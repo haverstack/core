@@ -517,6 +517,12 @@ const parseJournalEntry = (raw: WireJournalEntry): RecordJournalEntry => {
 // Query parameter builder (used when the server reaches no content)
 // -------------------------------------------------------
 
+/** A path with its search params attached, or the bare path when there are none. */
+const withParams = (path: string, params: URLSearchParams): string => {
+  const qs = params.toString();
+  return qs ? `${path}?${qs}` : path;
+};
+
 /**
  * A filter field naming one value or many travels as repeats of a single
  * parameter, so the server reads one shape either way.
@@ -760,6 +766,10 @@ const handshakeError = async (res: Response, path: string): Promise<Error> => {
   return new APIAdapterHandshakeError(undefined, `HTTP ${res.status}: POST ${path}`);
 };
 
+/** A handshake step's body, held to the same contract as every other success. */
+const successBody = async <T>(res: Response, path: string): Promise<T> =>
+  requireBody((await parseJsonBody(res, 'POST', path)) as T | undefined, `POST ${path}`);
+
 /**
  * Earn a bearer token by proving possession of the credential's key.
  *
@@ -785,7 +795,7 @@ const performHandshake = async (
 
   const challengeRes = await post('/auth/challenge', { did: credential.did });
   if (!challengeRes.ok) throw await handshakeError(challengeRes, '/auth/challenge');
-  const challenge = (await challengeRes.json()) as WireAuthChallengeResponse;
+  const challenge = await successBody<WireAuthChallengeResponse>(challengeRes, '/auth/challenge');
 
   const signature = await credential.sign(
     buildAuthChallengePayload({ origin: baseUrl, did: credential.did, nonce: challenge.nonce }),
@@ -808,7 +818,7 @@ const performHandshake = async (
     }
     throw err;
   }
-  return (await tokenRes.json()) as WireAuthTokenResponse;
+  return successBody<WireAuthTokenResponse>(tokenRes, '/auth/token');
 };
 
 // -------------------------------------------------------
@@ -874,7 +884,10 @@ export class APIAdapter implements StackAdapter {
       throw new APIAdapterError(`Discovery failed: server returned ${res.status}`, res.status);
     }
 
-    const discovery = (await res.json()) as DiscoveryResponse;
+    const discovery = requireBody(
+      (await parseJsonBody(res, 'GET', '/.well-known/stack')) as DiscoveryResponse | undefined,
+      'GET /.well-known/stack',
+    );
 
     if (!isProtocolCompatible(discovery.version ?? '')) {
       throw new APIAdapterVersionError(
@@ -1009,16 +1022,28 @@ export class APIAdapter implements StackAdapter {
     method: string,
     path: string,
     body?: unknown,
-    { nullOn404 = false, ifMatch }: { nullOn404?: boolean; ifMatch?: number } = {},
+    {
+      nullOn404 = false,
+      ifMatch,
+      headers: extra,
+    }: { nullOn404?: boolean; ifMatch?: number; headers?: Record<string, string> } = {},
   ): Promise<T | null | undefined> {
+    // Bytes travel as-is under the Content-Type the caller supplies; any
+    // other body is JSON.
+    const bytes = body instanceof Uint8Array;
     const res = await this.send(`${this.baseUrl}${path}`, (token) => {
-      const headers = authHeaders(token);
-      if (body !== undefined) headers['Content-Type'] = 'application/json';
+      const headers = authHeaders(token, extra);
+      if (body !== undefined && !bytes) headers['Content-Type'] = 'application/json';
       // Opt-in optimistic-concurrency precondition (see Stack's ifVersion).
       // A mismatch gets a 412 with a version_conflict wire body, which
       // errorForResponse() below reconstructs as StackVersionConflictError.
       if (ifMatch !== undefined) headers['If-Match'] = `"${ifMatch}"`;
-      return { method, headers, body: body !== undefined ? JSON.stringify(body) : undefined };
+      const encoded = bytes
+        ? (body as BodyInit)
+        : body !== undefined
+          ? JSON.stringify(body)
+          : undefined;
+      return { method, headers, body: encoded };
     });
 
     if (res.status === 404 && nullOn404) return null;
@@ -1057,27 +1082,6 @@ export class APIAdapter implements StackAdapter {
 
     if (!res.ok) throw await this.errorForResponse(res, 'GET', path);
     return new Uint8Array(await res.arrayBuffer());
-  }
-
-  /** POST /attachments always returns the created _attachment@1 record — see putAttachmentWithMetadata() below. */
-  private async uploadBinary(
-    path: string,
-    data: Uint8Array,
-    mimeType: string,
-    filename?: string,
-    appId?: string,
-  ): Promise<WireRecord | undefined> {
-    const url = `${this.baseUrl}${path}${appId ? `?appId=${encodeURIComponent(appId)}` : ''}`;
-    const res = await this.send(url, (token) => {
-      const headers = authHeaders(token, { 'Content-Type': mimeType });
-      if (filename)
-        headers['Content-Disposition'] =
-          `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`;
-      return { method: 'POST', headers, body: data as unknown as BodyInit };
-    });
-
-    if (!res.ok) throw await this.errorForResponse(res, 'POST', path);
-    return (await parseJsonBody(res, 'POST', path)) as WireRecord | undefined;
   }
 
   // -------------------------------------------------------
@@ -1222,8 +1226,10 @@ export class APIAdapter implements StackAdapter {
       body = await this.requestBody<WireQueryResponse>('POST', '/records/query', query);
     } else {
       // A server reaching no content only exposes GET /records
-      const qs = buildQueryParams(query).toString();
-      body = await this.requestBody<WireQueryResponse>('GET', qs ? `/records?${qs}` : '/records');
+      body = await this.requestBody<WireQueryResponse>(
+        'GET',
+        withParams('/records', buildQueryParams(query)),
+      );
     }
 
     return {
@@ -1267,78 +1273,83 @@ export class APIAdapter implements StackAdapter {
 
   /**
    * Reads the window the caller asked for, across as many requests as the
-   * server's own page cap takes — `getJournal()`'s loop, walking `cursor`
-   * as the next `beforeVersion` rather than `afterSeq`.
-   * See docs/spec/wire-format.md § Versions.
-   */
-  async getVersions(id: RecordId, query: VersionsQuery = {}): Promise<RecordVersion[]> {
-    const versions: RecordVersion[] = [];
-    let beforeVersion = query.beforeVersion;
-    for (;;) {
-      const remaining = query.limit === undefined ? undefined : query.limit - versions.length;
-      if (remaining !== undefined && remaining <= 0) break;
-      const params = new URLSearchParams();
-      if (beforeVersion !== undefined) params.set('beforeVersion', String(beforeVersion));
-      if (remaining !== undefined) params.set('limit', String(remaining));
-      const qs = params.toString();
-      const path = `/records/${pathSegment(id)}/versions${qs ? `?${qs}` : ''}`;
-      const body = await this.requestBody<WireVersionsResponse>('GET', path);
-      for (const v of body.versions) versions.push(parseVersion(v));
-      if (body.versions.length === 0) break;
-      // A cursor that does not move strictly older would repeat a page.
-      if (
-        typeof body.cursor !== 'number' ||
-        (beforeVersion !== undefined && body.cursor >= beforeVersion)
-      ) {
-        break;
-      }
-      beforeVersion = body.cursor;
-    }
-    return query.limit === undefined ? versions : versions.slice(0, query.limit);
-  }
-
-  /**
-   * Reads the window the caller asked for, across as many requests as the
    * server's own page cap takes. A server may answer a page shorter than
-   * the `limit` asked for — the endpoint is the one read with no ceiling
-   * when `limit` is omitted, so it needs that freedom — and a caller
-   * reconstructing an association's full history would silently get a
-   * prefix if this returned the first page. `cursor` is the only
-   * end-of-log signal, exactly as it is on a query.
-   *
-   * See docs/spec/wire-format.md § Journal.
+   * the `limit` asked for, and a caller reconstructing a full history would
+   * silently get a prefix if this returned the first page. `cursor` is the
+   * only end-of-log signal, exactly as it is on a query.
    */
-  async getJournal(id: RecordId, query: JournalQuery = {}): Promise<RecordJournalEntry[]> {
-    const entries: RecordJournalEntry[] = [];
-    let afterSeq = query.afterSeq;
+  private async readPages<W extends { cursor: number | null }, R, T>(
+    path: string,
+    opts: {
+      cursorParam: string;
+      cursor: number | undefined;
+      limit: number | undefined;
+      items: (body: W) => R[];
+      parse: (raw: R) => T;
+      /** Whether `next` lands somewhere the read from `prev` has not been. */
+      advances: (next: number, prev: number) => boolean;
+    },
+  ): Promise<T[]> {
+    const { cursorParam, limit, items, parse, advances } = opts;
+    const out: T[] = [];
+    let cursor = opts.cursor;
     for (;;) {
       // Asks only for what is still outstanding, so a server honoring the
       // limit exactly answers a bounded read in one request.
-      const remaining = query.limit === undefined ? undefined : query.limit - entries.length;
+      const remaining = limit === undefined ? undefined : limit - out.length;
       if (remaining !== undefined && remaining <= 0) break;
       const params = new URLSearchParams();
-      if (afterSeq !== undefined) params.set('afterSeq', String(afterSeq));
+      if (cursor !== undefined) params.set(cursorParam, String(cursor));
       if (remaining !== undefined) params.set('limit', String(remaining));
-      const qs = params.toString();
-      const path = `/records/${pathSegment(id)}/journal${qs ? `?${qs}` : ''}`;
-      const body = await this.requestBody<WireJournalResponse>('GET', path);
+      const body = await this.requestBody<W>('GET', withParams(path, params));
+      const page = items(body);
       // Appended one at a time rather than spread: a spread is an argument
-      // list, and this is the one read a server may answer without a ceiling.
-      for (const e of body.entries) entries.push(parseJournalEntry(e));
-      if (body.entries.length === 0) break;
-      // Only a cursor past the window just asked for can land the next
-      // request somewhere new. A server that omits one, repeats one, or
-      // mints one unconditionally ends the read here rather than spinning
-      // on it. See docs/spec/wire-format.md § Journal.
-      if (typeof body.cursor !== 'number' || (afterSeq !== undefined && body.cursor <= afterSeq)) {
+      // list, and a page may arrive without a ceiling.
+      for (const raw of page) out.push(parse(raw));
+      if (page.length === 0) break;
+      // A server that omits a cursor, repeats one, or mints one
+      // unconditionally ends the read here rather than spinning on it.
+      if (
+        typeof body.cursor !== 'number' ||
+        (cursor !== undefined && !advances(body.cursor, cursor))
+      ) {
         break;
       }
-      afterSeq = body.cursor;
+      cursor = body.cursor;
     }
     // `limit` is this method's own ceiling, not a request the server is
     // trusted to have honored: a page longer than the one asked for would
     // otherwise hand the caller more than the contract allows.
-    return query.limit === undefined ? entries : entries.slice(0, query.limit);
+    return limit === undefined ? out : out.slice(0, limit);
+  }
+
+  /** See docs/spec/wire-format.md § Versions. */
+  async getVersions(id: RecordId, query: VersionsQuery = {}): Promise<RecordVersion[]> {
+    return this.readPages(`/records/${pathSegment(id)}/versions`, {
+      cursorParam: 'beforeVersion',
+      cursor: query.beforeVersion,
+      limit: query.limit,
+      items: (body: WireVersionsResponse) => body.versions,
+      parse: parseVersion,
+      // Newest first, so the cursor has to move strictly older.
+      advances: (next, prev) => next < prev,
+    });
+  }
+
+  /**
+   * Unbounded when `limit` is omitted — the one read with no ceiling,
+   * which is why a server needs the freedom to answer it in pages.
+   * See docs/spec/wire-format.md § Journal.
+   */
+  async getJournal(id: RecordId, query: JournalQuery = {}): Promise<RecordJournalEntry[]> {
+    return this.readPages(`/records/${pathSegment(id)}/journal`, {
+      cursorParam: 'afterSeq',
+      cursor: query.afterSeq,
+      limit: query.limit,
+      items: (body: WireJournalResponse) => body.entries,
+      parse: parseJournalEntry,
+      advances: (next, prev) => next > prev,
+    });
   }
 
   async getVersion(id: RecordId, version: number): Promise<RecordVersion | null> {
@@ -1419,8 +1430,16 @@ export class APIAdapter implements StackAdapter {
     opts: PutAttachmentOptions,
   ): Promise<StackRecord> {
     const { mimeType, filename, appId } = opts;
-    const raw = await this.uploadBinary('/attachments', data, mimeType, filename, appId);
-    return requireRecordBody(raw, 'POST /attachments');
+    const params = new URLSearchParams();
+    if (appId) params.set('appId', appId);
+    const path = withParams('/attachments', params);
+    const headers: Record<string, string> = { 'Content-Type': mimeType };
+    if (filename) {
+      headers['Content-Disposition'] =
+        `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`;
+    }
+    const raw = await this.request<WireRecord>('POST', path, data, { headers });
+    return requireRecordBody(raw, `POST ${path}`);
   }
 
   async getBlob(fileId: FileId): Promise<Uint8Array> {
@@ -1471,9 +1490,7 @@ export class APIAdapter implements StackAdapter {
     }
 
     const controller = new AbortController();
-    const params = buildChangeParams(opts);
-    const query = params.toString();
-    const url = `${this.baseUrl}/changes${query ? `?${query}` : ''}`;
+    const url = `${this.baseUrl}${withParams('/changes', buildChangeParams(opts))}`;
 
     let stopped = false;
     let settled = false;
@@ -1486,7 +1503,7 @@ export class APIAdapter implements StackAdapter {
       onFailed = reject;
     });
 
-    const dispatch = (frame: SseFrame, headCursor: () => string | undefined): void => {
+    const dispatch = (frame: SseFrame, head: string | undefined): void => {
       // A frame id is a stream position whatever the frame says, so an
       // unrecognized name still advances the cursor. One outside the
       // framable charset is discarded rather than echoed into a header.
@@ -1517,7 +1534,7 @@ export class APIAdapter implements StackAdapter {
           // The cursor is worthless now, so the next reconnect starts from
           // this connection's head rather than replaying against a
           // position the server has already refused.
-          cursor = headCursor();
+          cursor = head;
           opts.onReset?.();
           return;
         default:
@@ -1577,7 +1594,7 @@ export class APIAdapter implements StackAdapter {
     url: string,
     controller: AbortController,
     cursor: () => string | undefined,
-    dispatch: (frame: SseFrame, headCursor: () => string | undefined) => void,
+    dispatch: (frame: SseFrame, head: string | undefined) => void,
   ): Promise<void> {
     const res = await this.send(url, (token) => {
       const headers = authHeaders(token, { Accept: 'text/event-stream' });
@@ -1594,7 +1611,6 @@ export class APIAdapter implements StackAdapter {
     // This connection's own head, as its ready frame reported it — the
     // position a reset falls back to.
     let head: string | undefined;
-    const headCursor = () => head;
 
     const decoder = new SseDecoder();
     const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
@@ -1615,23 +1631,11 @@ export class APIAdapter implements StackAdapter {
               head = undefined;
             }
           }
-          dispatch(frame, headCursor);
+          dispatch(frame, head);
         }
       }
     } finally {
       reader.releaseLock();
     }
-  }
-
-  // -------------------------------------------------------
-  // Lifecycle
-  // -------------------------------------------------------
-
-  async flush(): Promise<void> {
-    // Each request commits immediately; nothing to flush client-side.
-  }
-
-  async close(): Promise<void> {
-    // Stateless HTTP client; nothing to tear down.
   }
 }

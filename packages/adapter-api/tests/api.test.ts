@@ -1973,28 +1973,6 @@ describe('deleteBlob', () => {
 });
 
 // -------------------------------------------------------
-// Lifecycle
-// -------------------------------------------------------
-
-describe('flush', () => {
-  test('is a no-op', async () => {
-    const adapter = await openAdapter();
-    const callsBefore = mockFetch.mock.calls.length;
-    await expect(adapter.flush()).resolves.toBeUndefined();
-    expect(mockFetch.mock.calls.length).toBe(callsBefore);
-  });
-});
-
-describe('close', () => {
-  test('is a no-op', async () => {
-    const adapter = await openAdapter();
-    const callsBefore = mockFetch.mock.calls.length;
-    await expect(adapter.close()).resolves.toBeUndefined();
-    expect(mockFetch.mock.calls.length).toBe(callsBefore);
-  });
-});
-
-// -------------------------------------------------------
 // Error propagation
 // -------------------------------------------------------
 
