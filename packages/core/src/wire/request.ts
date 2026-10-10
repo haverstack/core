@@ -26,7 +26,7 @@
  */
 
 import { StackBadRequestError } from '../errors.js';
-import { TARGET_KEYS } from '../query-validation.js';
+import { TARGET_KEYS } from '../associations/validation.js';
 import { NATIVE_SORT_FIELDS } from '../types/index.js';
 import type {
   DataAssociation,

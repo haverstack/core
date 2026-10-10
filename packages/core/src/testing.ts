@@ -1,3 +1,14 @@
+/**
+ * @haverstack/core/testing
+ * -------------------------------------------------------
+ * In-memory adapters for tests: MemoryAdapter, which implements the whole
+ * StackAdapter contract — every filter, sort and capability a local
+ * adapter must declare — so code under test runs against real predicates;
+ * and IncapableMemoryAdapter, which declares none of the optional ones, for
+ * exercising the capability-gated fallbacks. Audience: tests in this repo
+ * and in apps built on it.
+ */
+
 import type {
   StackAdapter,
   StackRecord,
@@ -26,6 +37,7 @@ import type {
 } from './types/index.js';
 import { SYSTEM_TYPES } from './types/index.js';
 import { applyMergePatch } from './merge.js';
+import { fileRefFields } from './schema.js';
 import { compareSortEntries, contentSortEntry } from './adapter/sort.js';
 import type { SortEntry } from './adapter/sort.js';
 
@@ -36,7 +48,11 @@ import {
   StackBadRequestError,
 } from './errors.js';
 import { parseContentFilterKey } from './query-validation.js';
-import { applyAssociationEdits, assertOneSurface, associationEqual } from './record-changes.js';
+import {
+  applyAssociationEdits,
+  assertOneSurface,
+  associationEqual,
+} from './associations/identity.js';
 
 /** Core resolves the default direction; an adapter only ever sees an explicit one. */
 const requireDirection = (sort: QuerySort): 'asc' | 'desc' => {
@@ -180,9 +196,7 @@ export class MemoryAdapter implements StackAdapter {
     const schema = this.types.get(record.typeId)?.schema;
     if (!schema) return false;
     const content = record.content as Record<string, unknown>;
-    return Object.entries(schema).some(
-      ([field, def]) => def.kind === 'file-ref' && content[field] === fileId,
-    );
+    return fileRefFields(schema).some((field) => content[field] === fileId);
   }
 
   async mutateRecord(

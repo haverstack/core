@@ -11,9 +11,14 @@
 
 import { baseIdOf, familyIdProblem } from './schema.js';
 import { ARGUMENTS_INVALID, StackBadRequestError, StackValidationError } from './errors.js';
-import { assertKnownKeys, GRANTEE_KEYS, unknownKeys } from './query-validation.js';
+import {
+  assertKnownKeys,
+  GRANTEE_KEYS,
+  granteeErrors,
+  unknownKeys,
+} from './associations/validation.js';
 import { SYSTEM_TYPES, GRANT_ACTIONS } from './types/index.js';
-import { carriesRoster, groupRoleFromAssociations } from './access.js';
+import { resolveGroupRole, roleSatisfies } from './access.js';
 import type {
   BaseId,
   EntityId,
@@ -21,13 +26,10 @@ import type {
   GrantContent,
   GrantGrantee,
   GroupRole,
-  QueryResult,
   RecordId,
-  StackQuery,
   StackRecord,
   TypeId,
 } from './types/index.js';
-import { queryAllPages } from './stack/reads.js';
 import type { ValidationError } from './validate.js';
 
 /**
@@ -45,7 +47,7 @@ export const GRANT_ACTION_SET: ReadonlySet<GrantAction> = new Set(GRANT_ACTIONS)
  * cannot read is the drop-box, and it discloses nothing.
  * See docs/spec/access-control.md § Write implies read.
  */
-export const READ_COMPANIONS: ReadonlyMap<GrantAction, readonly GrantAction[]> = new Map([
+const READ_COMPANIONS: ReadonlyMap<GrantAction, readonly GrantAction[]> = new Map([
   ['update-own', ['read-own', 'read-any']],
   ['delete-own', ['read-own', 'read-any']],
   ['update-any', ['read-any']],
@@ -98,6 +100,13 @@ export type GrantQuery =
   | Exclude<GrantGrantee, { kind: 'group' }>
   | { kind: 'group'; groupId: RecordId; role: GroupRole | 'any' };
 
+/** Whether two action lists name the same verbs, order and repeats aside. */
+export function sameActions(a: readonly GrantAction[], b: readonly GrantAction[]): boolean {
+  const as = new Set(a);
+  const bs = new Set(b);
+  return as.size === bs.size && [...bs].every((x) => as.has(x));
+}
+
 /**
  * Direct (non-roster) match between a stored _grant's content and a target:
  * the whole grantee, `role` included. A target is the identity grantType()
@@ -125,36 +134,13 @@ export function matchesGrantTarget(content: GrantContent, target: GrantQuery): b
  * the listing-only `role: 'any'`, which grantType() and revokeType() refuse.
  */
 export function validateGrantTarget(target: GrantQuery, allowAny = false): void {
-  const t = target as Partial<Record<'kind' | 'entityId' | 'groupId' | 'role', unknown>> | null;
+  const t = target as { kind?: unknown } | null;
   if (t?.kind === 'authenticated' || t?.kind === 'entity' || t?.kind === 'group')
     assertKnownKeys(t, GRANTEE_KEYS[t.kind], 'grant target');
-  switch (t?.kind) {
-    case 'authenticated':
-      return;
-    case 'entity':
-      if (typeof t.entityId !== 'string' || t.entityId.length === 0) {
-        throw new StackBadRequestError('An entity grant target requires a non-empty entityId.');
-      }
-      return;
-    case 'group':
-      if (typeof t.groupId !== 'string' || t.groupId.length === 0) {
-        throw new StackBadRequestError('A group grant target requires a non-empty groupId.');
-      }
-      if (t.role !== 'member' && t.role !== 'admin' && !(allowAny && t.role === 'any')) {
-        throw new StackBadRequestError(
-          allowAny
-            ? "A group grant target requires role 'member', 'admin' or 'any'."
-            : "A group grant target requires role 'member' or 'admin'.",
-        );
-      }
-      // No format check: groupId is a reference, like parentId or an
-      // association's recordId. One that resolves to nothing simply denies.
-      return;
-    default:
-      throw new StackBadRequestError(
-        "A grant target must name its tier: { kind: 'entity' }, { kind: 'group' } or { kind: 'authenticated' }.",
-      );
-  }
+  // No format check on a groupId: it is a reference, like parentId or an
+  // association's recordId. One that resolves to nothing simply denies.
+  const errors = granteeErrors(t, 'grant target', { authenticated: true, anyRole: allowAny });
+  if (errors.length > 0) throw new StackBadRequestError(errors[0]!.message);
 }
 
 /**
@@ -165,8 +151,7 @@ export function validateGrantTarget(target: GrantQuery, allowAny = false): void 
  */
 export function validateGrantee(typeId: TypeId, content: unknown): ValidationError[] {
   if (baseIdOf(typeId) !== SYSTEM_TYPES.GRANT) return [];
-  const c = content as { grantee?: unknown } | null;
-  const g = c?.grantee as Partial<Record<'kind' | 'entityId' | 'groupId' | 'role', unknown>> | null;
+  const g = (content as { grantee?: unknown } | null)?.grantee as { kind?: unknown } | null;
   // An absent or non-object grantee is the schema's to refuse, and it does.
   if (!g || typeof g !== 'object') return [];
   if (g.kind === 'authenticated' || g.kind === 'entity' || g.kind === 'group') {
@@ -177,42 +162,7 @@ export function validateGrantee(typeId: TypeId, content: unknown): ValidationErr
         message: `A ${String(g.kind)} grantee does not carry ${key}`,
       }));
   }
-  switch (g.kind) {
-    case 'authenticated':
-      return [];
-    case 'entity':
-      return typeof g.entityId === 'string' && g.entityId.length > 0
-        ? []
-        : [
-            {
-              path: 'grantee.entityId',
-              message: 'An entity grantee requires a non-empty entityId',
-            },
-          ];
-    case 'group': {
-      const errors: ValidationError[] = [];
-      if (typeof g.groupId !== 'string' || g.groupId.length === 0) {
-        errors.push({
-          path: 'grantee.groupId',
-          message: 'A group grantee requires a non-empty groupId',
-        });
-      }
-      if (g.role !== 'member' && g.role !== 'admin') {
-        errors.push({
-          path: 'grantee.role',
-          message: "A group grantee requires role 'member' or 'admin'",
-        });
-      }
-      return errors;
-    }
-    default:
-      return [
-        {
-          path: 'grantee.kind',
-          message: "A grantee must name its tier: 'entity', 'group' or 'authenticated'",
-        },
-      ];
-  }
+  return granteeErrors(g, 'grantee', { authenticated: true });
 }
 
 /**
@@ -268,39 +218,12 @@ export async function grantCoversGrantee(
       if (!opts.allowGroup) return false;
       if (!g.groupId) return false;
       if (g.role !== 'member' && g.role !== 'admin') return false;
-      const role = await resolveGroupRoleMemoized(
-        g.groupId,
-        grantee,
-        opts.groupRoles,
-        opts.resolveRecord,
-      );
-      return g.role === 'admin' ? role === 'admin' : role !== null;
+      const role = await resolveGroupRole(g.groupId, grantee, opts.resolveRecord, opts.groupRoles);
+      return roleSatisfies(role, g.role);
     }
     default:
       return false;
   }
-}
-
-/**
- * An entity's role on a `_group` roster, memoized in the caller's
- * `groupRoles` map. That map is built per operation, so no resolved role
- * outlives the operation that resolved it — removal from a group must never
- * go stale.
- */
-async function resolveGroupRoleMemoized(
-  groupId: RecordId,
-  entityId: EntityId,
-  groupRoles: Map<string, GroupRole | null>,
-  resolveRecord: (id: RecordId) => Promise<StackRecord | null>,
-): Promise<GroupRole | null> {
-  const key = `${groupId}:${entityId}`;
-  const cached = groupRoles.get(key);
-  if (cached !== undefined) return cached;
-  const group = await resolveRecord(groupId);
-  const role =
-    group && carriesRoster(group) ? groupRoleFromAssociations(group.associations, entityId) : null;
-  groupRoles.set(key, role);
-  return role;
 }
 
 /**
@@ -316,25 +239,6 @@ export const UNGRANTABLE_SYSTEM_TYPES: ReadonlySet<string> = new Set([
   SYSTEM_TYPES.APP,
   SYSTEM_TYPES.INSTALL,
 ]);
-
-/**
- * Every `_grant` Record, cursor-walked. Read through an unscoped query at
- * every call site: a grant is what decides who may read, so it can never
- * itself sit behind a read check.
- *
- * `includeUnlisted`, because withholding a Record from enumeration decides
- * nothing about what it confers. Deleted grants are excluded on the
- * opposite grounds — a soft delete is how revokeType() withdraws one.
- * See docs/spec/unlisted.md.
- */
-export async function loadGrantRecords(
-  query: (q: StackQuery) => Promise<QueryResult>,
-): Promise<(StackRecord & { content: GrantContent })[]> {
-  const records = await queryAllPages(query, {
-    filter: { typeId: `${SYSTEM_TYPES.GRANT}@1`, includeUnlisted: true },
-  });
-  return records as (StackRecord & { content: GrantContent })[];
-}
 
 /**
  * Actions must be known GrantAction values; the target is held to the

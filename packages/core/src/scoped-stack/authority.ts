@@ -9,7 +9,12 @@
  * subject.
  */
 
-import { checkAccess, groupRoleFromAssociations, isOwnerActingAlone } from '../access.js';
+import {
+  checkAccess,
+  groupRoleFromAssociations,
+  isGroupRecord,
+  isOwnerActingAlone,
+} from '../access.js';
 import type { AccessMode } from '../access.js';
 import { StackError, StackNotFoundError, StackPermissionError } from '../errors.js';
 import {
@@ -17,19 +22,26 @@ import {
   grantConveys,
   grantCoversGrantee,
   grantReach,
-  loadGrantRecords,
 } from '../grants.js';
 import { filtersContent } from '../query-validation.js';
-import { baseIdOf } from '../schema.js';
-import { findFirstMatch, queryAllPages } from '../stack/reads.js';
+import { baseIdOf, fileRefFields } from '../schema.js';
+import { claimedFamilies, familyStanding, INSTALL_APP_LABEL, linkedIds } from '../install.js';
+import {
+  findFirstMatch,
+  loadGrantRecords,
+  loadInstallRecords,
+  queryAllPages,
+} from '../stack/reads.js';
 import { SYSTEM_TYPES } from '../types/index.js';
 import type {
   Actor,
+  AppContent,
   AttachmentContent,
   EntityId,
   GrantAction,
   GrantContent,
   GroupRole,
+  InstallContent,
   StackRecord,
   TypeId,
 } from '../types/index.js';
@@ -188,7 +200,7 @@ export class ScopeAuthority {
    * principalAllows() without its shortcuts: whether the principal itself
    * holds a grant naming it for these verbs, read the principal-side way.
    * Also what an installed app's own migration authority rests on — see
-   * ScopedStack.installMayMigrate().
+   * installMayMigrate().
    */
   principalHolds(
     typeId: TypeId,
@@ -370,13 +382,51 @@ export class ScopeAuthority {
         ).some((r) => (r.content as AttachmentContent).fileId === fileId);
   }
 
+  /**
+   * Whether this request is an installed app, acting as itself, migrating
+   * `record` within families its one live install claims, to a version the
+   * owner approved, holding `update-any` on each directly.
+   * See docs/spec/apps.md § Migrating an installed app's types.
+   */
+  async installMayMigrate(record: StackRecord, toTypeId: TypeId): Promise<boolean> {
+    const principal = this.principalId;
+    if (!principal || this.delegated) return false;
+    const families = new Set([baseIdOf(record.typeId), baseIdOf(toTypeId)]);
+
+    const installs = await loadInstallRecords(this.stack);
+    let install: (StackRecord & { content: InstallContent }) | undefined;
+    for (const family of families) {
+      const claimants = installs.filter((r) => claimedFamilies(r.content).has(family));
+      if (claimants.length !== 1) return false;
+      if (familyStanding(family, claimants[0]!.content.appId) !== 'own') return false;
+      if (install && install.id !== claimants[0]!.id) return false;
+      install = claimants[0];
+    }
+    if (!install || install.deletedAt) return false;
+    if (!Array.isArray(install.content.defines) || !install.content.defines.includes(toTypeId)) {
+      return false;
+    }
+
+    let linked = false;
+    for (const cardId of linkedIds(install, INSTALL_APP_LABEL)) {
+      const card = await this.stack.get(cardId);
+      if (card && baseIdOf(card.typeId) === SYSTEM_TYPES.APP) {
+        if ((card.content as AppContent).did === principal) linked = true;
+      }
+    }
+    if (!linked) return false;
+
+    const grants = await this.loadGrants();
+    for (const family of families) {
+      if (!(await this.principalHolds(`${family}@1`, ['update-any'], grants))) return false;
+    }
+    return true;
+  }
+
   /** Names of the type's top-level file-ref fields — the content-reference half of referencesFileId matching. */
   async fileRefFieldNames(typeId: TypeId): Promise<string[]> {
     const type = await this.stack.getType(typeId);
-    if (!type) return [];
-    return Object.entries(type.schema)
-      .filter(([, def]) => def.kind === 'file-ref')
-      .map(([field]) => field);
+    return type ? fileRefFields(type.schema) : [];
   }
 
   /**
@@ -407,7 +457,7 @@ export class ScopeAuthority {
    * See docs/spec/access-control.md § Record-level permissions.
    */
   canReshare(record: StackRecord): boolean {
-    if (baseIdOf(record.typeId) === SYSTEM_TYPES.GROUP) return this.isGroupManager(record);
+    if (isGroupRecord(record)) return this.isGroupManager(record);
     if (!this.mayReshare(this.principalId, record)) return false;
     return !this.delegated || this.mayReshare(this.subjectId, record);
   }

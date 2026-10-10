@@ -1,8 +1,10 @@
 /**
- * Stack — Content Validation
+ * Stack — Content and Schema Validation
  * -------------------------------------------------------
- * Validates a Record's content object against a TypeSchema.
- * Returns a list of validation errors — empty means valid.
+ * Validates a Record's content object against a TypeSchema, and a
+ * TypeSchema itself before it is defined — including the field-name rules
+ * both share, so no stored name is one a content filter cannot address.
+ * Every check returns a list of validation errors — empty means valid.
  *
  * Validates recursively for array and object field kinds.
  * Coercion is never performed — types must match exactly.
@@ -637,10 +639,3 @@ export const validateSchemaFieldNames = (
   }
   return errors;
 };
-
-/**
- * Returns true if the content is valid against the schema.
- * Use validateContent() directly to get error details.
- */
-export const isValid = (content: Record<string, unknown>, schema: TypeSchema): boolean =>
-  validateContent(content, schema).length === 0;

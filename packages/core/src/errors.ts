@@ -8,9 +8,10 @@
  *
  * Several errors sit deliberately outside that root (UseAfterCloseError,
  * InvalidAdapterError, OwnerMismatchError, RelayScopeError, and — in their own
- * modules — IdGenerationError and InvalidDidError): they report a local
- * programming error or an assembled topology, not a state a request can be
- * in, so no server ever responds with one.
+ * modules — IdGenerationError, InvalidDidError, InvalidAuthChallengeError and
+ * StoredVersionError): they report a local programming error, malformed
+ * local input or an assembled topology, not a state a request can be in, so
+ * no server ever responds with one.
  *
  * The `Stack` prefix is reserved for the taxonomy: a class named
  * `Stack…Error` extends StackError, and nothing else carries the prefix.
@@ -59,7 +60,7 @@ export abstract class StackError extends Error {
   abstract readonly code: StackErrorCode;
 }
 
-export const CONTENT_INVALID = 'Content validation failed';
+const CONTENT_INVALID = 'Content validation failed';
 export const ARGUMENTS_INVALID = 'Invalid arguments';
 export const SCHEMA_INVALID = 'Schema validation failed';
 

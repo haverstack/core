@@ -44,7 +44,7 @@ export type { AttachmentDownloadContentType } from './attachment-download.js';
 // storedMimeType as an input rather than selecting the record itself — a
 // server must call these to pick the record a download describes and pass
 // the winner in. Contract, not internal. haverstack/server#37
-export { firstRecordedAttachment, resolveReferencedAttachment } from './attachment-download.js';
+export { firstRecordedAttachment, resolveReferencedAttachment } from '../stack/attachments.js';
 
 // Server-facing: bearer-token issuance and lookup, backed by its own file
 // outside the portable stack database — not a slot on StackAdapter.

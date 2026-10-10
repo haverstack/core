@@ -21,37 +21,21 @@ const RESERVED_ID_PREFIX = '_';
 export const DEFAULT_ID_TIMESTAMP_SKEW_MS = 24 * 60 * 60 * 1000;
 
 /**
- * The same format rule applied to a `parentId` a caller names. Separate
- * from validateRecordId() only for its message: the id under discussion is
- * the destination, not the record being written, and a shared message would
- * report the wrong one. See docs/spec/data-model.md § Reparenting.
+ * Format and reserved-prefix checks for a caller-supplied id, reported
+ * under `field` — `parentId` when the id names a destination rather than
+ * the record being written. The prefix is asked first so "_config" gets a
+ * specific refusal. StackBadRequestError, not StackValidationError: a
+ * malformed id never reaches schema validation.
  */
-export function validateParentId(parentId: string): void {
-  if (parentId.startsWith(RESERVED_ID_PREFIX)) {
-    throw new StackBadRequestError(
-      `Invalid parentId "${parentId}": uses the reserved "${RESERVED_ID_PREFIX}" prefix.`,
-    );
-  }
-  if (!isValidIdFormat(parentId)) {
-    throw new StackBadRequestError(
-      `Invalid parentId "${parentId}": expected 12 lowercase Crockford base-32 characters.`,
-    );
-  }
-}
-
-/**
- * Format and reserved-prefix checks for a caller-supplied id. The prefix is
- * asked first so "_config" gets a specific refusal, not a generic format
- * one. StackBadRequestError, not StackValidationError: a malformed id never
- * reaches schema validation — see StackBadRequestError's doc comment.
- */
-export function validateRecordId(id: string): void {
+export function validateRecordId(id: string, field = 'ID'): void {
   if (id.startsWith(RESERVED_ID_PREFIX)) {
-    throw new StackBadRequestError(`ID "${id}" uses the reserved "${RESERVED_ID_PREFIX}" prefix.`);
+    throw new StackBadRequestError(
+      `Invalid ${field} "${id}": uses the reserved "${RESERVED_ID_PREFIX}" prefix.`,
+    );
   }
   if (!isValidIdFormat(id)) {
     throw new StackBadRequestError(
-      `Invalid ID "${id}": expected 12 lowercase Crockford base-32 characters.`,
+      `Invalid ${field} "${id}": expected 12 lowercase Crockford base-32 characters.`,
     );
   }
 }

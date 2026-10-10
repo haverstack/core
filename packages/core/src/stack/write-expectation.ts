@@ -1,7 +1,7 @@
 /**
  * Stack — Write expectations
  * -------------------------------------------------------
- * What a typed collection expects of the record a write addresses: its
+ * What a type handle expects of the record a write addresses: its
  * family on every write, and its exact version on a write whose content is
  * validated against the stored Type. `Stack` checks it against the read it
  * already makes before writing, so a typed write costs what an untyped one
@@ -34,8 +34,8 @@ export type ExpectationOptions = { readonly [WRITE_EXPECTATION]?: WriteExpectati
 
 /**
  * A content write addressed a record stored at another version of the
- * expected family. Carries the record as read, so the collection can
- * migrate it and retry without reading it again. Never reaches the wire.
+ * expected family. Carries the record as read, so a caller holding the
+ * handle can migrate it and retry without reading it again. Never reaches the wire.
  */
 export class StoredVersionError extends Error {
   constructor(readonly record: StackRecord) {

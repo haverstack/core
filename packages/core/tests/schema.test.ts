@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'vitest';
-import { hashSchema, isCompatible, diffSchemas, parseTypeId, buildTypeId } from '../src/schema.js';
+import { hashSchema, isCompatible, diffSchemas, parseTypeId } from '../src/schema.js';
 import type { FieldDef, TypeSchema } from '../src/types/index.js';
 
 // -------------------------------------------------------
@@ -649,24 +649,6 @@ describe('parseTypeId', () => {
       baseId: 'com.example.myapp/note',
       version: 42,
     });
-  });
-});
-
-// -------------------------------------------------------
-// buildTypeId
-// -------------------------------------------------------
-
-describe('buildTypeId', () => {
-  test('builds a versioned type ID', () => {
-    expect(buildTypeId('com.example.myapp/note', 2)).toBe('com.example.myapp/note@2');
-  });
-
-  test('roundtrips with parseTypeId', () => {
-    const baseId = 'com.example.myapp/note';
-    const version = 3;
-    const id = buildTypeId(baseId, version);
-    const parsed = parseTypeId(id);
-    expect(parsed).toEqual({ baseId, version });
   });
 });
 

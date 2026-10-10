@@ -6,7 +6,8 @@
  * take the query function to run against, so the same read serves an
  * unscoped `Stack` and a permission-filtered `ScopedStack` without either
  * knowing which it got; the `_app` and `_install` reads must see past
- * deletion and listing, so they take the unscoped `Stack` itself.
+ * deletion and listing, so they take the unscoped `Stack` itself. Also the
+ * page-size bounds both classes' query() applies.
  *
  * None of these is a public API.
  */
@@ -19,14 +20,16 @@ import type {
   AppContent,
   EntityContent,
   EntityId,
+  GrantContent,
   InstallContent,
   QueryResult,
   StackQuery,
   StackRecord,
 } from '../types/index.js';
 
-/** Default page size used to fill a permission-filtered query result. */
+/** The page size query() answers with when the caller names none. */
 export const DEFAULT_QUERY_LIMIT = 50;
+/** The largest page query() returns, whatever the caller asks for. */
 export const MAX_QUERY_LIMIT = 1000;
 
 /**
@@ -148,4 +151,23 @@ export async function loadInstallRecords(
     filter: { baseId: SYSTEM_TYPES.INSTALL, includeDeleted: true, includeUnlisted: true },
   });
   return records as (StackRecord & { content: InstallContent })[];
+}
+
+/**
+ * Every `_grant` Record, cursor-walked. Read through an unscoped query at
+ * every call site: a grant is what decides who may read, so it can never
+ * itself sit behind a read check.
+ *
+ * `includeUnlisted`, because withholding a Record from enumeration decides
+ * nothing about what it confers. Deleted grants are excluded on the
+ * opposite grounds — a soft delete is how revokeType() withdraws one.
+ * See docs/spec/unlisted.md.
+ */
+export async function loadGrantRecords(
+  run: (query: StackQuery) => Promise<QueryResult>,
+): Promise<(StackRecord & { content: GrantContent })[]> {
+  const records = await queryAllPages(run, {
+    filter: { typeId: `${SYSTEM_TYPES.GRANT}@1`, includeUnlisted: true },
+  });
+  return records as (StackRecord & { content: GrantContent })[];
 }

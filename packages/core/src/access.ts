@@ -5,7 +5,8 @@
  * Record's `permissions` field, with no dependency on a transport layer or
  * storage backend. Used by ScopedStack (see scoped-stack/scoped-stack.ts) to enforce
  * access control; exported standalone for callers that want the raw
- * predicate.
+ * predicate. Also the one home of the `_group` roster rules that predicate
+ * and the grant path resolve against, and of the owner-acting-alone tier.
  *
  * A permission set is read as data throughout, never as the type: it can
  * arrive from an import or a foreign server, where no compiler has seen
@@ -19,12 +20,14 @@ import type {
   AuthorityAssociation,
   DataAssociation,
   EntityId,
+  EntityTarget,
   GroupRole,
   Grantee,
   RecordId,
+  RelationshipAssociation,
   StackRecord,
 } from './types/index.js';
-import { granteeEqual } from './record-changes.js';
+import { granteeEqual } from './associations/identity.js';
 import { baseIdOf } from './schema.js';
 import type { ValidationError } from './validate.js';
 
@@ -114,7 +117,7 @@ async function granteeCovers(
   if (!subjectEntityId) return false;
   if (grantee.kind === 'entity') return grantee.entityId === subjectEntityId;
   const role = await resolveGroupRole(grantee.groupId, subjectEntityId, resolveRecord);
-  return grantee.role === 'admin' ? role === 'admin' : role !== null;
+  return roleSatisfies(role, grantee.role);
 }
 
 /**
@@ -142,15 +145,38 @@ export function validatePermissions(
   return errors;
 }
 
-/** Resolve a role from the `_group` Record a permission's `groupId` names. */
-async function resolveGroupRole(
-  groupRecordId: RecordId,
+/**
+ * An entity's role on the `_group` roster `groupId` names. `memo`, when
+ * given, is built per operation, so no resolved role outlives the operation
+ * that resolved it — removal from a group must never go stale.
+ */
+export async function resolveGroupRole(
+  groupId: RecordId,
   entityId: EntityId,
   resolveRecord: RecordResolver,
+  memo?: Map<string, GroupRole | null>,
 ): Promise<GroupRole | null> {
-  const group = await resolveRecord(groupRecordId);
-  if (!group || !carriesRoster(group)) return null;
-  return groupRoleFromAssociations(group.associations, entityId);
+  const key = `${groupId}:${entityId}`;
+  const cached = memo?.get(key);
+  if (cached !== undefined) return cached;
+  const group = await resolveRecord(groupId);
+  const role =
+    group && carriesRoster(group) ? groupRoleFromAssociations(group.associations, entityId) : null;
+  memo?.set(key, role);
+  return role;
+}
+
+/** Whether a held role meets a grantee's: an admin is also a member. */
+export function roleSatisfies(held: GroupRole | null, required: GroupRole): boolean {
+  return required === 'admin' ? held === 'admin' : held !== null;
+}
+
+/**
+ * Whether a Record is a `_group`, in any of its type versions — the family
+ * whose roster rules apply.
+ */
+export function isGroupRecord(record: StackRecord): boolean {
+  return baseIdOf(record.typeId) === SYSTEM_TYPES.GROUP;
 }
 
 /**
@@ -162,7 +188,7 @@ async function resolveGroupRole(
  * still reach anyone. See docs/spec/identity.md § Group.
  */
 export function carriesRoster(record: StackRecord): boolean {
-  return baseIdOf(record.typeId) === SYSTEM_TYPES.GROUP && !record.deletedAt;
+  return isGroupRecord(record) && !record.deletedAt;
 }
 
 /**
@@ -206,12 +232,30 @@ export function hasGroupAdmin(associations: DataAssociation[] | undefined): bool
  * nothing, so it must not count toward the invariant either.
  * See docs/spec/data-model.md § Relationship targets.
  */
-export function isGroupAdminAssociation(association: Association): boolean {
+function isGroupAdminAssociation(
+  association: Association,
+): association is RelationshipAssociation & { target: EntityTarget } {
   return (
     association.kind === 'relationship' &&
     association.label === 'admin' &&
     association.target.kind === 'entity'
   );
+}
+
+/** Bootstraps a `_group` record's first admin at create time. */
+export function stampGroupAdmin(
+  associations: DataAssociation[] | undefined,
+  creator: EntityId,
+): DataAssociation[] {
+  const list = associations ?? [];
+  const alreadyAdmin = list.some(
+    (a) => isGroupAdminAssociation(a) && a.target.entityId === creator,
+  );
+  if (alreadyAdmin) return list;
+  return [
+    ...list,
+    { kind: 'relationship', label: 'admin', target: { kind: 'entity', entityId: creator } },
+  ];
 }
 
 /**

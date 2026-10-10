@@ -4,12 +4,15 @@
  * The Stack class is the primary interface for apps. It sits
  * on top of a StackAdapter and adds:
  *
- *  - ID generation
- *  - Type definition and schema hashing
- *  - Content validation on write
- *  - Migration registry and explicit, owner-driven migrateAll()
- *  - Version snapshotting on update
- *  - Soft delete and purge
+ *  - ID generation, and validation of every caller-supplied field
+ *  - Type definition, schema hashing and drift detection
+ *  - Content validation on write, and the integrity rules in integrity.ts
+ *  - Migrations: the registry, commitMigration() and owner-driven migrateAll()
+ *  - Version snapshots, the change journal, soft delete and purge
+ *  - Association and permission edits, and the change feed
+ *  - Attachments, type-level grants and app installs, whose bodies live
+ *    beside this file
+ *  - asEntity()/asActor(), the scoped views that enforce access control
  *
  * Apps should never talk to a StackAdapter directly.
  */
@@ -21,6 +24,7 @@ import {
   parseTypeId,
   baseIdOf,
   diffSchemas,
+  fileRefFields,
   lineageProblem,
 } from '../schema.js';
 import {
@@ -34,8 +38,7 @@ import {
   validateSchemaShape,
 } from '../validate.js';
 import { applyMergePatch } from '../merge.js';
-import { validatePermissions } from '../access.js';
-import { compareRecordedAttachments } from '../wire/attachment-download.js';
+import { stampGroupAdmin, validatePermissions } from '../access.js';
 import { ChangeEmitter, RelayDelivery, PendingChange, assertSinceUsable } from './changes.js';
 import { SYSTEM_TYPES } from '../types/index.js';
 import type { ValidationError } from '../validate.js';
@@ -100,14 +103,17 @@ import {
   assertValidVersionsQuery,
   assertValidSort,
   normalizeSort,
+  filtersContent,
+  assertFamilyId,
+} from '../query-validation.js';
+import {
   assertAssociationEdits,
   assertAssociationList,
   assertAuthorityAssociations,
   assertDataAssociations,
-  filtersContent,
   validateAssociations,
-  assertFamilyId,
-} from '../query-validation.js';
+} from '../associations/validation.js';
+import { applyAssociationEdits, associationDelta, editsOf } from '../associations/identity.js';
 import { validateGrantee, validateGrantBaseId } from '../grants.js';
 import type { GrantQuery } from '../grants.js';
 import { bindingFieldsOf } from './identity-bindings.js';
@@ -122,14 +128,10 @@ import {
 } from './record-id.js';
 import { queryAllPages, lookupEntityByDid, MAX_QUERY_LIMIT } from './reads.js';
 import {
-  applyAssociationEdits,
   assertNonEmptyChangeSet,
-  associationDelta,
   bumpsVersion,
   changeSetOps,
-  editsOf,
   effectiveChanges,
-  stampGroupAdmin,
   takesIfVersion,
 } from '../record-changes.js';
 import { ScopedStack, scopeToken } from '../scoped-stack/scoped-stack.js';
@@ -196,7 +198,7 @@ import type {
  * empty id is refused rather than stored as a name for nobody.
  * See docs/spec/data-model.md § Actor.
  */
-export function normalizeActor(actor: Actor | undefined): Actor | undefined {
+function normalizeActor(actor: Actor | undefined): Actor | undefined {
   if (!actor) return undefined;
   for (const field of ['subjectId', 'principalId'] as const) {
     if (actor[field] === '') {
@@ -1220,8 +1222,8 @@ export class Stack implements StackClient {
     );
     const type = await this.getType(record.typeId);
     const content = record.content as Record<string, unknown>;
-    const fromContent = Object.entries(type?.schema ?? {}).flatMap(([field, def]) =>
-      def.kind === 'file-ref' && typeof content[field] === 'string' ? [content[field]] : [],
+    const fromContent = fileRefFields(type?.schema ?? {}).flatMap((field) =>
+      typeof content[field] === 'string' ? [content[field]] : [],
     );
     return [...new Set([...fromAssociations, ...fromContent])];
   }
@@ -1581,7 +1583,9 @@ export class Stack implements StackClient {
     });
     return results
       .filter((r) => (r.content as AttachmentContent).fileId === fileId)
-      .sort(compareRecordedAttachments) as (StackRecord & { content: AttachmentContent })[];
+      .sort(attachments.compareRecordedAttachments) as (StackRecord & {
+      content: AttachmentContent;
+    })[];
   }
 
   /**

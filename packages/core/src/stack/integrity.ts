@@ -9,13 +9,13 @@
  * is handed, or a by-id `read` straight from its adapter.
  */
 
-import { hasGroupAdmin } from '../access.js';
+import { hasGroupAdmin, isGroupRecord } from '../access.js';
 import type { RecordResolver } from '../access.js';
 import { ARGUMENTS_INVALID, StackConflictError, StackValidationError } from '../errors.js';
 import { bindingFieldsOf, uniqueBindingFieldsOf } from './identity-bindings.js';
 import { filtersContent } from '../query-validation.js';
-import { associationIdentical, isGroupRecord } from '../record-changes.js';
-import { validateParentId } from './record-id.js';
+import { associationIdentical } from '../associations/identity.js';
+import { validateRecordId } from './record-id.js';
 import { baseIdOf } from '../schema.js';
 import { findFirstMatch } from './reads.js';
 import { SYSTEM_TYPES } from '../types/index.js';
@@ -179,7 +179,7 @@ export async function assertParentExists(
   id: string,
   parentId: string,
 ): Promise<void> {
-  validateParentId(parentId);
+  validateRecordId(parentId, 'parentId');
   if (!(await read(parentId))) {
     throw new StackConflictError(
       `Cannot parent record "${id}" to "${parentId}": no such record. A container has to ` +

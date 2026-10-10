@@ -3662,7 +3662,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
     responseBody: {
       error: {
         code: 'bad_request',
-        message: 'ID "_hk153x00001" uses the reserved "_" prefix.',
+        message: 'Invalid ID "_hk153x00001": uses the reserved "_" prefix.',
       },
     },
   },

@@ -10,11 +10,12 @@ import {
   checkGrantValid,
   grantCoversGrantee,
   grantReach,
-  loadGrantRecords,
   matchesGrantTarget,
+  sameActions,
   validateGrantTarget,
 } from '../grants.js';
 import { assertFamilyId } from '../query-validation.js';
+import { loadGrantRecords } from './reads.js';
 import { SYSTEM_TYPES } from '../types/index.js';
 import type { GrantQuery } from '../grants.js';
 import type { BaseId, GrantContent, GroupRole, StackRecord, TypeGrant } from '../types/index.js';
@@ -70,7 +71,6 @@ export async function revokeType(
 ): Promise<(StackRecord & { content: GrantContent })[]> {
   validateGrantTarget(grant.grantee);
   assertFamilyId(baseId, 'revokeType');
-  const actionSet = new Set(grant.actions);
   const all = await loadGrantRecords((q) => stack.query(q));
   const matches = all.filter((r) => {
     const c = r.content;
@@ -81,7 +81,7 @@ export async function revokeType(
     const reach = grantReach(c);
     if (!reach || reach.familyId !== baseId) return false;
     if (!matchesGrantTarget(c, grant.grantee)) return false;
-    return c.actions.length === actionSet.size && c.actions.every((a) => actionSet.has(a));
+    return sameActions(c.actions, grant.actions);
   });
   for (const match of matches) await stack.delete(match.id);
   return matches;

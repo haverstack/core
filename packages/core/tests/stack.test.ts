@@ -32,7 +32,7 @@ import {
   IncapableMemoryAdapter,
   type MemoryAdapterOpenOptions,
 } from '../src/testing.js';
-import { firstRecordedAttachment } from '../src/wire/attachment-download.js';
+import { firstRecordedAttachment } from '../src/stack/attachments.js';
 import type {
   DataAssociation,
   AttachmentContent,
