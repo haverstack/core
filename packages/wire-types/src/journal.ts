@@ -9,13 +9,9 @@ import type { AssociationChange, ChangeKind, ChangeOp, RecordJournalEntry } from
 import { serializeChangeActor, type WireChangeActor } from './change-feed.js';
 
 /**
- * One journal entry as `GET /records/:id/journal` carries it. Every field
- * a `RecordJournalEntry` holds, since the whole entry is what makes a
- * change recoverable — an envelope with a verb, an actor and a delta, and
- * no `content`, which lives on a snapshot.
- *
- * `seq` is a dense integer from 1, per record — never the change feed's
- * opaque `cursor`, and nothing may be carried from one to the other. See
+ * Every field a `RecordJournalEntry` holds, since the whole entry is what
+ * makes a change recoverable; `content` lives on a snapshot instead. `seq`
+ * is dense per record and never the change feed's `cursor`. See
  * docs/spec/wire-format.md § Journal.
  */
 export type WireJournalEntry = {
@@ -44,12 +40,10 @@ export type WireJournalEntry = {
 };
 
 /**
- * The response envelope of `GET /records/:id/journal`.
- *
- * `cursor` is the only end-of-log signal, as it is on a query: a server
- * may cap a page below the `limit` asked for, so a short page does not
- * mean an exhausted log. It carries the `seq` to send as the next
- * `afterSeq`, and is null once nothing follows.
+ * The response envelope of `GET /records/:id/journal`. `cursor` is the only
+ * end-of-log signal, since a server may cap a page below the `limit` asked
+ * for. It carries the `seq` to send as the next `afterSeq`, and is null
+ * once nothing follows.
  */
 export type WireJournalResponse = {
   entries: WireJournalEntry[];

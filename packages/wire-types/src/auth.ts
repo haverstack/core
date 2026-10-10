@@ -9,13 +9,10 @@
 import { hasErrorBody } from './errors.js';
 
 /**
- * How a token can be earned here. Optional, and absent means only whatever
- * issuance scheme the server arranged out of band — a client holding a DID
- * credential then has nothing to perform and is told so at open(), rather
- * than discovering it as a 404 partway through a handshake.
- *
- * An object rather than a boolean because issuance is the surface most
- * likely to grow one: a consent flow arrives as another entry here.
+ * How a token can be earned here. Absent means only a scheme arranged out
+ * of band, which a client learns at open() rather than as a 404 partway
+ * through a handshake. An object so a consent flow can arrive as another
+ * entry. See docs/spec/wire-format.md § Advertising it.
  */
 export type DiscoveryAuth = {
   methods: AuthMethod[];

@@ -33,12 +33,10 @@ export type DiscoveryResponse = {
 };
 
 /**
- * `capabilities` as it arrives, before normalizeCapabilities() reads it: a
- * foreign server may omit any part of it, and may name a reach or a sort
- * field this client has never heard of. Typed loosely on exactly the
- * fields where that can happen, so the runtime checks that place them are
- * visible as checks rather than as casts.
- * See docs/spec/wire-format.md § Discovery.
+ * `capabilities` as it arrives: a foreign server may omit any part, or name
+ * a reach or sort field this client has never heard of. Typed loosely on
+ * exactly those fields, so the checks normalizeCapabilities() makes read as
+ * checks rather than casts. See docs/spec/wire-format.md § Discovery.
  */
 export type DiscoveryCapabilities = {
   filter?: { content?: string; contentPresent?: boolean; search?: boolean };
@@ -50,17 +48,11 @@ const CONTENT_FILTER_REACHES = new Set<string>(['none', 'field', 'path']);
 const SORT_FIELDS: ReadonlySet<string> = new Set(NATIVE_SORT_FIELDS);
 
 /**
- * Read a discovery response's capabilities, resolving anything absent,
- * malformed or unrecognized to the least capable value it could stand for
- * — one rule, applied once, rather than a default per key at each call
- * site. Silence is never a claim in either direction: a client that read
- * an omitted flag as support would send a query the server drops and
- * present the unfiltered superset that comes back as a filtered result.
- *
- * A `null` limit is the one entry that reads as permissive, because it
- * says only that this client cannot pre-check; the server's own ceiling
- * still answers with a 413.
- * See docs/spec/adapters.md § Adapter capabilities.
+ * Resolves anything absent, malformed or unrecognized to the least capable
+ * value it could stand for — one rule, applied once, rather than a default
+ * per key at each call site. A `null` limit is the one permissive reading,
+ * since the server's own ceiling still answers 413. See
+ * docs/spec/adapters.md § Adapter capabilities.
  */
 export function normalizeCapabilities(
   capabilities: DiscoveryCapabilities | undefined,

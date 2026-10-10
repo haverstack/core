@@ -47,13 +47,9 @@ export type WireRecord = {
 
 /**
  * The response envelope of `GET /records` and `POST /records/query`.
- *
- * `cursor` is the only end-of-results signal: `records` may be empty while
- * `cursor` is non-null, since a server filters a bounded window of stored
- * Records per request against the requester's permissions.
- *
- * There is no count of the whole match — see docs/spec/wire-format.md
- * § Response envelope.
+ * `cursor` is the only end-of-results signal — a page may be empty while
+ * it is non-null — and there is no count of the whole match. See
+ * docs/spec/wire-format.md § Response envelope.
  */
 export type WireQueryResponse = {
   records: WireRecord[];
@@ -72,15 +68,9 @@ export type WireType = {
 };
 
 /**
- * `parentId` is spelled exactly as `WireRecord` spells it: absent is the
- * root. A snapshot is state, not an instruction, so it takes the same
- * shape the record it describes takes — `null` is an input spelling
- * (a change set's `parentId`, a `parentId=null` filter) and never appears
- * on a response. See docs/spec/wire-format.md § Versions.
- *
- * No `associations` field: association changes don't bump `version`,
- * so no version ever snapshots the association set. See
- * docs/spec/versioning.md § Version history.
+ * No `associations`, `permissions`, `parentId` or `unlistedAt`: none of the
+ * four bumps `version`, so no version ever snapshots them. See
+ * docs/spec/wire-format.md § Versions.
  */
 export type WireVersion = {
   version: number;

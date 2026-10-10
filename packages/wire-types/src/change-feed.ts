@@ -17,10 +17,7 @@ import { serializeActor, serializeRecord, type WireRecord } from './records.js';
 /**
  * The change feed a server offers, absent when it offers none. An object
  * rather than a boolean for the same reason `auth` is one: this surface
- * grows entries — another transport, batched frames — and the alternative
- * is a boolean followed by three more of them.
- *
- * See docs/spec/change-feed.md.
+ * grows entries. See docs/spec/change-feed.md.
  */
 export type DiscoveryChanges = {
   transports: ChangeTransport[];
@@ -83,15 +80,9 @@ export function serializeChangeActor(actor: ChangeActor): WireChangeActor {
 
 /**
  * A change as a server frames it. A purge carries neither the record nor
- * its parent, whatever the subscriber asked for: purge is the
- * erasure primitive, and a frame carrying the body — or anything else
- * pointing at it — hands every subscriber a permanent copy of what the
- * stack has just destroyed.
- *
- * The rule lives here rather than at each call site because a server holds
- * the purged record at that moment, for the readability check it can only
- * make before the write, and so is in exactly the position to leak it. See
- * docs/spec/events.md § Purged records carry nothing.
+ * its parent, whatever was asked for: purge is the erasure primitive, and
+ * the rule lives here because a server still holds the purged record at
+ * emission. See docs/spec/events.md § Purged records carry nothing.
  */
 export function serializeChange(c: RecordChange): WireRecordChange {
   const w: WireRecordChange = {
