@@ -9,7 +9,15 @@
  * Two identities, one rule: **the principal governs authority, the subject
  * governs attribution.** Both are DIDs and both are often equal, which is
  * what makes them easy to confuse — so the split is stated on every gate
- * that depends on it.
+ * that depends on it. Grant lookup and the privilege-bearing gates no grant
+ * reaches (resharing, group management, purge, widening access at create
+ * time) key on the principal; authorship, `-own` matching, record-level
+ * permissions and "files I uploaded" key on the subject. Unconditional
+ * owner access splits the same way: an owner subject passes every
+ * permission check, an owner principal is not bounded by grants, and under
+ * delegation both halves apply. The questions those gates ask are
+ * ScopeAuthority's, in authority.ts; this module turns their answers into
+ * refusals.
  *
  * Also holds the feed side of the same rule: a subscription's deliveries
  * run through the same canRead() a get() answers with, so a feed can never
@@ -18,20 +26,11 @@
  * See docs/spec/access-control.md and docs/spec/events.md § Permission scoping.
  */
 
-import { baseIdOf } from './schema.js';
-import { validatePatchValues } from './validate.js';
-import { checkAccess, groupRoleFromAssociations, isOwnerActingAlone } from './access.js';
-import {
-  ChangeEmitter,
-  Subscription,
-  matchesFilter,
-  passesUnlistedBoundary,
-  assertSinceUsable,
-} from './changes.js';
-import type { EmittedChange } from './changes.js';
-import { SYSTEM_TYPES } from './types/index.js';
+import { baseIdOf } from '../schema.js';
+import { validatePatchValues } from '../validate.js';
+import { ChangeEmitter, assertSinceUsable } from '../stack/changes.js';
+import { SYSTEM_TYPES } from '../types/index.js';
 import type {
-  Actor,
   ActorOptions,
   AppContent,
   AppId,
@@ -45,7 +44,6 @@ import type {
   EntityId,
   FileId,
   GrantAction,
-  GrantContent,
   GroupRole,
   QueryResult,
   RecordChange,
@@ -63,15 +61,14 @@ import type {
   TypeId,
   Unsubscribe,
   RecordChangeSet,
-} from './types/index.js';
+} from '../types/index.js';
 import {
-  StackError,
   StackConflictError,
   StackNotFoundError,
   StackPermissionError,
   RelayScopeError,
   StackValidationError,
-} from './errors.js';
+} from '../errors.js';
 import {
   assertAssociationEdits,
   assertAssociationList,
@@ -82,38 +79,33 @@ import {
   assertValidBaseIdFilter,
   assertValidSort,
   filtersContent,
-} from './query-validation.js';
+} from '../query-validation.js';
+import { bindingFieldsOf } from '../stack/identity-bindings.js';
 import {
-  grantConveys,
-  grantCoversGrantee,
-  grantReach,
-  loadGrantRecords,
-  UNGRANTABLE_SYSTEM_TYPES,
-} from './grants.js';
-import { bindingFieldsOf } from './identity-bindings.js';
-import { checkFamily, storedVersionDiffers, WRITE_EXPECTATION } from './write-expectation.js';
-import type { ExpectationOptions } from './write-expectation.js';
-import { claimedFamilies, familyStanding, linkedIds, INSTALL_APP_LABEL } from './install.js';
-import { assertAttachmentSize } from './limits.js';
-import { validateIdTimestampSkew, validateRecordId } from './record-id.js';
+  checkFamily,
+  storedVersionDiffers,
+  WRITE_EXPECTATION,
+} from '../stack/write-expectation.js';
+import type { ExpectationOptions } from '../stack/write-expectation.js';
+import { claimedFamilies, familyStanding, linkedIds, INSTALL_APP_LABEL } from '../install.js';
+import { assertAttachmentSize } from '../stack/limits.js';
+import { validateIdTimestampSkew, validateRecordId } from '../stack/record-id.js';
 import {
   DEFAULT_QUERY_LIMIT,
   MAX_QUERY_LIMIT,
-  findFirstMatch,
+  findAppCardByDid,
+  loadInstallRecords,
   lookupEntityByDid,
-  queryAllPages,
-} from './stack-reads.js';
+} from '../stack/reads.js';
 import {
+  assertNonEmptyChangeSet,
   associationDelta,
   associationEqual,
+  editsOf,
   isGroupRecord,
   presentDeleted,
   withoutAuthorityChanges,
-  assertNonEmptyChangeSet,
-} from './record-changes.js';
-// Every import from stack.js is type-only: a ScopedStack never constructs
-// a Stack, so nothing here closes a runtime cycle with stack.ts, which does
-// construct a ScopedStack.
+} from '../record-changes.js';
 import {
   isTypeHandle,
   typedCreate,
@@ -121,7 +113,7 @@ import {
   typedMutate,
   typedQuery,
   typedSubscribe,
-} from './type-handle.js';
+} from '../type-handle.js';
 import type {
   ContentOf,
   PatchOf,
@@ -132,9 +124,15 @@ import type {
   TypedSubscribeOptions,
   TypedRecord,
   TypeHandle,
-} from './type-handle.js';
+} from '../type-handle.js';
+import { uploadContent } from '../stack/attachments.js';
+// Type-only: a ScopedStack never constructs a Stack, so nothing here
+// closes a runtime cycle with stack.ts, which does construct a ScopedStack.
+import type { Stack } from '../stack/stack.js';
+import { ScopeAuthority } from './authority.js';
+import { ScopedSubscription } from './subscription.js';
+import type { FeedAuthorityCache } from './subscription.js';
 import type {
-  Stack,
   BackdatableCreateRecordOptions,
   CollectAttachmentGarbageOptions,
   CollectAttachmentGarbageResult,
@@ -143,113 +141,7 @@ import type {
   DeleteResult,
   GetRecordOptions,
   StackClient,
-} from './stack.js';
-
-/**
- * The authority lookups canRead needs, held for the life of one
- * subscription. A subscription is long-lived where a query is not, so the
- * cache is only safe because every write that can change canRead's answer
- * arrives as an event that drops it — see ScopedSubscription.
- */
-class FeedAuthorityCache {
-  private grantRecords: StackRecord[] | null = null;
-  /**
-   * Bumped by every invalidation, so a load that was already in flight can
-   * tell that its result is stale before seating it.
-   */
-  private generation = 0;
-  /** Roster roles, memoized per group, as ScopedStack.query() does per query. */
-  roles = new Map<string, GroupRole | null>();
-
-  /** Every `_grant` record, refilled through `load` after an invalidation. */
-  async grants(load: () => Promise<StackRecord[]>): Promise<StackRecord[]> {
-    if (this.grantRecords !== null) return this.grantRecords;
-    const generation = this.generation;
-    const loaded = await load();
-    // An invalidation during the load already dropped the set these
-    // replace, so seating them would outlive the write that expired them
-    // and no later event would drop them again. The event being decided
-    // precedes that write, so it is still decided on what was loaded.
-    if (this.generation === generation) this.grantRecords = loaded;
-    return loaded;
-  }
-
-  invalidateFor(typeFamily: string): void {
-    if (typeFamily === SYSTEM_TYPES.GRANT) {
-      this.grantRecords = null;
-      this.generation++;
-    }
-    if (typeFamily === SYSTEM_TYPES.GROUP) this.roles = new Map();
-  }
-}
-
-/**
- * A ScopedStack's delivery: canRead per event, with the grant and roster
- * lookups it needs cached for the life of the subscription and dropped the
- * moment anything that feeds them changes.
- *
- * Two properties do the work, and neither is optional. **Deliveries are
- * serialized**, because the permission decision is asynchronous and two
- * changes to one record could otherwise resolve out of order, breaking the
- * feed's one ordering guarantee. And **the filter fails closed**: a check
- * that throws drops the event and reports the error.
- * See docs/spec/events.md § Permission scoping.
- */
-class ScopedSubscription extends Subscription {
-  private readonly cache = new FeedAuthorityCache();
-  /** Tail of the delivery chain — see the class comment. */
-  private queue: Promise<void> = Promise.resolve();
-
-  constructor(
-    private readonly canRead: (record: StackRecord, cache: FeedAuthorityCache) => Promise<boolean>,
-    handler: (change: RecordChange) => void,
-    opts: SubscribeOptions,
-  ) {
-    super(handler, opts);
-  }
-
-  accept(emission: EmittedChange): void {
-    // Invalidation reads every emission, including the ones this
-    // subscriber may not see: a revocation the subscriber cannot read is
-    // exactly the one that must still expire its cache.
-    this.invalidateFor(emission);
-    if (!matchesFilter(emission, this.opts.filter)) return;
-    this.queue = this.queue.then(() => this.filterAndDeliver(emission));
-  }
-
-  /**
-   * A cached grant set outlives the write that revokes it unless something
-   * drops it. Both writes that can change canRead's answer — a `_grant`
-   * record, or a `_group` roster — arrive here as ordinary events, which
-   * is what makes the cache safe to hold at all. A future authority change
-   * that did not emit would silently strand it.
-   */
-  private invalidateFor(emission: EmittedChange): void {
-    this.cache.invalidateFor(baseIdOf(emission.change.typeId));
-  }
-
-  private async filterAndDeliver(emission: EmittedChange): Promise<void> {
-    if (this.isClosed) return;
-    if (!passesUnlistedBoundary(emission, this.opts.includeUnlisted)) return;
-    try {
-      if (!(await this.canRead(emission.record, this.cache))) return;
-    } catch (err) {
-      // Fail closed: an undecided permission question is not a yes.
-      this.reportError(err);
-      return;
-    }
-    // After the permission decision, which needs the whole record: a frame
-    // carrying a deleted record's body would be a read channel around the
-    // tombstone. See docs/spec/events.md § Soft-deleted records reach the
-    // feed as tombstones.
-    this.deliver(this.project(emission));
-  }
-
-  private project(emission: EmittedChange): EmittedChange {
-    const record = presentDeleted(emission.record);
-    return record === emission.record ? emission : { ...emission, record };
-  }
-}
+} from '../stack/client.js';
 
 /**
  * Held by Stack alone: the index re-exports ScopedStack but not this, so
@@ -278,25 +170,13 @@ export type ScopedStackInit = {
 };
 
 /**
- * A permission-enforcing view of a Stack for a single (principal, subject)
- * pair, obtained via `stack.asEntity(entityId)`. A record the request
- * cannot read answers exactly as a missing one does — null on reads,
- * StackNotFoundError on the verbs that name one — so only a requester who
- * could have read it is told a refusal was about access.
+ * A permission-enforcing view of a Stack for one (principal, subject) pair,
+ * obtained via `stack.asEntity()` or `stack.asActor()`. A record the request
+ * cannot read answers exactly as a missing one does.
  * See docs/spec/disclosure.md § Which refusal a Record answers with.
- *
- * Which identity each gate keys on follows the module comment's rule.
- * Grant lookup and the privilege-bearing gates no grant reaches
- * (resharing, group management, purge, widening access at create
- * time) key on `principalId`; authorship, `-own` matching,
- * record-level permission resolution and "files I uploaded" lookups key on
- * `subjectId`. Unconditional owner access splits the same way: an
- * owner subject resolves past every permission check, an owner principal
- * is not bounded by grants, and under delegation both halves apply.
  */
 export class ScopedStack implements StackClient {
-  readonly #principalId: EntityId | null;
-  readonly #subjectId: EntityId | null;
+  readonly #authority: ScopeAuthority;
   private readonly stack: Stack;
   private readonly idTimestampSkewMs: number | null;
   private readonly adapter: StackAdapter;
@@ -310,8 +190,7 @@ export class ScopedStack implements StackClient {
       throw new TypeError('A ScopedStack is obtained through Stack.asEntity() or Stack.asActor()');
     }
     this.stack = init.stack;
-    this.#principalId = init.principalId;
-    this.#subjectId = init.subjectId;
+    this.#authority = new ScopeAuthority(init.stack, init.principalId, init.subjectId);
     this.idTimestampSkewMs = init.idTimestampSkewMs;
     this.adapter = init.adapter;
     this.changes = init.changes;
@@ -324,7 +203,7 @@ export class ScopedStack implements StackClient {
    * anonymous. See docs/spec/access-control.md § Delegation: principal and subject.
    */
   get principalId(): EntityId | null {
-    return this.#principalId;
+    return this.#authority.principalId;
   }
 
   /**
@@ -332,287 +211,30 @@ export class ScopedStack implements StackClient {
    * anonymous. Equal to `principalId` unless an app is acting for a user.
    */
   get subjectId(): EntityId | null {
-    return this.#subjectId;
+    return this.#authority.subjectId;
   }
 
   get capabilities(): StackCapabilities {
     return this.stack.capabilities;
   }
 
-  private resolveRecord = (id: string): Promise<StackRecord | null> =>
-    this.stack.get(id, { includeDeleted: true });
-
-  /** Every `_grant` Record — see loadGrantRecords(). */
-  private loadGrants = (): Promise<StackRecord[]> => loadGrantRecords((q) => this.stack.query(q));
-
-  /** Whether a delegated app is acting for someone other than itself. */
-  private get delegated(): boolean {
-    return this.#subjectId !== this.#principalId;
-  }
-
-  /**
-   * Whether any grant could name this request — the one question every
-   * prefetch asks before scanning the `_grant` family, since an anonymous
-   * requester is reached by none. Both identities are read: `asEntity()`
-   * refuses an anonymous principal acting for a subject, so they are null
-   * together, and saying so costs nothing.
-   */
-  private get identified(): boolean {
-    return this.#principalId !== null || this.#subjectId !== null;
-  }
-
-  /**
-   * Who this request is, for stamping onto whatever it mutates. Attribution
-   * follows record-level authorship: the subject is the actor, and the
-   * principal is named beside it only when the two differ.
-   * See docs/spec/data-model.md § Authorship and attribution.
-   */
-  private get requester(): Actor | undefined {
-    if (this.#subjectId === null) return undefined;
-    return this.delegated && this.#principalId !== null
-      ? { subjectId: this.#subjectId, principalId: this.#principalId }
-      : { subjectId: this.#subjectId };
-  }
-
   private get actor(): ActorOptions {
     // The key is always present, so spreading this last overrides anything
     // a caller passed: a scoped requester names itself by making the
     // request, never by describing itself in the options.
-    return { actor: this.requester };
+    return { actor: this.#authority.requester };
   }
 
-  /**
-   * Whether unconditional owner authority applies — the owner acting as
-   * itself. The verbs that rest on it are irreversible or disclose the
-   * sharing graph, so delegation never carries one to a subject, whichever
-   * side the owner is on. Shared with the predicate a server applies to a
-   * session, which decides the same tier one step earlier. See
-   * docs/spec/access-control.md § Delegation: principal and subject.
-   */
-  private get ownerActingAlone(): boolean {
-    return isOwnerActingAlone(
-      { principalId: this.#principalId, subjectId: this.#subjectId },
-      this.stack.ownerEntityId,
-    );
+  /** Refuse a create this request holds no grant for — see ScopeAuthority.checkCreateGrant(). */
+  private async requireCreateGrant(typeId: TypeId): Promise<void> {
+    if (!(await this.#authority.checkCreateGrant(typeId))) {
+      throw new StackPermissionError(`No create grant for type "${typeId}"`);
+    }
   }
 
-  /** Refuse anything but the owner acting as itself — see ownerActingAlone. */
+  /** Refuse anything but the owner acting as itself — see ScopeAuthority.ownerActingAlone. */
   private requireOwnerActingAlone(message: string): void {
-    if (!this.ownerActingAlone) throw new StackPermissionError(message);
-  }
-
-  private checkRead(record: StackRecord): Promise<boolean> {
-    return checkAccess(
-      record,
-      this.#subjectId,
-      this.stack.ownerEntityId,
-      'read',
-      this.resolveRecord,
-    );
-  }
-
-  private checkWrite(record: StackRecord): Promise<boolean> {
-    return checkAccess(
-      record,
-      this.#subjectId,
-      this.stack.ownerEntityId,
-      'write',
-      this.resolveRecord,
-    );
-  }
-
-  /**
-   * Whether `grantee` holds a _grant covering one of `actions` for the
-   * type's family (grants match by baseId, so a version bump never orphans
-   * one). -own actions additionally require the author to be `grantee`,
-   * unless `matchOwn` is false — on the principal side of a delegated
-   * request the suffix reads as the bare verb, since which records are
-   * reachable is the subject's business. `allowDefault` decides whether a
-   * grant naming nobody counts.
-   *
-   * Reached only through subjectAllows()/principalAllows(), which fix those
-   * two flags per side. Call one of those instead.
-   */
-  private async hasGrant(
-    typeId: TypeId,
-    actions: GrantAction[],
-    opts: {
-      grantee: EntityId | null;
-      record?: StackRecord;
-      prefetchedGrants?: StackRecord[];
-      groupRoles?: Map<string, GroupRole | null>;
-      matchOwn?: boolean;
-      allowDefault?: boolean;
-      allowGroup?: boolean;
-    },
-  ): Promise<boolean> {
-    const {
-      grantee,
-      record,
-      prefetchedGrants,
-      matchOwn = true,
-      allowDefault = true,
-      allowGroup = true,
-    } = opts;
-    if (!grantee) return false;
-    // Absent when the caller has no operation-scoped map to share — one
-    // call's worth of memoization, which is still every grant record in
-    // this loop naming the same group.
-    const groupRoles = opts.groupRoles ?? new Map<string, GroupRole | null>();
-
-    const familyId = baseIdOf(typeId);
-
-    // grantType() refuses to write these, but a _grant record is an ordinary
-    // Record: an unscoped Stack, an import, or a server mapping a request
-    // body onto Stack can mint one anyway. Refusing at the point of use is
-    // what makes the rule hold regardless of how the record got there.
-    if (UNGRANTABLE_SYSTEM_TYPES.has(familyId)) return false;
-
-    let grantRecords: StackRecord[];
-    if (prefetchedGrants !== undefined) {
-      grantRecords = prefetchedGrants;
-    } else {
-      // Cursor-walked to see grants past page one. A stored baseId is
-      // judged by grantReach(), which refuses a versioned one.
-      grantRecords = await this.loadGrants();
-    }
-
-    for (const r of grantRecords) {
-      const c = r.content as GrantContent;
-      const reach = grantReach(c);
-      if (!reach || reach.familyId !== familyId) continue;
-      const covers = await grantCoversGrantee(c, grantee, {
-        allowDefault,
-        allowGroup,
-        groupRoles,
-        resolveRecord: this.resolveRecord,
-      });
-      if (!covers) continue;
-      const matches = actions.some((action) => {
-        if (!grantConveys(reach.actions, action)) return false;
-        if (matchOwn && action.endsWith('-own')) return record?.createdBy?.subjectId === grantee;
-        return true;
-      });
-      if (matches) return true;
-    }
-    return false;
-  }
-
-  /**
-   * The principal half of a delegated request's authority: does the app
-   * hold any grant permitting these verbs on this type at all. Bounds what
-   * the subject's own authority can reach through it, so a powerful app
-   * can never lend its reach to a weaker subject — nor the reverse.
-   * Vacuously true when there's no delegation, where the principal and
-   * subject checks would be the same question asked twice.
-   *
-   * Neither default nor group-targeted grants count here. "Any
-   * authenticated entity" is about people who turn up, not software the
-   * owner installed; and a roster is editable by any of the group's admins,
-   * so authority reaching a principal through one would let someone other
-   * than the owner name an app to a type.
-   */
-  private principalAllows(
-    typeId: TypeId,
-    actions: GrantAction[],
-    prefetchedGrants?: StackRecord[],
-  ): Promise<boolean> {
-    if (!this.delegated) return Promise.resolve(true);
-    if (this.#principalId === this.stack.ownerEntityId) return Promise.resolve(true);
-    return this.hasGrant(typeId, actions, {
-      grantee: this.#principalId,
-      prefetchedGrants,
-      matchOwn: false,
-      allowDefault: false,
-      allowGroup: false,
-    });
-  }
-
-  /**
-   * The subject half: which records are reachable, answered with `-own`
-   * matching and default grants both in force — the ordinary reading of a
-   * grant, since the subject is the entity a grant is written about.
-   *
-   * Paired with principalAllows() so that the two halves of the
-   * intersection are the only callers of hasGrant(): its flags differ per
-   * side and mean nothing on their own, so no call site sets them by hand.
-   */
-  private subjectAllows(
-    typeId: TypeId,
-    actions: GrantAction[],
-    opts: {
-      record?: StackRecord;
-      prefetchedGrants?: StackRecord[];
-      groupRoles?: Map<string, GroupRole | null>;
-    } = {},
-  ): Promise<boolean> {
-    return this.hasGrant(typeId, actions, {
-      grantee: this.#subjectId,
-      record: opts.record,
-      prefetchedGrants: opts.prefetchedGrants,
-      groupRoles: opts.groupRoles,
-    });
-  }
-
-  /**
-   * How to refuse a record this request addressed by ID. A requester who
-   * can read the record is told it exists and the verb was refused;
-   * everyone else is told what a missing ID is told, so no one learns an ID
-   * is live who could not have learned it by reading. `message` therefore
-   * only ever reaches someone holding the record already.
-   * See docs/spec/disclosure.md § Which refusal a Record answers with.
-   */
-  private async denialFor(record: StackRecord, message: string): Promise<StackError> {
-    // Prefetched here rather than threaded down from the gate: a write
-    // carried by a record-level permission settles without reading a grant
-    // at all, and that path must not pay for this one. Both halves of
-    // canRead share the one scan.
-    const grants = this.identified ? await this.loadGrants() : undefined;
-    if (await this.canRead(record, grants)) return new StackPermissionError(message);
-    return new StackNotFoundError(`Record not found: "${record.id}"`);
-  }
-
-  private async canRead(
-    record: StackRecord,
-    prefetchedGrants?: StackRecord[],
-    groupRoles?: Map<string, GroupRole | null>,
-  ): Promise<boolean> {
-    const reachable =
-      (await this.checkRead(record)) ||
-      (await this.subjectAllows(record.typeId, ['read-own', 'read-any'], {
-        record,
-        prefetchedGrants,
-        groupRoles,
-      }));
-    if (!reachable) return false;
-    return this.principalAllows(record.typeId, ['read-own', 'read-any'], prefetchedGrants);
-  }
-
-  private async checkCreateGrant(typeId: TypeId): Promise<boolean> {
-    if (this.ownerActingAlone) return true;
-    const reachable =
-      this.#subjectId === this.stack.ownerEntityId ||
-      (await this.subjectAllows(typeId, ['create']));
-    if (!reachable) return false;
-    return this.principalAllows(typeId, ['create']);
-  }
-
-  /**
-   * `_group` records are managed, not merely written: only the owner or an
-   * `admin` roster holder may mutate them — ordinary write permissions and
-   * grants don't apply. Asked of both identities under delegation, like
-   * a reshare. See docs/spec/identity.md § Group.
-   */
-  private isGroupManager(record: StackRecord): boolean {
-    if (!this.managesGroup(this.#principalId, record)) return false;
-    return !this.delegated || this.managesGroup(this.#subjectId, record);
-  }
-
-  /** Whether one identity, on its own, manages `record` — see isGroupManager(). */
-  private managesGroup(entityId: EntityId | null, record: StackRecord): boolean {
-    if (!entityId) return false;
-    if (entityId === this.stack.ownerEntityId) return true;
-    return groupRoleFromAssociations(record.associations, entityId) === 'admin';
+    if (!this.#authority.ownerActingAlone) throw new StackPermissionError(message);
   }
 
   /**
@@ -652,8 +274,8 @@ export class ScopedStack implements StackClient {
     checkFamily(record, opts.expect);
     if (opts.fenceGrantRecord) await this.requireOwnerForGrantRecord(record);
     if (isGroupRecord(record)) {
-      if (!this.isGroupManager(record)) {
-        throw await this.denialFor(
+      if (!this.#authority.isGroupManager(record)) {
+        throw await this.#authority.denialFor(
           record,
           `Cannot change group "${id}": only its admins can manage it`,
         );
@@ -661,13 +283,13 @@ export class ScopedStack implements StackClient {
       return record;
     }
     const subjectReaches =
-      (await this.checkWrite(record)) ||
-      (await this.subjectAllows(record.typeId, actions, { record }));
-    const principalHolds = await this.principalAllows(record.typeId, actions);
+      (await this.#authority.recordPermits(record, 'write')) ||
+      (await this.#authority.subjectAllows(record.typeId, actions, { record }));
+    const principalHolds = await this.#authority.principalAllows(record.typeId, actions);
     if (!subjectReaches || !principalHolds) {
       const verb = actions[0]!.split('-')[0]!;
       const what = `Cannot ${verb} "${id}" (${record.typeId})`;
-      throw await this.denialFor(
+      throw await this.#authority.denialFor(
         record,
         subjectReaches
           ? `${what}: the app acting for this entity holds no ${verb} grant`
@@ -688,108 +310,6 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Whether this request may reference `recordId` (as a parentId or
-   * relationship target). Missing and unreadable both return false —
-   * indistinguishable, so this can't probe for a record's existence.
-   *
-   * The owner acting alone passes without the lookup: there is no record in
-   * their own stack they may not read, so the gate could only refuse them
-   * for absence — which is `Stack`'s to answer, with a conflict that names
-   * the problem. See docs/spec/access-control.md § Reference-creation gating.
-   */
-  private async canReadReferent(recordId: string): Promise<boolean> {
-    if (this.ownerActingAlone) return true;
-    const record = await this.stack.get(recordId, { includeDeleted: true });
-    if (!record) return false;
-    return this.canRead(record);
-  }
-
-  /**
-   * Whether this request can read some record referencing `fileId` —
-   * shared by canAccessFile() and the non-owner _attachment@1 create()
-   * carve-out, which deliberately excludes the uploader clause.
-   * `_attachment@1` records never match: the carve-out has to be satisfied
-   * by some *other* record referencing the file, or one successful guess
-   * would unlock unlimited further metadata records for the same fileId.
-   * See docs/spec/attachments.md § Creating `_attachment@1` records directly.
-   */
-  private async hasReadableReference(fileId: string): Promise<boolean> {
-    const prefetchedGrants = this.identified ? await this.loadGrants() : undefined;
-    const groupRoles = new Map<string, GroupRole | null>();
-
-    const match = await findFirstMatch(
-      (q) => this.stack.query(q),
-      // Reach, not enumeration: a record readable by ID conveys the file it
-      // references. See docs/spec/unlisted.md.
-      { filter: { referencesFileId: fileId, includeUnlisted: true } },
-      (record) =>
-        baseIdOf(record.typeId) !== SYSTEM_TYPES.ATTACHMENT &&
-        this.canRead(record, prefetchedGrants, groupRoles),
-    );
-    return match !== undefined;
-  }
-
-  /**
-   * Whether this request may reference or download `fileId` — the dual of
-   * getAttachment()'s access rule. Nonexistent and inaccessible are
-   * indistinguishable (both false), so no confirmation oracle for guessed
-   * hashes. See docs/spec/access-control.md § Reference-creation gating.
-   */
-  private async canAccessFile(fileId: string): Promise<boolean> {
-    if (this.ownerActingAlone) return true;
-
-    // Reaching a file through a record this request can read is already
-    // fully intersected — canRead() applied the principal's mask against
-    // that record's own type, which is the type the reference lives on.
-    if (await this.hasReadableReference(fileId)) return true;
-
-    if (!this.#subjectId) return false;
-
-    // The remaining paths are authorship facts about the subject, so they
-    // decide *which* files match — they are not themselves a grant, and the
-    // principal still needs one of its own on the attachment type.
-    if (!(await this.principalAllows(`${SYSTEM_TYPES.ATTACHMENT}@1`, ['read-own', 'read-any']))) {
-      return false;
-    }
-
-    if (this.#subjectId === this.stack.ownerEntityId) return true;
-
-    // `includeUnlisted`, as hasReadableReference() above: withholding a
-    // record from enumeration decides nothing about what it conveys, and
-    // the uploader clause does not lapse. See docs/spec/unlisted.md.
-    return filtersContent(this.stack.capabilities)
-      ? (
-          await this.stack.query({
-            filter: {
-              typeId: `${SYSTEM_TYPES.ATTACHMENT}@1`,
-              createdBy: { subjectId: this.#subjectId },
-              content: { fileId },
-              includeUnlisted: true,
-            },
-            limit: 1,
-          })
-        ).records.length > 0
-      : (
-          await queryAllPages((q) => this.stack.query(q), {
-            filter: {
-              typeId: `${SYSTEM_TYPES.ATTACHMENT}@1`,
-              createdBy: { subjectId: this.#subjectId },
-              includeUnlisted: true,
-            },
-          })
-        ).some((r) => (r.content as AttachmentContent).fileId === fileId);
-  }
-
-  /** Names of the type's top-level file-ref fields — the content-reference half of referencesFileId matching. */
-  private async fileRefFieldNames(typeId: TypeId): Promise<string[]> {
-    const type = await this.stack.getType(typeId);
-    if (!type) return [];
-    return Object.entries(type.schema)
-      .filter(([, def]) => def.kind === 'file-ref')
-      .map(([field]) => field);
-  }
-
-  /**
    * Gates file-ref content fields on file access, mirroring the
    * attachment-association gate — a file-ref field conveys attachment
    * access exactly like an `attachment` association. Only fields present
@@ -800,10 +320,10 @@ export class ScopedStack implements StackClient {
     typeId: TypeId,
     content: Record<string, unknown | null>,
   ): Promise<void> {
-    for (const field of await this.fileRefFieldNames(typeId)) {
+    for (const field of await this.#authority.fileRefFieldNames(typeId)) {
       const value = content[field];
       if (typeof value !== 'string') continue;
-      if (!(await this.canAccessFile(value))) {
+      if (!(await this.#authority.canAccessFile(value))) {
         throw new StackPermissionError(
           `Cannot reference file "${value}" in field "${field}": it does not exist or you cannot read it`,
         );
@@ -812,20 +332,15 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Reference-creation gate for one association: `attachment` requires
-   * file access, and a `relationship` naming a record in this stack
-   * requires read access to it. `tag` is unchecked, and `_group` roster
-   * associations are gated by the stricter isGroupManager() instead.
-   *
-   * The other target arms are ungated because the gate's purpose —
-   * refusing a reference that would convey access to, or confirm the
-   * existence of, an unreadable record — has nothing to bite on: core
-   * never resolves them, so no access flows through one.
-   * See docs/spec/access-control.md § Reference-creation gating.
+   * Reference-creation gate for one association: file access for an
+   * `attachment`, read access for a `relationship` to a record in this
+   * stack. Other targets convey nothing, and a `_group` roster has the
+   * stricter management gate. See docs/spec/access-control.md
+   * § Reference-creation gating.
    */
   private async requireAssociationAccess(typeId: TypeId, association: Association): Promise<void> {
     if (association.kind === 'attachment') {
-      if (!(await this.canAccessFile(association.fileId))) {
+      if (!(await this.#authority.canAccessFile(association.fileId))) {
         throw new StackPermissionError(
           `Cannot reference file "${association.fileId}": it does not exist or you cannot read it`,
         );
@@ -837,7 +352,7 @@ export class ScopedStack implements StackClient {
       // read them as this stack — so a check on presence alone would
       // leave one spelling of a local Record ungated.
       if (target.kind !== 'record' || target.stackUrl) return;
-      if (!(await this.canReadReferent(target.recordId))) {
+      if (!(await this.#authority.canReadReferent(target.recordId))) {
         throw new StackPermissionError(
           `Cannot reference record "${target.recordId}": it does not exist or you cannot read it`,
         );
@@ -846,15 +361,10 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Create a record on behalf of the subject: create grant required,
-   * anonymous denied, `createdBy` set to the requester, client IDs skew-checked,
-   * reference-creating options gated, and non-owner `_attachment@1`
-   * creation refused save one carve-out. A scoped create always stamps
-   * authorship — an absent `createdBy` means an unscoped `Stack` wrote it.
-   * `createdAt`/`updatedAt` are refused to everyone but the owner acting
-   * alone, rather than dropped, so an app never believes it published
-   * something it didn't. See docs/spec/access-control.md and
-   * docs/spec/data-model.md § Record IDs.
+   * Create a record on behalf of the subject, stamped with the requester as
+   * `createdBy`. Every option that could widen reach or forge a position is
+   * refused rather than dropped, so an app never believes it published
+   * something it didn't. See docs/spec/data-model.md § Backdating on import.
    */
   async create<S extends ReadonlyTypeSchema>(
     handle: TypeHandle<S>,
@@ -875,39 +385,40 @@ export class ScopedStack implements StackClient {
       return typedCreate(this, typeIdOrHandle, content as never, opts);
     }
     const typeId = typeIdOrHandle;
-    const principal = this.#principalId;
+    const principal = this.#authority.principalId;
     if (!principal) throw new StackPermissionError('Anonymous requesters cannot create records');
     // A grantee is exactly the untrusted actor the `id` skew check below
     // exists to stop from forging a sort position, and a delegated app
     // acting for the owner inherits none of the owner's extra trust — same
-    // reasoning as mayGrantAccess() below. Asked value-wise, since an
+    // reasoning as ScopeAuthority.mayGrantAccess(). Asked value-wise, since an
     // `undefined` carries no date and Stack.create() reads it as absent.
-    if ((opts.createdAt !== undefined || opts.updatedAt !== undefined) && !this.ownerActingAlone) {
+    if (
+      (opts.createdAt !== undefined || opts.updatedAt !== undefined) &&
+      !this.#authority.ownerActingAlone
+    ) {
       throw new StackPermissionError(
         'createdAt/updatedAt can only be set by the stack owner acting alone; a grantee or delegated create always stamps the current time.',
       );
     }
-    if (!(await this.checkCreateGrant(typeId))) {
-      throw new StackPermissionError(`No create grant for type "${typeId}"`);
-    }
+    await this.requireCreateGrant(typeId);
     // The exemption is the owner's own, so delegation doesn't carry it: an
     // owner principal acting for someone else would otherwise let that
     // subject name any fileId and reach the bytes through the uploader
     // clause, which matches on the subject this create stamps.
-    if (!this.ownerActingAlone && baseIdOf(typeId) === SYSTEM_TYPES.ATTACHMENT) {
+    if (!this.#authority.ownerActingAlone && baseIdOf(typeId) === SYSTEM_TYPES.ATTACHMENT) {
       const fileId = (content as Record<string, unknown>).fileId;
-      if (typeof fileId !== 'string' || !(await this.hasReadableReference(fileId))) {
+      if (typeof fileId !== 'string' || !(await this.#authority.hasReadableReference(fileId))) {
         throw new StackPermissionError(
           `Cannot reference file "${String(fileId)}": it does not exist or you cannot read it`,
         );
       }
     }
-    if (opts.permissions?.length && !this.mayGrantAccess()) {
+    if (opts.permissions?.length && !this.#authority.mayGrantAccess()) {
       throw new StackPermissionError(
         'A delegated principal cannot set permissions, at create time or after',
       );
     }
-    if (opts.unlisted && !this.mayGrantAccess()) {
+    if (opts.unlisted && !this.#authority.mayGrantAccess()) {
       throw new StackPermissionError(
         'A delegated principal cannot create an unlisted record, at create time or after',
       );
@@ -916,17 +427,14 @@ export class ScopedStack implements StackClient {
     await this.requireAppIdMatchesPrincipal(opts.appId);
     if (opts.id !== undefined) {
       validateRecordId(opts.id);
-      // Skipped when createdAt is also supplied: only the owner reaches
-      // here with that combination (checked above), and Stack.create()
-      // below checks the id against createdAt instead of "now" — the
-      // check here exists for a live grantee write, and a backdated
-      // owner create is deliberately not one. See
-      // docs/spec/data-model.md § Record IDs.
+      // A backdated create — the owner's alone, checked above — has its id
+      // checked against `createdAt` by Stack.create() instead of against now.
+      // See docs/spec/data-model.md § Record IDs.
       if (opts.createdAt === undefined) {
         validateIdTimestampSkew(opts.id, this.idTimestampSkewMs, Date.now(), 'the current time');
       }
     }
-    if (opts.parentId !== undefined && !(await this.canReadReferent(opts.parentId))) {
+    if (opts.parentId !== undefined && !(await this.#authority.canReadReferent(opts.parentId))) {
       throw new StackPermissionError(
         `Cannot reference record "${opts.parentId}" as parent: it does not exist or you cannot read it`,
       );
@@ -937,34 +445,8 @@ export class ScopedStack implements StackClient {
     await this.requireFileRefAccess(typeId, content);
     return this.stack.create(typeId, content, {
       ...opts,
-      createdBy: this.requester,
+      createdBy: this.#authority.requester,
     });
-  }
-
-  /**
-   * Whether this request may decide who else reaches a record — the rule
-   * a reshare enforces, asked at create time too so the reach it
-   * withholds can't be taken one step earlier while authoring. A delegated
-   * app is denied it: widening access is the one thing containment most
-   * needs to hold. Refused rather than silently ignored, so an app never
-   * believes it published something it didn't. Not `ownerActingAlone`:
-   * the record is the subject's own, so an owner principal grants it no
-   * reach the subject lacks.
-   * See docs/spec/access-control.md § Delegation: principal and subject.
-   */
-  private mayGrantAccess(): boolean {
-    return !this.delegated || this.#principalId === this.stack.ownerEntityId;
-  }
-
-  /**
-   * Whether one identity, on its own, may decide who else reaches `record`
-   * — the owner-or-creator rule a reshare enforces, asked of one
-   * side at a time. See
-   * docs/spec/access-control.md § Delegation: principal and subject.
-   */
-  private mayReshare(entityId: EntityId | null, record: StackRecord): boolean {
-    if (!entityId) return false;
-    return entityId === this.stack.ownerEntityId || entityId === record.createdBy?.subjectId;
   }
 
   /**
@@ -987,7 +469,7 @@ export class ScopedStack implements StackClient {
     const opts = idOrOpts as GetRecordOptions;
     const record = await this.stack.get(id, opts);
     if (!record) return null;
-    if (!(await this.canRead(record))) return null;
+    if (!(await this.#authority.canRead(record))) return null;
     return presentDeleted(record);
   }
 
@@ -1002,7 +484,7 @@ export class ScopedStack implements StackClient {
       (q) => this.query(q),
       did,
       filtersContent(this.stack.capabilities),
-      this.ownerActingAlone,
+      this.#authority.ownerActingAlone,
     );
   }
 
@@ -1031,7 +513,7 @@ export class ScopedStack implements StackClient {
     assertSortCapability(query.sort, this.stack.capabilities);
     assertValidAssociationFilters(query.filter);
     assertValidBaseIdFilter(query.filter);
-    if (query.filter?.includeUnlisted && !this.ownerActingAlone) {
+    if (query.filter?.includeUnlisted && !this.#authority.ownerActingAlone) {
       throw new StackPermissionError('includeUnlisted is owner-only');
     }
     const limit = Math.min(query.limit ?? DEFAULT_QUERY_LIMIT, MAX_QUERY_LIMIT);
@@ -1039,7 +521,9 @@ export class ScopedStack implements StackClient {
     const maxFetched = limit * 10;
     let totalFetched = 0;
 
-    const prefetchedGrants = this.identified ? await this.loadGrants() : undefined;
+    const prefetchedGrants = this.#authority.identified
+      ? await this.#authority.loadGrants()
+      : undefined;
     // Scoped to this query, like prefetchedGrants beside it: every
     // candidate Record shares one roster resolution per group, and nothing
     // is carried into the next operation.
@@ -1053,7 +537,7 @@ export class ScopedStack implements StackClient {
         // Projected here as well as in get(), or `includeDeleted` would be
         // a strictly better read channel than the fetch-by-ID it is
         // supposed to match.
-        if (await this.canRead(record, prefetchedGrants, groupRoles)) {
+        if (await this.#authority.canRead(record, prefetchedGrants, groupRoles)) {
           records.push(presentDeleted(record));
         }
       }
@@ -1063,14 +547,10 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Apply a change set on behalf of the subject. Authority is resolved
-   * **per key** and every gate reads the record as it stands, never as the
-   * change set would leave it: a widened `permissions` never satisfies the
-   * read check on a `parentId` named in the same call, and a `_group`
-   * roster never satisfies the admin check that same call has to pass.
-   * One refused key refuses the whole call, so nothing is partially
-   * applied and no key is silently dropped.
-   * See docs/spec/access-control.md § Composing a change set.
+   * Apply a change set on behalf of the subject. Each key is gated against
+   * the record as it stands, never as the set would leave it, and one
+   * refused key refuses the call. See docs/spec/access-control.md
+   * § Composing a change set.
    */
   async mutate<S extends ReadonlyTypeSchema>(
     handle: TypeHandle<S>,
@@ -1121,14 +601,9 @@ export class ScopedStack implements StackClient {
       changes.contentPatch !== undefined ||
       changes.associations !== undefined ||
       changes.parentId !== undefined;
-    // `unlisted` reshares on the key's presence alone: it is a boolean, so
-    // naming it is the whole of what it can say. `permissions` is a set,
-    // and a set restated is not a reshare — see permissionsMove() below,
-    // which refines the escalation on this branch alone. A change set
-    // naming no writable key is gated before any record is in hand to
-    // compute a delta from, so there it reshares on presence, like the
-    // boolean. See docs/spec/access-control.md
-    // § Storage unifies; the API does not.
+    // `unlisted` reshares on presence alone; a restated `permissions` set
+    // does not, which permissionsMove() decides once the record is in hand.
+    // See docs/spec/access-control.md § Storage unifies; the API does not.
     const unlists = changes.unlisted !== undefined;
 
     // requireUpdatable() reads the record and applies the write gate; the
@@ -1138,18 +613,15 @@ export class ScopedStack implements StackClient {
     const record = writes
       ? await this.requireUpdatable(id, { expect: opts })
       : await this.requireReshareable(id, opts);
-    // Narrowed to what the gate below actually authorized. A key the gate
-    // read as inert is dropped rather than forwarded: `Stack` recomputes
-    // the delta against its own read of the record, so a key left standing
-    // on the strength of one read would write the ACL on the strength of
-    // another — and the set that reaches it is the one this requester saw,
-    // which is by then stale. See docs/spec/access-control.md
+    // A key the gate read as inert is dropped, not forwarded: `Stack`
+    // recomputes the delta from its own read, and must not write an ACL on
+    // the strength of this one. See docs/spec/access-control.md
     // § Storage unifies; the API does not.
     let authorized = changes;
     if (writes) {
       const moves = this.permissionsMove(record, changes);
       if (unlists || moves) await this.requireReshareOf(record);
-      if (changes.permissions !== undefined && !moves && !this.canReshare(record)) {
+      if (changes.permissions !== undefined && !moves && !this.#authority.canReshare(record)) {
         const { permissions: _inert, ...rest } = changes;
         authorized = rest;
       }
@@ -1188,7 +660,7 @@ export class ScopedStack implements StackClient {
       await this.requireAssociationAccess(record.typeId, assoc);
     }
 
-    if (changes.parentId != null && !(await this.canReadReferent(changes.parentId))) {
+    if (changes.parentId != null && !(await this.#authority.canReadReferent(changes.parentId))) {
       throw new StackPermissionError(
         `Cannot reference record "${changes.parentId}" as parent: it does not exist or you cannot read it`,
       );
@@ -1238,12 +710,9 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Whether a change set's `permissions` key actually moves the ACL. Read
-   * off the computed delta rather than the elements the caller supplied:
-   * a gate that inspected only what was named would miss the wholesale
-   * replacement that drops everything, which names nothing at all. Any
-   * add, remove or repoint in either direction is a reshare.
-   * See docs/spec/access-control.md § Record-level permissions.
+   * Whether a change set's `permissions` key moves the ACL, read off the
+   * computed delta so a replacement that drops everything — naming nothing
+   * — still counts. See docs/spec/access-control.md § Record-level permissions.
    */
   private permissionsMove(record: StackRecord, changes: RecordChangeSet): boolean {
     if (changes.permissions === undefined) return false;
@@ -1252,8 +721,8 @@ export class ScopedStack implements StackClient {
 
   /** The reshare decision alone, for a record already read and write-gated. */
   private async requireReshareOf(record: StackRecord): Promise<void> {
-    if (!this.canReshare(record)) {
-      throw await this.denialFor(
+    if (!this.#authority.canReshare(record)) {
+      throw await this.#authority.denialFor(
         record,
         `Cannot change permissions on "${record.id}": only its author or the stack owner can reshare it`,
       );
@@ -1261,34 +730,10 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Whether this request may decide who else reaches `record` — the
-   * decision requireReshareOf() refuses on, without the refusal, for the
-   * read paths that project on it rather than throw.
-   *
-   * A `_group` asks management, not authorship: a creator later demoted
-   * from the admin roster shouldn't retain a side door to reassign who can
-   * read or write the group record. Everything else is intersected like
-   * every other authority here, or an owner principal would carry its
-   * subject to records the subject cannot touch.
-   */
-  private canReshare(record: StackRecord): boolean {
-    if (baseIdOf(record.typeId) === SYSTEM_TYPES.GROUP) return this.isGroupManager(record);
-    if (!this.mayReshare(this.#principalId, record)) return false;
-    return !this.delegated || this.mayReshare(this.#subjectId, record);
-  }
-
-  /**
-   * Naming the software behind a key is the trust decision the `_app`
-   * registry exists to record, so both halves of that binding — `did` and
-   * `appId` — belong to the owner alone. Without this, record-level `write`
-   * on a card would be a second way in: one carrying no DID yet could be
-   * pointed at a write-holder's own key, or relabelled to claim another
-   * app's `appId`. `name` and `version` stay writable — display, not lookup.
-   *
-   * Owner *acting alone*, in both directions, or the same route reopens
-   * from the subject's side. `_entity` deliberately does not get this rule:
-   * naming people is what a contacts app does, so its cards stay writable
-   * by grant. See docs/spec/identity.md § DID bindings.
+   * An `_app` card's `did` and `appId` are the owner's alone to set, or
+   * record-level `write` would be a second way to name the software behind
+   * a key. `_entity` cards stay writable by grant, as a contacts app needs.
+   * See docs/spec/identity.md § DID bindings.
    */
   private requireOwnerForAppIdentity(
     typeId: TypeId,
@@ -1300,29 +745,15 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * A self-reported `appId` must agree with the `_app` card naming the
-   * principal's DID, where the owner registered one: `principalId` is
-   * verified, so letting the pair disagree would leave a verified principal
-   * claiming a name the owner gave different software. A principal with no
-   * card keeps `appId` as the bare self-report it is for every undelegated
-   * writer. See docs/spec/identity.md § Attribution and what can be trusted.
+   * A delegated write's `appId` must match the `_app` card the owner
+   * registered for the principal's DID, if there is one: a verified
+   * principal may not claim a name the owner gave other software.
+   * See docs/spec/identity.md § Attribution and what can be trusted.
    */
   private async requireAppIdMatchesPrincipal(appId: AppId | undefined): Promise<void> {
-    if (appId === undefined || !this.delegated) return;
-    const card = await findFirstMatch(
-      (q) => this.stack.query(q),
-      {
-        filter: {
-          baseId: SYSTEM_TYPES.APP,
-          includeDeleted: true,
-          includeUnlisted: true,
-          ...(filtersContent(this.stack.capabilities) && {
-            content: { did: this.#principalId },
-          }),
-        },
-      },
-      (r) => (r.content as AppContent).did === this.#principalId,
-    );
+    const principal = this.#authority.principalId;
+    if (appId === undefined || !this.#authority.delegated || !principal) return;
+    const card = await findAppCardByDid(this.stack, principal);
     if (card && (card.content as AppContent).appId !== appId) {
       throw new StackPermissionError(
         `appId "${appId}" is not the appId registered for this principal`,
@@ -1331,11 +762,8 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * The owner's own DID is the one `_entity` binding a grantee may not claim.
-   * `ownerProfile` adopts whichever card holds it, so a card minted by
-   * someone else becomes the stack's own profile, and uniqueness then makes
-   * that permanent. Every other DID stays open to a contacts app, which is
-   * the reach `_entity` is grantable for.
+   * The owner's own DID is the one `_entity` binding a grantee may not
+   * claim: `ownerProfile` adopts whichever card holds it.
    * See docs/spec/identity.md § DID bindings.
    */
   private requireOwnerForOwnerDid(typeId: TypeId, did: unknown): void {
@@ -1345,19 +773,18 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * A `_grant` Record *is* authority, so rewriting one is the escalation
-   * UNGRANTABLE_SYSTEM_TYPES refuses at evaluation, reached by editing an
-   * existing grant rather than minting a fresh one. An `_install` decides
-   * grants and migration authority, so it is fenced the same way. The verbs
-   * that write either live on `Stack`, never `StackClient`, so no scoped
-   * write is lost. Writes only: reading one and its history stays on the
-   * ordinary gate. See docs/spec/access-control.md § Type-level grants.
+   * `_grant` and `_install` Records are authority, so only the owner acting
+   * alone may write one; reading them stays on the ordinary gate.
+   * See docs/spec/access-control.md § What a grant covers.
    */
   private async requireOwnerForGrantRecord(record: StackRecord): Promise<void> {
     const family = baseIdOf(record.typeId);
     if (family !== SYSTEM_TYPES.GRANT && family !== SYSTEM_TYPES.INSTALL) return;
-    if (this.ownerActingAlone) return;
-    throw await this.denialFor(record, `Only the stack owner may write a ${family} record`);
+    if (this.#authority.ownerActingAlone) return;
+    throw await this.#authority.denialFor(
+      record,
+      `Only the stack owner may write a ${family} record`,
+    );
   }
 
   /**
@@ -1372,12 +799,7 @@ export class ScopedStack implements StackClient {
     opts: ExpectationOptions = {},
   ): Promise<StackRecord> {
     assertAssociationList(associations, 'associate()', 'associations', 'data');
-    return this.amendAssociations(
-      id,
-      associations.map((association) => ({ op: 'add', association })),
-      opts,
-      'associate()',
-    );
+    return this.amendAssociations(id, editsOf('add', associations), opts, 'associate()');
   }
 
   /** See associate() — the same write gate, the same kind refusal. */
@@ -1387,12 +809,7 @@ export class ScopedStack implements StackClient {
     opts: ExpectationOptions = {},
   ): Promise<StackRecord> {
     assertAssociationList(associations, 'dissociate()', 'associations', 'data');
-    return this.amendAssociations(
-      id,
-      associations.map((association) => ({ op: 'remove', association })),
-      opts,
-      'dissociate()',
-    );
+    return this.amendAssociations(id, editsOf('remove', associations), opts, 'dissociate()');
   }
 
   /**
@@ -1416,11 +833,9 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Extend who reaches a record — the reshare gate's own verb, on the
-   * owner-or-creator rule the `permissions` key carries. The write bit
-   * does not confer it: a write-holder who could grant would escalate to
-   * deciding who else reaches the record, which is the whole of what
-   * scoping access is for.
+   * Extend who reaches a record, on the reshare gate the `permissions` key
+   * carries. The write bit does not confer it, or a write-holder could
+   * decide who else reaches the record.
    * See docs/spec/access-control.md § Record-level permissions.
    */
   async grantAccess(
@@ -1429,12 +844,7 @@ export class ScopedStack implements StackClient {
     opts: ExpectationOptions = {},
   ): Promise<StackRecord> {
     assertAssociationList(permissions, 'grantAccess()', 'permissions', 'authority');
-    return this.amendAccess(
-      id,
-      permissions.map((association) => ({ op: 'add', association })),
-      opts,
-      'grantAccess()',
-    );
+    return this.amendAccess(id, editsOf('add', permissions), opts, 'grantAccess()');
   }
 
   /** Withdraw elements of who reaches a record — see grantAccess(). */
@@ -1444,12 +854,7 @@ export class ScopedStack implements StackClient {
     opts: ExpectationOptions = {},
   ): Promise<StackRecord> {
     assertAssociationList(permissions, 'revokeAccess()', 'permissions', 'authority');
-    return this.amendAccess(
-      id,
-      permissions.map((association) => ({ op: 'remove', association })),
-      opts,
-      'revokeAccess()',
-    );
+    return this.amendAccess(id, editsOf('remove', permissions), opts, 'revokeAccess()');
   }
 
   /** The reshare gate over an edit list — see grantAccess(). */
@@ -1490,7 +895,7 @@ export class ScopedStack implements StackClient {
     opts: DeleteRecordOptions & ExpectationOptions = {},
   ): Promise<DeleteAndReturnResult> {
     const record = await this.requireDeletable(id, opts);
-    if (opts.purge && !this.ownerActingAlone) {
+    if (opts.purge && !this.#authority.ownerActingAlone) {
       throw new StackPermissionError('Purge is owner-only');
     }
     if (!opts[WRITE_EXPECTATION]) return this.stack.deleteAndReturn(id, { ...opts, ...this.actor });
@@ -1530,18 +935,14 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * See getVersions() — the same mutate-surface gate, for the same reason.
-   *
-   * The journal is where a Record's sharing history lives, and that half
-   * is the resharer's: a reader who could not have moved the ACL is served
-   * the `reshare` op without the elements beneath it, so the entry
-   * still names that it moved. Asked of both identities, so delegation is
-   * no route to it either. See docs/spec/journal.md § Reading it.
+   * See getVersions() — the same gate. A requester who may not reshare the
+   * record is served each `reshare` op without the elements beneath it.
+   * See docs/spec/journal.md § Reading it.
    */
   async getJournal(id: RecordId, query: JournalQuery = {}): Promise<RecordJournalEntry[]> {
     const record = await this.requireUpdatable(id, { mutating: false });
     const entries = await this.stack.getJournal(id, query);
-    return this.canReshare(record) ? entries : entries.map(withoutAuthorityChanges);
+    return this.#authority.canReshare(record) ? entries : entries.map(withoutAuthorityChanges);
   }
 
   /** See getVersions() — the same mutate-surface gate. */
@@ -1563,7 +964,7 @@ export class ScopedStack implements StackClient {
     opts: IfVersionOptions & ExpectationOptions = {},
   ): Promise<StackRecord> {
     const record = await this.requireUpdatable(id, { expect: opts });
-    if (!this.ownerActingAlone) {
+    if (!this.#authority.ownerActingAlone) {
       const target = await this.stack.getVersion(id, version);
       if (target) {
         // A rollback that would move a card's binding is the same trust
@@ -1585,20 +986,10 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Commit a per-record migration — **the owner acting alone**, the same
-   * restriction the bulk `migrateAll()` carries by living on `Stack`, with
-   * one exception: an installed app migrating within its own families (see
-   * installMayMigrate()).
-   *
-   * Migrate replaces `content` and `typeId` wholesale, so a grant-based
-   * version would have to re-derive every gate `create()` applies at the
-   * destination *and* every gate `mutate()` applies over the existing
-   * content, reopening each one it missed. The sharpest is create()'s
-   * non-owner `_attachment@1` refusal: without it, a requester could
-   * migrate a record they authored into the family naming any `fileId` and
-   * read the bytes through canAccessFile()'s uploader clause. Ordinary
-   * write access to a record is not consent to move it between families.
-   * See docs/spec/data-model.md § Type migrations.
+   * Commit a per-record migration: the owner acting alone, or an installed
+   * app within its own families (installMayMigrate()). Ordinary write
+   * access is not consent to move a record between families.
+   * See docs/spec/access-control.md § What a grant covers.
    */
   async commitMigration(
     id: RecordId,
@@ -1606,7 +997,7 @@ export class ScopedStack implements StackClient {
     content: Record<string, unknown>,
     opts: IfVersionOptions = {},
   ): Promise<StackRecord> {
-    if (!this.ownerActingAlone && !(await this.installMayMigrate(id, toTypeId))) {
+    if (!this.#authority.ownerActingAlone && !(await this.installMayMigrate(id, toTypeId))) {
       throw new StackPermissionError(
         'Only the stack owner, or an installed app within the type families it defines, may commit a migration',
       );
@@ -1614,33 +1005,24 @@ export class ScopedStack implements StackClient {
     // The new content is a fresh set of file references, so an app is held
     // to the gate create() applies; otherwise a migration could point one of
     // its records at any attachment and read the bytes through it.
-    if (!this.ownerActingAlone) await this.requireFileRefAccess(toTypeId, content);
+    if (!this.#authority.ownerActingAlone) await this.requireFileRefAccess(toTypeId, content);
     return this.stack.commitMigration(id, toTypeId, content, { ...opts, ...this.actor });
   }
 
   /**
-   * Whether this request is an installed app migrating a record within its
-   * own families: the app acting as itself, its key linked to the one live
-   * install claiming both families in its own namespace, `toTypeId` a version the owner
-   * approved, and an `update-any` grant on each family made out to the key
-   * directly. Read as data, so a family two installs claim — however that
-   * came to be — confers nothing.
-   *
-   * The reasons migration is otherwise owner-only do not reach this case:
-   * no install can claim a system family, so neither an `_attachment` nor
-   * a DID binding is in reach, and the owner's approval of the version is
-   * the consent. See docs/spec/apps.md § Migrating an installed app's types.
+   * Whether this request is an installed app, acting as itself, migrating a
+   * record within families its one live install claims, to a version the
+   * owner approved, holding `update-any` on each directly.
+   * See docs/spec/apps.md § Migrating an installed app's types.
    */
   private async installMayMigrate(id: RecordId, toTypeId: TypeId): Promise<boolean> {
-    const principal = this.#principalId;
-    if (!principal || this.delegated) return false;
+    const principal = this.#authority.principalId;
+    if (!principal || this.#authority.delegated) return false;
     const record = await this.stack.get(id, { includeDeleted: true });
     if (!record) return false;
     const families = new Set([baseIdOf(record.typeId), baseIdOf(toTypeId)]);
 
-    const installs = (await queryAllPages((q) => this.stack.query(q), {
-      filter: { baseId: SYSTEM_TYPES.INSTALL, includeDeleted: true, includeUnlisted: true },
-    })) as (StackRecord & { content: InstallContent })[];
+    const installs = await loadInstallRecords(this.stack);
     let install: (StackRecord & { content: InstallContent }) | undefined;
     for (const family of families) {
       const claimants = installs.filter((r) => claimedFamilies(r.content).has(family));
@@ -1663,15 +1045,9 @@ export class ScopedStack implements StackClient {
     }
     if (!linked) return false;
 
-    const grants = await this.loadGrants();
+    const grants = await this.#authority.loadGrants();
     for (const family of families) {
-      const held = await this.hasGrant(`${family}@1`, ['update-any'], {
-        grantee: principal,
-        prefetchedGrants: grants,
-        matchOwn: false,
-        allowDefault: false,
-        allowGroup: false,
-      });
+      const held = await this.#authority.principalHolds(`${family}@1`, ['update-any'], grants);
       if (!held) return false;
     }
     // Asked only once authority is settled, as every mutating verb asks it.
@@ -1694,30 +1070,23 @@ export class ScopedStack implements StackClient {
     data: Uint8Array,
     opts: PutAttachmentOptions,
   ): Promise<StackRecord & { content: AttachmentContent }> {
-    const { mimeType, filename, appId } = opts;
+    const { appId } = opts;
     // The one ScopedStack path that reaches the adapter without going
     // through Stack first — without this, a closed stack would still write
     // bytes before the delegated create() refused.
     this.assertStackOpen();
-    const principal = this.#principalId;
+    const principal = this.#authority.principalId;
     if (!principal) {
       throw new StackPermissionError('Anonymous requesters cannot upload attachments');
     }
-    if (!(await this.checkCreateGrant(`${SYSTEM_TYPES.ATTACHMENT}@1`))) {
-      throw new StackPermissionError(`No create grant for type "${SYSTEM_TYPES.ATTACHMENT}@1"`);
-    }
+    await this.requireCreateGrant(`${SYSTEM_TYPES.ATTACHMENT}@1`);
     await this.requireAppIdMatchesPrincipal(appId);
     assertAttachmentSize(data.byteLength, this.capabilities.limits.attachmentBytes);
     const fileId = await this.adapter.putBlob(data);
     return this.stack.create<AttachmentContent>(
       `${SYSTEM_TYPES.ATTACHMENT}@1`,
-      {
-        fileId,
-        mimeType,
-        size: data.byteLength,
-        ...(filename && { filename }),
-      },
-      { createdBy: this.requester, appId },
+      uploadContent(fileId, data, opts),
+      { createdBy: this.#authority.requester, appId },
     );
   }
 
@@ -1727,7 +1096,7 @@ export class ScopedStack implements StackClient {
    * predicate as the reference-creation gate (canAccessFile).
    */
   async getAttachment(fileId: FileId): Promise<Uint8Array> {
-    if (!(await this.canAccessFile(fileId))) {
+    if (!(await this.#authority.canAccessFile(fileId))) {
       throw new StackPermissionError(
         `Cannot read file "${fileId}": it does not exist or you cannot read it`,
       );
@@ -1756,14 +1125,10 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Observe the changes this request may read. The predicate is canRead
-   * applied per event — the same one get() and query() answer with, so a
-   * feed can't disagree with them about what this session sees.
-   *
-   * A record the subscriber cannot read produces no event at all, rather
-   * than an empty or redacted one: the existence of a change is itself a
-   * disclosure, the same reasoning that keeps a count of the whole match
-   * off a query result. See docs/spec/events.md § Permission scoping.
+   * Observe the changes this request may read, decided per event by the
+   * same canRead() that get() and query() use. An unreadable record yields
+   * no event at all, since a change's existence is itself a disclosure.
+   * See docs/spec/events.md § Permission scoping.
    */
   async subscribe<S extends ReadonlyTypeSchema>(
     handle: TypeHandle<S>,
@@ -1801,7 +1166,7 @@ export class ScopedStack implements StackClient {
     // always false here — `since` never has a cursor to mean anything by.
     assertSinceUsable(opts.since, false);
     assertValidBaseIdFilter(opts.filter);
-    if (opts.includeUnlisted && !this.ownerActingAlone) {
+    if (opts.includeUnlisted && !this.#authority.ownerActingAlone) {
       throw new StackPermissionError('includeUnlisted is owner-only');
     }
     return this.changes.add(
@@ -1816,7 +1181,9 @@ export class ScopedStack implements StackClient {
    * the stack makes.
    */
   private async canReadCached(record: StackRecord, cache: FeedAuthorityCache): Promise<boolean> {
-    const grants = this.identified ? await cache.grants(() => this.loadGrants()) : undefined;
-    return this.canRead(record, grants, cache.roles);
+    const grants = this.#authority.identified
+      ? await cache.grants(() => this.#authority.loadGrants())
+      : undefined;
+    return this.#authority.canRead(record, grants, cache.roles);
   }
 }

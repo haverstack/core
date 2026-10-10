@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, vi } from 'vitest';
-import { Stack } from '../src/stack.js';
+import { Stack } from '../src/stack/stack.js';
 import {
   StackError,
   StackValidationError,
@@ -129,6 +129,16 @@ describe('Stack.open', () => {
   // timezone is optional passthrough metadata, nothing more — no
   // default, since defaulting to a real timezone would claim knowledge the
   // stack doesn't have.
+  test('each Stack holds its own system Type schema objects', async () => {
+    const a = await Stack.open(await MemoryAdapter.open({ ownerEntityId: 'did:key:a' }));
+    const b = await Stack.open(await MemoryAdapter.open({ ownerEntityId: 'did:key:b' }));
+    const schemaA = (await a.getType('_config@1'))!.schema;
+    const schemaB = (await b.getType('_config@1'))!.schema;
+    expect(schemaA).toEqual(schemaB);
+    expect(schemaA).not.toBe(schemaB);
+    expect(schemaA.entityId).not.toBe(schemaB.entityId);
+  });
+
   test('timezone is undefined when not specified — no default', async () => {
     const adapter = await MemoryAdapter.open({ ownerEntityId: 'entity-without-timezone' });
     const s = await Stack.open(adapter);
@@ -543,10 +553,9 @@ describe('defineType', () => {
     expect(after).toEqual(before);
   });
 
-  test('repeated seedSystemTypes()-style redefinition across Stack.open() calls stays idempotent', async () => {
-    // Simulates the every-open churn this issue closes: a second Stack
-    // instance (e.g. a fresh process reopening the same adapter) redefines
-    // the same types on the same underlying storage.
+  test('an identical redefinition from another Stack over the same storage keeps the stored type', async () => {
+    // A second Stack over one adapter — a fresh process reopening it —
+    // redefines what the first already stored.
     const before = await stack.getType(NOTE_V1);
     const stackB = await Stack.open(adapter);
     await stackB.defineType({
@@ -3676,6 +3685,33 @@ describe('flush / close', () => {
     await stack.close();
     await stack.close();
     expect(closes).toBe(1);
+  });
+});
+
+describe('close during a write', () => {
+  test('a write admitted before close() is not refused by its own parent checks', async () => {
+    const parent = await stack.create(NOTE_V1, { text: 'parent' });
+    const pending = stack.create(NOTE_V1, { text: 'child' }, { parentId: parent.id });
+    const closing = stack.close();
+    await expect(pending).resolves.toMatchObject({ parentId: parent.id });
+    await closing;
+  });
+
+  test('a write admitted before close() is not refused by its attachment pointer check', async () => {
+    const upload = await stack.putAttachment(new Uint8Array([1]), { mimeType: 'text/plain' });
+    const { fileId } = upload.content;
+    const pending = stack.create(
+      NOTE_V1,
+      { text: 'with file' },
+      {
+        associations: [
+          { kind: 'attachment', label: 'file', fileId, attachmentRecordId: upload.id },
+        ],
+      },
+    );
+    const closing = stack.close();
+    await expect(pending).resolves.toMatchObject({ content: { text: 'with file' } });
+    await closing;
   });
 });
 

@@ -18,7 +18,7 @@
  */
 
 import { ARGUMENTS_INVALID, StackBadRequestError, StackValidationError } from '../errors.js';
-import type { DefineTypeOptions } from '../stack.js';
+import type { DefineTypeOptions } from '../stack/client.js';
 import { assertKnownKeys, validateAssociation } from '../query-validation.js';
 import type { AppManifest } from '../install.js';
 import type {

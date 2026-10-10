@@ -2,23 +2,28 @@
  * Canned reads over a stack
  * -------------------------------------------------------
  * The internal call sites that need every match rather than a page —
- * grant checks, attachment cleanup, DID resolution — expressed once. Each
- * takes the query function to run against, so the same read serves an
+ * grant checks, attachment cleanup, DID resolution — expressed once. Most
+ * take the query function to run against, so the same read serves an
  * unscoped `Stack` and a permission-filtered `ScopedStack` without either
- * knowing which it got.
+ * knowing which it got; the `_app` and `_install` reads must see past
+ * deletion and listing, so they take the unscoped `Stack` itself.
  *
  * None of these is a public API.
  */
 
-import { StackBadRequestError } from './errors.js';
-import { SYSTEM_TYPES } from './types/index.js';
+import { StackBadRequestError } from '../errors.js';
+import { filtersContent } from '../query-validation.js';
+import { SYSTEM_TYPES } from '../types/index.js';
+import type { Stack } from './stack.js';
 import type {
+  AppContent,
   EntityContent,
   EntityId,
+  InstallContent,
   QueryResult,
   StackQuery,
   StackRecord,
-} from './types/index.js';
+} from '../types/index.js';
 
 /** Default page size used to fill a permission-filtered query result. */
 export const DEFAULT_QUERY_LIMIT = 50;
@@ -109,4 +114,38 @@ export async function lookupEntityByDid(
     (r) => (r.content as EntityContent).did === did,
   );
   return record ?? null;
+}
+
+/**
+ * The `_app` card claiming `did`, deleted and unlisted included — the
+ * binding rules make it single-valued. Takes the unscoped Stack, since no
+ * scoped view may read past deletion and listing for everyone.
+ * See docs/spec/identity.md § DID bindings.
+ */
+export function findAppCardByDid(stack: Stack, did: EntityId): Promise<StackRecord | undefined> {
+  return findFirstMatch(
+    (q) => stack.query(q),
+    {
+      filter: {
+        baseId: SYSTEM_TYPES.APP,
+        includeDeleted: true,
+        includeUnlisted: true,
+        ...(filtersContent(stack.capabilities) && { content: { did } }),
+      },
+    },
+    (r) => (r.content as AppContent).did === did,
+  );
+}
+
+/**
+ * Every `_install` Record, deleted and unlisted included — a deleted
+ * install keeps its claims. Takes the unscoped Stack, as findAppCardByDid().
+ */
+export async function loadInstallRecords(
+  stack: Stack,
+): Promise<(StackRecord & { content: InstallContent })[]> {
+  const records = await queryAllPages((q) => stack.query(q), {
+    filter: { baseId: SYSTEM_TYPES.INSTALL, includeDeleted: true, includeUnlisted: true },
+  });
+  return records as (StackRecord & { content: InstallContent })[];
 }

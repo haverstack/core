@@ -19,8 +19,8 @@
  */
 
 // Core class and client interface
-export { Stack } from './stack.js';
-export { ScopedStack } from './scoped-stack.js';
+export { Stack } from './stack/stack.js';
+export { ScopedStack } from './scoped-stack/scoped-stack.js';
 export type {
   StackClient,
   CreateRecordOptions,
@@ -34,7 +34,7 @@ export type {
   CollectAttachmentGarbageOptions,
   CollectAttachmentGarbageResult,
   MigrateAllOptions,
-} from './stack.js';
+} from './stack/client.js';
 export type { AppManifest, InstallPlan, ForeignRequest, TypeChange } from './install.js';
 export { isPlanEmpty } from './install.js';
 

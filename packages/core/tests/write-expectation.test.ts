@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, vi } from 'vitest';
-import { Stack } from '../src/stack.js';
+import { Stack } from '../src/stack/stack.js';
 import { MemoryAdapter } from '../src/testing.js';
 import { typeHandle } from '../src/type-handle.js';
 import {
@@ -7,9 +7,9 @@ import {
   StackNotFoundError,
   StackVersionConflictError,
 } from '../src/errors.js';
-import { StoredVersionError, WRITE_EXPECTATION } from '../src/write-expectation.js';
-import type { WriteExpectation } from '../src/write-expectation.js';
-import type { ScopedStack } from '../src/scoped-stack.js';
+import { StoredVersionError, WRITE_EXPECTATION } from '../src/stack/write-expectation.js';
+import type { WriteExpectation } from '../src/stack/write-expectation.js';
+import type { ScopedStack } from '../src/scoped-stack/scoped-stack.js';
 import type { AuthorityAssociation, DataAssociation, RecordId } from '../src/types/index.js';
 
 const OWNER = 'owner-123';

@@ -429,3 +429,12 @@ export function withoutAuthorityChanges(entry: RecordJournalEntry): RecordJourna
   const { associations: _authority, ...rest } = entry;
   return data.length ? { ...rest, associations: data } : (rest as RecordJournalEntry);
 }
+
+/**
+ * The same op over every element of a list — what associate(),
+ * dissociate(), grantAccess() and revokeAccess() hand to the amend verb
+ * each is one half of.
+ */
+export function editsOf(op: 'add' | 'remove', associations: Association[]): AssociationEdit[] {
+  return associations.map((association) => ({ op, association }));
+}

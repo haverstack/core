@@ -3,7 +3,7 @@
  * -------------------------------------------------------
  * Implements the Permissions model from the spec: a pure predicate over a
  * Record's `permissions` field, with no dependency on a transport layer or
- * storage backend. Used by ScopedStack (see scoped-stack.ts) to enforce
+ * storage backend. Used by ScopedStack (see scoped-stack/scoped-stack.ts) to enforce
  * access control; exported standalone for callers that want the raw
  * predicate.
  *

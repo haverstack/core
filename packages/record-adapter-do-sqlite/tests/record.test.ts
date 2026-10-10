@@ -31,7 +31,7 @@ import type {
  * class's prototype chain. `instanceof StackConflictError` fails on the
  * far side of that boundary even though the error is genuinely a
  * StackConflictError inside the DO; `.code` (StackError's discriminant,
- * see packages/core/src/stack.ts) is what survives and what these tests
+ * see packages/core/src/stack/stack.ts) is what survives and what these tests
  * assert on instead. record-adapter-sqlite's tests never hit this because
  * everything there runs in one process.
  */

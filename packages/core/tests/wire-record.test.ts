@@ -4,7 +4,7 @@ import {
   changesFromWireBody,
   isOwnerActingAlone,
 } from '../src/wire/index.js';
-import { Stack } from '../src/stack.js';
+import { Stack } from '../src/stack/stack.js';
 import { StackBadRequestError, StackValidationError } from '../src/errors.js';
 import { MemoryAdapter } from '../src/testing.js';
 import type { StackRecord, TokenSession } from '../src/types/index.js';

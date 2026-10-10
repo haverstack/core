@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach } from 'vitest';
-import { Stack } from '../src/stack.js';
-import type { StackClient } from '../src/stack.js';
+import { Stack } from '../src/stack/stack.js';
+import type { StackClient } from '../src/stack/client.js';
 import { MemoryAdapter } from '../src/testing.js';
 import { StackNotFoundError, StackPermissionError, StackBadRequestError } from '../src/errors.js';
 import type {
