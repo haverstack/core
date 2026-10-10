@@ -123,13 +123,14 @@ import {
 import { queryAllPages, lookupEntityByDid, MAX_QUERY_LIMIT } from '../stack-reads.js';
 import {
   applyAssociationEdits,
-  associationDelta,
   assertNonEmptyChangeSet,
-  changeSetOps,
+  associationDelta,
   bumpsVersion,
-  takesIfVersion,
+  changeSetOps,
+  editsOf,
   effectiveChanges,
   stampGroupAdmin,
+  takesIfVersion,
 } from '../record-changes.js';
 import { ScopedStack, scopeToken } from '../scoped-stack/scoped-stack.js';
 import { MigrationRegistry } from './migrations.js';
@@ -1012,12 +1013,7 @@ export class Stack implements StackClient {
     opts: ActorOptions & ExpectationOptions = {},
   ): Promise<StackRecord> {
     assertAssociationList(associations, 'associate()', 'associations', 'data');
-    return this.amendAssociations(
-      id,
-      associations.map((association) => ({ op: 'add', association })),
-      opts,
-      'associate()',
-    );
+    return this.amendAssociations(id, editsOf('add', associations), opts, 'associate()');
   }
 
   /**
@@ -1033,12 +1029,7 @@ export class Stack implements StackClient {
     opts: ActorOptions & ExpectationOptions = {},
   ): Promise<StackRecord> {
     assertAssociationList(associations, 'dissociate()', 'associations', 'data');
-    return this.amendAssociations(
-      id,
-      associations.map((association) => ({ op: 'remove', association })),
-      opts,
-      'dissociate()',
-    );
+    return this.amendAssociations(id, editsOf('remove', associations), opts, 'dissociate()');
   }
 
   /**
@@ -1096,12 +1087,7 @@ export class Stack implements StackClient {
     opts: ActorOptions & ExpectationOptions = {},
   ): Promise<StackRecord> {
     assertAssociationList(permissions, 'grantAccess()', 'permissions', 'authority');
-    return this.amendAccess(
-      id,
-      permissions.map((association) => ({ op: 'add', association })),
-      opts,
-      'grantAccess()',
-    );
+    return this.amendAccess(id, editsOf('add', permissions), opts, 'grantAccess()');
   }
 
   /**
@@ -1115,12 +1101,7 @@ export class Stack implements StackClient {
     opts: ActorOptions & ExpectationOptions = {},
   ): Promise<StackRecord> {
     assertAssociationList(permissions, 'revokeAccess()', 'permissions', 'authority');
-    return this.amendAccess(
-      id,
-      permissions.map((association) => ({ op: 'remove', association })),
-      opts,
-      'revokeAccess()',
-    );
+    return this.amendAccess(id, editsOf('remove', permissions), opts, 'revokeAccess()');
   }
 
   /**
@@ -1623,7 +1604,6 @@ export class Stack implements StackClient {
     data: Uint8Array,
     opts: PutAttachmentOptions,
   ): Promise<StackRecord & { content: AttachmentContent }> {
-    const { mimeType, filename, appId } = opts;
     this.assertOpen();
     assertAttachmentSize(data.byteLength, this.capabilities.limits.attachmentBytes);
     if (this.adapter.putAttachmentWithMetadata) {
@@ -1640,13 +1620,8 @@ export class Stack implements StackClient {
     const fileId = await this.adapter.putBlob(data);
     return this.create<AttachmentContent>(
       `${SYSTEM_TYPES.ATTACHMENT}@1`,
-      {
-        fileId,
-        mimeType,
-        size: data.byteLength,
-        ...(filename && { filename }),
-      },
-      { appId },
+      attachments.uploadContent(fileId, data, opts),
+      { appId: opts.appId },
     );
   }
 

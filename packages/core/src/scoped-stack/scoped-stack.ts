@@ -82,17 +82,18 @@ import { validateIdTimestampSkew, validateRecordId } from '../record-id.js';
 import {
   DEFAULT_QUERY_LIMIT,
   MAX_QUERY_LIMIT,
-  findFirstMatch,
+  findAppCardByDid,
+  loadInstallRecords,
   lookupEntityByDid,
-  queryAllPages,
 } from '../stack-reads.js';
 import {
+  assertNonEmptyChangeSet,
   associationDelta,
   associationEqual,
+  editsOf,
   isGroupRecord,
   presentDeleted,
   withoutAuthorityChanges,
-  assertNonEmptyChangeSet,
 } from '../record-changes.js';
 import {
   isTypeHandle,
@@ -113,6 +114,7 @@ import type {
   TypedRecord,
   TypeHandle,
 } from '../type-handle.js';
+import { uploadContent } from '../stack/attachments.js';
 // Type-only: a ScopedStack never constructs a Stack, so nothing here
 // closes a runtime cycle with stack.ts, which does construct a ScopedStack.
 import type { Stack } from '../stack/stack.js';
@@ -223,7 +225,14 @@ export class ScopedStack implements StackClient {
     return { actor: this.#authority.requester };
   }
 
-  /** Refuse anything but the owner acting as itself — see ownerActingAlone. */
+  /** Refuse a create this request holds no grant for — see ScopeAuthority.checkCreateGrant(). */
+  private async requireCreateGrant(typeId: TypeId): Promise<void> {
+    if (!(await this.#authority.checkCreateGrant(typeId))) {
+      throw new StackPermissionError(`No create grant for type "${typeId}"`);
+    }
+  }
+
+  /** Refuse anything but the owner acting as itself — see ScopeAuthority.ownerActingAlone. */
   private requireOwnerActingAlone(message: string): void {
     if (!this.#authority.ownerActingAlone) throw new StackPermissionError(message);
   }
@@ -274,7 +283,7 @@ export class ScopedStack implements StackClient {
       return record;
     }
     const subjectReaches =
-      (await this.#authority.checkWrite(record)) ||
+      (await this.#authority.recordPermits(record, 'write')) ||
       (await this.#authority.subjectAllows(record.typeId, actions, { record }));
     const principalHolds = await this.#authority.principalAllows(record.typeId, actions);
     if (!subjectReaches || !principalHolds) {
@@ -401,9 +410,7 @@ export class ScopedStack implements StackClient {
         'createdAt/updatedAt can only be set by the stack owner acting alone; a grantee or delegated create always stamps the current time.',
       );
     }
-    if (!(await this.#authority.checkCreateGrant(typeId))) {
-      throw new StackPermissionError(`No create grant for type "${typeId}"`);
-    }
+    await this.requireCreateGrant(typeId);
     // The exemption is the owner's own, so delegation doesn't carry it: an
     // owner principal acting for someone else would otherwise let that
     // subject name any fileId and reach the bytes through the uploader
@@ -781,20 +788,12 @@ export class ScopedStack implements StackClient {
    * writer. See docs/spec/identity.md § Attribution and what can be trusted.
    */
   private async requireAppIdMatchesPrincipal(appId: AppId | undefined): Promise<void> {
-    if (appId === undefined || !this.#authority.delegated) return;
-    const card = await findFirstMatch(
+    const principal = this.#authority.principalId;
+    if (appId === undefined || !this.#authority.delegated || !principal) return;
+    const card = await findAppCardByDid(
       (q) => this.stack.query(q),
-      {
-        filter: {
-          baseId: SYSTEM_TYPES.APP,
-          includeDeleted: true,
-          includeUnlisted: true,
-          ...(filtersContent(this.stack.capabilities) && {
-            content: { did: this.#authority.principalId },
-          }),
-        },
-      },
-      (r) => (r.content as AppContent).did === this.#authority.principalId,
+      principal,
+      filtersContent(this.stack.capabilities),
     );
     if (card && (card.content as AppContent).appId !== appId) {
       throw new StackPermissionError(
@@ -848,12 +847,7 @@ export class ScopedStack implements StackClient {
     opts: ExpectationOptions = {},
   ): Promise<StackRecord> {
     assertAssociationList(associations, 'associate()', 'associations', 'data');
-    return this.amendAssociations(
-      id,
-      associations.map((association) => ({ op: 'add', association })),
-      opts,
-      'associate()',
-    );
+    return this.amendAssociations(id, editsOf('add', associations), opts, 'associate()');
   }
 
   /** See associate() — the same write gate, the same kind refusal. */
@@ -863,12 +857,7 @@ export class ScopedStack implements StackClient {
     opts: ExpectationOptions = {},
   ): Promise<StackRecord> {
     assertAssociationList(associations, 'dissociate()', 'associations', 'data');
-    return this.amendAssociations(
-      id,
-      associations.map((association) => ({ op: 'remove', association })),
-      opts,
-      'dissociate()',
-    );
+    return this.amendAssociations(id, editsOf('remove', associations), opts, 'dissociate()');
   }
 
   /**
@@ -905,12 +894,7 @@ export class ScopedStack implements StackClient {
     opts: ExpectationOptions = {},
   ): Promise<StackRecord> {
     assertAssociationList(permissions, 'grantAccess()', 'permissions', 'authority');
-    return this.amendAccess(
-      id,
-      permissions.map((association) => ({ op: 'add', association })),
-      opts,
-      'grantAccess()',
-    );
+    return this.amendAccess(id, editsOf('add', permissions), opts, 'grantAccess()');
   }
 
   /** Withdraw elements of who reaches a record — see grantAccess(). */
@@ -920,12 +904,7 @@ export class ScopedStack implements StackClient {
     opts: ExpectationOptions = {},
   ): Promise<StackRecord> {
     assertAssociationList(permissions, 'revokeAccess()', 'permissions', 'authority');
-    return this.amendAccess(
-      id,
-      permissions.map((association) => ({ op: 'remove', association })),
-      opts,
-      'revokeAccess()',
-    );
+    return this.amendAccess(id, editsOf('remove', permissions), opts, 'revokeAccess()');
   }
 
   /** The reshare gate over an edit list — see grantAccess(). */
@@ -1114,9 +1093,7 @@ export class ScopedStack implements StackClient {
     if (!record) return false;
     const families = new Set([baseIdOf(record.typeId), baseIdOf(toTypeId)]);
 
-    const installs = (await queryAllPages((q) => this.stack.query(q), {
-      filter: { baseId: SYSTEM_TYPES.INSTALL, includeDeleted: true, includeUnlisted: true },
-    })) as (StackRecord & { content: InstallContent })[];
+    const installs = await loadInstallRecords((q) => this.stack.query(q));
     let install: (StackRecord & { content: InstallContent }) | undefined;
     for (const family of families) {
       const claimants = installs.filter((r) => claimedFamilies(r.content).has(family));
@@ -1164,7 +1141,7 @@ export class ScopedStack implements StackClient {
     data: Uint8Array,
     opts: PutAttachmentOptions,
   ): Promise<StackRecord & { content: AttachmentContent }> {
-    const { mimeType, filename, appId } = opts;
+    const { appId } = opts;
     // The one ScopedStack path that reaches the adapter without going
     // through Stack first — without this, a closed stack would still write
     // bytes before the delegated create() refused.
@@ -1173,20 +1150,13 @@ export class ScopedStack implements StackClient {
     if (!principal) {
       throw new StackPermissionError('Anonymous requesters cannot upload attachments');
     }
-    if (!(await this.#authority.checkCreateGrant(`${SYSTEM_TYPES.ATTACHMENT}@1`))) {
-      throw new StackPermissionError(`No create grant for type "${SYSTEM_TYPES.ATTACHMENT}@1"`);
-    }
+    await this.requireCreateGrant(`${SYSTEM_TYPES.ATTACHMENT}@1`);
     await this.requireAppIdMatchesPrincipal(appId);
     assertAttachmentSize(data.byteLength, this.capabilities.limits.attachmentBytes);
     const fileId = await this.adapter.putBlob(data);
     return this.stack.create<AttachmentContent>(
       `${SYSTEM_TYPES.ATTACHMENT}@1`,
-      {
-        fileId,
-        mimeType,
-        size: data.byteLength,
-        ...(filename && { filename }),
-      },
+      uploadContent(fileId, data, opts),
       { createdBy: this.#authority.requester, appId },
     );
   }

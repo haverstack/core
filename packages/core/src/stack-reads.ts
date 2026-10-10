@@ -13,8 +13,10 @@
 import { StackBadRequestError } from './errors.js';
 import { SYSTEM_TYPES } from './types/index.js';
 import type {
+  AppContent,
   EntityContent,
   EntityId,
+  InstallContent,
   QueryResult,
   StackQuery,
   StackRecord,
@@ -109,4 +111,38 @@ export async function lookupEntityByDid(
     (r) => (r.content as EntityContent).did === did,
   );
   return record ?? null;
+}
+
+/**
+ * The `_app` card claiming `did`, deleted and unlisted included — the
+ * binding rules make it single-valued. See docs/spec/identity.md § DID
+ * bindings.
+ */
+export function findAppCardByDid(
+  run: (query: StackQuery) => Promise<QueryResult>,
+  did: EntityId,
+  canFilterContent: boolean,
+): Promise<StackRecord | undefined> {
+  return findFirstMatch(
+    run,
+    {
+      filter: {
+        baseId: SYSTEM_TYPES.APP,
+        includeDeleted: true,
+        includeUnlisted: true,
+        ...(canFilterContent && { content: { did } }),
+      },
+    },
+    (r) => (r.content as AppContent).did === did,
+  );
+}
+
+/** Every `_install` Record, deleted and unlisted included — a deleted install keeps its claims. */
+export async function loadInstallRecords(
+  run: (query: StackQuery) => Promise<QueryResult>,
+): Promise<(StackRecord & { content: InstallContent })[]> {
+  const records = await queryAllPages(run, {
+    filter: { baseId: SYSTEM_TYPES.INSTALL, includeDeleted: true, includeUnlisted: true },
+  });
+  return records as (StackRecord & { content: InstallContent })[];
 }

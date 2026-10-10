@@ -15,6 +15,7 @@ import type {
   ActorOptions,
   AttachmentContent,
   FileId,
+  PutAttachmentOptions,
   StackAdapter,
   StackRecord,
 } from '../types/index.js';
@@ -27,6 +28,15 @@ import type { Stack } from './stack.js';
  * collection.
  */
 const DEFAULT_GC_GRACE_MS = 24 * 60 * 60 * 1000;
+
+/** The `_attachment@1` content describing bytes just stored as `fileId`. */
+export function uploadContent(
+  fileId: FileId,
+  data: Uint8Array,
+  { mimeType, filename }: PutAttachmentOptions,
+): AttachmentContent {
+  return { fileId, mimeType, size: data.byteLength, ...(filename && { filename }) };
+}
 
 /**
  * Whether any record references `fileId`. A soft-deleted or unlisted record

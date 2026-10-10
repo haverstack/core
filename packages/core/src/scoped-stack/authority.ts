@@ -10,6 +10,7 @@
  */
 
 import { checkAccess, groupRoleFromAssociations, isOwnerActingAlone } from '../access.js';
+import type { AccessMode } from '../access.js';
 import { StackError, StackNotFoundError, StackPermissionError } from '../errors.js';
 import {
   UNGRANTABLE_SYSTEM_TYPES,
@@ -93,24 +94,9 @@ export class ScopeAuthority {
     );
   }
 
-  private checkRead(record: StackRecord): Promise<boolean> {
-    return checkAccess(
-      record,
-      this.subjectId,
-      this.stack.ownerEntityId,
-      'read',
-      this.resolveRecord,
-    );
-  }
-
-  checkWrite(record: StackRecord): Promise<boolean> {
-    return checkAccess(
-      record,
-      this.subjectId,
-      this.stack.ownerEntityId,
-      'write',
-      this.resolveRecord,
-    );
+  /** Whether the record's own permissions let the subject `mode` it. */
+  recordPermits(record: StackRecord, mode: AccessMode): Promise<boolean> {
+    return checkAccess(record, this.subjectId, this.stack.ownerEntityId, mode, this.resolveRecord);
   }
 
   /**
@@ -284,7 +270,7 @@ export class ScopeAuthority {
     groupRoles?: Map<string, GroupRole | null>,
   ): Promise<boolean> {
     const reachable =
-      (await this.checkRead(record)) ||
+      (await this.recordPermits(record, 'read')) ||
       (await this.subjectAllows(record.typeId, ['read-own', 'read-any'], {
         record,
         prefetchedGrants,

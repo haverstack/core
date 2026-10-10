@@ -34,7 +34,7 @@ import {
 } from '../install.js';
 import { filtersContent } from '../query-validation.js';
 import { baseIdOf, diffSchemas, hashSchema, parseTypeId } from '../schema.js';
-import { findFirstMatch, queryAllPages } from '../stack-reads.js';
+import { findAppCardByDid, loadInstallRecords, queryAllPages } from '../stack-reads.js';
 import { SYSTEM_TYPES } from '../types/index.js';
 import {
   validateSchemaFieldNames,
@@ -249,29 +249,10 @@ function checkManifest(manifest: AppManifest, did: EntityId): void {
   for (const r of manifest.requests) checkGrantValid(r.baseId, r.actions);
 }
 
-/** Every `_install` Record, deleted and unlisted included — a deleted install keeps its claims. */
-async function loadInstalls(stack: Stack): Promise<(StackRecord & { content: InstallContent })[]> {
-  const records = await queryAllPages((q) => stack.query(q), {
-    filter: { baseId: SYSTEM_TYPES.INSTALL, includeDeleted: true, includeUnlisted: true },
-  });
-  return records as (StackRecord & { content: InstallContent })[];
-}
+const loadInstalls = (stack: Stack) => loadInstallRecords((q) => stack.query(q));
 
-/** The `_app` card claiming `did`, deleted and unlisted included. */
-function findAppCard(stack: Stack, did: EntityId): Promise<StackRecord | undefined> {
-  return findFirstMatch(
-    (q) => stack.query(q),
-    {
-      filter: {
-        baseId: SYSTEM_TYPES.APP,
-        includeDeleted: true,
-        includeUnlisted: true,
-        ...(filtersContent(stack.capabilities) && { content: { did } }),
-      },
-    },
-    (r) => (r.content as AppContent).did === did,
-  );
-}
+const findAppCard = (stack: Stack, did: EntityId) =>
+  findAppCardByDid((q) => stack.query(q), did, filtersContent(stack.capabilities));
 
 /** The key's `_app` card, created or undeleted as needed. */
 async function ensureAppCard(
