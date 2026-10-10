@@ -11,7 +11,7 @@
 
 import type { TypeSchema, FieldDef, ScalarFieldKind } from './types.js';
 import type { ReadonlyTypeSchema } from './type-handle.js';
-import { declaredEnumValues, enumAllows, formatEnumValues } from './validate.js';
+import { declaredEnumValues, formatEnumValues } from './validate.js';
 
 // -------------------------------------------------------
 // Canonical schema serialization
@@ -62,7 +62,7 @@ const canonicalizeFieldDef = (def: FieldDef): unknown => {
   // Scalar. An enum's `values` are sorted so reordering them is not a change.
   // A malformed stored list is hashed as it is, so it never matches a
   // different malformed one, or a def with no list at all.
-  const values = (def as { values?: unknown }).values;
+  const values = def.kind === 'enum' ? (def.values as unknown) : undefined;
   return {
     kind: def.kind,
     ...(def.required !== undefined && { required: def.required }),
@@ -160,11 +160,15 @@ const isFieldCompatible = (candidate: FieldDef, required: FieldDef, depth: numbe
   if (required.kind === 'enum') {
     if (candidate.kind !== 'enum') return false;
     const values = declaredEnumValues(candidate.values);
-    return values.length > 0 && values.every((v) => enumAllows(required.values, v));
+    const allowed = new Set(declaredEnumValues(required.values));
+    return values.length > 0 && values.every((v) => allowed.has(v));
   }
   // A required kind outside the union (a foreign or unvalidated schema) can't
   // be checked, so it fails closed too.
-  return (READ_COMPATIBLE[required.kind] ?? []).includes(candidate.kind);
+  return (
+    Object.hasOwn(READ_COMPATIBLE, required.kind) &&
+    READ_COMPATIBLE[required.kind].includes(candidate.kind)
+  );
 };
 
 const isCompatibleAtDepth = (

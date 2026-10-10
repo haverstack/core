@@ -35,8 +35,10 @@ describe('contentSortKey', () => {
 });
 
 describe('contentSortEntry', () => {
-  test('a kind outside the union orders as nothing', () => {
-    expect(contentSortEntry('nonsense' as ScalarFieldKind, 'x')).toBeNull();
+  test('a kind outside the union orders as text', () => {
+    expect(contentSortEntry('nonsense' as ScalarFieldKind, 'x')).toEqual(
+      contentSortEntry('string', 'x'),
+    );
   });
 
   test('reads a date as epoch milliseconds, not as an ISO string', () => {

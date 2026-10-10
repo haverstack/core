@@ -70,17 +70,18 @@ export function contentSortEntry(kind: ScalarFieldKind, value: unknown): SortEnt
       const ms = Date.parse(ZONELESS_DATE_TIME_RE.test(value) ? `${value}Z` : value);
       return Number.isNaN(ms) ? null : { kind: 'num', num: ms };
     }
+    // A stored schema is not re-validated, so its kind may be outside the
+    // union. It orders as text, so an index entry never depends on whether
+    // the reader recognizes the kind.
     case 'string':
     case 'text':
     case 'record-ref':
     case 'file-ref':
     case 'enum':
+    default:
       return typeof value === 'string'
         ? { kind: 'text', text: value, key: contentSortKey(value) }
         : null;
-    default:
-      // A stored schema is not re-validated, so its kind may be outside the union.
-      return null;
   }
 }
 

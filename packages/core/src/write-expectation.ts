@@ -28,6 +28,8 @@ export type WriteExpectation = {
   readonly typeId?: TypeId;
   /** Hold every write to `typeId`, as a typed handle's write is. */
   readonly exact?: boolean;
+  /** Throws if the content the write would leave can't be returned typed. */
+  readonly checkContent?: (content: Record<string, unknown>) => void;
 };
 
 export type ExpectationOptions = { readonly [WRITE_EXPECTATION]?: WriteExpectation };
@@ -77,4 +79,12 @@ export const storedVersionDiffers = (
   const expected = opts?.[WRITE_EXPECTATION];
   if (expected?.typeId === undefined || record.typeId === expected.typeId) return false;
   return patchesContent || expected.exact === true;
+};
+
+/** The content a write would leave, checked after validation and before it lands. */
+export const checkResultContent = (
+  content: Record<string, unknown>,
+  opts: ExpectationOptions | undefined,
+): void => {
+  opts?.[WRITE_EXPECTATION]?.checkContent?.(content);
 };

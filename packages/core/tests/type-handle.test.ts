@@ -342,6 +342,23 @@ describe.each([
     await expect(client.get(Book, book.id)).rejects.toThrow(StackValidationError);
   });
 
+  test('mutate() refuses before landing a write that would leave an unlisted enum value', async () => {
+    const book = await client.create(Book, { title: 'Dune', status: 'want' });
+    await stack.defineType({
+      id: Book.id,
+      name: 'Book',
+      schema: { ...Book.schema, status: { kind: 'string', required: true } },
+    });
+    await stack.patchContent(book.id, { status: 'paused' });
+    await expect(client.patchContent(Book, book.id, { title: 'Emma' })).rejects.toThrow(
+      StackValidationError,
+    );
+    expect((await stack.get(book.id))?.content).toEqual({ title: 'Dune', status: 'paused' });
+
+    const fixed = await client.patchContent(Book, book.id, { title: 'Emma', status: 'finished' });
+    expect(fixed.content).toEqual({ title: 'Emma', status: 'finished' });
+  });
+
   test('get() reads a tombstone as null', async () => {
     const book = await client.create(Book, { title: 'Dune', status: 'want' });
     await client.delete(book.id);

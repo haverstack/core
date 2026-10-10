@@ -54,6 +54,11 @@ describe('hashSchema', () => {
     expect(h1).not.toBe(h2);
   });
 
+  test('values on a non-enum kind do not affect the hash, as validation ignores them', async () => {
+    const stray = { s: { kind: 'string', values: ['x'] } } as unknown as TypeSchema;
+    expect(await hashSchema(stray)).toBe(await hashSchema({ s: { kind: 'string' } }));
+  });
+
   test('adding a field produces a different hash', async () => {
     const h1 = await hashSchema({ text: { kind: 'text', required: true } });
     const h2 = await hashSchema({
@@ -361,6 +366,13 @@ describe('isCompatible enum', () => {
   test('a required field of unknown kind is incompatible, not a throw', () => {
     const unknown = { s: { kind: 'nonsense', required: true } } as unknown as TypeSchema;
     expect(isCompatible(field({ kind: 'string' }), unknown)).toBe(false);
+  });
+
+  test('a required field whose kind names an Object.prototype key is incompatible', () => {
+    for (const kind of ['toString', 'constructor', '__proto__']) {
+      const odd = { s: { kind, required: true } } as unknown as TypeSchema;
+      expect(isCompatible(field({ kind: 'string' }), odd)).toBe(false);
+    }
   });
 
   test('a required enum refuses a string or text candidate, which may hold any value', () => {

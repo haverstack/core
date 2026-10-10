@@ -314,10 +314,14 @@ export const narrowRecord = <S extends ReadonlyTypeSchema>(
   if (record.typeId !== handle.id) {
     throw new StackBadRequestError(`Record "${record.id}" is ${record.typeId}, not ${handle.id}`);
   }
-  const errors: ValidationError[] = [];
-  walkEnums(record.content, handle.schema, '', errors);
-  if (errors.length > 0) throw new StackValidationError(errors);
+  assertEnumsListed(handle, record.content);
   return record as TypedRecord<S>;
+};
+
+const assertEnumsListed = (handle: TypeHandle, content: Record<string, unknown>): void => {
+  const errors: ValidationError[] = [];
+  walkEnums(content, handle.schema, '', errors);
+  if (errors.length > 0) throw new StackValidationError(errors);
 };
 
 /** The ways a typed read can be asked to see a tombstone. */
@@ -377,7 +381,12 @@ export const typedMutate = async <S extends ReadonlyTypeSchema>(
   // Checked against the read the write already makes, so nothing lands on
   // a record the handle does not type. See docs/spec/data-model.md § Type handles.
   const expect = {
-    [WRITE_EXPECTATION]: { baseId: handle.baseId, typeId: handle.id, exact: true },
+    [WRITE_EXPECTATION]: {
+      baseId: handle.baseId,
+      typeId: handle.id,
+      exact: true,
+      checkContent: (content: Record<string, unknown>) => assertEnumsListed(handle, content),
+    },
   };
   try {
     return narrowRecord(handle, await client.mutate(id, changes, { ...opts, ...expect } as never));
