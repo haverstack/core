@@ -207,8 +207,8 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
     description:
       'A change set naming a `parentId` that does not exist returns 409 with code ' +
       '"conflict". A parentId a caller names has to resolve; POST /records with a parentId is ' +
-      'refused the same way. Restore is the exception — see ' +
-      'restore-version-puts-the-record-back-in-its-old-container.',
+      'refused the same way. Restore names no parentId, so it has no site for this ' +
+      'refusal — see restore-version-leaves-the-record-where-it-sits.',
     method: 'PATCH',
     path: '/records/1hk153x00001',
     requestBody: { parentId: '1hk153xffffz' },

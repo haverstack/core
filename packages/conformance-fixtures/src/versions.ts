@@ -1,5 +1,5 @@
 import type { WireRecord, WireVersion, WireVersionsResponse } from '@haverstack/wire-types';
-import type { ConformanceFixture } from './types.js';
+import type { ConformanceFixture, ConformanceSequenceFixture } from './types.js';
 
 // -------------------------------------------------------
 // Versions: read
@@ -139,117 +139,142 @@ export const getVersionFixtures: ConformanceFixture<undefined, WireVersion>[] = 
 ];
 
 // -------------------------------------------------------
-// Versions: read after migrate/restore
+// Versions: history across mutations
 // -------------------------------------------------------
-//
-// The server is the only snapshot writer (docs/spec/wire-format.md
-// § Versions); these pin that a version row appears after POST /migrate
-// and POST /restore/:version specifically. A server-side conformance run
-// dispatches the mutating fixture first and asserts the version count
-// grew; a mocked-transport run can only assert the response shape parses.
 
-export const getVersionsAfterMutateFixtures: ConformanceFixture<undefined, WireVersionsResponse>[] =
-  [
-    {
-      name: 'get-versions-after-restore-includes-pre-restore-snapshot',
-      description:
-        'After restore-version (POST /records/1hk153x00001/restore/1, which moves the record to ' +
-        'version 4), GET /records/:id/versions includes a version 3 entry — the restore ' +
-        "endpoint's own auto-snapshot of the record's state immediately before restoring — " +
-        'alongside the pre-existing version 1 snapshot being restored from. Neither entry names ' +
-        'a container, whichever one the record sat in when it was taken.',
-      method: 'GET',
-      path: '/records/1hk153x00001/versions',
-      responseStatus: 200,
-      responseBody: {
-        versions: [
-          {
-            version: 3,
-            typeId: 'com.example/note@1',
-            content: { title: 'title before restore' },
-            updatedAt: '2024-01-04T00:00:00.000Z',
-          },
-          {
-            version: 1,
-            typeId: 'com.example/note@1',
-            content: { title: 'original title' },
-            updatedAt: '2024-01-01T00:00:00.000Z',
-          },
-        ],
-        cursor: null,
+const V1 = {
+  version: 1,
+  typeId: 'com.example/note@1',
+  content: { title: 'original title' },
+  updatedAt: '2024-01-01T00:00:00.000Z',
+};
+const V2 = {
+  version: 2,
+  typeId: 'com.example/note@1',
+  content: { title: 'draft title' },
+  updatedAt: '2024-01-02T00:00:00.000Z',
+};
+const V3 = {
+  version: 3,
+  typeId: 'com.example/note@1',
+  content: { title: 'title before restore' },
+  updatedAt: '2024-01-03T00:00:00.000Z',
+};
+const V4 = {
+  version: 4,
+  typeId: 'com.example/note@1',
+  content: { title: 'original title' },
+  updatedAt: '2024-01-04T00:00:00.000Z',
+};
+
+/**
+ * The server is the only snapshot writer (docs/spec/wire-format.md
+ * § Versions), so whether a mutation wrote a version is visible only in the
+ * history read after it. Each read after the first answers for the
+ * mutation before it.
+ */
+export const getVersionsSequenceFixtures: ConformanceSequenceFixture[] = [
+  {
+    name: 'version-history-grows-on-restore-and-migrate-but-not-associate',
+    description:
+      'POST /restore/:version and POST /migrate each snapshot the state they replace, so ' +
+      'GET /records/:id/versions gains exactly that entry after each; POST /associations ' +
+      'bumps no version, so the history read after it is the one read before. Assumes ' +
+      '"1hk153x00001" is a com.example/note@1 record at version 3 ' +
+      '({ title: "title before restore" }, updated 2024-01-03) holding snapshots of ' +
+      'versions 1 and 2, no associations, and a requester on the mutate surface.',
+    steps: [
+      {
+        name: 'version-history-before',
+        description: 'The history the sequence starts from: a snapshot for each replaced version.',
+        method: 'GET',
+        path: '/records/1hk153x00001/versions',
+        responseStatus: 200,
+        responseBody: { versions: [V2, V1], cursor: null },
       },
-    },
-    {
-      name: 'get-versions-after-migrate-includes-pre-migration-snapshot',
-      description:
-        'After commit-migration (POST /records/1hk153x00001/migrate, which moves the record to ' +
-        'version 5), GET /records/:id/versions includes a version 4 entry — the migrate ' +
-        "endpoint's own auto-snapshot of the record's pre-migration state, at its pre-migration " +
-        'typeId — on top of everything restore-version already produced.',
-      method: 'GET',
-      path: '/records/1hk153x00001/versions',
-      responseStatus: 200,
-      responseBody: {
-        versions: [
-          {
-            version: 4,
-            typeId: 'com.example/note@1',
-            content: { title: 'original title' },
-            updatedAt: '2024-01-04T00:00:00.000Z',
-          },
-          {
-            version: 3,
-            typeId: 'com.example/note@1',
-            content: { title: 'title before restore' },
-            updatedAt: '2024-01-04T00:00:00.000Z',
-          },
-          {
-            version: 1,
-            typeId: 'com.example/note@1',
-            content: { title: 'original title' },
-            updatedAt: '2024-01-01T00:00:00.000Z',
-          },
-        ],
-        cursor: null,
+      {
+        name: 'version-history-restore',
+        description: "The restore: version 3 becomes version 4, holding version 1's content.",
+        method: 'POST',
+        path: '/records/1hk153x00001/restore/1',
+        responseStatus: 200,
+        responseBody: {
+          id: '1hk153x00001',
+          typeId: 'com.example/note@1',
+          createdAt: '2024-01-01T00:00:00.000Z',
+          updatedAt: '2024-01-04T00:00:00.000Z',
+          content: { title: 'original title' },
+          version: 4,
+        },
       },
-    },
-    {
-      name: 'get-versions-after-associate-is-unchanged',
-      description:
-        'The association endpoints are the one pair of mutations that write no version. After ' +
-        'associate-tag (POST /records/1hk153x00001/associations), GET /records/:id/versions ' +
-        'answers with exactly the list it answered with before — no new entry, and no entry ' +
-        'gains an `associations` key, since no snapshot has ever captured one. A server that ' +
-        'snapshots here hands every later restore a stale association set to put back. ' +
-        'See docs/spec/wire-format.md § Versions.',
-      method: 'GET',
-      path: '/records/1hk153x00001/versions',
-      responseStatus: 200,
-      responseBody: {
-        versions: [
-          {
-            version: 4,
-            typeId: 'com.example/note@1',
-            content: { title: 'original title' },
-            updatedAt: '2024-01-04T00:00:00.000Z',
-          },
-          {
-            version: 3,
-            typeId: 'com.example/note@1',
-            content: { title: 'title before restore' },
-            updatedAt: '2024-01-04T00:00:00.000Z',
-          },
-          {
-            version: 1,
-            typeId: 'com.example/note@1',
-            content: { title: 'original title' },
-            updatedAt: '2024-01-01T00:00:00.000Z',
-          },
-        ],
-        cursor: null,
+      {
+        name: 'version-history-after-restore',
+        description:
+          'The restore snapshotted version 3, the state it replaced, beside the snapshot it ' +
+          'restored from. Neither entry names a container, whichever one the record sat in ' +
+          'when it was taken.',
+        method: 'GET',
+        path: '/records/1hk153x00001/versions',
+        responseStatus: 200,
+        responseBody: { versions: [V3, V2, V1], cursor: null },
       },
-    },
-  ];
+      {
+        name: 'version-history-migrate',
+        description: 'The migration: version 4 becomes version 5, under com.example/note@2.',
+        method: 'POST',
+        path: '/records/1hk153x00001/migrate',
+        requestBody: { toTypeId: 'com.example/note@2', content: { title: 'Hello', pinned: false } },
+        responseStatus: 200,
+        responseBody: {
+          id: '1hk153x00001',
+          typeId: 'com.example/note@2',
+          createdAt: '2024-01-01T00:00:00.000Z',
+          updatedAt: '2024-01-05T00:00:00.000Z',
+          content: { title: 'Hello', pinned: false },
+          version: 5,
+        },
+      },
+      {
+        name: 'version-history-after-migrate',
+        description:
+          'The migration snapshotted version 4 at its pre-migration typeId, so restoring it ' +
+          'later does not read @1-shaped content as @2.',
+        method: 'GET',
+        path: '/records/1hk153x00001/versions',
+        responseStatus: 200,
+        responseBody: { versions: [V4, V3, V2, V1], cursor: null },
+      },
+      {
+        name: 'version-history-associate',
+        description: 'The association: the record stays at version 5 with its updatedAt unmoved.',
+        method: 'POST',
+        path: '/records/1hk153x00001/associations',
+        requestBody: { changes: [{ op: 'add', association: { kind: 'tag', label: 'starred' } }] },
+        responseStatus: 200,
+        responseBody: {
+          id: '1hk153x00001',
+          typeId: 'com.example/note@2',
+          createdAt: '2024-01-01T00:00:00.000Z',
+          updatedAt: '2024-01-05T00:00:00.000Z',
+          content: { title: 'Hello', pinned: false },
+          version: 5,
+          associations: [{ kind: 'tag', label: 'starred' }],
+        },
+      },
+      {
+        name: 'version-history-after-associate',
+        description:
+          'No new entry, and no entry gains an `associations` key, since no snapshot captures ' +
+          'one. A server that snapshots here hands every later restore a stale association ' +
+          'set to put back. See docs/spec/wire-format.md § Versions.',
+        method: 'GET',
+        path: '/records/1hk153x00001/versions',
+        responseStatus: 200,
+        responseBody: { versions: [V4, V3, V2, V1], cursor: null },
+      },
+    ],
+  },
+];
 
 // -------------------------------------------------------
 // Versions: restore

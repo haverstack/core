@@ -39,12 +39,7 @@ import {
   unlistedChangeFixtures,
   parentChangeFixtures,
 } from './record-metadata.js';
-import {
-  getVersionsFixtures,
-  getVersionFixtures,
-  getVersionsAfterMutateFixtures,
-  restoreVersionFixtures,
-} from './versions.js';
+import { getVersionsFixtures, getVersionFixtures, restoreVersionFixtures } from './versions.js';
 import { getJournalFixtures } from './journal.js';
 import { commitMigrationFixtures } from './migration.js';
 import { installRequestFixtures } from './installs.js';
@@ -69,7 +64,8 @@ export * from './change-feed.js';
  * Every fixture across every endpoint, for consumers that want to iterate
  * uniformly. Excludes attachmentDownloadFixtures, attachmentUploadFixtures,
  * authSequenceFixtures, deleteRecordSequenceFixtures, getRecordSequenceFixtures,
- * changeFeedFixtures and changeFeedSequenceFixtures — each a different shape (binary body,
+ * getVersionsSequenceFixtures, changeFeedFixtures and
+ * changeFeedSequenceFixtures — each a different shape (binary body,
  * header-focused, or an ordered series rather than a plain JSON
  * request/response pair), imported separately.
  *
@@ -92,7 +88,6 @@ export const allConformanceFixtures: ConformanceFixture[] = [
   ...parentChangeFixtures,
   ...getVersionsFixtures,
   ...getVersionFixtures,
-  ...getVersionsAfterMutateFixtures,
   ...restoreVersionFixtures,
   ...getJournalFixtures,
   ...commitMigrationFixtures,
