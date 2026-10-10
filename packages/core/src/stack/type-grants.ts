@@ -70,7 +70,6 @@ export async function revokeType(
 ): Promise<(StackRecord & { content: GrantContent })[]> {
   validateGrantTarget(grant.grantee);
   assertFamilyId(baseId, 'revokeType');
-  const familyId = baseId;
   const actionSet = new Set(grant.actions);
   const all = await loadGrantRecords((q) => stack.query(q));
   const matches = all.filter((r) => {
@@ -80,7 +79,7 @@ export async function revokeType(
     // rather than the reach, so a grant carrying an action this
     // vocabulary drops is not withdrawn by a target that omits it.
     const reach = grantReach(c);
-    if (!reach || reach.familyId !== familyId) return false;
+    if (!reach || reach.familyId !== baseId) return false;
     if (!matchesGrantTarget(c, grant.grantee)) return false;
     return c.actions.length === actionSet.size && c.actions.every((a) => actionSet.has(a));
   });

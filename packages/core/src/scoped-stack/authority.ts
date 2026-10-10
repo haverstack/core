@@ -44,7 +44,7 @@ export class ScopeAuthority {
     readonly subjectId: EntityId | null,
   ) {}
 
-  readonly resolveRecord = (id: string): Promise<StackRecord | null> =>
+  private readonly resolveRecord = (id: string): Promise<StackRecord | null> =>
     this.stack.get(id, { includeDeleted: true });
 
   /** Every `_grant` Record — see loadGrantRecords(). */

@@ -108,7 +108,7 @@ export async function checkBindingsOnMigrate(
  * Read-then-write: two racing creates can both pass.
  * See docs/spec/identity.md § DID bindings.
  */
-export async function checkBindingUnique(
+async function checkBindingUnique(
   stack: Stack,
   family: string,
   field: 'did' | 'appId',

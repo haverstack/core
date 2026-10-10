@@ -753,11 +753,7 @@ export class ScopedStack implements StackClient {
   private async requireAppIdMatchesPrincipal(appId: AppId | undefined): Promise<void> {
     const principal = this.#authority.principalId;
     if (appId === undefined || !this.#authority.delegated || !principal) return;
-    const card = await findAppCardByDid(
-      (q) => this.stack.query(q),
-      principal,
-      filtersContent(this.stack.capabilities),
-    );
+    const card = await findAppCardByDid(this.stack, principal);
     if (card && (card.content as AppContent).appId !== appId) {
       throw new StackPermissionError(
         `appId "${appId}" is not the appId registered for this principal`,
@@ -1026,7 +1022,7 @@ export class ScopedStack implements StackClient {
     if (!record) return false;
     const families = new Set([baseIdOf(record.typeId), baseIdOf(toTypeId)]);
 
-    const installs = await loadInstallRecords((q) => this.stack.query(q));
+    const installs = await loadInstallRecords(this.stack);
     let install: (StackRecord & { content: InstallContent }) | undefined;
     for (const family of families) {
       const claimants = installs.filter((r) => claimedFamilies(r.content).has(family));

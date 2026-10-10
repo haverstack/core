@@ -32,7 +32,6 @@ import {
   sameRequest,
   snapshotManifest,
 } from '../install.js';
-import { filtersContent } from '../query-validation.js';
 import { baseIdOf, diffSchemas, hashSchema, parseTypeId } from '../schema.js';
 import { findAppCardByDid, loadInstallRecords, queryAllPages } from './reads.js';
 import { SYSTEM_TYPES } from '../types/index.js';
@@ -67,12 +66,12 @@ export async function planInstall(
   const manifest = snapshotManifest(submitted);
   checkManifest(manifest, did);
 
-  const installs = await loadInstalls(stack);
+  const installs = await loadInstallRecords(stack);
   const existing = installs.find((r) => r.content.appId === manifest.appId) ?? null;
   const ownVersions = ownTypeIds(manifest);
   const ownFamilies = new Set(ownVersions.map(baseIdOf));
 
-  const card = await findAppCard(stack, did);
+  const card = await findAppCardByDid(stack, did);
   if (card && (card.content as AppContent).appId !== manifest.appId) {
     throw new StackConflictError(
       `${did} is registered to "${(card.content as AppContent).appId}", not "${manifest.appId}"`,
@@ -187,7 +186,7 @@ export async function uninstallApp(
   stack: Stack,
   appId: AppId,
 ): Promise<StackRecord & { content: InstallContent }> {
-  const install = (await loadInstalls(stack)).find(
+  const install = (await loadInstallRecords(stack)).find(
     (r) => r.content.appId === appId && !r.deletedAt,
   );
   if (!install) throw new StackNotFoundError(`No install for "${appId}"`);
@@ -249,18 +248,13 @@ function checkManifest(manifest: AppManifest, did: EntityId): void {
   for (const r of manifest.requests) checkGrantValid(r.baseId, r.actions);
 }
 
-const loadInstalls = (stack: Stack) => loadInstallRecords((q) => stack.query(q));
-
-const findAppCard = (stack: Stack, did: EntityId) =>
-  findAppCardByDid((q) => stack.query(q), did, filtersContent(stack.capabilities));
-
 /** The key's `_app` card, created or undeleted as needed. */
 async function ensureAppCard(
   stack: Stack,
   manifest: AppManifest,
   did: EntityId,
 ): Promise<StackRecord> {
-  const card = await findAppCard(stack, did);
+  const card = await findAppCardByDid(stack, did);
   if (!card) {
     return stack.create<AppContent>(`${SYSTEM_TYPES.APP}@1`, {
       appId: manifest.appId,
