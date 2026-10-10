@@ -2675,6 +2675,30 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
     },
   },
   {
+    name: 'error-validation-enum-value-not-listed',
+    description:
+      'PATCH content setting an enum field to a value its `values` list does not name returns ' +
+      '422 with code "validation", the detail naming the allowed values. An enum value is a ' +
+      "string, so the type check passes and only the list refuses it. Assumes the record's " +
+      'type declares { status: { kind: "enum", values: ["want", "reading", "finished"] } }.',
+    method: 'PATCH',
+    path: '/records/1hk153x00001',
+    requestBody: { contentPatch: { status: 'abandoned' } },
+    responseStatus: 422,
+    responseBody: {
+      error: {
+        code: 'validation',
+        message: 'Content validation failed',
+        details: [
+          {
+            path: 'status',
+            message: 'Expected one of "want", "reading", "finished", got "abandoned"',
+          },
+        ],
+      },
+    },
+  },
+  {
     name: 'error-validation-failed-restore',
     description:
       'POST /records/:id/restore/:version against a drifted or corrupted snapshot — content ' +
@@ -3528,6 +3552,40 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
         schemaDrift: {
           typeId: 'com.example/note@1',
           violations: [{ path: 'title', message: 'field kind changed from "string" to "number"' }],
+        },
+      },
+    },
+  },
+  {
+    name: 'error-schema-drift-enum-values-removed',
+    description:
+      'POST /types redefining an enum field with fewer values narrows what the field accepts, ' +
+      'so it is not additive and returns 409 with code "schema_drift", naming the removed ' +
+      'values. Adding values, or an enum becoming a plain string, accepts strictly more and is ' +
+      'additive. Assumes "com.example/book@1" is already stored with { status: { kind: "enum", ' +
+      'values: ["want", "reading", "finished"] } }.',
+    method: 'POST',
+    path: '/types',
+    requestBody: {
+      id: 'com.example/book@1',
+      baseId: 'com.example/book',
+      version: 1,
+      name: 'Book',
+      schema: { status: { kind: 'enum', values: ['want', 'reading'] } },
+      schemaHash: '5d1e0c9b8a7f6e5d4c3b2a1908f7e6d5c4b3a291807f6e5d4c3b2a1908f7e6d5',
+      createdAt: '2024-01-01T00:00:00.000Z',
+    },
+    responseStatus: 409,
+    responseBody: {
+      error: {
+        code: 'schema_drift',
+        message:
+          'Schema drift detected for type "com.example/book@1": the stored schema and the new ' +
+          'definition differ beyond additive evolution (new optional fields only). Bump the ' +
+          'version instead of redefining "com.example/book@1" in place.',
+        schemaDrift: {
+          typeId: 'com.example/book@1',
+          violations: [{ path: 'status', message: 'enum values removed: "finished"' }],
         },
       },
     },

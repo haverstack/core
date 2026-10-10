@@ -1028,6 +1028,29 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
             1, 2, 3,
           ]);
         });
+
+        test('orders an enum field by value, not by its position in values', async () => {
+          await adapter.saveType(
+            conformanceType({
+              schema: {
+                title: { kind: 'string' },
+                status: { kind: 'enum', values: ['want', 'reading', 'finished'] },
+              },
+            }),
+          );
+          for (const status of ['want', 'finished', 'reading']) {
+            await adapter.createRecord(makeRecord({ content: { title: status, status } }));
+          }
+
+          const result = await adapter.queryRecords({
+            sort: { contentField: 'status', direction: 'asc' },
+          });
+          expect(result.records.map((r) => (r.content as { status: string }).status)).toEqual([
+            'finished',
+            'reading',
+            'want',
+          ]);
+        });
       });
     }
 

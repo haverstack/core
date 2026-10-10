@@ -11,6 +11,7 @@
 
 import type { TypeSchema, FieldDef, ScalarFieldKind } from './types.js';
 import type { ReadonlyTypeSchema } from './type-handle.js';
+import { formatEnumValues } from './validate.js';
 
 // -------------------------------------------------------
 // Canonical schema serialization
@@ -58,11 +59,11 @@ const canonicalizeFieldDef = (def: FieldDef): unknown => {
     };
   }
 
-  // Scalar. `enum` is sorted so reordering the values is not a change.
+  // Scalar. An enum's `values` are sorted so reordering them is not a change.
   return {
-    ...(def.kind === 'string' && def.enum && { enum: [...def.enum].sort() }),
     kind: def.kind,
     ...(def.required !== undefined && { required: def.required }),
+    ...(def.kind === 'enum' && { values: [...def.values].sort() }),
   };
 };
 
@@ -97,12 +98,14 @@ export const hashSchema = async (schema: TypeSchema): Promise<string> => {
 
 /**
  * Kinds acceptable in a candidate field, per required kind. `string` and
- * `text` are mutually acceptable for reading; everything else requires an
- * exact match. See docs/spec/data-model.md § Type compatibility.
+ * `text` are mutually acceptable for reading, and either accepts an enum,
+ * whose values are strings; everything else requires an exact match. A
+ * required enum takes the subset rule in isFieldCompatible instead. See
+ * docs/spec/data-model.md § Type compatibility.
  */
-const READ_COMPATIBLE: Record<ScalarFieldKind, ScalarFieldKind[]> = {
-  string: ['string', 'text'],
-  text: ['text', 'string'],
+const READ_COMPATIBLE: Record<Exclude<ScalarFieldKind, 'enum'>, ScalarFieldKind[]> = {
+  string: ['string', 'text', 'enum'],
+  text: ['text', 'string', 'enum'],
   number: ['number'],
   boolean: ['boolean'],
   date: ['date'],
@@ -110,8 +113,8 @@ const READ_COMPATIBLE: Record<ScalarFieldKind, ScalarFieldKind[]> = {
   'file-ref': ['file-ref'],
 };
 
-// Candidate schemas can come from another app's Type definition (the
-// untrusted side of duck-typed consumption), so recursion into array
+// Candidate schemas can come from another app's Type definition, whose
+// shape validation bounds its depth, so recursion into array
 // items / object properties is depth-bounded — matches MAX_VALIDATION_DEPTH
 // in validate.ts. Past the limit we can't verify compatibility, so we
 // fail closed (treat as incompatible) rather than risk a stack overflow.
@@ -148,6 +151,12 @@ const isFieldCompatible = (candidate: FieldDef, required: FieldDef, depth: numbe
     );
   }
   if (candidate.kind === 'array' || candidate.kind === 'object') return false;
+  // A consumer expecting an enum can handle only the values it lists.
+  if (required.kind === 'enum') {
+    if (candidate.kind !== 'enum') return false;
+    const allowed = new Set(required.values);
+    return candidate.values.every((v) => allowed.has(v));
+  }
   return READ_COMPATIBLE[required.kind].includes(candidate.kind);
 };
 
@@ -181,7 +190,8 @@ export const isCompatible = (
 // -------------------------------------------------------
 //
 // Deliberately distinct from isCompatible() above: read compatibility and
-// evolution legality are different relations that disagree on text/string.
+// evolution legality are different relations that disagree on text/string
+// and on enum.
 // See docs/spec/data-model.md § Type compatibility.
 
 export type SchemaDriftViolation = {
@@ -207,7 +217,10 @@ const diffField = (
     violations.push({ path, message: 'exceeds max nesting depth; cannot verify additive change' });
     return;
   }
-  if (stored.kind !== candidate.kind) {
+  // An enum becoming a string accepts strictly more, so it is the one kind
+  // change that is additive.
+  const widensEnum = stored.kind === 'enum' && candidate.kind === 'string';
+  if (stored.kind !== candidate.kind && !widensEnum) {
     violations.push({
       path,
       message: `kind changed from "${stored.kind}" to "${candidate.kind}"`,
@@ -220,20 +233,12 @@ const diffField = (
       message: `required changed from ${!!stored.required} to ${!!candidate.required}`,
     });
   }
-  // An enum narrows what a string field accepts when it is added or loses
-  // values, and widens it when it is removed or gains them.
-  if (stored.kind === 'string' && candidate.kind === 'string') {
-    if (!stored.enum && candidate.enum) {
-      violations.push({ path, message: 'enum added to an existing string field' });
-    } else if (stored.enum && candidate.enum) {
-      const kept = new Set(candidate.enum);
-      const removed = stored.enum.filter((v) => !kept.has(v));
-      if (removed.length > 0) {
-        violations.push({
-          path,
-          message: `enum values removed: ${removed.map((v) => JSON.stringify(v)).join(', ')}`,
-        });
-      }
+  // Losing a value narrows what an enum accepts; gaining one widens it.
+  if (stored.kind === 'enum' && candidate.kind === 'enum') {
+    const kept = new Set(candidate.values);
+    const removed = stored.values.filter((v) => !kept.has(v));
+    if (removed.length > 0) {
+      violations.push({ path, message: `enum values removed: ${formatEnumValues(removed)}` });
     }
   }
   // Opening a declared container, or closing an open one, changes which

@@ -36,12 +36,17 @@ export type ValidationError = {
 // Internal helpers
 // -------------------------------------------------------
 
+/** Shared by the 422 for a value outside the list and the 409 for removed values. */
+export const formatEnumValues = (values: readonly string[]): string =>
+  values.map((v) => JSON.stringify(v)).join(', ');
+
 const jsTypeForScalar = (kind: ScalarFieldKind): string => {
   switch (kind) {
     case 'string':
     case 'text':
     case 'record-ref':
     case 'file-ref':
+    case 'enum':
       return 'string';
     case 'number':
       return 'number';
@@ -197,10 +202,10 @@ const validateField = (
     });
   } else if (typeof value === 'number' && !Number.isFinite(value)) {
     errors.push({ path, message: `Expected a finite number, got ${value}` });
-  } else if (def.kind === 'string' && def.enum && !def.enum.includes(value as string)) {
+  } else if (def.kind === 'enum' && !def.values.includes(value as string)) {
     errors.push({
       path,
-      message: `Expected one of ${def.enum.map((v) => JSON.stringify(v)).join(', ')}, got ${JSON.stringify(value)}`,
+      message: `Expected one of ${formatEnumValues(def.values)}, got ${JSON.stringify(value)}`,
     });
   }
 };
@@ -344,22 +349,23 @@ const SCALAR_KINDS: Record<ScalarFieldKind, true> = {
   text: true,
   'record-ref': true,
   'file-ref': true,
+  enum: true,
 };
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
-const validateEnumShape = (list: unknown, path: string, errors: ValidationError[]): void => {
+const validateEnumValuesShape = (list: unknown, path: string, errors: ValidationError[]): void => {
   if (!Array.isArray(list) || list.length === 0) {
-    errors.push({ path, message: '"enum" must be a non-empty array of strings' });
+    errors.push({ path, message: 'An enum must declare "values", a non-empty array of strings' });
     return;
   }
   const seen = new Set<string>();
   for (const entry of list) {
     if (typeof entry !== 'string') {
-      errors.push({ path, message: `"enum" entries must be strings, got ${typeName(entry)}` });
+      errors.push({ path, message: `"values" entries must be strings, got ${typeName(entry)}` });
     } else if (seen.has(entry)) {
-      errors.push({ path, message: `"enum" lists ${JSON.stringify(entry)} more than once` });
+      errors.push({ path, message: `"values" lists ${JSON.stringify(entry)} more than once` });
     }
     seen.add(entry as string);
   }
@@ -389,8 +395,15 @@ const validateFieldDefShape = (
     return;
   }
 
-  if (def.enum !== undefined && (def.kind === 'array' || def.kind === 'object')) {
-    errors.push({ path, message: `"enum" is only allowed on a string field, not "${def.kind}"` });
+  const knownKind =
+    def.kind === 'array' || def.kind === 'object' || Object.hasOwn(SCALAR_KINDS, def.kind);
+  if (def.values !== undefined && knownKind && def.kind !== 'enum') {
+    errors.push({ path, message: `"values" is only allowed on an enum field, not "${def.kind}"` });
+  }
+  // Unknown keys are otherwise ignored, but `enum` names a kind: as a key it
+  // would read as a constraint that nothing enforces.
+  if (def.enum !== undefined) {
+    errors.push({ path, message: '"enum" is a field kind, not a field key' });
   }
 
   if (def.kind === 'array') {
@@ -438,13 +451,7 @@ const validateFieldDefShape = (
     return;
   }
 
-  if (def.enum !== undefined) {
-    if (def.kind !== 'string') {
-      errors.push({ path, message: `"enum" is only allowed on a string field, not "${def.kind}"` });
-    } else {
-      validateEnumShape(def.enum, path, errors);
-    }
-  }
+  if (def.kind === 'enum') validateEnumValuesShape(def.values, path, errors);
 };
 
 /**
