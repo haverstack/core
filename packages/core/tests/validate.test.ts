@@ -630,12 +630,12 @@ describe('validatePatchValues', () => {
 });
 
 // -------------------------------------------------------
-// String enums
+// Enums
 // -------------------------------------------------------
 
-describe('string enum', () => {
+describe('enum', () => {
   const schema: TypeSchema = {
-    status: { kind: 'string', enum: ['want', 'reading', 'finished'] },
+    status: { kind: 'enum', values: ['want', 'reading', 'finished'] },
   };
 
   test('a listed value is accepted', () => {
@@ -651,15 +651,15 @@ describe('string enum', () => {
     ]);
   });
 
-  test('a non-string is refused by the type check, not the enum', () => {
+  test('a non-string is refused by the type check, not the value list', () => {
     expect(errorsFor({ status: 3 }, schema)).toEqual([
       { path: 'status', message: 'Expected string, got number' },
     ]);
   });
 
-  test('an enum constrains a string inside a declared array', () => {
+  test('an enum constrains each element of a declared array', () => {
     const tags: TypeSchema = {
-      tags: { kind: 'array', items: { kind: 'string', enum: ['a', 'b'] } },
+      tags: { kind: 'array', items: { kind: 'enum', values: ['a', 'b'] } },
     };
     expect(paths({ tags: ['a', 'c'] }, tags)).toEqual(['tags[1]']);
   });
@@ -669,36 +669,34 @@ describe('validateSchemaShape enum', () => {
   const messages = (json: string) => validateSchemaShape(JSON.parse(json)).map((e) => e.message);
 
   test('a non-empty list of distinct strings is well-formed', () => {
-    expect(messages('{"s": {"kind": "string", "enum": ["a", "b"]}}')).toEqual([]);
+    expect(messages('{"s": {"kind": "enum", "values": ["a", "b"]}}')).toEqual([]);
   });
 
-  test('an empty or non-array enum is refused', () => {
-    const expected = ['"enum" must be a non-empty array of strings'];
-    expect(messages('{"s": {"kind": "string", "enum": []}}')).toEqual(expected);
-    expect(messages('{"s": {"kind": "string", "enum": "a"}}')).toEqual(expected);
+  test('missing, empty or non-array values are refused', () => {
+    const expected = ['An enum must declare "values", a non-empty array of strings'];
+    expect(messages('{"s": {"kind": "enum"}}')).toEqual(expected);
+    expect(messages('{"s": {"kind": "enum", "values": []}}')).toEqual(expected);
+    expect(messages('{"s": {"kind": "enum", "values": "a"}}')).toEqual(expected);
   });
 
-  test('non-string and duplicate entries are refused', () => {
-    expect(messages('{"s": {"kind": "string", "enum": ["a", 1]}}')).toEqual([
-      '"enum" entries must be strings, got number',
+  test('non-string and duplicate values are refused', () => {
+    expect(messages('{"s": {"kind": "enum", "values": ["a", 1]}}')).toEqual([
+      '"values" entries must be strings, got number',
     ]);
-    expect(messages('{"s": {"kind": "string", "enum": ["a", "a"]}}')).toEqual([
-      '"enum" lists "a" more than once',
-    ]);
-  });
-
-  test('an enum on a non-string kind is refused', () => {
-    expect(messages('{"s": {"kind": "text", "enum": ["a"]}}')).toEqual([
-      '"enum" is only allowed on a string field, not "text"',
+    expect(messages('{"s": {"kind": "enum", "values": ["a", "a"]}}')).toEqual([
+      '"values" lists "a" more than once',
     ]);
   });
 
-  test('an enum on an array or object is refused', () => {
-    expect(messages('{"a": {"kind": "array", "open": true, "enum": ["a"]}}')).toEqual([
-      '"enum" is only allowed on a string field, not "array"',
+  test('values on any other kind are refused', () => {
+    expect(messages('{"s": {"kind": "string", "values": ["a"]}}')).toEqual([
+      '"values" is only allowed on an enum field, not "string"',
     ]);
-    expect(messages('{"o": {"kind": "object", "open": true, "enum": ["a"]}}')).toEqual([
-      '"enum" is only allowed on a string field, not "object"',
+    expect(messages('{"a": {"kind": "array", "open": true, "values": ["a"]}}')).toEqual([
+      '"values" is only allowed on an enum field, not "array"',
+    ]);
+    expect(messages('{"o": {"kind": "object", "open": true, "values": ["a"]}}')).toEqual([
+      '"values" is only allowed on an enum field, not "object"',
     ]);
   });
 });

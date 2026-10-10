@@ -256,11 +256,12 @@ type ScalarFieldKind =
   | 'date'
   | 'text' // Long-form string (e.g. markdown body)
   | 'record-ref' // Reference to another record by ID
-  | 'file-ref'; // Reference to an attachment file ID (SHA-256 hex)
+  | 'file-ref' // Reference to an attachment file ID (SHA-256 hex)
+  | 'enum'; // One of a declared set of strings
 
 type FieldDef =
-  | { kind: 'string'; enum?: string[]; required?: boolean }
-  | { kind: Exclude<ScalarFieldKind, 'string'>; required?: boolean }
+  | { kind: 'enum'; values: string[]; required?: boolean }
+  | { kind: Exclude<ScalarFieldKind, 'enum'>; required?: boolean }
   | { kind: 'array'; items: FieldDef; open?: false; required?: boolean } // recursive
   | { kind: 'array'; open: true; required?: boolean } // elements unvalidated
   | { kind: 'object'; properties: TypeSchema; open?: false; required?: boolean } // recursive
@@ -304,7 +305,9 @@ await stack.defineType({
 
 **Array and object fields** are schema-validated on write and reachable by query: a content filter key is a path, and an array along it is matched element-wise (see [Filter](#filter)). **`open: true` declares the container open** — a list or object whose interior the schema does not describe, and the one way to store content the schema cannot name. A container declares either its interior or `open`, never neither: opacity is a claim the schema makes, not something inferred from a missing `items`/`properties`, so a schema that forgets to describe its elements is a mistake rather than a silently unchecked field. Query reach is unaffected: a path still walks into an open container, since the query engine reads the content rather than the schema. See [Undeclared content fields](#undeclared-content-fields).
 
-**A `string` field can declare `enum`, a non-empty list of the values it may hold.** A value outside the list is a `StackValidationError` at its path, naming the allowed values. `defineType()` refuses an empty list, non-string or duplicate entries, and `enum` on any kind but `string`. The schema is then the one place the allowed values live, so an app's union type (`'want' | 'reading' | 'finished'`) has something to derive from rather than drifting from it. The [schema hash](#schema-drift-detection) sorts the values, so reordering them is not a change.
+**An `enum` field holds one of the strings its `values` list names.** A value outside the list is a `StackValidationError` at its path, naming the allowed values. `defineType()` refuses an `enum` with missing or empty `values`, non-string or duplicate entries, and `values` on any other kind. The schema is then the one place the allowed values live, so an app's union type (`'want' | 'reading' | 'finished'`) has something to derive from rather than drifting from it. The [schema hash](#schema-drift-detection) sorts the values, so reordering them is not a change.
+
+An enum is its own kind rather than a constraint on `string` because it promises a reader something a string does not: the value is one of a known set. Every rule keyed on kind — [read compatibility](#type-compatibility), [drift](#schema-drift-detection), [sort order](#sorting-by-a-content-field) — therefore states what it does with one.
 
 **`date` fields validate against an ISO 8601 shape, not bare `Date.parse`** — `YYYY-MM-DD`, optionally extended with `THH:mm:ss`, optional fractional seconds, and an optional `Z`/numeric-offset suffix. A regex pins the shape; `Date.parse` then runs as a calendar sanity check on top of it (catching e.g. an invalid month). `Date.parse` alone also accepts engine-dependent, non-ISO formats (`"March 1 2020"`), which would let cross-runtime stacks disagree about what's valid and produce non-canonical stored values.
 
@@ -326,7 +329,7 @@ This matters because `defineType()` takes a `TypeSchema` but a schema arriving a
 
 - **Identical schema** (`schemaHash` matches) — a no-op; the stored Type is returned unchanged, `createdAt` untouched. Calling `defineType()` for every Type at every app startup is therefore cheap, not a rewrite each time.
 - **Identical schema, different `name`** — always persists (display metadata, not schema), `createdAt` still preserved.
-- **Different schema** — legal only if the change is a pure [additive-in-place evolution](#additive-evolution-within-a-version): new _optional_ fields only, recursively into `object` properties and `array` items; nothing removed, no field's `kind` changed, no field's `required` flipped in either direction, no container [opened or closed](#undeclared-content-fields), and no `enum` that narrows what a string field accepts: adding an `enum` to a field, or removing values from one, needs a new version, while removing an `enum` or adding values to one accepts strictly more and stays in place. An illegal change throws `StackSchemaDriftError` (wire: **409**, code `schema_drift`) naming each violation — the remedy is always a new version (`defineType({ id: '...@n+1', ... })` plus a `migration()` passed to `Stack.open()`), never redefining the same `id` in place.
+- **Different schema** — legal only if the change is a pure [additive-in-place evolution](#additive-evolution-within-a-version): new _optional_ fields only, recursively into `object` properties and `array` items; nothing removed, no field's `kind` changed, no field's `required` flipped in either direction, no container [opened or closed](#undeclared-content-fields), and no enum that loses values. **One kind change is additive: `enum` to `string`**, which accepts strictly more; `string` to `enum` narrows and needs a new version, as does `enum` to `text`, for the reason `string` to `text` does (below). Adding values to an enum stays in place. An illegal change throws `StackSchemaDriftError` (wire: **409**, code `schema_drift`) naming each violation — the remedy is always a new version (`defineType({ id: '...@n+1', ... })` plus a `migration()` passed to `Stack.open()`), never redefining the same `id` in place.
 
 `POST /types` (see [Wire format § Types](./wire-format.md#types)) applies the same check server-side, so the wire path can't silently replace a Type either.
 
@@ -342,17 +345,20 @@ Structural/duck-typed — a Type is **read-compatible** with a required schema i
 
 A field's kind is read-compatible with a required kind per this table (row = required kind, columns = candidate kinds accepted):
 
-| required →   | `string` | `text` | `number` | `boolean` | `date` | `record-ref` | `file-ref` |
-| ------------ | -------- | ------ | -------- | --------- | ------ | ------------ | ---------- |
-| `string`     | ✓        | ✓      |          |           |        |              |            |
-| `text`       | ✓        | ✓      |          |           |        |              |            |
-| `number`     |          |        | ✓        |           |        |              |            |
-| `boolean`    |          |        |          | ✓         |        |              |            |
-| `date`       |          |        |          |           | ✓      |              |            |
-| `record-ref` |          |        |          |           |        | ✓            |            |
-| `file-ref`   |          |        |          |           |        |              | ✓          |
+| required →   | `string` | `text` | `enum` | `number` | `boolean` | `date` | `record-ref` | `file-ref` |
+| ------------ | -------- | ------ | ------ | -------- | --------- | ------ | ------------ | ---------- |
+| `string`     | ✓        | ✓      | ✓      |          |           |        |              |            |
+| `text`       | ✓        | ✓      | ✓      |          |           |        |              |            |
+| `enum`       |          |        | ⊆      |          |           |        |              |            |
+| `number`     |          |        |        | ✓        |           |        |              |            |
+| `boolean`    |          |        |        |          | ✓         |        |              |            |
+| `date`       |          |        |        |          |           | ✓      |              |            |
+| `record-ref` |          |        |        |          |           |        | ✓            |            |
+| `file-ref`   |          |        |        |          |           |        |              | ✓          |
 
 `string` and `text` are mutually read-compatible — the distinction is presentation/indexing intent. Every other kind requires an exact match; notably `date` is not compatible with `string`, since `date` carries a parse/validity guarantee a plain string doesn't.
+
+**An enum reads as a string, and a required enum accepts only a narrower enum** (⊆ above): a candidate `enum` whose `values` are all in the required list. A consumer expecting an enum has handled exactly the values it lists, so a `string` or `text` candidate, which can hold anything, is refused, as is an enum listing a value the consumer does not. The check is as of the Type it is given: an enum may [gain values in place](#additive-evolution-within-a-version), so a candidate compatible today can later hold a value the consumer does not list, which is the case a [typed read](#type-handles) refuses.
 
 Apps that care about semantics filter by exact `typeId`; apps that want flexibility (e.g. "any Type with a required `text` field") use `isCompatible()` — see `packages/core/src/schema.ts` for the authoritative implementation and `packages/core/tests/schema.test.ts` for its behavior under nesting and the string/text equivalence.
 
@@ -373,7 +379,7 @@ const noteV2ToV3 = migration(NoteV2, NoteV3, (content) => ({ ...content, pinned:
 const stack = await Stack.open(adapter, { migrations: [noteV1ToV2, noteV2ToV3] });
 ```
 
-`migration()` takes two [type handles](#type-handles), so `fn` is checked as `ContentOf` the first to `ContentOf` the second: a step that drops a required field or yields a value outside an `enum` does not compile. Within a family it refuses a `to` whose `migratesFrom` is not `from.id`, so a step cannot be paired with the wrong handle.
+`migration()` takes two [type handles](#type-handles), so `fn` is checked as `ContentOf` the first to `ContentOf` the second: a step that drops a required field or yields a value outside an enum's `values` does not compile. Within a family it refuses a `to` whose `migratesFrom` is not `from.id`, so a step cannot be paired with the wrong handle.
 
 **Lineage stays inside a family; a migration can leave it.** `migratesFrom` names an earlier version of the same family, and `typeHandle()` and `defineType()` refuse anything else with `StackBadRequestError`. A step whose `from` and `to` are in different families has no lineage to check, so `migration()` builds it from the two handles alone. This is how an app's own type moves into a shared one — a [commons](../commons/README.md) type, say — without the shared handle naming every family that has ever migrated into it. A migration is a separate value from either handle: a handle is data a manifest carries over the wire, and may be shared by apps that do not run its family's migrations.
 
@@ -424,7 +430,7 @@ Not every schema change needs a version bump. **Additive-in-place** changes — 
 
 This is what makes duck-typed cross-app consumption (`isCompatible()`, above) work in practice: most evolution needs no coordination at all, and consumers that were never taught about a field simply don't see it. Adding the field to the schema is what licenses writing it — see [Undeclared content fields](#undeclared-content-fields) — and that is a `defineType()` call, not a version bump.
 
-Widening a string field's `enum` (adding values, or removing it) is additive for the same reason a new optional field is: the schema accepts strictly more. Narrowing one is not, and needs a version bump. See [Schema drift detection](#schema-drift-detection).
+Widening an enum (adding values, or turning it into a plain `string`) is additive for the same reason a new optional field is: the schema accepts strictly more. Narrowing one is not, and needs a version bump. See [Schema drift detection](#schema-drift-detection).
 
 **A version bump is a consolidation point**, warranted when:
 
@@ -629,7 +635,7 @@ A caller that genuinely needs a count follows `cursor` to exhaustion and counts 
 
 **Every top-level scalar is sortable, with no per-field opt-in.** A `sortable` marker in `TypeSchema` would change the schema hash, so making an existing field sortable would run the [schema drift](#schema-drift-detection) path for a change that alters no stored shape. The write cost is bounded by the number of top-level scalars on a Type.
 
-**A field orders as the kind its schema declares, not as the value a Record happens to hold.** `number` and `boolean` order numerically (false before true), `date` as epoch milliseconds — so a date field orders the way `createdAt` does rather than by ISO string collation — and every string-shaped kind as text. A value that doesn't match its declared kind orders as nothing. Deriving from the schema is what keeps an order stable across Records that spell a field differently.
+**A field orders as the kind its schema declares, not as the value a Record happens to hold.** `number` and `boolean` order numerically (false before true), `date` as epoch milliseconds — so a date field orders the way `createdAt` does rather than by ISO string collation — and every string-shaped kind as text. An `enum` is one of those: it orders by value, not by its position in `values`, which the [schema hash](#schema-drift-detection) does not preserve. A value that doesn't match its declared kind orders as nothing. Deriving from the schema is what keeps an order stable across Records that spell a field differently.
 
 **A `date` holding no UTC offset is read as UTC.** The offset is optional in the [shape a `date` accepts](#types), and resolving an offset-less date-time in whatever zone the host runs in would make the order depend on the machine: an index written on one host and a cursor re-derived on another would disagree, dropping or repeating a Record at a page boundary. UTC is also what a date-only value already resolves to, so `2020-03-01` and `2020-03-01T00:00:00` order alike.
 

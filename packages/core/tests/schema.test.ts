@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'vitest';
 import { hashSchema, isCompatible, diffSchemas, parseTypeId, buildTypeId } from '../src/schema.js';
-import type { TypeSchema } from '../src/types.js';
+import type { FieldDef, TypeSchema } from '../src/types.js';
 
 // -------------------------------------------------------
 // hashSchema
@@ -308,16 +308,58 @@ describe('isCompatible', () => {
 
 describe('hashSchema enum', () => {
   test('reordering enum values does not change the hash', async () => {
-    const h1 = await hashSchema({ s: { kind: 'string', enum: ['a', 'b'] } });
-    const h2 = await hashSchema({ s: { kind: 'string', enum: ['b', 'a'] } });
+    const h1 = await hashSchema({ s: { kind: 'enum', values: ['a', 'b'] } });
+    const h2 = await hashSchema({ s: { kind: 'enum', values: ['b', 'a'] } });
     expect(h1).toBe(h2);
   });
 
   test('an enum, and its values, change the hash', async () => {
     const plain = await hashSchema({ s: { kind: 'string' } });
-    const ab = await hashSchema({ s: { kind: 'string', enum: ['a', 'b'] } });
-    const ac = await hashSchema({ s: { kind: 'string', enum: ['a', 'c'] } });
+    const ab = await hashSchema({ s: { kind: 'enum', values: ['a', 'b'] } });
+    const ac = await hashSchema({ s: { kind: 'enum', values: ['a', 'c'] } });
     expect(new Set([plain, ab, ac]).size).toBe(3);
+  });
+});
+
+describe('isCompatible enum', () => {
+  const field = (def: FieldDef): TypeSchema => ({ s: { ...def, required: true } });
+  const abc = field({ kind: 'enum', values: ['a', 'b', 'c'] });
+  const ab = field({ kind: 'enum', values: ['b', 'a'] });
+
+  test('a required enum accepts an enum listing a subset of its values', () => {
+    expect(isCompatible(ab, abc)).toBe(true);
+    expect(isCompatible(abc, abc)).toBe(true);
+  });
+
+  test('a required enum refuses an enum listing a value it does not', () => {
+    expect(isCompatible(abc, ab)).toBe(false);
+  });
+
+  test('a required enum refuses a string or text candidate, which may hold any value', () => {
+    expect(isCompatible(field({ kind: 'string' }), abc)).toBe(false);
+    expect(isCompatible(field({ kind: 'text' }), abc)).toBe(false);
+  });
+
+  test('a required string or text accepts an enum, whose values are strings', () => {
+    expect(isCompatible(abc, field({ kind: 'string' }))).toBe(true);
+    expect(isCompatible(abc, field({ kind: 'text' }))).toBe(true);
+  });
+
+  test('the subset rule applies inside declared arrays and objects', () => {
+    const inArray = (values: string[]): TypeSchema => ({
+      s: { kind: 'array', items: { kind: 'enum', values }, required: true },
+    });
+    const inObject = (values: string[]): TypeSchema => ({
+      o: {
+        kind: 'object',
+        properties: { s: { kind: 'enum', values, required: true } },
+        required: true,
+      },
+    });
+    expect(isCompatible(inArray(['a']), inArray(['a', 'b']))).toBe(true);
+    expect(isCompatible(inArray(['a', 'b']), inArray(['a']))).toBe(false);
+    expect(isCompatible(inObject(['a']), inObject(['a', 'b']))).toBe(true);
+    expect(isCompatible(inObject(['a', 'b']), inObject(['a']))).toBe(false);
   });
 });
 
@@ -629,31 +671,42 @@ describe('buildTypeId', () => {
 });
 
 describe('diffSchemas enum', () => {
-  const withEnum = (values?: string[]): TypeSchema => ({
-    s: { kind: 'string', ...(values && { enum: values }) },
-  });
+  const field = (def: FieldDef): TypeSchema => ({ s: def });
+  const values = (...v: string[]) => field({ kind: 'enum', values: v });
 
-  test('adding an enum to an existing string field is drift', () => {
-    expect(diffSchemas(withEnum(), withEnum(['a']))).toEqual([
-      { path: 's', message: 'enum added to an existing string field' },
+  test('a string becoming an enum is drift', () => {
+    expect(diffSchemas(field({ kind: 'string' }), values('a'))).toEqual([
+      { path: 's', message: 'kind changed from "string" to "enum"' },
     ]);
   });
 
   test('removing enum values is drift', () => {
-    expect(diffSchemas(withEnum(['a', 'b', 'c']), withEnum(['a']))).toEqual([
+    expect(diffSchemas(values('a', 'b', 'c'), values('a'))).toEqual([
       { path: 's', message: 'enum values removed: "b", "c"' },
     ]);
   });
 
-  test('removing the enum is additive', () => {
-    expect(diffSchemas(withEnum(['a']), withEnum())).toEqual([]);
+  test('an enum becoming a string is additive', () => {
+    expect(diffSchemas(values('a'), field({ kind: 'string' }))).toEqual([]);
+  });
+
+  test('an enum becoming a string still reports a required flip', () => {
+    expect(diffSchemas(values('a'), field({ kind: 'string', required: true }))).toEqual([
+      { path: 's', message: 'required changed from false to true' },
+    ]);
+  });
+
+  test('an enum becoming text is drift', () => {
+    expect(diffSchemas(values('a'), field({ kind: 'text' }))).toEqual([
+      { path: 's', message: 'kind changed from "enum" to "text"' },
+    ]);
   });
 
   test('adding enum values is additive', () => {
-    expect(diffSchemas(withEnum(['a']), withEnum(['a', 'b']))).toEqual([]);
+    expect(diffSchemas(values('a'), values('a', 'b'))).toEqual([]);
   });
 
   test('reordering enum values is not a change', () => {
-    expect(diffSchemas(withEnum(['a', 'b']), withEnum(['b', 'a']))).toEqual([]);
+    expect(diffSchemas(values('a', 'b'), values('b', 'a'))).toEqual([]);
   });
 });

@@ -73,6 +73,10 @@ describe('contentSortEntry', () => {
     expect(contentSortEntry('boolean', true)).toEqual({ kind: 'num', num: 1 });
   });
 
+  test('reads an enum as text, ordered by value rather than declaration', () => {
+    expect(contentSortEntry('enum', 'Émile')).toEqual(contentSortEntry('string', 'Émile'));
+  });
+
   test('carries both the text and the key it orders by', () => {
     expect(contentSortEntry('string', 'Émile')).toEqual({
       kind: 'text',

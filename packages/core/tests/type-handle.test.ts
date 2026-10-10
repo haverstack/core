@@ -17,7 +17,7 @@ const BookV1 = typeHandle({
   name: 'Book',
   schema: {
     title: { kind: 'string', required: true },
-    status: { kind: 'string', enum: ['want', 'reading', 'done'], required: true },
+    status: { kind: 'enum', values: ['want', 'reading', 'done'], required: true },
   },
 });
 
@@ -27,7 +27,7 @@ const Book = typeHandle({
   migratesFrom: BookV1,
   schema: {
     title: { kind: 'string', required: true },
-    status: { kind: 'string', enum: ['want', 'reading', 'finished', 'abandoned'], required: true },
+    status: { kind: 'enum', values: ['want', 'reading', 'finished', 'abandoned'], required: true },
     pages: { kind: 'number' },
   },
 });
@@ -49,7 +49,7 @@ const Everything = typeHandle({
   name: 'Everything',
   schema: {
     s: { kind: 'string', required: true },
-    e: { kind: 'string', enum: ['a', 'b'], required: true },
+    e: { kind: 'enum', values: ['a', 'b'], required: true },
     t: { kind: 'text', required: true },
     n: { kind: 'number', required: true },
     b: { kind: 'boolean', required: true },
@@ -183,7 +183,7 @@ describe('typeHandle()', () => {
   });
 
   test('core TypeSchema fits the literal schema type', () => {
-    const fromCore: TypeSchema = { a: { kind: 'string', enum: ['x'] } };
+    const fromCore: TypeSchema = { a: { kind: 'enum', values: ['x'] } };
     expect(typeHandle({ id: 'com.example/x@1', name: 'X', schema: fromCore }).schema).toBe(
       fromCore,
     );
@@ -318,8 +318,8 @@ describe.each([
       schema: {
         ...Book.schema,
         status: {
-          kind: 'string',
-          enum: ['want', 'reading', 'finished', 'abandoned', 'paused'],
+          kind: 'enum',
+          values: ['want', 'reading', 'finished', 'abandoned', 'paused'],
           required: true,
         },
       },
@@ -428,8 +428,8 @@ describe.each([
       schema: {
         ...Book.schema,
         status: {
-          kind: 'string',
-          enum: ['want', 'reading', 'finished', 'abandoned', 'paused'],
+          kind: 'enum',
+          values: ['want', 'reading', 'finished', 'abandoned', 'paused'],
           required: true,
         },
       },

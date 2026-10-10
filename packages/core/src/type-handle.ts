@@ -37,16 +37,16 @@ import type {
 
 /**
  * `FieldDef` with readonly members, which is what a `const` type parameter
- * infers for a literal (`enum` becomes a readonly tuple). Every mutable
+ * infers for a literal (`values` becomes a readonly tuple). Every mutable
  * `TypeSchema` is assignable to it, so it is also what `defineType()` takes.
  */
 export type ReadonlyFieldDef =
   | {
-      readonly kind: 'string';
-      readonly enum?: readonly string[];
+      readonly kind: 'enum';
+      readonly values: readonly string[];
       readonly required?: boolean;
     }
-  | { readonly kind: Exclude<ScalarFieldKind, 'string'>; readonly required?: boolean }
+  | { readonly kind: Exclude<ScalarFieldKind, 'enum'>; readonly required?: boolean }
   | {
       readonly kind: 'array';
       readonly items: ReadonlyFieldDef;
@@ -82,7 +82,7 @@ type IsRequired<D> = D extends { readonly required: true } ? true : false;
 
 type Simplify<T> = { [K in keyof T]: T[K] } & {};
 
-type ValueOf<D> = D extends { readonly kind: 'string'; readonly enum: readonly (infer E)[] }
+type ValueOf<D> = D extends { readonly kind: 'enum'; readonly values: readonly (infer E)[] }
   ? E
   : D extends { readonly kind: 'string' | 'text' | 'date' | 'record-ref' | 'file-ref' }
     ? string
@@ -273,11 +273,11 @@ const unknownEnumValues = (
   errors: ValidationError[],
 ): void => {
   if (value === undefined || value === null) return;
-  if (def.kind === 'string') {
-    if (def.enum && typeof value === 'string' && !def.enum.includes(value)) {
+  if (def.kind === 'enum') {
+    if (typeof value === 'string' && !def.values.includes(value)) {
       errors.push({
         path,
-        message: `Expected one of ${def.enum.map((v) => JSON.stringify(v)).join(', ')}, got ${JSON.stringify(value)}`,
+        message: `Expected one of ${def.values.map((v) => JSON.stringify(v)).join(', ')}, got ${JSON.stringify(value)}`,
       });
     }
     return;

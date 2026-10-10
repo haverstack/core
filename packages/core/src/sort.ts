@@ -54,7 +54,8 @@ const ZONELESS_DATE_TIME_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?$/;
  *
  * `date` normalizes to epoch milliseconds so a date field orders the way
  * `createdAt` does instead of by ISO string collation, and `boolean` to
- * 0/1 so false precedes true.
+ * 0/1 so false precedes true. An enum orders as text: its declaration
+ * order is not part of the schema.
  */
 export function contentSortEntry(kind: ScalarFieldKind, value: unknown): SortEntry | null {
   switch (kind) {
@@ -69,7 +70,11 @@ export function contentSortEntry(kind: ScalarFieldKind, value: unknown): SortEnt
       const ms = Date.parse(ZONELESS_DATE_TIME_RE.test(value) ? `${value}Z` : value);
       return Number.isNaN(ms) ? null : { kind: 'num', num: ms };
     }
-    default:
+    case 'string':
+    case 'text':
+    case 'record-ref':
+    case 'file-ref':
+    case 'enum':
       return typeof value === 'string'
         ? { kind: 'text', text: value, key: contentSortKey(value) }
         : null;
