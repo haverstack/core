@@ -6,7 +6,7 @@ import {
   validateReservedKeys,
   isValid,
 } from '../src/validate.js';
-import type { TypeSchema, FieldDef } from '../src/types.js';
+import type { TypeSchema, FieldDef } from '../src/types/index.js';
 
 // -------------------------------------------------------
 // Helpers

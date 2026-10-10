@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach } from 'vitest';
 import { Stack } from '../src/stack.js';
 import { MemoryAdapter } from '../src/testing.js';
 import { migration, typeHandle } from '../src/type-handle.js';
-import type { RecordChange, StackRecord } from '../src/types.js';
+import type { RecordChange, StackRecord } from '../src/types/index.js';
 
 const fam = (typeId: string): string => typeId.split('@')[0]!;
 const NOTE = 'com.example.test/note@1';

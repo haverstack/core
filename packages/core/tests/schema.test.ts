@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'vitest';
 import { hashSchema, isCompatible, diffSchemas, parseTypeId, buildTypeId } from '../src/schema.js';
-import type { FieldDef, TypeSchema } from '../src/types.js';
+import type { FieldDef, TypeSchema } from '../src/types/index.js';
 
 // -------------------------------------------------------
 // hashSchema

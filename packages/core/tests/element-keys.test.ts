@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach } from 'vitest';
 import { Stack } from '../src/stack.js';
 import { StackBadRequestError, StackValidationError } from '../src/errors.js';
 import { MemoryAdapter } from '../src/testing.js';
-import type { Association, DataAssociation, AuthorityAssociation } from '../src/types.js';
+import type { Association, DataAssociation, AuthorityAssociation } from '../src/types/index.js';
 
 const fam = (typeId: string): string => typeId.split('@')[0]!;
 const NOTE = 'com.example.test/note@1';

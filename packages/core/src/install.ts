@@ -21,7 +21,7 @@
 
 import { baseIdOf, familyIdProblem, parseTypeId } from './schema.js';
 import { GRANT_ACTION_SET, UNGRANTABLE_SYSTEM_TYPES } from './grants.js';
-import { SYSTEM_TYPES } from './types.js';
+import { SYSTEM_TYPES } from './types/index.js';
 import type {
   AppId,
   AuthorityAssociation,
@@ -35,7 +35,7 @@ import type {
   RelationshipAssociation,
   StackRecord,
   TypeId,
-} from './types.js';
+} from './types/index.js';
 import type { DefineTypeOptions } from './stack.js';
 import type { ValidationError } from './validate.js';
 

@@ -174,23 +174,14 @@ The one adapter-side hook is the inverse direction:
 ```ts
 // StackRecordAdapter, optional
 subscribeChanges?(
-  opts: SubscribeChangesOptions,
+  opts: SubscribeOptions, // as below — Stack forwards every key
   handler: (change: RecordChange) => void,
 ): Promise<Unsubscribe>; // Unsubscribe = () => void, as below
-
-type SubscribeChangesOptions = {
-  filter?: ChangeFilter;
-  since?: string;
-  includeRecords?: boolean;
-  includeUnlisted?: boolean;
-  onError?: (err: unknown) => void;
-  onReset?: () => void;
-};
 ```
 
 An optional method checked for truthiness at the call site, per [Adapters § Adapter capabilities](./adapters.md#adapter-capabilities) — never a boolean in `capabilities`. A remote adapter implements it; local adapters do not, and their absence is not a gap: [a stack's storage has exactly one owning process](./adapters.md#concurrency--storage-ownership), so locally there is no third party whose writes could have been missed. **Resumption is meaningful only in the multi-writer topology.**
 
-`onError` here is the relay's own trouble — a connection it could not restore — rather than a subscriber's, and `onReset` is the gap that leaves. A relay reports what it is told and decides nothing, so it has no handler of its own to route errors from.
+**The relay takes the subscriber's own options.** A relay reports what it is told and decides nothing, so there is no option only a local emitter answers and no separate shape to keep in step. The subscriber's `onError` therefore hears two things on a relaying stack: its own handler throwing, and a connection the relay could not restore. `onReset` is the gap the latter leaves.
 
 **One relay per subscription, carrying that subscription's filter.** The filter travels rather than being applied to what comes back, because `createdBy` and `parentId` are answerable only where the record is: the far end holds it, and this end never will. Sharing one relay across subscriptions would mean either re-deriving those filters locally without the record, or subscribing unfiltered and paying for every change on every subscription.
 
@@ -232,7 +223,7 @@ interface StackClient {
 - **`ChangeFilter` is a subset of [`RecordFilter`](./data-model.md#filter), and every key means the same thing in both.** `typeId` is an exact match, `baseId` matches the whole family, and `createdBy` names the record's author — never the actor — with the same `subjectId` / `principalId` lists. The app that loads a set with `query()` and then follows it with `subscribe()` passes one value to both and sees the same records in each. A subscriber that wants to survive a type version bump says `baseId`, which is matched by family exactly as [grants are](./access-control.md#type-level-grants) — and, unlike in `query()`, covers versions registered after the subscription opened, since it is matched against each change's `typeId` rather than resolved against registered Types up front.
 - **Filtering is exact, not advisory.** A filtered subscription never receives an event outside its filter; a consumer that filters again is doing redundant work, not defensive work.
 - **`onReset` is the one control signal an app must handle.** A reconnect that resumes cleanly is the adapter's business and the app never hears about it; `onReset` means a gap opened that resumption could not close, and reconciling by query is the repair — the same work as startup. It never fires on a local stack, which has one writing process and so no gap to open. Passing a `since` the far end refuses (a `resume: false` server, an expired cursor) fires it on the very first connection — that is a gap too, and the one an app most needs to hear about: the difference between "you are current" and "you are missing an unknown amount."
-- **`since` resumes a subscription; it does not restart one.** It is forwarded to the adapter as `SubscribeChangesOptions.since` — see [Where events come from](#where-events-come-from) — so it means something only where a relay exists. A stack with no relay has no third party whose writes could have been missed, and so no cursor it could ever have minted; passing `since` there throws `StackBadRequestError` rather than silently starting from the present, which would let the caller believe it resumed when it did not. `ScopedStack.subscribe()` refuses it for the same reason it refuses a relay outright — see [Permission scoping](#permission-scoping) — a scoped view never has a relay of its own to resume. A cursor outside the [framable charset](./change-feed.md#frames) is refused the same way and by the same layer, so a malformed one reports identically whatever adapter is underneath; the value is otherwise opaque, checked for whether it can be framed and never for what it means.
+- **`since` resumes a subscription; it does not restart one.** It is forwarded to the adapter's `subscribeChanges()` unchanged — see [Where events come from](#where-events-come-from) — so it means something only where a relay exists. A stack with no relay has no third party whose writes could have been missed, and so no cursor it could ever have minted; passing `since` there throws `StackBadRequestError` rather than silently starting from the present, which would let the caller believe it resumed when it did not. `ScopedStack.subscribe()` refuses it for the same reason it refuses a relay outright — see [Permission scoping](#permission-scoping) — a scoped view never has a relay of its own to resume. A cursor outside the [framable charset](./change-feed.md#frames) is refused the same way and by the same layer, so a malformed one reports identically whatever adapter is underneath; the value is otherwise opaque, checked for whether it can be framed and never for what it means.
 
 ## Permission scoping
 

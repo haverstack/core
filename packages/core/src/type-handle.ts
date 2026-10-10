@@ -29,7 +29,7 @@ import type {
   SubscribeOptions,
   TypeId,
   Unsubscribe,
-} from './types.js';
+} from './types/index.js';
 
 // -------------------------------------------------------
 // Schema literal types

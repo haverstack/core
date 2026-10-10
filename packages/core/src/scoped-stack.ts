@@ -29,7 +29,7 @@ import {
   assertSinceUsable,
 } from './changes.js';
 import type { EmittedChange } from './changes.js';
-import { SYSTEM_TYPES } from './types.js';
+import { SYSTEM_TYPES } from './types/index.js';
 import type {
   Actor,
   ActorOptions,
@@ -63,7 +63,7 @@ import type {
   TypeId,
   Unsubscribe,
   RecordChangeSet,
-} from './types.js';
+} from './types/index.js';
 import {
   StackError,
   StackConflictError,

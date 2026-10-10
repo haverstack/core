@@ -12,7 +12,7 @@ import type {
 } from '../src/type-handle.js';
 import { StackBadRequestError, StackMigrationError, StackNotFoundError } from '../src/errors.js';
 import type { StackClient } from '../src/stack.js';
-import type { TypeId, TypeSchema } from '../src/types.js';
+import type { TypeId, TypeSchema } from '../src/types/index.js';
 
 const OWNER = 'owner-123';
 

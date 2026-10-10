@@ -12,7 +12,7 @@
 import { describe, test, expect } from 'vitest';
 import { assertQueryCapabilities, assertSortCapability } from '../src/query-validation.js';
 import { StackBadRequestError } from '../src/errors.js';
-import type { MissingCapability, RecordFilter, StackCapabilities } from '../src/types.js';
+import type { MissingCapability, RecordFilter, StackCapabilities } from '../src/types/index.js';
 
 const ALL: StackCapabilities = {
   filter: { content: 'path', contentPresent: true, search: true },

@@ -12,7 +12,7 @@
  * NATIVE_SORT_FIELDS says, so a fourth column has one place to be added.
  */
 import { describe, test, expect } from 'vitest';
-import { NATIVE_SORT_FIELDS } from '../src/types.js';
+import { NATIVE_SORT_FIELDS } from '../src/types/index.js';
 import { assertValidSort } from '../src/query-validation.js';
 import { parseQueryParams } from '../src/wire-request.js';
 import { StackBadRequestError } from '../src/errors.js';

@@ -8,7 +8,7 @@ import { describe, test, expect, beforeEach, vi } from 'vitest';
 import { Stack } from '../src/stack.js';
 import { StackBadRequestError, RelayScopeError } from '../src/errors.js';
 import { MemoryAdapter, type MemoryAdapterOpenOptions } from '../src/testing.js';
-import type { RecordChange, SubscribeChangesOptions } from '../src/types.js';
+import type { RecordChange, SubscribeOptions } from '../src/types/index.js';
 
 const NOTE = 'com.example.test/note@1';
 const OWNER = 'owner-123';
@@ -24,7 +24,7 @@ class RelayingMemoryAdapter extends MemoryAdapter {
     return new RelayingMemoryAdapter(opts);
   }
   readonly relays: {
-    opts: SubscribeChangesOptions;
+    opts: SubscribeOptions;
     push: (change: RecordChange) => void;
     stopped: boolean;
   }[] = [];
@@ -33,7 +33,7 @@ class RelayingMemoryAdapter extends MemoryAdapter {
   refuseWith: Error | undefined;
 
   async subscribeChanges(
-    opts: SubscribeChangesOptions,
+    opts: SubscribeOptions,
     handler: (change: RecordChange) => void,
   ): Promise<() => void> {
     if (this.refuseWith) throw this.refuseWith;

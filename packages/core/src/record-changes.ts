@@ -15,7 +15,7 @@
 
 import { baseIdOf } from './schema.js';
 import { StackBadRequestError } from './errors.js';
-import { SYSTEM_TYPES, RECORD_CHANGE_SET_KEYS } from './types.js';
+import { SYSTEM_TYPES, RECORD_CHANGE_SET_KEYS } from './types/index.js';
 import type {
   Association,
   AssociationChange,
@@ -29,7 +29,7 @@ import type {
   RecordJournalEntry,
   RelationshipTarget,
   StackRecord,
-} from './types.js';
+} from './types/index.js';
 
 /**
  * Association identity — what dissociate() matches and a second associate()

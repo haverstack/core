@@ -11,7 +11,7 @@
  * See docs/spec/data-model.md § Sorting by a content field.
  */
 
-import type { ScalarFieldKind } from './types.js';
+import type { ScalarFieldKind } from './types/index.js';
 
 /**
  * A field's value reduced to something ordered: a number, or text plus

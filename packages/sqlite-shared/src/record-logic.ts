@@ -34,7 +34,12 @@ import type {
   IfVersionOptions,
   ScalarFieldKind,
 } from '@haverstack/core';
-import type { JournalEntryInput, JournalOptions } from '@haverstack/core/adapter';
+import type {
+  BumpVersionOptions,
+  JournalEntryInput,
+  JournalOptions,
+  MutateOptions,
+} from '@haverstack/core/adapter';
 import { contentSortEntry } from '@haverstack/core/adapter';
 import type { SqlExecutor } from './executor.js';
 import { isForeignKeyViolation, isUniqueConstraintViolation } from './executor.js';
@@ -337,12 +342,7 @@ export class SharedSqlRecordLogic {
   async mutateRecord(
     id: string,
     changes: RecordChangeSet,
-    opts: {
-      ifVersion?: number;
-      snapshot?: RecordVersion;
-      bumpsVersion?: boolean;
-    } & ActorOptions &
-      JournalOptions = {},
+    opts: MutateOptions & BumpVersionOptions = {},
   ): Promise<StackRecord> {
     const existing = await this.getRecord(id);
     if (!existing) throw new StackNotFoundError(`Record not found: "${id}"`);
@@ -411,12 +411,7 @@ export class SharedSqlRecordLogic {
 
   async deleteRecord(
     id: string,
-    opts: {
-      purge?: boolean;
-      ifVersion?: number;
-      snapshot?: RecordVersion;
-    } & ActorOptions &
-      JournalOptions = {},
+    opts: { purge?: boolean } & MutateOptions = {},
   ): Promise<StackRecord | null> {
     if (opts.purge) {
       return this.exec.transaction(() => this.purgeRecord(id, opts.ifVersion));
@@ -466,10 +461,7 @@ export class SharedSqlRecordLogic {
     return purged;
   }
 
-  async undeleteRecord(
-    id: string,
-    opts: { ifVersion?: number; snapshot?: RecordVersion } & ActorOptions & JournalOptions = {},
-  ): Promise<StackRecord> {
+  async undeleteRecord(id: string, opts: MutateOptions = {}): Promise<StackRecord> {
     this.exec.transaction(() => {
       if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
       this.versionedUpdate(id, ['deleted_at = NULL'], [], opts);
@@ -482,11 +474,7 @@ export class SharedSqlRecordLogic {
   async restoreVersion(
     id: string,
     version: number,
-    opts: {
-      ifVersion?: number;
-      snapshot?: RecordVersion;
-    } & ActorOptions &
-      JournalOptions = {},
+    opts: MutateOptions = {},
   ): Promise<StackRecord> {
     const existing = await this.getRecord(id);
     if (!existing) throw new StackNotFoundError(`Record not found: "${id}"`);
@@ -511,7 +499,7 @@ export class SharedSqlRecordLogic {
     id: string,
     toTypeId: TypeId,
     content: Record<string, unknown>,
-    opts: { ifVersion?: number; snapshot?: RecordVersion } & ActorOptions & JournalOptions = {},
+    opts: MutateOptions = {},
   ): Promise<StackRecord> {
     // Checked against a read record first, rather than left to the
     // UPDATE's WHERE clause alone: fts5Strategy.remove() has to run before

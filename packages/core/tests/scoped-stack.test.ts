@@ -17,7 +17,7 @@ import type {
   AuthorityAssociation,
   DataAssociation,
   GrantGrantee,
-} from '../src/types.js';
+} from '../src/types/index.js';
 
 // -------------------------------------------------------
 // Test setup

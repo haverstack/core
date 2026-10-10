@@ -15,7 +15,7 @@ import { isOwnerActingAlone } from './access.js';
 import { StackBadRequestError } from './errors.js';
 import { fieldError, requireBody } from './wire-body.js';
 import type { BackdatableCreateRecordOptions } from './stack.js';
-import { RECORD_CHANGE_SET_KEYS } from './types.js';
+import { RECORD_CHANGE_SET_KEYS } from './types/index.js';
 import type {
   EntityId,
   AuthorityAssociation,
@@ -24,7 +24,7 @@ import type {
   StackRecord,
   TokenSession,
   TypeId,
-} from './types.js';
+} from './types/index.js';
 
 /**
  * A `POST /records` body as the three arguments `ScopedStack.create()`

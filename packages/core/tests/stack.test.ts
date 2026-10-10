@@ -22,7 +22,7 @@ import {
   MAX_ID_TIMESTAMP,
   IdGenerationError,
 } from '../src/id.js';
-import type { TypeSchema } from '../src/types.js';
+import type { TypeSchema } from '../src/types/index.js';
 import { migration, typeHandle } from '../src/type-handle.js';
 import type { Migration } from '../src/type-handle.js';
 import { RESERVED_CONTENT_KEYS, CONTENT_KEY_PATH_METACHARACTERS } from '../src/validate.js';
@@ -47,7 +47,7 @@ import type {
   RelationshipTarget,
   StackAdapter,
   StackRecord,
-} from '../src/types.js';
+} from '../src/types/index.js';
 
 // -------------------------------------------------------
 // Test setup

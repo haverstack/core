@@ -16,8 +16,7 @@ import {
   createOptionsFromWireRecord,
 } from '@haverstack/core/wire';
 import type { WireCreateRequest, TokenSession } from '@haverstack/core/wire';
-import type { StackQuery, StackRecord } from '@haverstack/core';
-import type { SubscribeChangesOptions } from '@haverstack/core/adapter';
+import type { StackQuery, StackRecord, SubscribeOptions } from '@haverstack/core';
 import { serializeRecord } from '@haverstack/wire-types';
 
 /**
@@ -69,7 +68,7 @@ async function roundTrip(query: StackQuery, reachesContent = false): Promise<Sta
 
 /** The same, for GET /changes' params. */
 async function roundTripChanges(
-  opts: SubscribeChangesOptions,
+  opts: SubscribeOptions,
 ): Promise<ReturnType<typeof parseChangeParams>> {
   mockFetch.mockResolvedValueOnce(jsonResponse(discovery(false)));
   const adapter = await APIAdapter.open({ url: BASE_URL, token: 'test-token' });
@@ -269,7 +268,7 @@ describe('POST /records/query round trip', () => {
 // -------------------------------------------------------
 
 describe('GET /changes round trip', () => {
-  const cases: Array<[string, SubscribeChangesOptions]> = [
+  const cases: Array<[string, SubscribeOptions]> = [
     ['no options', {}],
     ['single typeId', { filter: { typeId: 'com.example/note@1' } }],
     ['typeId array', { filter: { typeId: ['com.example/note@1', 'com.example/note@2'] } }],

@@ -147,11 +147,11 @@ export type {
   TypeGrant,
   PutAttachmentOptions,
   ConfigContent,
-} from './types.js';
+} from './types/index.js';
 
 export type { GrantQuery } from './grants.js';
 
-export { SYSTEM_TYPES, NATIVE_SORT_FIELDS } from './types.js';
+export { SYSTEM_TYPES, NATIVE_SORT_FIELDS } from './types/index.js';
 
 // Utilities
 

@@ -11,7 +11,7 @@ import { MemoryAdapter } from '../src/testing.js';
 import { isPlanEmpty } from '../src/install.js';
 import { migration, typeHandle } from '../src/type-handle.js';
 import type { AppManifest } from '../src/install.js';
-import type { AppContent, GrantContent, InstallContent, StackRecord } from '../src/types.js';
+import type { AppContent, GrantContent, InstallContent, StackRecord } from '../src/types/index.js';
 
 const OWNER = 'did:key:owner';
 const APP_DID = 'did:key:notes-app';
