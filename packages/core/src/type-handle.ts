@@ -14,6 +14,7 @@
 import { StackBadRequestError, StackMigrationError, StackValidationError } from './errors.js';
 import { lineageProblem, parseTypeId } from './schema.js';
 import { enumAllows, enumMismatchMessage, type ValidationError } from './validate.js';
+import { StoredVersionError, WRITE_EXPECTATION } from './write-expectation.js';
 import type { CreateRecordOptions, StackClient } from './stack.js';
 import type {
   BaseId,
@@ -372,15 +373,17 @@ export const typedMutate = async <S extends ReadonlyTypeSchema>(
   changes: TypedChangeSet<S>,
   opts?: IfVersionOptions,
 ): Promise<TypedRecord<S>> => {
-  // A patch is validated against the record's own stored Type, so one made
-  // through a handle for another version would be checked by a schema it
-  // was not written for. A missing, unreadable or deleted record is left to
-  // mutate(), which refuses it in its own words.
-  const current = await client.get(id, { includeDeleted: true });
-  if (current && current.typeId !== handle.id) {
-    throw new StackBadRequestError(`Record "${id}" is ${current.typeId}, not ${handle.id}`);
+  // Checked against the read the write already makes, so nothing lands on
+  // a record the handle does not type. See docs/spec/data-model.md § Type handles.
+  const expect = {
+    [WRITE_EXPECTATION]: { baseId: handle.baseId, typeId: handle.id, exact: true },
+  };
+  try {
+    return narrowRecord(handle, await client.mutate(id, changes, { ...opts, ...expect } as never));
+  } catch (err) {
+    if (!(err instanceof StoredVersionError)) throw err;
+    throw new StackBadRequestError(`Record "${id}" is ${err.record.typeId}, not ${handle.id}`);
   }
-  return narrowRecord(handle, await client.mutate(id, changes, opts));
 };
 
 export const typedSubscribe = <S extends ReadonlyTypeSchema>(

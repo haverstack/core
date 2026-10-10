@@ -4,8 +4,7 @@
     "outDir": "dist",
     "noEmit": true,
     "lib": ["ES2022"],
-    "types": [],
-    "skipLibCheck": true
+    "types": []
   },
   "include": ["src/**/*.ts", "tests/**/*.ts", "worker-configuration.d.ts"]
 }
