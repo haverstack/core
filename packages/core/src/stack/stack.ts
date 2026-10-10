@@ -57,20 +57,16 @@ import type {
   RecordVersion,
   StackCapabilities,
   IfVersionOptions,
-  GrantAction,
   GrantContent,
   TypeGrant,
   PutAttachmentOptions,
-  GroupRole,
   AttachmentContent,
   FileId,
   ConfigContent,
   EntityId,
   EntityContent,
-  AppContent,
   AppId,
   InstallContent,
-  InstallRequest,
   RecordId,
   Actor,
   ActorOptions,
@@ -113,38 +109,11 @@ import {
   filtersContent,
   validateAssociations,
 } from '../query-validation.js';
-import {
-  GRANT_ACTION_SET,
-  READ_COMPANIONS,
-  grantConveys,
-  grantReach,
-  matchesGrantTarget,
-  validateGrantTarget,
-  validateGrantee,
-  validateGrantBaseId,
-  grantCoversGrantee,
-  loadGrantRecords,
-} from '../grants.js';
+import { validateGrantee, validateGrantBaseId } from '../grants.js';
 import type { GrantQuery } from '../grants.js';
 import { bindingFieldsOf, uniqueBindingFieldsOf } from '../identity-bindings.js';
-import {
-  claimedFamilies,
-  familyStanding,
-  grantIsRequest,
-  installAppLink,
-  installGrantLink,
-  installReader,
-  linkedIds,
-  namespaceOf,
-  ownTypeIds,
-  planFingerprint,
-  sameRequest,
-  snapshotManifest,
-  validateInstall,
-  INSTALL_APP_LABEL,
-  INSTALL_GRANT_LABEL,
-} from '../install.js';
-import type { AppManifest, ForeignRequest, InstallPlan, TypeChange } from '../install.js';
+import { validateInstall } from '../install.js';
+import type { AppManifest, InstallPlan } from '../install.js';
 import { assertAttachmentSize, assertContentSize } from '../limits.js';
 import {
   validateParentId,
@@ -173,6 +142,8 @@ import {
 } from '../record-changes.js';
 import { ScopedStack, scopeToken } from '../scoped-stack/scoped-stack.js';
 import { MigrationRegistry } from './migrations.js';
+import * as apps from './install-app.js';
+import * as typeGrants from './type-grants.js';
 import { SYSTEM_TYPE_DEFINITIONS } from './system-types.js';
 import type {
   BackdatableCreateRecordOptions,
@@ -2389,13 +2360,7 @@ export class Stack implements StackClient {
     grant: TypeGrant,
   ): Promise<StackRecord & { content: GrantContent }> {
     this.assertOpen();
-    validateGrantTarget(grant.grantee);
-    this.checkGrantValid(baseId, grant.actions);
-    return this.create<GrantContent>(`${SYSTEM_TYPES.GRANT}@1`, {
-      baseId,
-      actions: grant.actions,
-      grantee: grant.grantee,
-    });
+    return typeGrants.grantType(this, baseId, grant);
   }
 
   /**
@@ -2414,29 +2379,7 @@ export class Stack implements StackClient {
    */
   async listTypeGrants(query?: GrantQuery): Promise<(StackRecord & { content: GrantContent })[]> {
     this.assertOpen();
-    if (query !== undefined) validateGrantTarget(query, true);
-    const all = await loadGrantRecords((q) => this.query(q));
-    if (query === undefined) return all;
-    if (query.kind !== 'entity') {
-      return all.filter((r) => matchesGrantTarget(r.content, query));
-    }
-
-    // An entity query resolves group rosters, since a grant naming a group
-    // the entity belongs to also currently applies to them. Shares
-    // grantCoversGrantee() with the access checks, so a listing can't
-    // disagree with them about who a grant covers.
-    const groupRoles = new Map<string, GroupRole | null>();
-    const result: (StackRecord & { content: GrantContent })[] = [];
-    for (const r of all) {
-      const covers = await grantCoversGrantee(r.content, query.entityId, {
-        allowDefault: true,
-        allowGroup: true,
-        groupRoles,
-        resolveRecord: (id) => this.get(id, { includeDeleted: true }),
-      });
-      if (covers) result.push(r);
-    }
-    return result;
+    return typeGrants.listTypeGrants(this, query);
   }
 
   /**
@@ -2457,27 +2400,7 @@ export class Stack implements StackClient {
     grant: TypeGrant,
   ): Promise<(StackRecord & { content: GrantContent })[]> {
     this.assertOpen();
-    validateGrantTarget(grant.grantee);
-    const problem = familyIdProblem(baseId, 'revokeType');
-    if (problem) {
-      throw new StackValidationError([{ path: 'baseId', message: problem }], ARGUMENTS_INVALID);
-    }
-    const familyId = baseId;
-    const actionSet = new Set(grant.actions);
-    const all = await loadGrantRecords((q) => this.query(q));
-    const matches = all.filter((r) => {
-      const c = r.content;
-      // Establishes the family and that `actions` is a list, so the exact
-      // match below reads a real one. Matched against the stored list
-      // rather than the reach, so a grant carrying an action this
-      // vocabulary drops is not withdrawn by a target that omits it.
-      const reach = grantReach(c);
-      if (!reach || reach.familyId !== familyId) return false;
-      if (!matchesGrantTarget(c, grant.grantee)) return false;
-      return c.actions.length === actionSet.size && c.actions.every((a) => actionSet.has(a));
-    });
-    for (const match of matches) await this.delete(match.id);
-    return matches;
+    return typeGrants.revokeType(this, baseId, grant);
   }
 
   // -------------------------------------------------------
@@ -2493,74 +2416,7 @@ export class Stack implements StackClient {
    */
   async planInstall(submitted: AppManifest, opts: { did: EntityId }): Promise<InstallPlan> {
     this.assertOpen();
-    const { did } = opts;
-    const manifest = snapshotManifest(submitted);
-    this.checkManifest(manifest, did);
-
-    const installs = await this.loadInstalls();
-    const existing = installs.find((r) => r.content.appId === manifest.appId) ?? null;
-    const ownVersions = ownTypeIds(manifest);
-    const ownFamilies = new Set(ownVersions.map(baseIdOf));
-
-    const card = await this.findAppCard(did);
-    if (card && (card.content as AppContent).appId !== manifest.appId) {
-      throw new StackConflictError(
-        `${did} is registered to "${(card.content as AppContent).appId}", not "${manifest.appId}"`,
-      );
-    }
-
-    const claimed = existing ? claimedFamilies(existing.content) : new Set<BaseId>();
-    const defined = new Set(existing?.content.defines ?? []);
-    const prior = existing?.content.requests ?? [];
-    const foreignRequests: ForeignRequest[] = [];
-    for (const r of manifest.requests) {
-      const standing = familyStanding(r.baseId, manifest.appId);
-      if (standing === 'own') continue;
-      const owner =
-        standing === 'foreign'
-          ? namespaceOf(r.baseId)
-          : standing === 'commons'
-            ? 'commons'
-            : 'system';
-      foreignRequests.push({ ...r, owner });
-    }
-
-    const typeChanges: TypeChange[] = [];
-    for (const t of manifest.types) {
-      const current = await this.getTypeCached(t.id);
-      if (!current) typeChanges.push({ id: t.id, change: 'new' });
-      else if (current.schemaHash !== (await hashSchema(t.schema as TypeSchema))) {
-        // Refused here, not left to defineType(): installApp() defines types one
-        // by one, so a drift found there leaves the earlier ones written.
-        const violations = diffSchemas(current.schema, t.schema as TypeSchema);
-        if (violations.length > 0) throw new StackSchemaDriftError(t.id, violations);
-        typeChanges.push({ id: t.id, change: 'schema' });
-      } else if (current.name !== t.name) typeChanges.push({ id: t.id, change: 'name' });
-    }
-
-    const linkedKeys: EntityId[] = [];
-    for (const id of existing ? linkedIds(existing, INSTALL_APP_LABEL) : []) {
-      const key = ((await this.get(id))?.content as AppContent | undefined)?.did;
-      if (typeof key === 'string') linkedKeys.push(key);
-    }
-
-    return {
-      manifest,
-      did,
-      existing,
-      newFamilies: [...ownFamilies].filter((f) => !claimed.has(f)),
-      newVersions: ownVersions.filter((id) => !defined.has(id)),
-      requestsAdded: manifest.requests.filter((r) => !prior.some((p) => sameRequest(p, r))),
-      requestsRemoved: prior.filter((p) => !manifest.requests.some((r) => sameRequest(p, r))),
-      foreignRequests,
-      typeChanges,
-      newKey:
-        !existing ||
-        !card ||
-        card.deletedAt !== undefined ||
-        !linkedIds(existing, INSTALL_APP_LABEL).includes(card.id),
-      linkedKeys,
-    };
+    return apps.planInstall(this, submitted, opts);
   }
 
   /**
@@ -2573,50 +2429,7 @@ export class Stack implements StackClient {
    */
   async installApp(plan: InstallPlan): Promise<StackRecord & { content: InstallContent }> {
     this.assertOpen();
-    const fresh = await this.planInstall(plan.manifest, { did: plan.did });
-    if (planFingerprint(fresh) !== planFingerprint(plan)) {
-      throw new StackConflictError(
-        `The stack changed since the install of "${plan.manifest.appId}" was planned; plan it again`,
-      );
-    }
-    const { manifest, did, existing } = fresh;
-
-    for (const type of manifest.types) await this.defineType(type);
-    const card = await this.ensureAppCard(manifest, did);
-
-    const defines = [...new Set([...(existing?.content.defines ?? []), ...ownTypeIds(manifest)])];
-    const requests: InstallRequest[] = manifest.requests.map((r) => ({
-      baseId: r.baseId,
-      actions: [...r.actions],
-    }));
-
-    let install: StackRecord;
-    if (!existing) {
-      install = await this.create<InstallContent>(
-        `${SYSTEM_TYPES.INSTALL}@1`,
-        {
-          appId: manifest.appId,
-          name: manifest.name,
-          ...(manifest.version !== undefined && { version: manifest.version }),
-          defines,
-          requests,
-        },
-        { associations: [installAppLink(card.id)] },
-      );
-    } else {
-      const current = existing.deletedAt ? await this.undelete(existing.id) : existing;
-      install = await this.patchContent(
-        existing.id,
-        { name: manifest.name, version: manifest.version ?? null, defines, requests },
-        { ifVersion: current.version },
-      );
-      if (!linkedIds(install, INSTALL_APP_LABEL).includes(card.id)) {
-        install = await this.associate(install.id, [installAppLink(card.id)]);
-      }
-    }
-    return (await this.reconcileInstallGrants(install)) as StackRecord & {
-      content: InstallContent;
-    };
+    return apps.installApp(this, plan);
   }
 
   /**
@@ -2627,215 +2440,12 @@ export class Stack implements StackClient {
    */
   async uninstallApp(appId: AppId): Promise<StackRecord & { content: InstallContent }> {
     this.assertOpen();
-    const install = (await this.loadInstalls()).find(
-      (r) => r.content.appId === appId && !r.deletedAt,
-    );
-    if (!install) throw new StackNotFoundError(`No install for "${appId}"`);
-    const edits: AssociationEdit[] = [];
-    for (const id of linkedIds(install, INSTALL_GRANT_LABEL)) {
-      if (await this.get(id)) await this.delete(id);
-      edits.push({ op: 'remove', association: installGrantLink(id) });
-    }
-    if (edits.length > 0) await this.amendAssociations(install.id, edits);
-    const { record } = await this.deleteAndReturn(install.id);
-    return record as StackRecord & { content: InstallContent };
-  }
-
-  /** A manifest's own shape, and every request held to grantType()'s rules. */
-  private checkManifest(manifest: AppManifest, did: EntityId): void {
-    const errors: ValidationError[] = [];
-    if (typeof did !== 'string' || !did.startsWith('did:')) {
-      errors.push({ path: 'did', message: 'Expected a DID' });
-    }
-    if (typeof manifest.appId !== 'string' || manifest.appId === '') {
-      errors.push({ path: 'appId', message: 'Expected a non-empty appId' });
-    }
-    if (typeof manifest.name !== 'string' || manifest.name === '') {
-      errors.push({ path: 'name', message: 'Expected a non-empty name' });
-    }
-    const seen = new Set<string>();
-    manifest.types.forEach((t, i) => {
-      if (seen.has(t.id)) {
-        errors.push({ path: `types[${i}].id`, message: `"${t.id}" is listed more than once` });
-      }
-      seen.add(t.id);
-      const schemaPath = `types[${i}].schema`;
-      const shapeErrors = validateSchemaShape(t.schema, schemaPath);
-      errors.push(...shapeErrors);
-      if (shapeErrors.length === 0) {
-        const schema = t.schema as TypeSchema;
-        for (const e of validateSchemaReservedNames(schema)) {
-          errors.push({ ...e, path: `${schemaPath}.${e.path}` });
-        }
-        validateSchemaFieldNames(schema, schemaPath, errors);
-      }
-      const parsed = parseTypeId(t.id);
-      if (!parsed) {
-        errors.push({ path: `types[${i}].id`, message: 'Expected a versioned TypeId' });
-      } else {
-        const standing = familyStanding(parsed.baseId, manifest.appId);
-        if (standing === 'system' || standing === 'foreign') {
-          errors.push({
-            path: `types[${i}].id`,
-            message:
-              standing === 'system'
-                ? `"${parsed.baseId}" is a system type; no app can define it`
-                : `"${parsed.baseId}" is outside the namespace "${manifest.appId}"; request access to it instead of defining it`,
-          });
-        }
-      }
-    });
-    if (errors.length > 0) throw new StackValidationError(errors, ARGUMENTS_INVALID);
-    for (const r of manifest.requests) this.checkGrantValid(r.baseId, r.actions);
-  }
-
-  /** Every `_install` Record, deleted and unlisted included — a deleted install keeps its claims. */
-  private async loadInstalls(): Promise<(StackRecord & { content: InstallContent })[]> {
-    const records = await queryAllPages((q) => this.query(q), {
-      filter: { baseId: SYSTEM_TYPES.INSTALL, includeDeleted: true, includeUnlisted: true },
-    });
-    return records as (StackRecord & { content: InstallContent })[];
-  }
-
-  /** The `_app` card claiming `did`, deleted and unlisted included. */
-  private findAppCard(did: EntityId): Promise<StackRecord | undefined> {
-    return findFirstMatch(
-      (q) => this.query(q),
-      {
-        filter: {
-          baseId: SYSTEM_TYPES.APP,
-          includeDeleted: true,
-          includeUnlisted: true,
-          ...(filtersContent(this.capabilities) && { content: { did } }),
-        },
-      },
-      (r) => (r.content as AppContent).did === did,
-    );
-  }
-
-  /** The key's `_app` card, created or undeleted as needed. */
-  private async ensureAppCard(manifest: AppManifest, did: EntityId): Promise<StackRecord> {
-    const card = await this.findAppCard(did);
-    if (!card) {
-      return this.create<AppContent>(`${SYSTEM_TYPES.APP}@1`, {
-        appId: manifest.appId,
-        name: manifest.name,
-        ...(manifest.version !== undefined && { version: manifest.version }),
-        did,
-      });
-    }
-    return card.deletedAt ? this.undelete(card.id) : card;
-  }
-
-  /**
-   * Make the grants linked to `install` exactly its `requests`, once per
-   * live linked key: withdraw any that no longer match, write any missing,
-   * and drop links to grants that are gone.
-   */
-  private async reconcileInstallGrants(install: StackRecord): Promise<StackRecord> {
-    const { requests } = install.content as InstallContent;
-    const dids: EntityId[] = [];
-    for (const id of linkedIds(install, INSTALL_APP_LABEL)) {
-      const did = ((await this.get(id))?.content as AppContent | undefined)?.did;
-      if (typeof did === 'string') dids.push(did);
-    }
-
-    const edits: AssociationEdit[] = [];
-    const held: GrantContent[] = [];
-    for (const id of linkedIds(install, INSTALL_GRANT_LABEL)) {
-      const grant = await this.get(id);
-      const content = grant?.content as GrantContent | undefined;
-      const wanted =
-        content !== undefined &&
-        baseIdOf(grant!.typeId) === SYSTEM_TYPES.GRANT &&
-        dids.some((did) => requests.some((r) => grantIsRequest(content, r, did)));
-      if (wanted) {
-        held.push(content);
-        continue;
-      }
-      if (grant) await this.delete(id);
-      edits.push({ op: 'remove', association: installGrantLink(id) });
-    }
-
-    for (const did of dids) {
-      for (const r of requests) {
-        if (held.some((g) => grantIsRequest(g, r, did))) continue;
-        const grant = await this.grantType(r.baseId, {
-          actions: r.actions,
-          grantee: { kind: 'entity', entityId: did },
-        });
-        held.push(grant.content);
-        edits.push({ op: 'add', association: installGrantLink(grant.id) });
-      }
-    }
-    let result = edits.length > 0 ? await this.amendAssociations(install.id, edits) : install;
-
-    // Each linked key may read its own install, which is how an app learns
-    // what was approved; a key of this app no longer linked may not.
-    // See docs/spec/apps.md § Over the wire.
-    const appKeys = new Set(
-      (
-        await queryAllPages((q) => this.query(q), {
-          filter: { baseId: SYSTEM_TYPES.APP, includeDeleted: true, includeUnlisted: true },
-        })
-      )
-        .map((r) => r.content as AppContent)
-        .filter((c) => c.appId === (install.content as InstallContent).appId)
-        .map((c) => c.did),
-    );
-    const readerOf = (p: AuthorityAssociation): EntityId | null =>
-      p.kind === 'permission' && p.label === 'read' && p.grantee.kind === 'entity'
-        ? p.grantee.entityId
-        : null;
-    const current = (result.permissions ?? []).map(readerOf);
-    const access: AssociationEdit[] = [
-      ...dids
-        .filter((did) => !current.includes(did))
-        .map((entityId) => ({ op: 'add' as const, association: installReader(entityId) })),
-      ...current
-        .filter((did): did is EntityId => did !== null && appKeys.has(did) && !dids.includes(did))
-        .map((entityId) => ({ op: 'remove' as const, association: installReader(entityId) })),
-    ];
-    if (access.length > 0) result = await this.amendAccess(install.id, access);
-    return result;
+    return apps.uninstallApp(this, appId);
   }
 
   // -------------------------------------------------------
   // Private helpers
   // -------------------------------------------------------
-
-  /**
-   * Actions must be known GrantAction values; the target is held to the
-   * same rule every `_grant` write meets — see validateGrantBaseId().
-   */
-  private checkGrantValid(baseId: BaseId, actions: GrantAction[]): void {
-    const errors: ValidationError[] = [];
-    actions.forEach((action, j) => {
-      if (!GRANT_ACTION_SET.has(action)) {
-        errors.push({ path: `actions[${j}]`, message: `Unknown grant action "${action}"` });
-      }
-    });
-
-    const problem = familyIdProblem(baseId, 'grantType');
-    if (problem) {
-      errors.push({ path: 'baseId', message: problem });
-    } else {
-      errors.push(...validateGrantBaseId(`${SYSTEM_TYPES.GRANT}@1`, { baseId }));
-    }
-
-    actions.forEach((action, j) => {
-      if (grantConveys(actions, action)) return;
-      const companions = READ_COMPANIONS.get(action);
-      if (!companions) return;
-      errors.push({
-        path: `actions[${j}]`,
-        message: `"${action}" requires ${companions.map((c) => `"${c}"`).join(' or ')} in the same grant: a mutate verb reaches the record and its history, so it conveys nothing without read. Name both in one grant: actions: [${companions.map((c) => `'${c}'`).join(' | ')}, '${action}']`,
-      });
-    });
-    if (errors.length > 0) {
-      throw new StackValidationError(errors, ARGUMENTS_INVALID);
-    }
-  }
 
   /**
    * Fast-fail for the ifVersion precondition using the already-fetched

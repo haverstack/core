@@ -10,11 +10,12 @@
  */
 
 import { baseIdOf, familyIdProblem } from './schema.js';
-import { StackBadRequestError } from './errors.js';
+import { ARGUMENTS_INVALID, StackBadRequestError, StackValidationError } from './errors.js';
 import { assertKnownKeys, GRANTEE_KEYS, unknownKeys } from './query-validation.js';
 import { SYSTEM_TYPES, GRANT_ACTIONS } from './types/index.js';
 import { carriesRoster, groupRoleFromAssociations } from './access.js';
 import type {
+  BaseId,
   EntityId,
   GrantAction,
   GrantContent,
@@ -333,4 +334,37 @@ export async function loadGrantRecords(
     filter: { typeId: `${SYSTEM_TYPES.GRANT}@1`, includeUnlisted: true },
   });
   return records as (StackRecord & { content: GrantContent })[];
+}
+
+/**
+ * Actions must be known GrantAction values; the target is held to the
+ * same rule every `_grant` write meets — see validateGrantBaseId().
+ */
+export function checkGrantValid(baseId: BaseId, actions: GrantAction[]): void {
+  const errors: ValidationError[] = [];
+  actions.forEach((action, j) => {
+    if (!GRANT_ACTION_SET.has(action)) {
+      errors.push({ path: `actions[${j}]`, message: `Unknown grant action "${action}"` });
+    }
+  });
+
+  const problem = familyIdProblem(baseId, 'grantType');
+  if (problem) {
+    errors.push({ path: 'baseId', message: problem });
+  } else {
+    errors.push(...validateGrantBaseId(`${SYSTEM_TYPES.GRANT}@1`, { baseId }));
+  }
+
+  actions.forEach((action, j) => {
+    if (grantConveys(actions, action)) return;
+    const companions = READ_COMPANIONS.get(action);
+    if (!companions) return;
+    errors.push({
+      path: `actions[${j}]`,
+      message: `"${action}" requires ${companions.map((c) => `"${c}"`).join(' or ')} in the same grant: a mutate verb reaches the record and its history, so it conveys nothing without read. Name both in one grant: actions: [${companions.map((c) => `'${c}'`).join(' | ')}, '${action}']`,
+    });
+  });
+  if (errors.length > 0) {
+    throw new StackValidationError(errors, ARGUMENTS_INVALID);
+  }
 }
