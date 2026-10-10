@@ -1563,7 +1563,7 @@ describe('a read answering 200 with an empty body', () => {
     [
       'getType',
       (a: APIAdapter) => a.getType('com.example/note@1'),
-      'GET /types/com.example/note@1',
+      'GET /types/com.example%2Fnote%401',
     ],
     ['listTypes', (a: APIAdapter) => a.listTypes(), 'GET /types'],
   ] as const)('%s reports it as a wire-format failure', async (_name, call, endpoint) => {

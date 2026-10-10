@@ -429,7 +429,7 @@ const parseRecord = (raw: WireRecord): StackRecord => {
  * than as a property access on `undefined`.
  * See docs/spec/wire-format.md § Records.
  */
-const requireRecordBody = (raw: WireRecord | undefined, endpoint: string): StackRecord => {
+const requireRecordBody = (raw: WireRecord | null | undefined, endpoint: string): StackRecord => {
   if (!raw) {
     throw new APIAdapterError(
       `${endpoint} answered with no Record body. Every mutation that bumps a version must ` +
@@ -1000,12 +1000,17 @@ export class APIAdapter implements StackAdapter {
     return res;
   }
 
+  /**
+   * `null` only for a 404 the caller opted into reading as absence;
+   * `undefined` for a response with no body. Which of those an endpoint
+   * may answer is for the typed helpers below to judge.
+   */
   private async request<T>(
     method: string,
     path: string,
     body?: unknown,
     { nullOn404 = false, ifMatch }: { nullOn404?: boolean; ifMatch?: number } = {},
-  ): Promise<T> {
+  ): Promise<T | null | undefined> {
     const res = await this.send(`${this.baseUrl}${path}`, (token) => {
       const headers = authHeaders(token);
       if (body !== undefined) headers['Content-Type'] = 'application/json';
@@ -1016,11 +1021,33 @@ export class APIAdapter implements StackAdapter {
       return { method, headers, body: body !== undefined ? JSON.stringify(body) : undefined };
     });
 
-    if (res.status === 404 && nullOn404) return null as T;
+    if (res.status === 404 && nullOn404) return null;
     if (!res.ok) throw await this.errorForResponse(res, method, path);
-    if (res.status === 204) return undefined as T;
+    if (res.status === 204) return undefined;
 
-    return (await parseJsonBody(res, method, path)) as T;
+    return (await parseJsonBody(res, method, path)) as T | null | undefined;
+  }
+
+  /** A mutation that bumps `version`, owed the record it produced. */
+  private async requestRecord(
+    method: string,
+    path: string,
+    body?: unknown,
+    ifVersion?: number,
+  ): Promise<StackRecord> {
+    const raw = await this.request<WireRecord>(method, path, body, { ifMatch: ifVersion });
+    return requireRecordBody(raw, `${method} ${path}`);
+  }
+
+  /** A read with no "absent" case, owed its body. */
+  private async requestBody<T>(method: string, path: string, body?: unknown): Promise<T> {
+    return requireBody(await this.request<T>(method, path, body), `${method} ${path}`);
+  }
+
+  /** A read that answers "not there" with a 404, returned as null. */
+  private async requestNullable<T>(path: string): Promise<T | null> {
+    const raw = await this.request<T>('GET', path, undefined, { nullOn404: true });
+    return requireNullableBody(raw, `GET ${path}`);
   }
 
   private async requestBinary(path: string): Promise<Uint8Array> {
@@ -1058,21 +1085,16 @@ export class APIAdapter implements StackAdapter {
   // -------------------------------------------------------
 
   async createRecord(record: StackRecord): Promise<StackRecord> {
-    const raw = await this.request<WireRecord | undefined>('POST', '/records', record);
-    return requireRecordBody(raw, 'POST /records');
+    return this.requestRecord('POST', '/records', record);
   }
 
   // Always opts into tombstones: hiding them is Stack.get()'s policy, and
   // the verbs that refuse or undelete one have to be able to find it.
   async getRecord(id: RecordId): Promise<StackRecord | null> {
-    const raw = await this.request<WireRecord | null | undefined>(
-      'GET',
+    const raw = await this.requestNullable<WireRecord>(
       `/records/${pathSegment(id)}?includeDeleted=true`,
-      undefined,
-      { nullOn404: true },
     );
-    const body = requireNullableBody(raw, `GET /records/${pathSegment(id)}`);
-    return body ? parseRecord(body) : null;
+    return raw ? parseRecord(raw) : null;
   }
 
   async mutateRecord(
@@ -1084,15 +1106,7 @@ export class APIAdapter implements StackAdapter {
     // updatedAt) ride along. The server applies it against its own current
     // state and assigns the new version/updatedAt; the response is
     // authoritative. One If-Match fences the whole set.
-    const raw = await this.request<WireRecord | undefined>(
-      'PATCH',
-      `/records/${pathSegment(id)}`,
-      changes,
-      {
-        ifMatch: opts.ifVersion,
-      },
-    );
-    return requireRecordBody(raw, `PATCH /records/${pathSegment(id)}`);
+    return this.requestRecord('PATCH', `/records/${pathSegment(id)}`, changes, opts.ifVersion);
   }
 
   /**
@@ -1110,9 +1124,7 @@ export class APIAdapter implements StackAdapter {
           'the app another way.',
       );
     }
-    const raw = await this.request<WireInstallResponse | undefined>('POST', '/installs', {
-      manifest,
-    });
+    const raw = await this.request<WireInstallResponse>('POST', '/installs', { manifest });
     if (raw?.status === 'pending') return { status: 'pending' };
     if (raw?.status === 'installed' && raw.install) {
       return {
@@ -1131,13 +1143,12 @@ export class APIAdapter implements StackAdapter {
     content: Record<string, unknown>,
     opts: { ifVersion?: number } = {},
   ): Promise<StackRecord> {
-    const raw = await this.request<WireRecord | undefined>(
+    return this.requestRecord(
       'POST',
       `/records/${pathSegment(id)}/migrate`,
       { toTypeId, content },
-      { ifMatch: opts.ifVersion },
+      opts.ifVersion,
     );
-    return requireRecordBody(raw, `POST /records/${pathSegment(id)}/migrate`);
   }
 
   /**
@@ -1153,7 +1164,7 @@ export class APIAdapter implements StackAdapter {
     const path = opts.purge
       ? `/records/${pathSegment(id)}?purge=true`
       : `/records/${pathSegment(id)}`;
-    const raw = await this.request<WireRecord | null | undefined>('DELETE', path, undefined, {
+    const raw = await this.request<WireRecord>('DELETE', path, undefined, {
       ifMatch: opts.ifVersion,
       // An unconditional purge of a record that isn't there purged
       // nothing, which is not an error — the same answer the local
@@ -1164,18 +1175,16 @@ export class APIAdapter implements StackAdapter {
     // The purge answers with the record it destroyed: it is the only
     // report of what it referenced, and every other row naming those files
     // is gone. See docs/spec/wire-format.md § Records.
-    if (opts.purge) return raw === null ? null : requireRecordBody(raw, `DELETE ${path}`);
-    return requireRecordBody(raw ?? undefined, `DELETE /records/${pathSegment(id)}`);
+    return raw === null ? null : requireRecordBody(raw, `DELETE ${path}`);
   }
 
   async undeleteRecord(id: RecordId, opts: { ifVersion?: number } = {}): Promise<StackRecord> {
-    const raw = await this.request<WireRecord | undefined>(
+    return this.requestRecord(
       'POST',
       `/records/${pathSegment(id)}/undelete`,
       undefined,
-      { ifMatch: opts.ifVersion },
+      opts.ifVersion,
     );
-    return requireRecordBody(raw, `POST /records/${pathSegment(id)}/undelete`);
   }
 
   async queryRecords(query: StackQuery): Promise<QueryResult> {
@@ -1207,24 +1216,16 @@ export class APIAdapter implements StackAdapter {
     // decide whether a family query is refused or silently widened.
     assertQueryTravels(query);
 
-    let raw: WireQueryResponse | undefined;
-    let endpoint: string;
+    let body: WireQueryResponse;
     if (filtersContent(this.capabilities)) {
       // POST /records/query supports the full query shape including content field filters
-      endpoint = 'POST /records/query';
-      raw = await this.request<WireQueryResponse | undefined>('POST', '/records/query', query);
+      body = await this.requestBody<WireQueryResponse>('POST', '/records/query', query);
     } else {
       // A server reaching no content only exposes GET /records
-      const params = buildQueryParams(query);
-      const qs = params.toString();
-      endpoint = 'GET /records';
-      raw = await this.request<WireQueryResponse | undefined>(
-        'GET',
-        qs ? `/records?${qs}` : '/records',
-      );
+      const qs = buildQueryParams(query).toString();
+      body = await this.requestBody<WireQueryResponse>('GET', qs ? `/records?${qs}` : '/records');
     }
 
-    const body = requireBody(raw, endpoint);
     return {
       records: body.records.map(parseRecord),
       cursor: body.cursor,
@@ -1257,8 +1258,7 @@ export class APIAdapter implements StackAdapter {
   async amendAssociations(id: RecordId, changes: AssociationEdit[]): Promise<StackRecord> {
     assertOneSurface(changes);
     const path = `/records/${pathSegment(id)}/${APIAdapter.associationPath(changes[0]?.association)}`;
-    const raw = await this.request<WireRecord | undefined>('POST', path, { changes });
-    return requireRecordBody(raw, `POST ${path}`);
+    return this.requestRecord('POST', path, { changes });
   }
 
   // -------------------------------------------------------
@@ -1282,8 +1282,7 @@ export class APIAdapter implements StackAdapter {
       if (remaining !== undefined) params.set('limit', String(remaining));
       const qs = params.toString();
       const path = `/records/${pathSegment(id)}/versions${qs ? `?${qs}` : ''}`;
-      const raw = await this.request<WireVersionsResponse | undefined>('GET', path);
-      const body = requireBody(raw, `GET ${path}`);
+      const body = await this.requestBody<WireVersionsResponse>('GET', path);
       for (const v of body.versions) versions.push(parseVersion(v));
       if (body.versions.length === 0) break;
       // A cursor that does not move strictly older would repeat a page.
@@ -1322,8 +1321,7 @@ export class APIAdapter implements StackAdapter {
       if (remaining !== undefined) params.set('limit', String(remaining));
       const qs = params.toString();
       const path = `/records/${pathSegment(id)}/journal${qs ? `?${qs}` : ''}`;
-      const raw = await this.request<WireJournalResponse | undefined>('GET', path);
-      const body = requireBody(raw, `GET ${path}`);
+      const body = await this.requestBody<WireJournalResponse>('GET', path);
       // Appended one at a time rather than spread: a spread is an argument
       // list, and this is the one read a server may answer without a ceiling.
       for (const e of body.entries) entries.push(parseJournalEntry(e));
@@ -1344,17 +1342,10 @@ export class APIAdapter implements StackAdapter {
   }
 
   async getVersion(id: RecordId, version: number): Promise<RecordVersion | null> {
-    const raw = await this.request<WireVersion | null | undefined>(
-      'GET',
+    const raw = await this.requestNullable<WireVersion>(
       `/records/${pathSegment(id)}/versions/${pathSegment(version)}`,
-      undefined,
-      { nullOn404: true },
     );
-    const body = requireNullableBody(
-      raw,
-      `GET /records/${pathSegment(id)}/versions/${pathSegment(version)}`,
-    );
-    return body ? parseVersion(body) : null;
+    return raw ? parseVersion(raw) : null;
   }
 
   async saveVersion(_id: RecordId, _version: RecordVersion): Promise<void> {
@@ -1373,15 +1364,11 @@ export class APIAdapter implements StackAdapter {
     version: number,
     opts: { ifVersion?: number } = {},
   ): Promise<StackRecord> {
-    const raw = await this.request<WireRecord | undefined>(
+    return this.requestRecord(
       'POST',
       `/records/${pathSegment(id)}/restore/${pathSegment(version)}`,
       undefined,
-      { ifMatch: opts.ifVersion },
-    );
-    return requireRecordBody(
-      raw,
-      `POST /records/${pathSegment(id)}/restore/${pathSegment(version)}`,
+      opts.ifVersion,
     );
   }
 
@@ -1394,19 +1381,12 @@ export class APIAdapter implements StackAdapter {
   }
 
   async getType(id: TypeId): Promise<StackType | null> {
-    const raw = await this.request<WireType | null | undefined>(
-      'GET',
-      `/types/${pathSegment(id)}`,
-      undefined,
-      { nullOn404: true },
-    );
-    const body = requireNullableBody(raw, `GET /types/${id}`);
-    return body ? parseType(body) : null;
+    const raw = await this.requestNullable<WireType>(`/types/${pathSegment(id)}`);
+    return raw ? parseType(raw) : null;
   }
 
   async listTypes(): Promise<StackType[]> {
-    const raw = await this.request<WireType[] | undefined>('GET', '/types');
-    return requireBody(raw, 'GET /types').map(parseType);
+    return (await this.requestBody<WireType[]>('GET', '/types')).map(parseType);
   }
 
   // -------------------------------------------------------
