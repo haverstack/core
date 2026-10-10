@@ -230,15 +230,16 @@ export type Migration<From = Record<string, unknown>, To = Record<string, unknow
 
 /**
  * Build the migration from `from` to `to`, checking `fn` against both
- * handles' content types. Within a family, `to` must name `from` as its
+ * handles' stored content: a stored enum may hold a value either handle
+ * does not list, and a step carries it through. Within a family, `to` must name `from` as its
  * `migratesFrom`; a step into another family has no lineage to check. See
  * docs/spec/data-model.md § Type migrations.
  */
 export const migration = <F extends ReadonlyTypeSchema, T extends ReadonlyTypeSchema>(
   from: TypeHandle<F>,
   to: TypeHandle<T>,
-  fn: (content: ContentOf<F>) => NoInfer<ContentOf<T>>,
-): Migration<ContentOf<F>, ContentOf<T>> => {
+  fn: (content: StoredContentOf<F>) => NoInfer<StoredContentOf<T>>,
+): Migration<StoredContentOf<F>, StoredContentOf<T>> => {
   if (to.baseId === from.baseId && to.migratesFrom !== from.id) {
     throw new StackMigrationError(
       `Cannot migrate "${from.id}" to "${to.id}": "${to.id}" migrates from ` +

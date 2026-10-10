@@ -277,7 +277,7 @@ type StackType = {
   version: number; // Incrementing integer
   name: string; // Human-readable label, e.g. "Note"
   schema: TypeSchema;
-  schemaHash: string; // SHA-256 of canonical (minified, alpha-sorted) schema
+  schemaHash: string; // SHA-256 of canonical (minified) schema; field names and enum values sorted by UTF-16 code unit
   migratesFrom?: TypeId; // an earlier version of the same family — documents lineage
   createdAt: Date;
 };
@@ -356,7 +356,7 @@ A field's kind is read-compatible with a required kind per this table (row = req
 | `record-ref` |          |        |        |          |           |        | ✓            |            |
 | `file-ref`   |          |        |        |          |           |        |              | ✓          |
 
-`string` and `text` are mutually read-compatible — the distinction is presentation/indexing intent. Every other kind requires an exact match; notably `date` is not compatible with `string`, since `date` carries a parse/validity guarantee a plain string doesn't.
+`string` and `text` are mutually read-compatible — the distinction is presentation/indexing intent — and each also accepts an enum. A required enum takes the subset rule below. Every other kind requires an exact match; notably `date` is not compatible with `string`, since `date` carries a parse/validity guarantee a plain string doesn't.
 
 **An enum reads as a string, and a required enum accepts only a narrower enum** (⊆ above): a candidate `enum` whose `values` are all in the required list. A consumer expecting an enum has handled exactly the values it lists, so a `string` or `text` candidate, which can hold anything, is refused, as is an enum listing a value the consumer does not. The check is as of the Type it is given: an enum may [gain values in place](#additive-evolution-within-a-version), or become a plain `string`, so a candidate compatible today can later hold a value the consumer does not list. A consumer handles such a value, as a [typed read](#type-handles) does.
 
@@ -379,7 +379,7 @@ const noteV2ToV3 = migration(NoteV2, NoteV3, (content) => ({ ...content, pinned:
 const stack = await Stack.open(adapter, { migrations: [noteV1ToV2, noteV2ToV3] });
 ```
 
-`migration()` takes two [type handles](#type-handles), so `fn` is checked as `ContentOf` the first to `ContentOf` the second: a step that drops a required field or yields a value outside an enum's `values` does not compile. The source is typed as written rather than as `StoredContentOf`, so an identity step compiles; a source value the handle does not list reaches the target's runtime validation when `migrateAll()` writes it. Within a family it refuses a `to` whose `migratesFrom` is not `from.id`, so a step cannot be paired with the wrong handle.
+`migration()` takes two [type handles](#type-handles), so `fn` is checked as `StoredContentOf` the first to `StoredContentOf` the second: a step that drops a required field does not compile. A stored enum may hold a value the source handle does not list, so the step carries it through rather than losing it, and a lookup keyed on only the listed values does not compile. A value the target does not accept is refused by its runtime validation when `migrateAll()` writes it. Within a family it refuses a `to` whose `migratesFrom` is not `from.id`, so a step cannot be paired with the wrong handle.
 
 **Lineage stays inside a family; a migration can leave it.** `migratesFrom` names an earlier version of the same family, and `typeHandle()` and `defineType()` refuse anything else with `StackBadRequestError`. A step whose `from` and `to` are in different families has no lineage to check, so `migration()` builds it from the two handles alone. This is how an app's own type moves into a shared one — a [commons](../commons/README.md) type, say — without the shared handle naming every family that has ever migrated into it. A migration is a separate value from either handle: a handle is data a manifest carries over the wire, and may be shared by apps that do not run its family's migrations.
 

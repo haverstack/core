@@ -54,11 +54,6 @@ describe('hashSchema', () => {
     expect(h1).not.toBe(h2);
   });
 
-  test('values on a non-enum kind do not affect the hash, as validation ignores them', async () => {
-    const stray = { s: { kind: 'string', values: ['x'] } } as unknown as TypeSchema;
-    expect(await hashSchema(stray)).toBe(await hashSchema({ s: { kind: 'string' } }));
-  });
-
   test('adding a field produces a different hash', async () => {
     const h1 = await hashSchema({ text: { kind: 'text', required: true } });
     const h2 = await hashSchema({

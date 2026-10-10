@@ -230,7 +230,7 @@ describe('typeHandle()', () => {
 describe('migration()', () => {
   test('types the function from both handles', () => {
     const m = migration(BookV1, Book, (c) => {
-      expectTypeOf(c).toEqualTypeOf<ContentOf<typeof BookV1.schema>>();
+      expectTypeOf(c).toEqualTypeOf<StoredContentOf<typeof BookV1.schema>>();
       return { ...c, status: c.status === 'done' ? 'finished' : c.status };
     });
     expect(m.from).toBe(BookV1.id);
@@ -246,9 +246,18 @@ describe('migration()', () => {
     migration(BookV1, Book, (c) => ({ title: c.title }));
   });
 
-  test('refuses at compile time a value outside the target enum', () => {
-    // @ts-expect-error 'done' is not one of the target's statuses
-    migration(BookV1, Book, (c) => ({ ...c }));
+  test('carries a value the source handle does not list through', () => {
+    const m = migration(BookV1, Book, (c) => c);
+    expect(m.migrate({ title: 'Dune', status: 'paused' })).toEqual({
+      title: 'Dune',
+      status: 'paused',
+    });
+  });
+
+  test('refuses at compile time a lookup keyed on only the listed values', () => {
+    const renamed = { want: 'want', reading: 'reading', done: 'finished' } as const;
+    // @ts-expect-error a stored status the source does not list has no entry
+    migration(BookV1, Book, (c) => ({ ...c, status: renamed[c.status] }));
   });
 
   test('refuses a target in the same family that does not migrate from the source', () => {

@@ -672,6 +672,12 @@ describe('validateSchemaShape enum', () => {
     expect(messages('{"s": {"kind": "enum", "values": ["a", "b"]}}')).toEqual([]);
   });
 
+  test('a misspelled kind is named as the problem, not its values', () => {
+    expect(messages('{"s": {"kind": "enm", "values": ["a"]}}')).toEqual([
+      '"enm" is not a field kind',
+    ]);
+  });
+
   test('missing, empty or non-array values are refused', () => {
     const expected = ['An enum must declare "values", a non-empty array of strings'];
     expect(messages('{"s": {"kind": "enum"}}')).toEqual(expected);

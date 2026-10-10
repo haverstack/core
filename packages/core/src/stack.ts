@@ -441,8 +441,8 @@ export interface StackClient {
   ): Promise<StackRecord & { content: T }>;
   /**
    * Typed read: the record at `presentAt: 'latest'`, checked to be exactly
-   * the handle's Type with every enum field holding a value the handle
-   * lists, else it throws. Live records only — a tombstone reads as `null`,
+   * the handle's Type, else it throws. An enum field may hold a value the
+   * handle does not list. Live records only — a tombstone reads as `null`,
    * and there is no `includeDeleted`.
    * See docs/spec/data-model.md § Type handles.
    */

@@ -395,7 +395,9 @@ const validateFieldDefShape = (
     return;
   }
 
-  if (def.values !== undefined && def.kind !== 'enum') {
+  const knownKind =
+    def.kind === 'array' || def.kind === 'object' || Object.hasOwn(SCALAR_KINDS, def.kind);
+  if (def.values !== undefined && knownKind && def.kind !== 'enum') {
     errors.push({ path, message: `"values" is only allowed on an enum field, not "${def.kind}"` });
   }
   // Unknown keys are otherwise ignored, but `enum` names a kind: as a key it
