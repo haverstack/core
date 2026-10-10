@@ -64,9 +64,9 @@ export const WIRE_ERROR_STATUS: Record<WireErrorCode, number> = {
   version_conflict: 412,
   validation: 422,
   /**
-   * Migration-graph errors are thrown client-side, at registration, so no
-   * server response carries this code; it has a status because every code
-   * does. See docs/spec/wire-format.md § Error responses.
+   * StackMigrationError is thrown client-side and never by a server, so no
+   * response carries this code; it has a status because every code does.
+   * See docs/spec/wire-format.md § Error responses.
    */
   migration: 500,
   // Shares 409 with 'conflict', so a schema-drift response without a
