@@ -553,10 +553,9 @@ describe('defineType', () => {
     expect(after).toEqual(before);
   });
 
-  test('repeated seedSystemTypes()-style redefinition across Stack.open() calls stays idempotent', async () => {
-    // Simulates the every-open churn this issue closes: a second Stack
-    // instance (e.g. a fresh process reopening the same adapter) redefines
-    // the same types on the same underlying storage.
+  test('an identical redefinition from another Stack over the same storage keeps the stored type', async () => {
+    // A second Stack over one adapter — a fresh process reopening it —
+    // redefines what the first already stored.
     const before = await stack.getType(NOTE_V1);
     const stackB = await Stack.open(adapter);
     await stackB.defineType({

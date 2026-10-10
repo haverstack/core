@@ -1,9 +1,11 @@
 /**
- * Attachment cleanup
+ * Attachment helpers
  * -------------------------------------------------------
- * Deleting unreferenced attachment metadata on an adapter with no atomic
- * way to do it, and the garbage sweep that finds what is unreferenced.
- * Both run over an unscoped Stack's public API; Stack.deleteAttachment()
+ * The content an upload's `_attachment@1` record is written with, shared by
+ * Stack.putAttachment() and ScopedStack.putAttachment(); and the cleanup
+ * half — deleting unreferenced metadata on an adapter with no atomic way
+ * to do it, and the garbage sweep that finds what is unreferenced. The
+ * cleanup runs over an unscoped Stack's public API; Stack.deleteAttachment()
  * and collectAttachmentGarbage() carry the contract. See
  * docs/spec/attachments.md § Deleting attachments.
  */
