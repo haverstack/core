@@ -1,5 +1,33 @@
 # @haverstack/adapter-api
 
+## 0.41.0
+
+### Minor Changes
+
+- [#443](https://github.com/haverstack/core/pull/443) [`ffefedd`](https://github.com/haverstack/core/commit/ffefeddcad5479890978aa77e4ecd410932ec5f9) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `APIAdapter` no longer defines `flush()` or `close()`. Both were no-ops, and both are optional on `StackAdapter`, so `Stack` skips them already; a caller invoking them directly on an `APIAdapter` can drop the call.
+
+- [#443](https://github.com/haverstack/core/pull/443) [`ffefedd`](https://github.com/haverstack/core/commit/ffefeddcad5479890978aa77e4ecd410932ec5f9) Thanks [@cuibonobo](https://github.com/cuibonobo)! - A discovery or auth handshake response that is empty or not JSON now throws `APIAdapterError` naming the endpoint, as every other success response does, rather than a `SyntaxError` or `TypeError`.
+
+- [#444](https://github.com/haverstack/core/pull/444) [`ddad23c`](https://github.com/haverstack/core/commit/ddad23c52f7d4d93e7a2910f65dfc9862167d5fc) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Only a refused credential is reported as an authentication failure. A handshake step answering a bare `5xx` now throws `APIAdapterError` rather than `APIAdapterHandshakeError`, and a renewal that fails on a dropped connection or a server error surfaces as that `APIAdapterConnectionError` or `APIAdapterError` rather than as `APIAdapterReauthError`. A change feed whose renewal fails that way keeps reconnecting instead of stopping.
+
+### Patch Changes
+
+- [#443](https://github.com/haverstack/core/pull/443) [`d82f64e`](https://github.com/haverstack/core/commit/d82f64e8ad729bc34946c48c0d3ec0dc5805bd8b) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Errors for a response missing its body now name the endpoint exactly as it was requested, encoded path and query string included.
+
+- [#436](https://github.com/haverstack/core/pull/436) [`90d800a`](https://github.com/haverstack/core/commit/90d800a8e86c079855a17627582f015186ffe081) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `StackRecordAdapter.subscribeChanges()` takes `SubscribeOptions`, the same options a subscriber passes to `subscribe()`. `SubscribeChangesOptions` is gone from `@haverstack/core/adapter`; it had the same fields, and `Stack` already forwarded every one of them, the subscriber's own `onError` included. A new `MutateOptions` type in `@haverstack/core/adapter` names the options every version-bumping adapter mutation takes. `GrantContent` and `InstallRequest` are now derived from `TypeGrant`.
+
+- [#443](https://github.com/haverstack/core/pull/443) [`e18ddb7`](https://github.com/haverstack/core/commit/e18ddb7cf5f92423fdfb1a925c7f571c8f001196) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Split the adapter into one module per layer. The package exports are unchanged.
+
+- [#442](https://github.com/haverstack/core/pull/442) [`59f34ce`](https://github.com/haverstack/core/commit/59f34ce3cf777c39db3fa08bacb645f8001f9ae2) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `@haverstack/wire-types` no longer restates shapes `@haverstack/core` already defines, and its auth handshake types share one prefix:
+  - `AuthChallengeRequest` and `AuthTokenRequest` are removed. Use `WireAuthChallengeRequest` and `WireAuthTokenRequest`, re-exported from `@haverstack/core/wire`, where the parsers that return them live.
+  - `AuthChallengeResponse` and `AuthTokenResponse` are renamed `WireAuthChallengeResponse` and `WireAuthTokenResponse` to match. Their shape is unchanged.
+  - `WireActor` and `WireChangeActor` are now aliases of core's `Actor` and `ChangeActor`. Their shape is unchanged.
+  - `WireAssociationEditsRequest` is removed; nothing referenced it.
+
+- Updated dependencies [[`7d30040`](https://github.com/haverstack/core/commit/7d30040c4b61b8e5881604d0c042fec9c7e45122), [`98401c0`](https://github.com/haverstack/core/commit/98401c0a1a8b86fd2bfec74072ca3c3504320b66), [`fdca4ca`](https://github.com/haverstack/core/commit/fdca4ca25760b19a79bc660404ebf95cf9c9048b), [`90d800a`](https://github.com/haverstack/core/commit/90d800a8e86c079855a17627582f015186ffe081), [`7d30040`](https://github.com/haverstack/core/commit/7d30040c4b61b8e5881604d0c042fec9c7e45122), [`da5148b`](https://github.com/haverstack/core/commit/da5148bdb3e25e770e947df0c4c2af5b2a6f0f44), [`f616aaa`](https://github.com/haverstack/core/commit/f616aaa741c97fe1de1cfb262081e1f378082051), [`9b4adef`](https://github.com/haverstack/core/commit/9b4adef9bbb205ef27c161724dd2fe863254ffd2), [`59f34ce`](https://github.com/haverstack/core/commit/59f34ce3cf777c39db3fa08bacb645f8001f9ae2), [`89e0a07`](https://github.com/haverstack/core/commit/89e0a07b03ade71449cd20b7ad0333761c39a41f)]:
+  - @haverstack/core@0.42.0
+  - @haverstack/wire-types@0.41.0
+
 ## 0.40.0
 
 ### Minor Changes
