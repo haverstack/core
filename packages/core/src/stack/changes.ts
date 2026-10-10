@@ -44,12 +44,9 @@ export type EmittedChange = {
   record: StackRecord;
   /**
    * The container a move took the record out of, `null` for the root.
-   * Emitter-side only, like `record`: it exists so a `parentId` filter can
-   * answer for the origin as well as the destination, and no frame carries
-   * it — a subscriber compares the frame's `parentId` to its own filter to
-   * tell an arrival from a departure. Present on `reparent`, and on a
-   * `restore` that put a different container back; absent wherever the
-   * record did not move. See docs/spec/events.md § The reparent transition.
+   * Emitter-side only, like `record`: it lets a `parentId` filter answer for
+   * the origin as well as the destination, and no frame carries it.
+   * See docs/spec/events.md § The reparent transition.
    */
   previousParentId?: string | null;
   /**
@@ -116,11 +113,9 @@ const asArray = <T>(value: T | T[]): T[] => (Array.isArray(value) ? value : [val
 
 /**
  * Whether an emission passes the unlisted-enumeration boundary for one
- * subscription. The `unlist` transition is the one exception to the
- * default exclusion: without it a subscriber who already knows the record
- * would never be told to drop it. Every other transition falls out of
- * checking the record's current state.
- * See docs/spec/events.md § The unlisted transition.
+ * subscription. `unlist` is the one exception to the default exclusion:
+ * without it a subscriber who already holds the record would never be told
+ * to drop it. See docs/spec/events.md § The unlisted transition.
  */
 export function passesUnlistedBoundary(emitted: EmittedChange, includeUnlisted?: boolean): boolean {
   if (includeUnlisted) return true;
@@ -130,14 +125,9 @@ export function passesUnlistedBoundary(emitted: EmittedChange, includeUnlisted?:
 
 /**
  * The frame a subscriber receives. A `purged` frame never carries the
- * record, whatever was asked for: purge is the erasure primitive,
- * and a frame that shipped the body — or the author — of a record the
- * stack has just destroyed would hand every subscriber a permanent copy of
- * the thing being erased. See docs/spec/events.md § Purged records carry
- * nothing.
- *
- * The record rides by reference, shared across every frame projected from
- * one emission: handlers are contractually read-only over it.
+ * record, whatever was asked for — see docs/spec/events.md § Purged records
+ * carry nothing. The record rides by reference, shared across every frame
+ * from one emission: handlers are contractually read-only over it.
  */
 export function emitted(emission: EmittedChange, includeRecords: boolean): RecordChange {
   const { change, record } = emission;
@@ -207,16 +197,10 @@ function reportError(err: unknown, opts: SubscribeOptions): void {
 }
 
 /**
- * Delivery for frames that originate elsewhere. A relayed frame arrives
- * already projected and already scoped by the authority that opened the
- * feed, so nothing here filters it again: the emitter that produced it saw
- * the record, and this one never will — a purge in particular leaves
- * nothing to decide with. See docs/spec/events.md § Where events come from.
- *
- * It is delivered to one subscriber rather than through the emitter,
- * because a relay is opened per subscription and carries that
- * subscription's filter. Handing it to the registry would give every other
- * subscriber a copy of a stream it did not ask for.
+ * Delivery for frames that originate elsewhere, already projected and
+ * scoped by the authority that opened the feed, so nothing here filters
+ * them again. One subscriber's, not the registry's: a relay carries its own
+ * subscription's filter. See docs/spec/events.md § Where events come from.
  */
 export class RelayDelivery {
   private closed = false;
@@ -253,16 +237,10 @@ class UnscopedSubscription extends Subscription {
 }
 
 /**
- * One change, held between the two halves it is written in.
- *
- * A change lands twice: the durable half travels into the adapter's
- * transaction ahead of the write, and the live half is built from the
- * record that write produced. Naming the change once — its ops, its kind,
- * its actor, what it moved — is what makes "the entry set is the event
- * set" true by construction rather than by convention. No verb can journal
- * one thing and announce another, and a verb that writes only one half has
- * to say so where it does it. See docs/spec/journal.md § The entry set is
- * the event set.
+ * One change, held between the journal entry that travels into the
+ * adapter's write and the event built from the record it produced. Naming
+ * it once is what keeps a verb from journaling one thing and announcing
+ * another. See docs/spec/journal.md § The entry set is the event set.
  */
 export class PendingChange {
   readonly ops: ChangeOp[];
@@ -302,13 +280,10 @@ export class PendingChange {
   }
 
   /**
-   * The durable half, handed to the adapter as `journal` so that it lands
-   * in the same write as the mutation it describes.
-   *
-   * Absent for a purge, which destroys the log an entry would be appended
-   * to. The rule lives here rather than at each call site that would
-   * otherwise have to remember it. See docs/spec/journal.md § A purge
-   * destroys the journal.
+   * The durable half, handed to the adapter as `journal` so it lands in the
+   * same write as the mutation it describes. Absent for a purge, which
+   * destroys the log it would be appended to — see docs/spec/journal.md
+   * § A purge destroys the journal.
    */
   get journal(): JournalEntryInput | undefined {
     if (this.kind === 'purged') return undefined;
@@ -323,15 +298,10 @@ export class PendingChange {
   }
 
   /**
-   * The live half, built from the record the write produced — for a purge,
-   * from the record as it stood immediately before destruction.
-   *
-   * The actor is read off the record for every version-bumping op, so it
-   * agrees with what was persisted by construction. A no-bump op stamps
-   * nothing, so the requester travels here instead — reading the record
-   * would report whoever's last version-bumping write this is. A purged
-   * frame drops `parentId` and the create-time `appId` too: it says a
-   * record of some type was destroyed and nothing about whose it was.
+   * The live half, built from the record the write produced (for a purge,
+   * as it stood before destruction). A version-bumping op's actor is read
+   * off that record; a no-bump op stamps none, so the requester travels
+   * here instead. See docs/spec/events.md § Attribution.
    */
   emission(record: StackRecord, at?: Date): EmittedChange {
     if (this.kind === 'purged') {
@@ -433,12 +403,10 @@ export class ChangeEmitter {
 }
 
 /**
- * The kind a set of ops resolves to: the most conservative entry wins.
- * `unlist` beats everything a change set can carry beside it, because a
- * subscriber holding the record still has to drop it — announcing an edit
- * bundled with an unlist as an upsert would leave a stale copy behind.
- * Nothing else competes: `created` and `purged` name whole-record
- * transitions that are always emitted alone.
+ * The kind a set of ops resolves to: the most conservative wins. `unlist`
+ * beats anything beside it, since announcing an edit bundled with an
+ * unlist as an upsert would leave subscribers holding a stale copy.
+ * `created` and `purged` are always emitted alone.
  */
 function resolveKind(ops: ChangeOp[]): ChangeKind {
   if (ops.includes('unlist')) return 'removed';
@@ -472,15 +440,9 @@ export const CHANGE_KINDS: Record<ChangeOp, ChangeKind> = {
 const CURSOR_FORMAT = /^[A-Za-z0-9_-]+$/;
 
 /**
- * `since` only means something where a relay exists: a stack with no
- * third party whose writes could have been missed has no cursor it could
- * ever have minted. Silently starting from the present would let the
- * caller believe it resumed when it did not, so a stack that cannot honor
- * `since` refuses it rather than ignoring it.
- *
- * Its shape is checked here rather than left to the adapter, so a malformed
- * cursor is the same error whoever is underneath. The value stays opaque:
- * this asks whether it is framable, never what it means.
+ * Refuse a `since` this stack cannot honor rather than silently starting
+ * from the present, and a malformed one here rather than in the adapter, so
+ * it is the same error whoever is underneath. The value stays opaque.
  * See docs/spec/events.md § Subscribing.
  */
 export function assertSinceUsable(since: string | undefined, relaysChanges: boolean): void {

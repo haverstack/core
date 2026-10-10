@@ -23,11 +23,8 @@ export function assertAttachmentSize(byteLength: number, attachmentBytes: number
 
 /**
  * The content half of the same pre-check, on Stack.create() and
- * Stack.mutate(). Local adapters declare `limits.contentBytes: null` and skip
- * the serialization entirely; only a server declares a ceiling, and its
- * own request-size limit stays authoritative — this just spares an app the
- * round trip and gives it a typed failure instead of a 413 it has to
- * interpret. See docs/spec/wire-format.md § Request size limits.
+ * Stack.mutate(). A `null` ceiling — every local adapter's — skips the
+ * serialization entirely.
  */
 export function assertContentSize(
   content: Record<string, unknown>,

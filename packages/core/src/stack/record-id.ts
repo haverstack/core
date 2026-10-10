@@ -40,16 +40,10 @@ export function validateParentId(parentId: string): void {
 }
 
 /**
- * Format and reserved-prefix checks — full-trust context (Stack.create()).
- * Checked before the format check: the Crockford charset already excludes
- * "_", so a reserved-looking id (e.g. "_config") would otherwise just fail
- * as a generic format error instead of a specific, actionable one.
- *
- * Throws StackBadRequestError, not StackValidationError: a malformed id is
- * structurally bad input the request never gets past — it doesn't reach
- * type-schema validation — the same reasoning that makes an undecodable
- * pagination cursor a StackBadRequestError rather than a content-validation
- * failure. See StackBadRequestError's doc comment.
+ * Format and reserved-prefix checks for a caller-supplied id. The prefix is
+ * asked first so "_config" gets a specific refusal, not a generic format
+ * one. StackBadRequestError, not StackValidationError: a malformed id never
+ * reaches schema validation — see StackBadRequestError's doc comment.
  */
 export function validateRecordId(id: string): void {
   if (id.startsWith(RESERVED_ID_PREFIX)) {
@@ -63,36 +57,16 @@ export function validateRecordId(id: string): void {
 }
 
 /**
- * Validity and range check for the backdating options on unscoped
- * Stack.create(). A Date is only as good as what the caller parsed it
- * from, and the two failure modes both need catching here rather than
- * downstream:
- *
- * - **Invalid Date** (`new Date('13/45/2020')` off a malformed import row)
- *   has a NaN getTime(), and every comparison against NaN is false — so an
- *   unchecked Invalid Date passes the updatedAt/createdAt ordering check
- *   and the id/createdAt skew check by turning them off, mints the
- *   epoch-zero ID `000000000xxx`, and persists a record whose
- *   `createdAt.toISOString()` throws RangeError in serializeRecord() —
- *   making that record, and any wire response containing it,
- *   permanently unreadable.
- * - **Out of encodable range** — before 1970 crockford32Encode() throws a
- *   bare RangeError from deep inside the ID encoder, and past
- *   MAX_ID_TIMESTAMP the derived ID silently grows to 13 characters and
- *   fails isValidIdFormat().
- *
- * Checked at the door for both, as a StackValidationError naming the
- * field. Applies whether or not an `id` is supplied: a clock field outside
- * this range is unrepresentable regardless of where the ID came from.
+ * Validity and range check for a backdated `createdAt`/`updatedAt`. An
+ * Invalid Date would switch the ordering and skew checks off rather than
+ * fail them, and one outside an id's encodable range has no id to agree
+ * with. See docs/spec/data-model.md § Backdating on import.
  */
 export function validateClockField(value: Date | undefined, path: string): ValidationError[] {
   if (value === undefined) return [];
-  // Type-checked callers always pass a Date, but this option is
-  // reachable from the wire: JSON has no Date, so a server that forwards a
-  // parsed `POST /records` body hands us the ISO *string* it deserialized.
-  // Without this the very next line is `"2020-…".getTime()` — an unhandled
-  // TypeError, a 500 where the caller should have got a 400 naming the
-  // field.
+  // Reachable from the wire, where JSON has no Date: a forwarded request
+  // body hands over an ISO string, which must be a 400 naming the field
+  // rather than a TypeError from the getTime() below.
   if (!(value instanceof Date)) {
     return [{ path, message: `${path} must be a Date.` }];
   }
@@ -114,16 +88,10 @@ export function validateClockField(value: Date | undefined, path: string): Valid
 }
 
 /**
- * Timestamp-prefix plausibility check, shared by callers that compare an
- * ID's embedded millisecond against a different reference each:
- * ScopedStack.create() against the current time for any non-backdated
- * create (a grantee is untrusted and could otherwise mint an ID that
- * forges its sort position, and this is the one check standing between a
- * delegated or grantee caller and doing so), and Stack.create() — reached
- * directly when unscoped, or via ScopedStack.create() when the requester
- * is the owner acting alone with an explicit `createdAt` — against that
- * `createdAt` instead (the two must agree, not silently diverge — see
- * docs/spec/data-model.md § Record IDs). Pass null to disable.
+ * Whether an id's embedded timestamp is within `skewMs` of `reference`:
+ * the current time for a live scoped create, where it stops a grantee
+ * forging a sort position, or an explicit `createdAt`, which the id must
+ * agree with. Pass null to disable. See docs/spec/data-model.md § Record IDs.
  */
 export function validateIdTimestampSkew(
   id: string,

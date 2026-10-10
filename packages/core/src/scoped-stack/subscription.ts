@@ -53,16 +53,10 @@ export class FeedAuthorityCache {
 }
 
 /**
- * A ScopedStack's delivery: canRead per event, with the grant and roster
- * lookups it needs cached for the life of the subscription and dropped the
- * moment anything that feeds them changes.
- *
- * Two properties do the work, and neither is optional. **Deliveries are
- * serialized**, because the permission decision is asynchronous and two
- * changes to one record could otherwise resolve out of order, breaking the
- * feed's one ordering guarantee. And **the filter fails closed**: a check
- * that throws drops the event and reports the error.
- * See docs/spec/events.md § Permission scoping.
+ * A ScopedStack's delivery: canRead per event, its grant and roster lookups
+ * cached until anything feeding them changes. Deliveries are serialized,
+ * since the async decision could otherwise reorder changes, and the filter
+ * fails closed. See docs/spec/events.md § Permission scoping.
  */
 export class ScopedSubscription extends Subscription {
   private readonly cache = new FeedAuthorityCache();

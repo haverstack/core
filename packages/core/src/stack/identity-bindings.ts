@@ -23,19 +23,10 @@ const BINDING_FIELDS: ReadonlyMap<string, readonly ('did' | 'appId')[]> = new Ma
 ]);
 
 /**
- * The subset that is additionally unique per stack: the fields something
- * resolves *by*. An Actor's `principalId` finds its card by `_app.did` and
- * its `subjectId` by `_entity.did`, so a second card claiming either leaves
- * that lookup without a single answer — and ambiguity is all an
- * impersonating card needs.
- *
- * `_app.appId` is deliberately absent. Nothing resolves a card by it — the
- * cross-check reaches the card by `did` and only compares `appId` — so
- * uniqueness would buy no disambiguation, while forbidding the second card
- * key rotation is supposed to produce: `appId` is required, so a
- * replacement card for the same software necessarily repeats it. Moving one
- * card onto another's `appId` is what immutability already refuses.
- * See docs/spec/identity.md § DID bindings.
+ * The subset that is additionally unique per stack: the fields an Actor is
+ * resolved *by*, where a second claimant leaves the lookup ambiguous.
+ * `_app.appId` is deliberately absent — nothing resolves by it, and a new
+ * key's card must repeat it. See docs/spec/identity.md § DID bindings.
  */
 const UNIQUE_BINDING_FIELDS: ReadonlyMap<string, readonly ('did' | 'appId')[]> = new Map([
   [SYSTEM_TYPES.APP, ['did'] as const],
