@@ -11,7 +11,7 @@
 
 import type { TypeSchema, FieldDef, ScalarFieldKind } from './types.js';
 import type { ReadonlyTypeSchema } from './type-handle.js';
-import { declaredEnumValues, formatEnumValues } from './validate.js';
+import { formatEnumValues } from './validate.js';
 
 // -------------------------------------------------------
 // Canonical schema serialization
@@ -60,13 +60,10 @@ const canonicalizeFieldDef = (def: FieldDef): unknown => {
   }
 
   // Scalar. An enum's `values` are sorted so reordering them is not a change.
-  // A malformed stored list is hashed as it is, so it never matches a
-  // different malformed one, or a def with no list at all.
-  const values = def.kind === 'enum' ? (def.values as unknown) : undefined;
   return {
     kind: def.kind,
     ...(def.required !== undefined && { required: def.required }),
-    ...(values !== undefined && { values: Array.isArray(values) ? [...values].sort() : values }),
+    ...(def.kind === 'enum' && { values: [...def.values].sort() }),
   };
 };
 
@@ -154,21 +151,13 @@ const isFieldCompatible = (candidate: FieldDef, required: FieldDef, depth: numbe
     );
   }
   if (candidate.kind === 'array' || candidate.kind === 'object') return false;
-  // A consumer expecting an enum can handle only the values it lists. An
-  // enum candidate with a missing or empty `values` list promises nothing,
-  // so it fails closed.
+  // A consumer expecting an enum can handle only the values it lists.
   if (required.kind === 'enum') {
     if (candidate.kind !== 'enum') return false;
-    const values = declaredEnumValues(candidate.values);
-    const allowed = new Set(declaredEnumValues(required.values));
-    return values.length > 0 && values.every((v) => allowed.has(v));
+    const allowed = new Set(required.values);
+    return candidate.values.every((v) => allowed.has(v));
   }
-  // A required kind outside the union (a foreign or unvalidated schema) can't
-  // be checked, so it fails closed too.
-  return (
-    Object.hasOwn(READ_COMPATIBLE, required.kind) &&
-    READ_COMPATIBLE[required.kind].includes(candidate.kind)
-  );
+  return READ_COMPATIBLE[required.kind].includes(candidate.kind);
 };
 
 const isCompatibleAtDepth = (
@@ -246,8 +235,8 @@ const diffField = (
   }
   // Losing a value narrows what an enum accepts; gaining one widens it.
   if (stored.kind === 'enum' && candidate.kind === 'enum') {
-    const kept = new Set(declaredEnumValues(candidate.values));
-    const removed = declaredEnumValues(stored.values).filter((v) => !kept.has(v));
+    const kept = new Set(candidate.values);
+    const removed = stored.values.filter((v) => !kept.has(v));
     if (removed.length > 0) {
       violations.push({ path, message: `enum values removed: ${formatEnumValues(removed)}` });
     }

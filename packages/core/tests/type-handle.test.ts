@@ -1,16 +1,18 @@
 import { describe, test, expect, expectTypeOf, beforeEach, vi } from 'vitest';
 import { Stack } from '../src/stack.js';
 import { MemoryAdapter } from '../src/testing.js';
-import { migration, narrowRecord, typeHandle } from '../src/type-handle.js';
-import type { ContentOf, PatchOf, TypedChange, TypedRecord } from '../src/type-handle.js';
-import {
-  StackBadRequestError,
-  StackMigrationError,
-  StackNotFoundError,
-  StackValidationError,
-} from '../src/errors.js';
+import { migration, typeHandle } from '../src/type-handle.js';
+import type {
+  ContentOf,
+  PatchOf,
+  StoredContentOf,
+  TypedChange,
+  TypedRecord,
+  UnlistedValue,
+} from '../src/type-handle.js';
+import { StackBadRequestError, StackMigrationError, StackNotFoundError } from '../src/errors.js';
 import type { StackClient } from '../src/stack.js';
-import type { StackRecord, TypeId, TypeSchema } from '../src/types.js';
+import type { TypeId, TypeSchema } from '../src/types.js';
 
 const OWNER = 'owner-123';
 
@@ -111,6 +113,36 @@ describe('ContentOf', () => {
     // @ts-expect-error a required field is missing
     const missing: BookContent = { status: 'want' };
     expect([wrongEnum, missing]).toHaveLength(2);
+  });
+});
+
+describe('StoredContentOf', () => {
+  test('reads an enum as its listed values or any other string', () => {
+    expectTypeOf<StoredContentOf<typeof Book.schema>>().toEqualTypeOf<{
+      title: string;
+      status: 'want' | 'reading' | 'finished' | 'abandoned' | UnlistedValue;
+      pages?: number;
+    }>();
+  });
+
+  test('reads an enum nested in an array or object the same way', () => {
+    const Nested = typeHandle({
+      id: 'com.example/nested@1',
+      name: 'Nested',
+      schema: {
+        tags: { kind: 'array', items: { kind: 'enum', values: ['x'] }, required: true },
+        meta: {
+          kind: 'object',
+          required: true,
+          properties: { mood: { kind: 'enum', values: ['y'], required: true } },
+        },
+      },
+    });
+    expect(Nested.baseId).toBe('com.example/nested');
+    expectTypeOf<StoredContentOf<typeof Nested.schema>>().toEqualTypeOf<{
+      tags: ('x' | UnlistedValue)[];
+      meta: { mood: 'y' | UnlistedValue };
+    }>();
   });
 });
 
@@ -244,15 +276,6 @@ describe('migration()', () => {
 // Typed reads and writes
 // -------------------------------------------------------
 
-describe('narrowRecord()', () => {
-  test('refuses a non-string value in an enum field', () => {
-    const record = { id: 'r1', typeId: Book.id, content: { title: 'Dune', status: 3 } };
-    expect(() => narrowRecord(Book, record as unknown as StackRecord)).toThrow(
-      StackValidationError,
-    );
-  });
-});
-
 describe.each([
   ['Stack', (s: Stack): StackClient => s],
   ['ScopedStack', (s: Stack): StackClient => s.asEntity(OWNER)],
@@ -323,9 +346,9 @@ describe.each([
     await expect(client.get(Book, book.id)).rejects.toThrow(StackMigrationError);
   });
 
-  test('get() throws on an enum value the handle does not list', async () => {
+  test('get() returns an enum value the handle does not list', async () => {
     const book = await client.create(Book, { title: 'Dune', status: 'want' });
-    // The writer's schema listed one more value than this reader's handle.
+    // The writer's schema lists one more value than this reader's handle.
     await stack.defineType({
       id: Book.id,
       name: 'Book',
@@ -339,10 +362,10 @@ describe.each([
       },
     });
     await stack.patchContent(book.id, { status: 'paused' });
-    await expect(client.get(Book, book.id)).rejects.toThrow(StackValidationError);
+    expect((await client.get(Book, book.id))?.content.status).toBe('paused');
   });
 
-  test('mutate() refuses before landing a write that would leave an unlisted enum value', async () => {
+  test('mutate() keeps an enum value the handle does not list', async () => {
     const book = await client.create(Book, { title: 'Dune', status: 'want' });
     await stack.defineType({
       id: Book.id,
@@ -350,13 +373,12 @@ describe.each([
       schema: { ...Book.schema, status: { kind: 'string', required: true } },
     });
     await stack.patchContent(book.id, { status: 'paused' });
-    await expect(client.patchContent(Book, book.id, { title: 'Emma' })).rejects.toThrow(
-      StackValidationError,
-    );
-    expect((await stack.get(book.id))?.content).toEqual({ title: 'Dune', status: 'paused' });
-
-    const fixed = await client.patchContent(Book, book.id, { title: 'Emma', status: 'finished' });
-    expect(fixed.content).toEqual({ title: 'Emma', status: 'finished' });
+    const updated = await client.mutate(Book, book.id, {
+      contentPatch: { title: 'Emma' },
+      unlisted: true,
+    });
+    expect(updated.content).toEqual({ title: 'Emma', status: 'paused' });
+    expect(updated.unlistedAt).toBeDefined();
   });
 
   test('get() reads a tombstone as null', async () => {
@@ -450,7 +472,7 @@ describe.each([
     expect(seen).toEqual(['removed']);
   });
 
-  test('subscribe() withholds a record holding an enum value the handle does not list', async () => {
+  test('subscribe() delivers a record holding an enum value the handle does not list', async () => {
     const seen: TypedChange<typeof Book.schema>[] = [];
     const book = await client.create(Book, { title: 'Dune', status: 'want' });
     await stack.defineType({
@@ -473,8 +495,7 @@ describe.each([
     stop();
 
     expect(seen).toHaveLength(1);
-    expect(seen[0].recordId).toBe(book.id);
-    expect(seen[0].record).toBeUndefined();
+    expect(seen[0].record?.content).toEqual({ title: 'Dune', status: 'paused' });
   });
 
   test('a typed write to a record of another family finds no record and writes nothing', async () => {

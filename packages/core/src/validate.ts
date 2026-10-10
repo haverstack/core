@@ -36,27 +36,9 @@ export type ValidationError = {
 // Internal helpers
 // -------------------------------------------------------
 
-/**
- * The values an enum def allows. A stored Type is not re-validated on read,
- * so its def may arrive without a `values` list; it then allows nothing
- * rather than throwing.
- */
-export const declaredEnumValues = (values: unknown): readonly string[] =>
-  Array.isArray(values) ? (values as string[]) : [];
-
-export const enumAllows = (values: unknown, value: unknown): boolean =>
-  declaredEnumValues(values).includes(value as string);
-
 /** Shared by the 422 for a value outside the list and the 409 for removed values. */
 export const formatEnumValues = (values: readonly string[]): string =>
   values.map((v) => JSON.stringify(v)).join(', ');
-
-export const enumMismatchMessage = (values: unknown, value: unknown): string => {
-  const allowed = declaredEnumValues(values);
-  return allowed.length > 0
-    ? `Expected one of ${formatEnumValues(allowed)}, got ${JSON.stringify(value)}`
-    : `The schema declares no enum values, so ${JSON.stringify(value)} is not allowed`;
-};
 
 const jsTypeForScalar = (kind: ScalarFieldKind): string => {
   switch (kind) {
@@ -220,8 +202,11 @@ const validateField = (
     });
   } else if (typeof value === 'number' && !Number.isFinite(value)) {
     errors.push({ path, message: `Expected a finite number, got ${value}` });
-  } else if (def.kind === 'enum' && !enumAllows(def.values, value)) {
-    errors.push({ path, message: enumMismatchMessage(def.values, value) });
+  } else if (def.kind === 'enum' && !def.values.includes(value as string)) {
+    errors.push({
+      path,
+      message: `Expected one of ${formatEnumValues(def.values)}, got ${JSON.stringify(value)}`,
+    });
   }
 };
 

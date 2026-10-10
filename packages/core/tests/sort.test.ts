@@ -1,7 +1,6 @@
 import { describe, test, expect } from 'vitest';
 import { contentSortKey, contentSortEntry, compareSortEntries } from '../src/sort.js';
 import type { SortEntry } from '../src/sort.js';
-import type { ScalarFieldKind } from '../src/types.js';
 
 describe('contentSortKey', () => {
   test('folds case and combining marks away', () => {
@@ -35,12 +34,6 @@ describe('contentSortKey', () => {
 });
 
 describe('contentSortEntry', () => {
-  test('a kind outside the union orders as text', () => {
-    expect(contentSortEntry('nonsense' as ScalarFieldKind, 'x')).toEqual(
-      contentSortEntry('string', 'x'),
-    );
-  });
-
   test('reads a date as epoch milliseconds, not as an ISO string', () => {
     expect(contentSortEntry('date', '2020-03-01T00:00:00Z')).toEqual({
       kind: 'num',

@@ -324,19 +324,6 @@ describe('hashSchema enum', () => {
     const ac = await hashSchema({ s: { kind: 'enum', values: ['a', 'c'] } });
     expect(new Set([plain, ab, ac]).size).toBe(3);
   });
-
-  test('a stored enum with no values list hashes rather than throwing', async () => {
-    const malformed = { s: { kind: 'enum' } } as unknown as TypeSchema;
-    await expect(hashSchema(malformed)).resolves.toMatch(/\S/);
-  });
-
-  test('a malformed values entry hashes apart from a missing one', async () => {
-    const missing = await hashSchema({ s: { kind: 'enum' } } as unknown as TypeSchema);
-    const scalar = await hashSchema({
-      s: { kind: 'enum', values: 'a,b' },
-    } as unknown as TypeSchema);
-    expect(scalar).not.toBe(missing);
-  });
 });
 
 describe('isCompatible enum', () => {
@@ -351,28 +338,6 @@ describe('isCompatible enum', () => {
 
   test('a required enum refuses an enum listing a value it does not', () => {
     expect(isCompatible(abc, ab)).toBe(false);
-  });
-
-  test('a candidate enum with no values list is incompatible, not a throw', () => {
-    const malformed = { s: { kind: 'enum', required: true } } as unknown as TypeSchema;
-    expect(isCompatible(malformed, abc)).toBe(false);
-  });
-
-  test('a candidate enum with an empty values list is incompatible', () => {
-    const empty = { s: { kind: 'enum', values: [], required: true } } as unknown as TypeSchema;
-    expect(isCompatible(empty, abc)).toBe(false);
-  });
-
-  test('a required field of unknown kind is incompatible, not a throw', () => {
-    const unknown = { s: { kind: 'nonsense', required: true } } as unknown as TypeSchema;
-    expect(isCompatible(field({ kind: 'string' }), unknown)).toBe(false);
-  });
-
-  test('a required field whose kind names an Object.prototype key is incompatible', () => {
-    for (const kind of ['toString', 'constructor', '__proto__']) {
-      const odd = { s: { kind, required: true } } as unknown as TypeSchema;
-      expect(isCompatible(field({ kind: 'string' }), odd)).toBe(false);
-    }
   });
 
   test('a required enum refuses a string or text candidate, which may hold any value', () => {
@@ -748,10 +713,5 @@ describe('diffSchemas enum', () => {
 
   test('reordering enum values is not a change', () => {
     expect(diffSchemas(values('a', 'b'), values('b', 'a'))).toEqual([]);
-  });
-
-  test('a stored enum with no values list diffs rather than throwing', () => {
-    const malformed = { s: { kind: 'enum' } } as unknown as TypeSchema;
-    expect(diffSchemas(malformed, values('a'))).toEqual([]);
   });
 });

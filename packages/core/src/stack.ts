@@ -180,12 +180,7 @@ import {
   typedQuery,
   typedSubscribe,
 } from './type-handle.js';
-import {
-  checkFamily,
-  checkResultContent,
-  checkStoredVersion,
-  WRITE_EXPECTATION,
-} from './write-expectation.js';
+import { checkFamily, checkStoredVersion, WRITE_EXPECTATION } from './write-expectation.js';
 import type { ExpectationOptions } from './write-expectation.js';
 import type {
   ContentOf,
@@ -1310,7 +1305,6 @@ export class Stack implements StackClient {
     checkStoredVersion(existing, opts, changes.contentPatch !== undefined);
 
     const merged = await this.validateChangeSet(id, existing, changes);
-    checkResultContent(merged ?? existing.content, opts);
 
     const ops = changeSetOps(existing, changes, merged);
     // Nothing moved, so there is nothing to version. Decided here rather

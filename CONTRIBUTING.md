@@ -233,6 +233,8 @@ Note that this is about _our_ history, not about inputs we genuinely receive. Ha
 
 **`Stack` is the invariant layer; adapters are storage engines.** Validation, `_config` protection, ID rules, migration policy, and permission logic live in `packages/core` so every adapter inherits them. An adapter that reimplements an invariant is a bug waiting to diverge. The deliberate exception is documented in the spec: the `_config` query exclusion must live in each adapter's own query predicate, because post-filtering in `Stack` would under-fill a page.
 
+**Validate where data enters; trust it inside.** Input is checked once, at the boundary it crosses: a public API call such as `defineType()` or `create()`, or a wire request a server decodes. Past that point the types are true, and code reads a stored Type or Record as its type says. Data an adapter returns is inside: a store that holds something core never wrote was edited by hand, and guarding for that in every reader costs more than it buys. Each guard for malformed stored data also forces a policy choice (does a missing list allow nothing? does an unknown kind sort as text?), and those choices drift apart between call sites. A foreign source, such as a third-party server, is an edge, and the adapter that reads it validates what it hands to `Stack`.
+
 **Package naming declares the adapter contract**, per [`docs/spec/adapters.md`](./docs/spec/adapters.md):
 
 | Prefix             | Implements           |

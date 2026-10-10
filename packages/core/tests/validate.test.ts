@@ -663,13 +663,6 @@ describe('enum', () => {
     };
     expect(paths({ tags: ['a', 'c'] }, tags)).toEqual(['tags[1]']);
   });
-
-  test('a stored enum with no values list refuses every value rather than throwing', () => {
-    const malformed = { status: { kind: 'enum' } } as unknown as TypeSchema;
-    expect(errorsFor({ status: 'want' }, malformed)).toEqual([
-      { path: 'status', message: 'The schema declares no enum values, so "want" is not allowed' },
-    ]);
-  });
 });
 
 describe('validateSchemaShape enum', () => {

@@ -2,18 +2,17 @@
  * Stack — Type handles
  * -------------------------------------------------------
  * A Type's schema written once as a literal, from which the compiler derives
- * the content type: `ContentOf` for a read or a create, `PatchOf` for a
- * `contentPatch`. A handle is a plain value, so `StackClient` code can use it
- * wherever it has no `defineType()` result.
+ * the content type: `ContentOf` for a create, `StoredContentOf` for a read,
+ * `PatchOf` for a `contentPatch`. A handle is a plain value, so `StackClient`
+ * code can use it wherever it has no `defineType()` result.
  *
  * The derived types layer over runtime validation, which stays the guarantee.
  * What a typed read adds is a runtime check that the record is the handle's
  * Type. See docs/spec/data-model.md § Type handles.
  */
 
-import { StackBadRequestError, StackMigrationError, StackValidationError } from './errors.js';
+import { StackBadRequestError, StackMigrationError } from './errors.js';
 import { lineageProblem, parseTypeId } from './schema.js';
-import { enumAllows, enumMismatchMessage, type ValidationError } from './validate.js';
 import { StoredVersionError, WRITE_EXPECTATION } from './write-expectation.js';
 import type { CreateRecordOptions, StackClient } from './stack.js';
 import type {
@@ -83,8 +82,23 @@ type IsRequired<D> = D extends { readonly required: true } ? true : false;
 
 type Simplify<T> = { [K in keyof T]: T[K] } & {};
 
-type ValueOf<D> = D extends { readonly kind: 'enum'; readonly values: readonly (infer E)[] }
-  ? E
+/** What a value is read as or written as; they differ only for an enum. */
+type Direction = 'read' | 'write';
+
+/**
+ * A string an enum's `values` do not list. An enum may widen in place, so a
+ * read can meet one; `string & {}` keeps the listed values as completions.
+ * See docs/spec/data-model.md § Type handles.
+ */
+export type UnlistedValue = string & {};
+
+type ValueOf<D, M extends Direction> = D extends {
+  readonly kind: 'enum';
+  readonly values: readonly (infer E)[];
+}
+  ? M extends 'read'
+    ? E | UnlistedValue
+    : E
   : D extends { readonly kind: 'string' | 'text' | 'date' | 'record-ref' | 'file-ref' }
     ? string
     : D extends { readonly kind: 'number' }
@@ -94,26 +108,32 @@ type ValueOf<D> = D extends { readonly kind: 'enum'; readonly values: readonly (
         : D extends { readonly kind: 'array'; readonly open: true }
           ? unknown[]
           : D extends { readonly kind: 'array'; readonly items: infer I }
-            ? ValueOf<I>[]
+            ? ValueOf<I, M>[]
             : D extends { readonly kind: 'object'; readonly open: true }
               ? Record<string, unknown>
               : D extends { readonly kind: 'object'; readonly properties: infer P }
                 ? P extends ReadonlyTypeSchema
-                  ? ContentOf<P>
+                  ? ContentAs<P, M>
                   : never
                 : never;
 
-/**
- * The content a schema describes: a required field is present, any other may
- * be absent. See docs/spec/data-model.md § Type handles.
- */
-export type ContentOf<S extends ReadonlyTypeSchema> = Simplify<
+type ContentAs<S extends ReadonlyTypeSchema, M extends Direction> = Simplify<
   {
-    -readonly [K in keyof S as IsRequired<S[K]> extends true ? K : never]: ValueOf<S[K]>;
+    -readonly [K in keyof S as IsRequired<S[K]> extends true ? K : never]: ValueOf<S[K], M>;
   } & {
-    -readonly [K in keyof S as IsRequired<S[K]> extends true ? never : K]?: ValueOf<S[K]>;
+    -readonly [K in keyof S as IsRequired<S[K]> extends true ? never : K]?: ValueOf<S[K], M>;
   }
 >;
+
+/**
+ * The content a schema describes, as a write supplies it: a required field
+ * is present, any other may be absent. See docs/spec/data-model.md § Type
+ * handles.
+ */
+export type ContentOf<S extends ReadonlyTypeSchema> = ContentAs<S, 'write'>;
+
+/** `ContentOf`, as a read returns it: an enum may hold an unlisted value. */
+export type StoredContentOf<S extends ReadonlyTypeSchema> = ContentAs<S, 'read'>;
 
 /**
  * The `contentPatch` a schema accepts: every field optional, and `null`
@@ -121,12 +141,14 @@ export type ContentOf<S extends ReadonlyTypeSchema> = Simplify<
  * replaced but not removed.
  */
 export type PatchOf<S extends ReadonlyTypeSchema> = Simplify<{
-  -readonly [K in keyof S]?: IsRequired<S[K]> extends true ? ValueOf<S[K]> : ValueOf<S[K]> | null;
+  -readonly [K in keyof S]?: IsRequired<S[K]> extends true
+    ? ValueOf<S[K], 'write'>
+    : ValueOf<S[K], 'write'> | null;
 }>;
 
 /** A record whose content is the handle's, as a typed read returns it. */
 export type TypedRecord<S extends ReadonlyTypeSchema> = Omit<StackRecord, 'content'> & {
-  content: ContentOf<S>;
+  content: StoredContentOf<S>;
 };
 
 // -------------------------------------------------------
@@ -239,12 +261,7 @@ export type TypedQuery = Omit<StackQuery, 'filter' | 'presentAt'> & {
   filter?: Omit<RecordFilter, 'typeId' | 'baseId' | 'includeDeleted'>;
 };
 
-/**
- * A change whose `record`, when present, is the handle's content. Absent
- * where an untyped change's would be, and also where the record holds an
- * enum value the handle does not list — re-read it with the typed `get()`,
- * which says why.
- */
+/** A change whose `record`, when present, is the handle's content. */
 export type TypedChange<S extends ReadonlyTypeSchema> = Omit<RecordChange, 'record'> & {
   record?: TypedRecord<S>;
 };
@@ -263,49 +280,9 @@ export type TypedChangeSet<S extends ReadonlyTypeSchema> = Omit<RecordChangeSet,
 // -------------------------------------------------------
 
 /**
- * Enum values the record holds that the handle's schema does not list. An
- * enum may gain values, or widen to a plain `string`, within a version, so
- * a reader older than the writer can meet any string; throwing keeps the
- * derived union exact. See docs/spec/data-model.md § Type handles.
- */
-const unknownEnumValues = (
-  value: unknown,
-  def: ReadonlyFieldDef,
-  path: string,
-  errors: ValidationError[],
-): void => {
-  if (value === undefined || value === null) return;
-  if (def.kind === 'enum') {
-    if (!enumAllows(def.values, value)) {
-      errors.push({ path, message: enumMismatchMessage(def.values, value) });
-    }
-    return;
-  }
-  if (def.kind === 'array' && !def.open && Array.isArray(value)) {
-    value.forEach((item, i) => unknownEnumValues(item, def.items, `${path}[${i}]`, errors));
-    return;
-  }
-  if (def.kind === 'object' && !def.open && typeof value === 'object' && !Array.isArray(value)) {
-    walkEnums(value as Record<string, unknown>, def.properties, path, errors);
-  }
-};
-
-const walkEnums = (
-  content: Record<string, unknown>,
-  schema: ReadonlyTypeSchema,
-  prefix: string,
-  errors: ValidationError[],
-): void => {
-  for (const key of Object.keys(schema)) {
-    unknownEnumValues(content[key], schema[key], prefix ? `${prefix}.${key}` : key, errors);
-  }
-};
-
-/**
  * Narrow a record to a handle's content type: it must be exactly the
- * handle's Type, and every enum field must hold a value the handle lists.
- * A record of another Type throws, and so does one whose family has moved
- * past the handle's version.
+ * handle's Type. A record of another Type throws, and so does one whose
+ * family has moved past the handle's version.
  */
 export const narrowRecord = <S extends ReadonlyTypeSchema>(
   handle: TypeHandle<S>,
@@ -314,14 +291,7 @@ export const narrowRecord = <S extends ReadonlyTypeSchema>(
   if (record.typeId !== handle.id) {
     throw new StackBadRequestError(`Record "${record.id}" is ${record.typeId}, not ${handle.id}`);
   }
-  assertEnumsListed(handle, record.content);
   return record as TypedRecord<S>;
-};
-
-const assertEnumsListed = (handle: TypeHandle, content: Record<string, unknown>): void => {
-  const errors: ValidationError[] = [];
-  walkEnums(content, handle.schema, '', errors);
-  if (errors.length > 0) throw new StackValidationError(errors);
 };
 
 /** The ways a typed read can be asked to see a tombstone. */
@@ -381,12 +351,7 @@ export const typedMutate = async <S extends ReadonlyTypeSchema>(
   // Checked against the read the write already makes, so nothing lands on
   // a record the handle does not type. See docs/spec/data-model.md § Type handles.
   const expect = {
-    [WRITE_EXPECTATION]: {
-      baseId: handle.baseId,
-      typeId: handle.id,
-      exact: true,
-      checkContent: (content: Record<string, unknown>) => assertEnumsListed(handle, content),
-    },
+    [WRITE_EXPECTATION]: { baseId: handle.baseId, typeId: handle.id, exact: true },
   };
   try {
     return narrowRecord(handle, await client.mutate(id, changes, { ...opts, ...expect } as never));
@@ -408,13 +373,7 @@ export const typedSubscribe = <S extends ReadonlyTypeSchema>(
   client.subscribe(
     (change) => {
       const { record, ...rest } = change;
-      let narrowed: TypedRecord<S> | undefined;
-      try {
-        narrowed = record && narrowRecord(handle, record);
-      } catch (err) {
-        if (!(err instanceof StackValidationError)) throw err;
-      }
-      handler(narrowed ? { ...rest, record: narrowed } : rest);
+      handler(record ? { ...rest, record: narrowRecord(handle, record) } : rest);
     },
     { ...opts, filter: { ...opts.filter, typeId: handle.id } },
   );
