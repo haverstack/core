@@ -14,7 +14,7 @@
 import { isOwnerActingAlone } from '../access.js';
 import { StackBadRequestError } from '../errors.js';
 import { fieldError, requireBody } from './body.js';
-import type { BackdatableCreateRecordOptions } from '../stack.js';
+import type { BackdatableCreateRecordOptions } from '../stack/stack.js';
 import { RECORD_CHANGE_SET_KEYS } from '../types/index.js';
 import type {
   EntityId,

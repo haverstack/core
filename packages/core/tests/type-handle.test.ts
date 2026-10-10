@@ -1,5 +1,5 @@
 import { describe, test, expect, expectTypeOf, beforeEach, vi } from 'vitest';
-import { Stack } from '../src/stack.js';
+import { Stack } from '../src/stack/stack.js';
 import { MemoryAdapter } from '../src/testing.js';
 import { migration, typeHandle } from '../src/type-handle.js';
 import type {
@@ -11,7 +11,7 @@ import type {
   UnlistedValue,
 } from '../src/type-handle.js';
 import { StackBadRequestError, StackMigrationError, StackNotFoundError } from '../src/errors.js';
-import type { StackClient } from '../src/stack.js';
+import type { StackClient } from '../src/stack/stack.js';
 import type { TypeId, TypeSchema } from '../src/types/index.js';
 
 const OWNER = 'owner-123';

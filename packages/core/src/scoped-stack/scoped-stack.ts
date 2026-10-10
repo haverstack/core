@@ -18,18 +18,18 @@
  * See docs/spec/access-control.md and docs/spec/events.md § Permission scoping.
  */
 
-import { baseIdOf } from './schema.js';
-import { validatePatchValues } from './validate.js';
-import { checkAccess, groupRoleFromAssociations, isOwnerActingAlone } from './access.js';
+import { baseIdOf } from '../schema.js';
+import { validatePatchValues } from '../validate.js';
+import { checkAccess, groupRoleFromAssociations, isOwnerActingAlone } from '../access.js';
 import {
   ChangeEmitter,
   Subscription,
   matchesFilter,
   passesUnlistedBoundary,
   assertSinceUsable,
-} from './changes.js';
-import type { EmittedChange } from './changes.js';
-import { SYSTEM_TYPES } from './types/index.js';
+} from '../changes.js';
+import type { EmittedChange } from '../changes.js';
+import { SYSTEM_TYPES } from '../types/index.js';
 import type {
   Actor,
   ActorOptions,
@@ -63,7 +63,7 @@ import type {
   TypeId,
   Unsubscribe,
   RecordChangeSet,
-} from './types/index.js';
+} from '../types/index.js';
 import {
   StackError,
   StackConflictError,
@@ -71,7 +71,7 @@ import {
   StackPermissionError,
   RelayScopeError,
   StackValidationError,
-} from './errors.js';
+} from '../errors.js';
 import {
   assertAssociationEdits,
   assertAssociationList,
@@ -82,27 +82,27 @@ import {
   assertValidBaseIdFilter,
   assertValidSort,
   filtersContent,
-} from './query-validation.js';
+} from '../query-validation.js';
 import {
   grantConveys,
   grantCoversGrantee,
   grantReach,
   loadGrantRecords,
   UNGRANTABLE_SYSTEM_TYPES,
-} from './grants.js';
-import { bindingFieldsOf } from './identity-bindings.js';
-import { checkFamily, storedVersionDiffers, WRITE_EXPECTATION } from './write-expectation.js';
-import type { ExpectationOptions } from './write-expectation.js';
-import { claimedFamilies, familyStanding, linkedIds, INSTALL_APP_LABEL } from './install.js';
-import { assertAttachmentSize } from './limits.js';
-import { validateIdTimestampSkew, validateRecordId } from './record-id.js';
+} from '../grants.js';
+import { bindingFieldsOf } from '../identity-bindings.js';
+import { checkFamily, storedVersionDiffers, WRITE_EXPECTATION } from '../write-expectation.js';
+import type { ExpectationOptions } from '../write-expectation.js';
+import { claimedFamilies, familyStanding, linkedIds, INSTALL_APP_LABEL } from '../install.js';
+import { assertAttachmentSize } from '../limits.js';
+import { validateIdTimestampSkew, validateRecordId } from '../record-id.js';
 import {
   DEFAULT_QUERY_LIMIT,
   MAX_QUERY_LIMIT,
   findFirstMatch,
   lookupEntityByDid,
   queryAllPages,
-} from './stack-reads.js';
+} from '../stack-reads.js';
 import {
   associationDelta,
   associationEqual,
@@ -110,7 +110,7 @@ import {
   presentDeleted,
   withoutAuthorityChanges,
   assertNonEmptyChangeSet,
-} from './record-changes.js';
+} from '../record-changes.js';
 // Every import from stack.js is type-only: a ScopedStack never constructs
 // a Stack, so nothing here closes a runtime cycle with stack.ts, which does
 // construct a ScopedStack.
@@ -121,7 +121,7 @@ import {
   typedMutate,
   typedQuery,
   typedSubscribe,
-} from './type-handle.js';
+} from '../type-handle.js';
 import type {
   ContentOf,
   PatchOf,
@@ -132,7 +132,7 @@ import type {
   TypedSubscribeOptions,
   TypedRecord,
   TypeHandle,
-} from './type-handle.js';
+} from '../type-handle.js';
 import type {
   Stack,
   BackdatableCreateRecordOptions,
@@ -143,7 +143,7 @@ import type {
   DeleteResult,
   GetRecordOptions,
   StackClient,
-} from './stack.js';
+} from '../stack/stack.js';
 
 /**
  * The authority lookups canRead needs, held for the life of one

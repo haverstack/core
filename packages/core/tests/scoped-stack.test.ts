@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, vi } from 'vitest';
-import { Stack } from '../src/stack.js';
-import { ScopedStack } from '../src/scoped-stack.js';
+import { Stack } from '../src/stack/stack.js';
+import { ScopedStack } from '../src/scoped-stack/scoped-stack.js';
 import {
   StackPermissionError,
   StackNotFoundError,

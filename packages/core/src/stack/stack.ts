@@ -14,7 +14,7 @@
  * Apps should never talk to a StackAdapter directly.
  */
 
-import { generateId, generateIdForTimestamp } from './id.js';
+import { generateId, generateIdForTimestamp } from '../id.js';
 import {
   hashSchema,
   isCompatible,
@@ -23,7 +23,7 @@ import {
   diffSchemas,
   familyIdProblem,
   lineageProblem,
-} from './schema.js';
+} from '../schema.js';
 import {
   dropAbsentFields,
   validateContent,
@@ -33,13 +33,13 @@ import {
   validateSchemaFieldNames,
   validateSchemaReservedNames,
   validateSchemaShape,
-} from './validate.js';
-import { applyMergePatch } from './merge.js';
-import { hasGroupAdmin, validatePermissions } from './access.js';
-import { compareRecordedAttachments } from './wire/attachment-download.js';
-import { ChangeEmitter, RelayDelivery, PendingChange, assertSinceUsable } from './changes.js';
-import { SYSTEM_TYPES } from './types/index.js';
-import type { ValidationError } from './validate.js';
+} from '../validate.js';
+import { applyMergePatch } from '../merge.js';
+import { hasGroupAdmin, validatePermissions } from '../access.js';
+import { compareRecordedAttachments } from '../wire/attachment-download.js';
+import { ChangeEmitter, RelayDelivery, PendingChange, assertSinceUsable } from '../changes.js';
+import { SYSTEM_TYPES } from '../types/index.js';
+import type { ValidationError } from '../validate.js';
 import type {
   StackRecord,
   StackType,
@@ -82,7 +82,7 @@ import type {
   JournalQuery,
   VersionsQuery,
   RecordJournalEntry,
-} from './types/index.js';
+} from '../types/index.js';
 
 import {
   UseAfterCloseError,
@@ -96,7 +96,7 @@ import {
   StackVersionConflictError,
   ARGUMENTS_INVALID,
   SCHEMA_INVALID,
-} from './errors.js';
+} from '../errors.js';
 import {
   assertQueryCapabilities,
   assertSortCapability,
@@ -112,7 +112,7 @@ import {
   assertDataAssociations,
   filtersContent,
   validateAssociations,
-} from './query-validation.js';
+} from '../query-validation.js';
 import {
   GRANT_ACTION_SET,
   READ_COMPANIONS,
@@ -124,9 +124,9 @@ import {
   validateGrantBaseId,
   grantCoversGrantee,
   loadGrantRecords,
-} from './grants.js';
-import type { GrantQuery } from './grants.js';
-import { bindingFieldsOf, uniqueBindingFieldsOf } from './identity-bindings.js';
+} from '../grants.js';
+import type { GrantQuery } from '../grants.js';
+import { bindingFieldsOf, uniqueBindingFieldsOf } from '../identity-bindings.js';
 import {
   claimedFamilies,
   familyStanding,
@@ -143,22 +143,22 @@ import {
   validateInstall,
   INSTALL_APP_LABEL,
   INSTALL_GRANT_LABEL,
-} from './install.js';
-import type { AppManifest, ForeignRequest, InstallPlan, TypeChange } from './install.js';
-import { assertAttachmentSize, assertContentSize } from './limits.js';
+} from '../install.js';
+import type { AppManifest, ForeignRequest, InstallPlan, TypeChange } from '../install.js';
+import { assertAttachmentSize, assertContentSize } from '../limits.js';
 import {
   validateParentId,
   validateRecordId,
   validateClockField,
   validateIdTimestampSkew,
   DEFAULT_ID_TIMESTAMP_SKEW_MS,
-} from './record-id.js';
+} from '../record-id.js';
 import {
   queryAllPages,
   findFirstMatch,
   lookupEntityByDid,
   MAX_QUERY_LIMIT,
-} from './stack-reads.js';
+} from '../stack-reads.js';
 import {
   applyAssociationEdits,
   associationDelta,
@@ -170,8 +170,8 @@ import {
   effectiveChanges,
   stampGroupAdmin,
   isGroupRecord,
-} from './record-changes.js';
-import { ScopedStack, scopeToken } from './scoped-stack.js';
+} from '../record-changes.js';
+import { ScopedStack, scopeToken } from '../scoped-stack/scoped-stack.js';
 import {
   isTypeHandle,
   typedCreate,
@@ -179,9 +179,9 @@ import {
   typedMutate,
   typedQuery,
   typedSubscribe,
-} from './type-handle.js';
-import { checkFamily, checkStoredVersion, WRITE_EXPECTATION } from './write-expectation.js';
-import type { ExpectationOptions } from './write-expectation.js';
+} from '../type-handle.js';
+import { checkFamily, checkStoredVersion, WRITE_EXPECTATION } from '../write-expectation.js';
+import type { ExpectationOptions } from '../write-expectation.js';
 import type {
   ContentOf,
   Migration,
@@ -193,7 +193,7 @@ import type {
   TypedSubscribeOptions,
   TypedRecord,
   TypeHandle,
-} from './type-handle.js';
+} from '../type-handle.js';
 
 // -------------------------------------------------------
 // Supporting types

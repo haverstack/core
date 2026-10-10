@@ -5,7 +5,7 @@
  * the other. See docs/spec/events.md § Where events come from.
  */
 import { describe, test, expect, beforeEach, vi } from 'vitest';
-import { Stack } from '../src/stack.js';
+import { Stack } from '../src/stack/stack.js';
 import { StackBadRequestError, RelayScopeError } from '../src/errors.js';
 import { MemoryAdapter, type MemoryAdapterOpenOptions } from '../src/testing.js';
 import type { RecordChange, SubscribeOptions } from '../src/types/index.js';
