@@ -9,8 +9,15 @@
  * Two identities, one rule: **the principal governs authority, the subject
  * governs attribution.** Both are DIDs and both are often equal, which is
  * what makes them easy to confuse — so the split is stated on every gate
- * that depends on it. The questions those gates ask are ScopeAuthority's,
- * in authority.ts; this module turns their answers into refusals.
+ * that depends on it. Grant lookup and the privilege-bearing gates no grant
+ * reaches (resharing, group management, purge, widening access at create
+ * time) key on the principal; authorship, `-own` matching, record-level
+ * permissions and "files I uploaded" key on the subject. Unconditional
+ * owner access splits the same way: an owner subject passes every
+ * permission check, an owner principal is not bounded by grants, and under
+ * delegation both halves apply. The questions those gates ask are
+ * ScopeAuthority's, in authority.ts; this module turns their answers into
+ * refusals.
  *
  * Also holds the feed side of the same rule: a subscription's deliveries
  * run through the same canRead() a get() answers with, so a feed can never
@@ -163,21 +170,10 @@ export type ScopedStackInit = {
 };
 
 /**
- * A permission-enforcing view of a Stack for a single (principal, subject)
- * pair, obtained via `stack.asEntity(entityId)`. A record the request
- * cannot read answers exactly as a missing one does — null on reads,
- * StackNotFoundError on the verbs that name one — so only a requester who
- * could have read it is told a refusal was about access.
+ * A permission-enforcing view of a Stack for one (principal, subject) pair,
+ * obtained via `stack.asEntity()` or `stack.asActor()`. A record the request
+ * cannot read answers exactly as a missing one does.
  * See docs/spec/disclosure.md § Which refusal a Record answers with.
- *
- * Which identity each gate keys on follows the module comment's rule.
- * Grant lookup and the privilege-bearing gates no grant reaches
- * (resharing, group management, purge, widening access at create
- * time) key on `principalId`; authorship, `-own` matching,
- * record-level permission resolution and "files I uploaded" lookups key on
- * `subjectId`. Unconditional owner access splits the same way: an
- * owner subject resolves past every permission check, an owner principal
- * is not bounded by grants, and under delegation both halves apply.
  */
 export class ScopedStack implements StackClient {
   readonly #authority: ScopeAuthority;
@@ -336,16 +332,11 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Reference-creation gate for one association: `attachment` requires
-   * file access, and a `relationship` naming a record in this stack
-   * requires read access to it. `tag` is unchecked, and `_group` roster
-   * associations are gated by the stricter isGroupManager() instead.
-   *
-   * The other target arms are ungated because the gate's purpose —
-   * refusing a reference that would convey access to, or confirm the
-   * existence of, an unreadable record — has nothing to bite on: core
-   * never resolves them, so no access flows through one.
-   * See docs/spec/access-control.md § Reference-creation gating.
+   * Reference-creation gate for one association: file access for an
+   * `attachment`, read access for a `relationship` to a record in this
+   * stack. Other targets convey nothing, and a `_group` roster has the
+   * stricter management gate. See docs/spec/access-control.md
+   * § Reference-creation gating.
    */
   private async requireAssociationAccess(typeId: TypeId, association: Association): Promise<void> {
     if (association.kind === 'attachment') {
@@ -370,15 +361,10 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Create a record on behalf of the subject: create grant required,
-   * anonymous denied, `createdBy` set to the requester, client IDs skew-checked,
-   * reference-creating options gated, and non-owner `_attachment@1`
-   * creation refused save one carve-out. A scoped create always stamps
-   * authorship — an absent `createdBy` means an unscoped `Stack` wrote it.
-   * `createdAt`/`updatedAt` are refused to everyone but the owner acting
-   * alone, rather than dropped, so an app never believes it published
-   * something it didn't. See docs/spec/access-control.md and
-   * docs/spec/data-model.md § Record IDs.
+   * Create a record on behalf of the subject, stamped with the requester as
+   * `createdBy`. Every option that could widen reach or forge a position is
+   * refused rather than dropped, so an app never believes it published
+   * something it didn't. See docs/spec/data-model.md § Backdating on import.
    */
   async create<S extends ReadonlyTypeSchema>(
     handle: TypeHandle<S>,
@@ -441,12 +427,9 @@ export class ScopedStack implements StackClient {
     await this.requireAppIdMatchesPrincipal(opts.appId);
     if (opts.id !== undefined) {
       validateRecordId(opts.id);
-      // Skipped when createdAt is also supplied: only the owner reaches
-      // here with that combination (checked above), and Stack.create()
-      // below checks the id against createdAt instead of "now" — the
-      // check here exists for a live grantee write, and a backdated
-      // owner create is deliberately not one. See
-      // docs/spec/data-model.md § Record IDs.
+      // A backdated create — the owner's alone, checked above — has its id
+      // checked against `createdAt` by Stack.create() instead of against now.
+      // See docs/spec/data-model.md § Record IDs.
       if (opts.createdAt === undefined) {
         validateIdTimestampSkew(opts.id, this.idTimestampSkewMs, Date.now(), 'the current time');
       }
@@ -564,14 +547,10 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Apply a change set on behalf of the subject. Authority is resolved
-   * **per key** and every gate reads the record as it stands, never as the
-   * change set would leave it: a widened `permissions` never satisfies the
-   * read check on a `parentId` named in the same call, and a `_group`
-   * roster never satisfies the admin check that same call has to pass.
-   * One refused key refuses the whole call, so nothing is partially
-   * applied and no key is silently dropped.
-   * See docs/spec/access-control.md § Composing a change set.
+   * Apply a change set on behalf of the subject. Each key is gated against
+   * the record as it stands, never as the set would leave it, and one
+   * refused key refuses the call. See docs/spec/access-control.md
+   * § Composing a change set.
    */
   async mutate<S extends ReadonlyTypeSchema>(
     handle: TypeHandle<S>,
@@ -622,14 +601,9 @@ export class ScopedStack implements StackClient {
       changes.contentPatch !== undefined ||
       changes.associations !== undefined ||
       changes.parentId !== undefined;
-    // `unlisted` reshares on the key's presence alone: it is a boolean, so
-    // naming it is the whole of what it can say. `permissions` is a set,
-    // and a set restated is not a reshare — see permissionsMove() below,
-    // which refines the escalation on this branch alone. A change set
-    // naming no writable key is gated before any record is in hand to
-    // compute a delta from, so there it reshares on presence, like the
-    // boolean. See docs/spec/access-control.md
-    // § Storage unifies; the API does not.
+    // `unlisted` reshares on presence alone; a restated `permissions` set
+    // does not, which permissionsMove() decides once the record is in hand.
+    // See docs/spec/access-control.md § Storage unifies; the API does not.
     const unlists = changes.unlisted !== undefined;
 
     // requireUpdatable() reads the record and applies the write gate; the
@@ -639,12 +613,9 @@ export class ScopedStack implements StackClient {
     const record = writes
       ? await this.requireUpdatable(id, { expect: opts })
       : await this.requireReshareable(id, opts);
-    // Narrowed to what the gate below actually authorized. A key the gate
-    // read as inert is dropped rather than forwarded: `Stack` recomputes
-    // the delta against its own read of the record, so a key left standing
-    // on the strength of one read would write the ACL on the strength of
-    // another — and the set that reaches it is the one this requester saw,
-    // which is by then stale. See docs/spec/access-control.md
+    // A key the gate read as inert is dropped, not forwarded: `Stack`
+    // recomputes the delta from its own read, and must not write an ACL on
+    // the strength of this one. See docs/spec/access-control.md
     // § Storage unifies; the API does not.
     let authorized = changes;
     if (writes) {
@@ -739,12 +710,9 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Whether a change set's `permissions` key actually moves the ACL. Read
-   * off the computed delta rather than the elements the caller supplied:
-   * a gate that inspected only what was named would miss the wholesale
-   * replacement that drops everything, which names nothing at all. Any
-   * add, remove or repoint in either direction is a reshare.
-   * See docs/spec/access-control.md § Record-level permissions.
+   * Whether a change set's `permissions` key moves the ACL, read off the
+   * computed delta so a replacement that drops everything — naming nothing
+   * — still counts. See docs/spec/access-control.md § Record-level permissions.
    */
   private permissionsMove(record: StackRecord, changes: RecordChangeSet): boolean {
     if (changes.permissions === undefined) return false;
@@ -762,17 +730,10 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Naming the software behind a key is the trust decision the `_app`
-   * registry exists to record, so both halves of that binding — `did` and
-   * `appId` — belong to the owner alone. Without this, record-level `write`
-   * on a card would be a second way in: one carrying no DID yet could be
-   * pointed at a write-holder's own key, or relabelled to claim another
-   * app's `appId`. `name` and `version` stay writable — display, not lookup.
-   *
-   * Owner *acting alone*, in both directions, or the same route reopens
-   * from the subject's side. `_entity` deliberately does not get this rule:
-   * naming people is what a contacts app does, so its cards stay writable
-   * by grant. See docs/spec/identity.md § DID bindings.
+   * An `_app` card's `did` and `appId` are the owner's alone to set, or
+   * record-level `write` would be a second way to name the software behind
+   * a key. `_entity` cards stay writable by grant, as a contacts app needs.
+   * See docs/spec/identity.md § DID bindings.
    */
   private requireOwnerForAppIdentity(
     typeId: TypeId,
@@ -784,12 +745,10 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * A self-reported `appId` must agree with the `_app` card naming the
-   * principal's DID, where the owner registered one: `principalId` is
-   * verified, so letting the pair disagree would leave a verified principal
-   * claiming a name the owner gave different software. A principal with no
-   * card keeps `appId` as the bare self-report it is for every undelegated
-   * writer. See docs/spec/identity.md § Attribution and what can be trusted.
+   * A delegated write's `appId` must match the `_app` card the owner
+   * registered for the principal's DID, if there is one: a verified
+   * principal may not claim a name the owner gave other software.
+   * See docs/spec/identity.md § Attribution and what can be trusted.
    */
   private async requireAppIdMatchesPrincipal(appId: AppId | undefined): Promise<void> {
     const principal = this.#authority.principalId;
@@ -807,11 +766,8 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * The owner's own DID is the one `_entity` binding a grantee may not claim.
-   * `ownerProfile` adopts whichever card holds it, so a card minted by
-   * someone else becomes the stack's own profile, and uniqueness then makes
-   * that permanent. Every other DID stays open to a contacts app, which is
-   * the reach `_entity` is grantable for.
+   * The owner's own DID is the one `_entity` binding a grantee may not
+   * claim: `ownerProfile` adopts whichever card holds it.
    * See docs/spec/identity.md § DID bindings.
    */
   private requireOwnerForOwnerDid(typeId: TypeId, did: unknown): void {
@@ -821,13 +777,9 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * A `_grant` Record *is* authority, so rewriting one is the escalation
-   * UNGRANTABLE_SYSTEM_TYPES refuses at evaluation, reached by editing an
-   * existing grant rather than minting a fresh one. An `_install` decides
-   * grants and migration authority, so it is fenced the same way. The verbs
-   * that write either live on `Stack`, never `StackClient`, so no scoped
-   * write is lost. Writes only: reading one and its history stays on the
-   * ordinary gate. See docs/spec/access-control.md § Type-level grants.
+   * `_grant` and `_install` Records are authority, so only the owner acting
+   * alone may write one; reading them stays on the ordinary gate.
+   * See docs/spec/access-control.md § What a grant covers.
    */
   private async requireOwnerForGrantRecord(record: StackRecord): Promise<void> {
     const family = baseIdOf(record.typeId);
@@ -885,11 +837,9 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Extend who reaches a record — the reshare gate's own verb, on the
-   * owner-or-creator rule the `permissions` key carries. The write bit
-   * does not confer it: a write-holder who could grant would escalate to
-   * deciding who else reaches the record, which is the whole of what
-   * scoping access is for.
+   * Extend who reaches a record, on the reshare gate the `permissions` key
+   * carries. The write bit does not confer it, or a write-holder could
+   * decide who else reaches the record.
    * See docs/spec/access-control.md § Record-level permissions.
    */
   async grantAccess(
@@ -989,13 +939,9 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * See getVersions() — the same mutate-surface gate, for the same reason.
-   *
-   * The journal is where a Record's sharing history lives, and that half
-   * is the resharer's: a reader who could not have moved the ACL is served
-   * the `reshare` op without the elements beneath it, so the entry
-   * still names that it moved. Asked of both identities, so delegation is
-   * no route to it either. See docs/spec/journal.md § Reading it.
+   * See getVersions() — the same gate. A requester who may not reshare the
+   * record is served each `reshare` op without the elements beneath it.
+   * See docs/spec/journal.md § Reading it.
    */
   async getJournal(id: RecordId, query: JournalQuery = {}): Promise<RecordJournalEntry[]> {
     const record = await this.requireUpdatable(id, { mutating: false });
@@ -1044,20 +990,10 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Commit a per-record migration — **the owner acting alone**, the same
-   * restriction the bulk `migrateAll()` carries by living on `Stack`, with
-   * one exception: an installed app migrating within its own families (see
-   * installMayMigrate()).
-   *
-   * Migrate replaces `content` and `typeId` wholesale, so a grant-based
-   * version would have to re-derive every gate `create()` applies at the
-   * destination *and* every gate `mutate()` applies over the existing
-   * content, reopening each one it missed. The sharpest is create()'s
-   * non-owner `_attachment@1` refusal: without it, a requester could
-   * migrate a record they authored into the family naming any `fileId` and
-   * read the bytes through canAccessFile()'s uploader clause. Ordinary
-   * write access to a record is not consent to move it between families.
-   * See docs/spec/data-model.md § Type migrations.
+   * Commit a per-record migration: the owner acting alone, or an installed
+   * app within its own families (installMayMigrate()). Ordinary write
+   * access is not consent to move a record between families.
+   * See docs/spec/access-control.md § What a grant covers.
    */
   async commitMigration(
     id: RecordId,
@@ -1078,17 +1014,10 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Whether this request is an installed app migrating a record within its
-   * own families: the app acting as itself, its key linked to the one live
-   * install claiming both families in its own namespace, `toTypeId` a version the owner
-   * approved, and an `update-any` grant on each family made out to the key
-   * directly. Read as data, so a family two installs claim — however that
-   * came to be — confers nothing.
-   *
-   * The reasons migration is otherwise owner-only do not reach this case:
-   * no install can claim a system family, so neither an `_attachment` nor
-   * a DID binding is in reach, and the owner's approval of the version is
-   * the consent. See docs/spec/apps.md § Migrating an installed app's types.
+   * Whether this request is an installed app, acting as itself, migrating a
+   * record within families its one live install claims, to a version the
+   * owner approved, holding `update-any` on each directly.
+   * See docs/spec/apps.md § Migrating an installed app's types.
    */
   private async installMayMigrate(id: RecordId, toTypeId: TypeId): Promise<boolean> {
     const principal = this.#authority.principalId;
@@ -1200,14 +1129,10 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Observe the changes this request may read. The predicate is canRead
-   * applied per event — the same one get() and query() answer with, so a
-   * feed can't disagree with them about what this session sees.
-   *
-   * A record the subscriber cannot read produces no event at all, rather
-   * than an empty or redacted one: the existence of a change is itself a
-   * disclosure, the same reasoning that keeps a count of the whole match
-   * off a query result. See docs/spec/events.md § Permission scoping.
+   * Observe the changes this request may read, decided per event by the
+   * same canRead() that get() and query() use. An unreadable record yields
+   * no event at all, since a change's existence is itself a disclosure.
+   * See docs/spec/events.md § Permission scoping.
    */
   async subscribe<S extends ReadonlyTypeSchema>(
     handle: TypeHandle<S>,
