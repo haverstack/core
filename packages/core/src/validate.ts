@@ -309,9 +309,9 @@ const dropAbsentValue = (value: unknown, def: FieldDef, depth: number): unknown 
 
 /**
  * Content keys naming JavaScript's object machinery rather than a field.
- * A write path that sets a key by assignment and one that defines it
- * disagree about `__proto__`, so all three are refused at the write rather
- * than skipped, and the caller finds out.
+ * Whether one survives a write would depend on how the code setting it was
+ * written — assignment drops `__proto__`, JSON.parse keeps it — so all
+ * three are refused at the write, and the caller finds out.
  * See docs/spec/data-model.md § Reserved content keys.
  */
 export const RESERVED_CONTENT_KEYS: readonly string[] = ['__proto__', 'constructor', 'prototype'];

@@ -3445,8 +3445,9 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       'A content key of __proto__, constructor or prototype is refused with 422 and code ' +
       '"validation" on POST /records and PATCH /records/:id alike. Undeclared content fields are ' +
       'permitted by design, but these three name JavaScript object machinery rather than fields, ' +
-      'and the write paths disagree about them: a merge patch to __proto__ reaches the prototype ' +
-      'setter and vanishes, while the same key through create() stores as an ordinary property. ' +
+      'and whether one survives a write depends on how an implementation sets keys: assigning ' +
+      '__proto__ reaches the prototype setter and drops the write, while JSON.parse stores it as ' +
+      'an ordinary property. ' +
       'A server built on core inherits the refusal through ordinary record validation; one ' +
       'mapping request bodies onto storage directly applies it itself. See ' +
       'docs/spec/data-model.md § Reserved content keys.',
