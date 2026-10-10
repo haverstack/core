@@ -92,6 +92,7 @@ import {
   APIAdapterAuthError,
   APIAdapterCapabilityError,
   APIAdapterVersionError,
+  APIAdapterHandshakeError,
   APIAdapterReauthError,
   APIAdapterInsecureUrlError,
   APIAdapterAuthUnsupportedError,
@@ -368,6 +369,10 @@ export class APIAdapter implements StackAdapter {
     try {
       renewed = await this.reauthenticate(stale);
     } catch (err) {
+      // Only a refused credential is a failed renewal. A dropped connection
+      // or a server in trouble surfaces as itself, so a caller can tell it
+      // may clear — the change feed reconnects through one.
+      if (!(err instanceof APIAdapterHandshakeError)) throw err;
       throw new APIAdapterReauthError(
         `Session at "${this.baseUrl}" expired and re-authenticating failed.`,
         err,

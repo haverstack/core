@@ -88,10 +88,10 @@ export class APIAdapterHandshakeError extends APIAdapterAuthError {
 }
 
 /**
- * Thrown when a request came back 401 and re-authenticating did not
- * recover it. Distinguishable from APIAdapterAuthError, which means the
- * token was never good: this one means a session ended and could not be
- * renewed, so the credential — not the request — is what to look at.
+ * Thrown when a request came back 401 and renewal did not recover it: the
+ * server refused the credential, or refused the retried request. Unlike
+ * APIAdapterAuthError, which means the token was never good, this means a
+ * session ended, so the credential — not the request — is what to look at.
  */
 export class APIAdapterReauthError extends APIAdapterAuthError {
   constructor(message: string, cause?: unknown) {
