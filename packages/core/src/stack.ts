@@ -36,7 +36,7 @@ import {
 } from './validate.js';
 import { applyMergePatch } from './merge.js';
 import { hasGroupAdmin, validatePermissions } from './access.js';
-import { compareRecordedAttachments } from './attachment-download.js';
+import { compareRecordedAttachments } from './wire/attachment-download.js';
 import { ChangeEmitter, RelayDelivery, PendingChange, assertSinceUsable } from './changes.js';
 import { SYSTEM_TYPES } from './types/index.js';
 import type { ValidationError } from './validate.js';

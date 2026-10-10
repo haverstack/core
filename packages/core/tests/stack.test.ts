@@ -26,13 +26,13 @@ import type { TypeSchema } from '../src/types/index.js';
 import { migration, typeHandle } from '../src/type-handle.js';
 import type { Migration } from '../src/type-handle.js';
 import { RESERVED_CONTENT_KEYS, CONTENT_KEY_PATH_METACHARACTERS } from '../src/validate.js';
-import { InvalidDidError } from '../src/did.js';
+import { InvalidDidError } from '../src/did/did.js';
 import {
   MemoryAdapter,
   IncapableMemoryAdapter,
   type MemoryAdapterOpenOptions,
 } from '../src/testing.js';
-import { firstRecordedAttachment } from '../src/attachment-download.js';
+import { firstRecordedAttachment } from '../src/wire/attachment-download.js';
 import type {
   DataAssociation,
   AttachmentContent,

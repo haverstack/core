@@ -9,16 +9,16 @@
       "types": "./dist/index.d.ts"
     },
     "./did": {
-      "import": "./dist/did-entry.js",
-      "types": "./dist/did-entry.d.ts"
+      "import": "./dist/did/index.js",
+      "types": "./dist/did/index.d.ts"
     },
     "./wire": {
-      "import": "./dist/wire-entry.js",
-      "types": "./dist/wire-entry.d.ts"
+      "import": "./dist/wire/index.js",
+      "types": "./dist/wire/index.d.ts"
     },
     "./adapter": {
-      "import": "./dist/adapter-entry.js",
-      "types": "./dist/adapter-entry.d.ts"
+      "import": "./dist/adapter/index.js",
+      "types": "./dist/adapter/index.d.ts"
     },
     "./testing": {
       "import": "./dist/testing.js",

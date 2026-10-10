@@ -14,7 +14,7 @@
 import { describe, test, expect } from 'vitest';
 import { NATIVE_SORT_FIELDS } from '../src/types/index.js';
 import { assertValidSort } from '../src/query-validation.js';
-import { parseQueryParams } from '../src/wire-request.js';
+import { parseQueryParams } from '../src/wire/request.js';
 import { StackBadRequestError } from '../src/errors.js';
 
 const url = (search: string) => new URL(`https://example.com/records${search}`);

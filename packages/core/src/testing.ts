@@ -26,8 +26,8 @@ import type {
 } from './types/index.js';
 import { SYSTEM_TYPES } from './types/index.js';
 import { applyMergePatch } from './merge.js';
-import { compareSortEntries, contentSortEntry } from './sort.js';
-import type { SortEntry } from './sort.js';
+import { compareSortEntries, contentSortEntry } from './adapter/sort.js';
+import type { SortEntry } from './adapter/sort.js';
 
 import {
   StackVersionConflictError,
@@ -422,7 +422,7 @@ export class MemoryAdapter implements StackAdapter {
     // `o >= 0` is part of being well-formed, not a nicety: a crafted
     // negative offset would reach `results.slice(-3, ...)` and hand back
     // the tail of the result set as "the next page". Cursors arrive from
-    // the wire uninspected (wire-request copies `?cursor=` verbatim), so
+    // the wire uninspected (wire/request.ts copies `?cursor=` verbatim), so
     // this is the only place the offset is checked at all.
     if (typeof d !== 'string' || typeof o !== 'number' || !Number.isInteger(o) || o < 0) {
       throw new StackBadRequestError(`Malformed cursor: "${cursor}"`);

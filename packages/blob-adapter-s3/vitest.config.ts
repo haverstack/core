@@ -4,7 +4,7 @@ import { resolve } from 'path';
 export default defineConfig({
   resolve: {
     alias: {
-      '@haverstack/core/adapter': resolve(__dirname, '../core/src/adapter-entry.ts'),
+      '@haverstack/core/adapter': resolve(__dirname, '../core/src/adapter/index.ts'),
       '@haverstack/core': resolve(__dirname, '../core/src/index.ts'),
     },
   },

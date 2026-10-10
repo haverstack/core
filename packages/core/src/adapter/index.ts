@@ -18,8 +18,8 @@ export type {
   JournalEntryInput,
   JournalOptions,
   MutateOptions,
-} from './types/index.js';
-export { OwnerMismatchError } from './errors.js';
+} from '../types/index.js';
+export { OwnerMismatchError } from '../errors.js';
 export { combineAdapters } from './combine.js';
 export {
   assertQueryCapabilities,
@@ -30,6 +30,6 @@ export {
   assertValidVersionsQuery,
   filtersContent,
   parseContentFilterKey,
-} from './query-validation.js';
+} from '../query-validation.js';
 export { contentSortEntry, contentSortKey, compareSortEntries } from './sort.js';
 export type { SortEntry } from './sort.js';

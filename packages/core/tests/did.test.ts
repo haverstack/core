@@ -11,7 +11,7 @@ import {
   exportDidPrivateKeyJwk,
   importDidPrivateKeyJwk,
   InvalidDidError,
-} from '../src/did.js';
+} from '../src/did/did.js';
 
 describe('generateDidKeypair', () => {
   test('produces a well-formed did:key string', async () => {
@@ -129,7 +129,7 @@ describe('private key JWK export/import', () => {
   });
 });
 
-// Resolves the entry point rather than ../src/did.js: what the package
+// Resolves the entry point rather than ../src/did/did.js: what the package
 // exports is part of its contract, and only a test that goes through the
 // entry point pins it.
 // A did:key's base58 payload has one valid length, so anything longer is
@@ -156,7 +156,7 @@ describe('parseDidKey length screening', () => {
 
 describe('@haverstack/core/did entry surface', () => {
   test('exports the did:key narrowing isValidDid() documents', async () => {
-    const entry = await import('../src/did-entry.js');
+    const entry = await import('../src/did/index.js');
     expect(entry.isValidDid('did:web:example.com')).toBe(true);
     expect(entry.isValidDidKey('did:web:example.com')).toBe(false);
     expect(entry.isValidDidKey('did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK')).toBe(

@@ -48,7 +48,7 @@ export { firstRecordedAttachment, resolveReferencedAttachment } from './attachme
 
 // Server-facing: bearer-token issuance and lookup, backed by its own file
 // outside the portable stack database — not a slot on StackAdapter.
-export type { StackTokenStore, TokenInfo, TokenSession } from './types/index.js';
+export type { StackTokenStore, TokenInfo, TokenSession } from '../types/index.js';
 
 // No in-repo caller: the parse half of the request encoding adapter-api
 // builds, so a server decodes GET /records, POST /records/query,
@@ -70,27 +70,27 @@ export {
   parseIfMatch,
   parseUploadFilename,
   parsePositiveInt,
-} from './wire-request.js';
+} from './request.js';
 
 // The build-side half of the fields that never travel: adapter-api refuses
 // them before encoding, so which encoding a server's content reach selects
 // never decides whether a family query widens or is refused.
-export { assertQueryTravels } from './wire-request.js';
+export { assertQueryTravels } from './request.js';
 export type {
   ParsedChangeParams,
   ParsedDownloadParams,
   ParsedAssociationParams,
-} from './wire-request.js';
+} from './request.js';
 
 // Re-exported by @haverstack/wire-types for the response side: one wire
 // date decoding, used by both halves.
-export { parseDate } from './wire-request.js';
+export { parseDate } from './request.js';
 
 // No in-repo caller: the create half of the same contract, so a server
 // inherits which half of a record body it may trust rather than deciding
 // field by field. See docs/spec/wire-format.md § Records.
-export { createOptionsFromWireRecord, changesFromWireBody } from './wire-record.js';
-export type { WireCreateRequest } from './wire-record.js';
+export { createOptionsFromWireRecord, changesFromWireBody } from './record.js';
+export type { WireCreateRequest } from './record.js';
 
 // No in-repo caller: the bodies of the remaining endpoints core specifies,
 // so a server refuses a key they do not define without keeping its own
@@ -103,15 +103,15 @@ export {
   parseTypeBody,
   parseMigrationBody,
   parseInstallBody,
-} from './wire-body.js';
+} from './body.js';
 export type {
   WireAuthChallengeRequest,
   WireAuthTokenRequest,
   WireEntityPatch,
   WireMigrationRequest,
-} from './wire-body.js';
+} from './body.js';
 
 // The tier gating purge, commitMigration() and includeUnlisted, which
 // a server must decide for those routes itself. Computing it as "is the
 // owner" is a privilege bug with no symptom.
-export { isOwnerActingAlone } from './access.js';
+export { isOwnerActingAlone } from '../access.js';

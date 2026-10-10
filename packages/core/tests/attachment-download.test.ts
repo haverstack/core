@@ -6,7 +6,7 @@ import {
   firstRecordedAttachment,
   resolveReferencedAttachment,
   FORCED_CONTENT_TYPE,
-} from '../src/attachment-download.js';
+} from '../src/wire/attachment-download.js';
 
 // -------------------------------------------------------
 // isSafeAttachmentContentType

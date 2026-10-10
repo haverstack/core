@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'vitest';
-import { contentSortKey, contentSortEntry, compareSortEntries } from '../src/sort.js';
-import type { SortEntry } from '../src/sort.js';
+import { contentSortKey, contentSortEntry, compareSortEntries } from '../src/adapter/sort.js';
+import type { SortEntry } from '../src/adapter/sort.js';
 
 describe('contentSortKey', () => {
   test('folds case and combining marks away', () => {

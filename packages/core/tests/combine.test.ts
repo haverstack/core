@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'vitest';
-import { combineAdapters } from '../src/combine.js';
+import { combineAdapters } from '../src/adapter/combine.js';
 import type {
   StackRecordAdapter,
   StackBlobAdapter,

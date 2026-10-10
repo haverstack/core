@@ -3,7 +3,7 @@ import {
   createOptionsFromWireRecord,
   changesFromWireBody,
   isOwnerActingAlone,
-} from '../src/wire-entry.js';
+} from '../src/wire/index.js';
 import { Stack } from '../src/stack.js';
 import { StackBadRequestError, StackValidationError } from '../src/errors.js';
 import { MemoryAdapter } from '../src/testing.js';
