@@ -264,8 +264,9 @@ export type TypedChangeSet<S extends ReadonlyTypeSchema> = Omit<RecordChangeSet,
 
 /**
  * Enum values the record holds that the handle's schema does not list. An
- * enum may gain values within a version, so a reader older than the writer
- * can meet one; throwing keeps the derived union exact.
+ * enum may gain values, or widen to a plain `string`, within a version, so
+ * a reader older than the writer can meet any string; throwing keeps the
+ * derived union exact. See docs/spec/data-model.md § Type handles.
  */
 const unknownEnumValues = (
   value: unknown,

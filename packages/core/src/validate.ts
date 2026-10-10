@@ -37,19 +37,26 @@ export type ValidationError = {
 // -------------------------------------------------------
 
 /**
- * A stored Type is not re-validated on read, so an enum def may arrive
- * without `values`; it then allows nothing rather than throwing.
+ * The values an enum def allows. A stored Type is not re-validated on read,
+ * so its def may arrive without a `values` list; it then allows nothing
+ * rather than throwing.
  */
-export const enumAllows = (values: readonly string[] | undefined, value: unknown): boolean =>
-  Array.isArray(values) && values.includes(value as string);
+export const declaredEnumValues = (values: unknown): readonly string[] =>
+  Array.isArray(values) ? (values as string[]) : [];
 
-export const enumMismatchMessage = (
-  values: readonly string[] | undefined,
-  value: unknown,
-): string =>
-  Array.isArray(values) && values.length > 0
-    ? `Expected one of ${values.map((v) => JSON.stringify(v)).join(', ')}, got ${JSON.stringify(value)}`
+export const enumAllows = (values: unknown, value: unknown): boolean =>
+  declaredEnumValues(values).includes(value as string);
+
+/** Shared by the 422 for a value outside the list and the 409 for removed values. */
+export const formatEnumValues = (values: readonly string[]): string =>
+  values.map((v) => JSON.stringify(v)).join(', ');
+
+export const enumMismatchMessage = (values: unknown, value: unknown): string => {
+  const allowed = declaredEnumValues(values);
+  return allowed.length > 0
+    ? `Expected one of ${formatEnumValues(allowed)}, got ${JSON.stringify(value)}`
     : `The schema declares no enum values, so ${JSON.stringify(value)} is not allowed`;
+};
 
 const jsTypeForScalar = (kind: ScalarFieldKind): string => {
   switch (kind) {

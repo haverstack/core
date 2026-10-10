@@ -11,7 +11,7 @@
 
 import type { TypeSchema, FieldDef, ScalarFieldKind } from './types.js';
 import type { ReadonlyTypeSchema } from './type-handle.js';
-import { enumAllows } from './validate.js';
+import { declaredEnumValues, enumAllows, formatEnumValues } from './validate.js';
 
 // -------------------------------------------------------
 // Canonical schema serialization
@@ -60,11 +60,13 @@ const canonicalizeFieldDef = (def: FieldDef): unknown => {
   }
 
   // Scalar. An enum's `values` are sorted so reordering them is not a change.
-  // A stored enum may lack the list; it hashes as one that allows nothing.
+  // A malformed stored list is hashed as it is, so it never matches a
+  // different malformed one, or a def with no list at all.
+  const values = (def as { values?: unknown }).values;
   return {
     kind: def.kind,
     ...(def.required !== undefined && { required: def.required }),
-    ...(def.kind === 'enum' && Array.isArray(def.values) && { values: [...def.values].sort() }),
+    ...(values !== undefined && { values: Array.isArray(values) ? [...values].sort() : values }),
   };
 };
 
@@ -153,15 +155,16 @@ const isFieldCompatible = (candidate: FieldDef, required: FieldDef, depth: numbe
   }
   if (candidate.kind === 'array' || candidate.kind === 'object') return false;
   // A consumer expecting an enum can handle only the values it lists. An
-  // enum candidate with no `values` list promises nothing, so it fails closed.
+  // enum candidate with a missing or empty `values` list promises nothing,
+  // so it fails closed.
   if (required.kind === 'enum') {
-    return (
-      candidate.kind === 'enum' &&
-      Array.isArray(candidate.values) &&
-      candidate.values.every((v) => enumAllows(required.values, v))
-    );
+    if (candidate.kind !== 'enum') return false;
+    const values = declaredEnumValues(candidate.values);
+    return values.length > 0 && values.every((v) => enumAllows(required.values, v));
   }
-  return READ_COMPATIBLE[required.kind].includes(candidate.kind);
+  // A required kind outside the union (a foreign or unvalidated schema) can't
+  // be checked, so it fails closed too.
+  return (READ_COMPATIBLE[required.kind] ?? []).includes(candidate.kind);
 };
 
 const isCompatibleAtDepth = (
@@ -239,14 +242,10 @@ const diffField = (
   }
   // Losing a value narrows what an enum accepts; gaining one widens it.
   if (stored.kind === 'enum' && candidate.kind === 'enum') {
-    // A stored Type is not re-validated, so its enum may lack the list.
-    const kept = new Set(candidate.values);
-    const removed = (Array.isArray(stored.values) ? stored.values : []).filter((v) => !kept.has(v));
+    const kept = new Set(declaredEnumValues(candidate.values));
+    const removed = declaredEnumValues(stored.values).filter((v) => !kept.has(v));
     if (removed.length > 0) {
-      violations.push({
-        path,
-        message: `enum values removed: ${removed.map((v) => JSON.stringify(v)).join(', ')}`,
-      });
+      violations.push({ path, message: `enum values removed: ${formatEnumValues(removed)}` });
     }
   }
   // Opening a declared container, or closing an open one, changes which
