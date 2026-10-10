@@ -6,7 +6,6 @@
  * alone. See docs/spec/access-control.md § Type-level grants.
  */
 
-import { ARGUMENTS_INVALID, StackValidationError } from '../errors.js';
 import {
   checkGrantValid,
   grantCoversGrantee,
@@ -15,7 +14,7 @@ import {
   matchesGrantTarget,
   validateGrantTarget,
 } from '../grants.js';
-import { familyIdProblem } from '../schema.js';
+import { assertFamilyId } from '../query-validation.js';
 import { SYSTEM_TYPES } from '../types/index.js';
 import type { GrantQuery } from '../grants.js';
 import type { BaseId, GrantContent, GroupRole, StackRecord, TypeGrant } from '../types/index.js';
@@ -70,10 +69,7 @@ export async function revokeType(
   grant: TypeGrant,
 ): Promise<(StackRecord & { content: GrantContent })[]> {
   validateGrantTarget(grant.grantee);
-  const problem = familyIdProblem(baseId, 'revokeType');
-  if (problem) {
-    throw new StackValidationError([{ path: 'baseId', message: problem }], ARGUMENTS_INVALID);
-  }
+  assertFamilyId(baseId, 'revokeType');
   const familyId = baseId;
   const actionSet = new Set(grant.actions);
   const all = await loadGrantRecords((q) => stack.query(q));

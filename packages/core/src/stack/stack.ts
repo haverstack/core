@@ -21,7 +21,6 @@ import {
   parseTypeId,
   baseIdOf,
   diffSchemas,
-  familyIdProblem,
   lineageProblem,
 } from '../schema.js';
 import {
@@ -107,6 +106,7 @@ import {
   assertDataAssociations,
   filtersContent,
   validateAssociations,
+  assertFamilyId,
 } from '../query-validation.js';
 import { validateGrantee, validateGrantBaseId } from '../grants.js';
 import type { GrantQuery } from '../grants.js';
@@ -527,10 +527,7 @@ export class Stack implements StackClient {
     opts: MigrateAllOptions = {},
   ): Promise<{ migrated: number; skipped: number }> {
     this.assertOpen();
-    const problem = familyIdProblem(baseId, 'migrateAll');
-    if (problem) {
-      throw new StackValidationError([{ path: 'baseId', message: problem }], ARGUMENTS_INVALID);
-    }
+    assertFamilyId(baseId, 'migrateAll');
     const familyTypeIds = await this.familyTypeIds([baseId]);
 
     if (familyTypeIds.length === 0) {

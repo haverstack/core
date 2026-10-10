@@ -633,6 +633,18 @@ export function assertValidAssociationFilters(filter: RecordFilter | undefined):
 }
 
 /**
+ * Refuse a `baseId` argument that cannot name a type family, as an
+ * argument error prefixed with the `surface` it was passed to. See
+ * familyIdProblem().
+ */
+export function assertFamilyId(baseId: unknown, surface: string): void {
+  const problem = familyIdProblem(baseId, surface);
+  if (problem) {
+    throw new StackValidationError([{ path: 'baseId', message: problem }], ARGUMENTS_INVALID);
+  }
+}
+
+/**
  * Refuse a `baseId` carrying an `@version` suffix. A family filter resolves
  * against registered families, so a TypeId there would match nothing and
  * say nothing. See docs/spec/data-model.md § Filter.
