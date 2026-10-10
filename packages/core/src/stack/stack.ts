@@ -35,7 +35,7 @@ import {
   validateSchemaShape,
 } from '../validate.js';
 import { applyMergePatch } from '../merge.js';
-import { hasGroupAdmin, validatePermissions } from '../access.js';
+import { validatePermissions } from '../access.js';
 import { compareRecordedAttachments } from '../wire/attachment-download.js';
 import { ChangeEmitter, RelayDelivery, PendingChange, assertSinceUsable } from '../changes.js';
 import { SYSTEM_TYPES } from '../types/index.js';
@@ -50,7 +50,6 @@ import type {
   StackQuery,
   RecordFilter,
   QueryResult,
-  Association,
   AssociationEdit,
   AuthorityAssociation,
   DataAssociation,
@@ -111,39 +110,44 @@ import {
 } from '../query-validation.js';
 import { validateGrantee, validateGrantBaseId } from '../grants.js';
 import type { GrantQuery } from '../grants.js';
-import { bindingFieldsOf, uniqueBindingFieldsOf } from '../identity-bindings.js';
+import { bindingFieldsOf } from '../identity-bindings.js';
 import { validateInstall } from '../install.js';
 import type { AppManifest, InstallPlan } from '../install.js';
 import { assertAttachmentSize, assertContentSize } from '../limits.js';
 import {
-  validateParentId,
   validateRecordId,
   validateClockField,
   validateIdTimestampSkew,
   DEFAULT_ID_TIMESTAMP_SKEW_MS,
 } from '../record-id.js';
-import {
-  queryAllPages,
-  findFirstMatch,
-  lookupEntityByDid,
-  MAX_QUERY_LIMIT,
-} from '../stack-reads.js';
+import { queryAllPages, lookupEntityByDid, MAX_QUERY_LIMIT } from '../stack-reads.js';
 import {
   applyAssociationEdits,
   associationDelta,
-  associationIdentical,
   assertNonEmptyChangeSet,
   changeSetOps,
   bumpsVersion,
   takesIfVersion,
   effectiveChanges,
   stampGroupAdmin,
-  isGroupRecord,
 } from '../record-changes.js';
 import { ScopedStack, scopeToken } from '../scoped-stack/scoped-stack.js';
 import { MigrationRegistry } from './migrations.js';
 import * as apps from './install-app.js';
 import * as typeGrants from './type-grants.js';
+import {
+  assertAttachmentImmutable,
+  assertGroupAdminRemains,
+  assertNoParentCycle,
+  assertParentExists,
+  checkAttachmentAssociationPointers,
+  checkAttachmentMimeTypeOnCreate,
+  checkBindingImmutable,
+  checkBindingsOnCreate,
+  checkBindingsOnMigrate,
+  checkBindingsOnUpdate,
+  checkConfigEntityIdUnchanged,
+} from './integrity.js';
 import { SYSTEM_TYPE_DEFINITIONS } from './system-types.js';
 import type {
   BackdatableCreateRecordOptions,
@@ -192,14 +196,6 @@ import type {
 const DEFAULT_GC_GRACE_MS = 24 * 60 * 60 * 1000;
 
 /**
- * How far a change set's `parentId` will walk a proposed ancestor chain before refusing
- * the move. Bounds the reads one call can cost; a hierarchy deeper than
- * this is beyond what `parentId` is for. See docs/spec/data-model.md
- * § Reparenting.
- */
-const MAX_PARENT_DEPTH = 64;
-
-/**
  * An Actor in the one form `Stack` stores: a `principalId` equal to the
  * subject is dropped, so "acted as itself" has a single spelling, and an
  * empty id is refused rather than stored as a name for nobody.
@@ -220,19 +216,6 @@ export function normalizeActor(actor: Actor | undefined): Actor | undefined {
 
 /** Sentinel: filter.baseId resolved to zero matching types. */
 const EMPTY_FAMILY = Symbol('empty-family');
-
-/**
- * The `_attachment@1` fields a write may not move, each with the message it
- * is refused by. Ordered as reported. See docs/spec/attachments.md § The
- * `_attachment` record type.
- */
-const ATTACHMENT_IMMUTABLE_FIELDS = [
-  ['mimeType', 'mimeType is immutable after creation; delete and re-upload to change it'],
-  ['fileId', 'fileId is immutable'],
-  ['size', 'size is immutable'],
-] as const;
-
-type AttachmentImmutableField = (typeof ATTACHMENT_IMMUTABLE_FIELDS)[number][0];
 
 /**
  * One refusal for every problem a call carries, content and arguments alike,
@@ -671,12 +654,12 @@ export class Stack implements StackClient {
     assertContentSize(content, this.capabilities.limits.contentBytes, 'Content');
 
     if (typeId === `${SYSTEM_TYPES.ATTACHMENT}@1`) {
-      await this.checkAttachmentMimeTypeOnCreate(content as unknown as AttachmentContent);
+      await checkAttachmentMimeTypeOnCreate(this, content as unknown as AttachmentContent);
     }
 
-    await this.checkAttachmentAssociationPointers(opts.associations);
+    await checkAttachmentAssociationPointers(this, opts.associations);
 
-    await this.checkBindingsOnCreate(typeId, content as Record<string, unknown>);
+    await checkBindingsOnCreate(this, typeId, content as Record<string, unknown>);
 
     if (opts.id !== undefined) {
       validateRecordId(opts.id);
@@ -695,7 +678,7 @@ export class Stack implements StackClient {
       // already point at it, and the chain above the parent can lead back
       // to it — so the walk is asked only for that combination.
       // See docs/spec/data-model.md § Reparenting.
-      if (opts.parentId !== undefined) await this.assertNoParentCycle(opts.id, opts.parentId);
+      if (opts.parentId !== undefined) await assertNoParentCycle(this, opts.id, opts.parentId);
     }
 
     const createdBy = normalizeActor(opts.createdBy);
@@ -724,7 +707,7 @@ export class Stack implements StackClient {
 
     // Every create naming a parent owes the reference check, whether or not
     // it supplied an id: a destination a caller names has to exist.
-    if (opts.parentId !== undefined) await this.assertParentExists(id, opts.parentId);
+    if (opts.parentId !== undefined) await assertParentExists(this, id, opts.parentId);
 
     const record: StackRecord = {
       id,
@@ -948,7 +931,7 @@ export class Stack implements StackClient {
       : [];
     throwValidation(patchErrors, argumentErrors);
 
-    await this.checkAttachmentAssociationPointers(associations, existing.associations);
+    await checkAttachmentAssociationPointers(this, associations, existing.associations);
 
     let merged: Record<string, unknown> | undefined;
     if (contentPatch) {
@@ -974,7 +957,7 @@ export class Stack implements StackClient {
         // Presence decides mimeType and value decides the rest: re-sending
         // the mimeType a record already holds is refused outright, while a
         // client round-tripping fileId or size unchanged has claimed nothing.
-        this.assertAttachmentImmutable(
+        assertAttachmentImmutable(
           (field) =>
             Object.prototype.hasOwnProperty.call(contentPatch, field) &&
             (field === 'mimeType' ||
@@ -983,10 +966,17 @@ export class Stack implements StackClient {
         );
       }
 
-      await this.checkBindingsOnUpdate(existing.typeId, id, contentPatch, existing.content, merged);
+      await checkBindingsOnUpdate(
+        this,
+        existing.typeId,
+        id,
+        contentPatch,
+        existing.content,
+        merged,
+      );
 
       if (id === SYSTEM_TYPES.CONFIG) {
-        this.checkConfigEntityIdUnchanged(
+        checkConfigEntityIdUnchanged(
           (existing.content as ConfigContent).entityId,
           (merged as ConfigContent).entityId,
         );
@@ -994,35 +984,15 @@ export class Stack implements StackClient {
     }
 
     if (associations !== undefined) {
-      this.assertGroupAdminRemains(existing, associations);
+      assertGroupAdminRemains(existing, associations);
     }
 
     if (parentId !== undefined && parentId !== null && parentId !== (existing.parentId ?? null)) {
-      await this.assertParentExists(id, parentId);
-      await this.assertNoParentCycle(id, parentId);
+      await assertParentExists(this, id, parentId);
+      await assertNoParentCycle(this, id, parentId);
     }
 
     return merged;
-  }
-
-  /**
-   * Refuse a write that would leave a `_group` Record with no `admin` on its
-   * roster. Asked of the roster the write would *produce*, which is the
-   * whole of the self-removal question: an admin removing themselves passes
-   * while another remains and is refused when they are the last, without
-   * either case naming who is going.
-   *
-   * An integrity constraint on the Record, not a permission question, so it
-   * lives here rather than in `ScopedStack` and binds every requester — the
-   * stack owner included. See docs/spec/identity.md § Group.
-   */
-  private assertGroupAdminRemains(record: StackRecord, next: DataAssociation[]): void {
-    if (!isGroupRecord(record)) return;
-    if (hasGroupAdmin(next)) return;
-    throw new StackConflictError(
-      `Cannot leave group "${record.id}" without an admin: a _group record's roster keeps at ` +
-        'least one `admin` relationship association. Name the incoming admin in the same write.',
-    );
   }
 
   /**
@@ -1094,8 +1064,9 @@ export class Stack implements StackClient {
     const delta = associationDelta(current, next);
     if (delta.length === 0) return existing;
     // Only a roster can lose its last admin, and only the post-state says so.
-    this.assertGroupAdminRemains(existing, next);
-    await this.checkAttachmentAssociationPointers(
+    assertGroupAdminRemains(existing, next);
+    await checkAttachmentAssociationPointers(
+      this,
       changes.flatMap((c) => (c.op === 'add' ? [c.association] : [])),
       current,
     );
@@ -1212,60 +1183,6 @@ export class Stack implements StackClient {
     const record = await this.adapter.getRecord(id);
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
     return record;
-  }
-
-  /**
-   * The checks a *caller-named* destination owes, before the cycle walk:
-   * `parentId` is a real, well-formed record id. Format first, so a
-   * malformed one is a 400 naming the problem rather than a read that
-   * cannot match. Existence closes the gap between the owner path and a
-   * non-owner's, where canReadReferent() already refuses a parent that
-   * isn't there.
-   *
-   * restoreVersion() deliberately does not call this — see its own comment.
-   * See docs/spec/data-model.md § Reparenting.
-   */
-  private async assertParentExists(id: string, parentId: string): Promise<void> {
-    validateParentId(parentId);
-    if (!(await this.adapter.getRecord(parentId))) {
-      throw new StackConflictError(
-        `Cannot parent record "${id}" to "${parentId}": no such record. A container has to ` +
-          'exist when it is named.',
-      );
-    }
-  }
-
-  /**
-   * Refuse an edge that would make a record its own ancestor — asked at
-   * every site that adds one. Nothing downstream (a generator deriving a
-   * page path, a folder view) is written to survive a cycle.
-   *
-   * Walks with the unscoped adapter: a walk that skipped the links a
-   * requester cannot read would let a cycle be assembled through them and
-   * break the invariant for every reader.
-   *
-   * Read-then-write, so two moves racing on opposite ends of one chain can
-   * both pass — the same deferral as checkBindingUnique() above, since
-   * closing it would put a graph constraint in the storage contract.
-   * Consumers walking `parentId` should carry a visited set rather than
-   * trust this alone. See docs/spec/data-model.md § Reparenting.
-   */
-  private async assertNoParentCycle(id: string, parentId: string): Promise<void> {
-    let cursor: string | undefined = parentId;
-    for (let depth = 0; cursor !== undefined; depth++) {
-      if (cursor === id) {
-        throw new StackConflictError(
-          `Cannot parent record "${id}" to "${parentId}": it is a descendant of "${id}", ` +
-            'and the move would make the record its own ancestor.',
-        );
-      }
-      // The cap bounds work, and guarantees this terminates on a chain that
-      // is already cyclic. It does not refuse the move: a chain this long is
-      // past what the check can speak to, not evidence of a loop, and
-      // refusing it would claim an invariant core does not maintain.
-      if (depth >= MAX_PARENT_DEPTH) return;
-      cursor = (await this.adapter.getRecord(cursor))?.parentId;
-    }
   }
 
   /**
@@ -1547,7 +1464,7 @@ export class Stack implements StackClient {
     }
 
     if (id === SYSTEM_TYPES.CONFIG) {
-      this.checkConfigEntityIdUnchanged(
+      checkConfigEntityIdUnchanged(
         (existing.content as ConfigContent).entityId,
         (target.content as ConfigContent).entityId,
       );
@@ -1559,7 +1476,7 @@ export class Stack implements StackClient {
     // Uniqueness needs none — a restore can only put back a value this same
     // card already held.
     for (const field of bindingFieldsOf(baseIdOf(target.typeId))) {
-      this.checkBindingImmutable(
+      checkBindingImmutable(
         baseIdOf(target.typeId),
         field,
         (existing.content as Record<string, unknown>)[field],
@@ -1670,7 +1587,7 @@ export class Stack implements StackClient {
     if (fromFamily === SYSTEM_TYPES.ATTACHMENT) {
       // Value-wise throughout: a migration re-sends all three required
       // fields, so presence would refuse every migration of the family.
-      this.assertAttachmentImmutable(
+      assertAttachmentImmutable(
         (field) =>
           (content as unknown as AttachmentContent)[field] !==
           (existingContent as unknown as AttachmentContent)[field],
@@ -1678,13 +1595,13 @@ export class Stack implements StackClient {
     } else if (toFamily === SYSTEM_TYPES.ATTACHMENT) {
       // A record arriving from outside the family stakes a fresh claim on
       // its fileId, exactly as create() does — so it owes create()'s check.
-      await this.checkAttachmentMimeTypeOnCreate(content as unknown as AttachmentContent);
+      await checkAttachmentMimeTypeOnCreate(this, content as unknown as AttachmentContent);
     }
 
-    await this.checkBindingsOnMigrate(existing.typeId, toTypeId, id, existingContent, content);
+    await checkBindingsOnMigrate(this, existing.typeId, toTypeId, id, existingContent, content);
 
     if (id === SYSTEM_TYPES.CONFIG) {
-      this.checkConfigEntityIdUnchanged(
+      checkConfigEntityIdUnchanged(
         (existing.content as ConfigContent).entityId,
         (content as ConfigContent).entityId,
       );
@@ -1702,270 +1619,9 @@ export class Stack implements StackClient {
     return migrated;
   }
 
-  /** Uniqueness for every unique binding field a newly created card claims. */
-  private async checkBindingsOnCreate(
-    typeId: TypeId,
-    content: Record<string, unknown>,
-  ): Promise<void> {
-    const family = baseIdOf(typeId);
-    for (const field of uniqueBindingFieldsOf(family)) {
-      await this.checkBindingUnique(family, field, content[field]);
-    }
-  }
-
-  /**
-   * Immutability for every binding field a patch touches, then uniqueness
-   * for the subset that carries it. Fields absent from the patch carry no
-   * new claim — a content patch is a merge, so an untouched binding is the one the
-   * card already holds.
-   */
-  private async checkBindingsOnUpdate(
-    typeId: TypeId,
-    id: RecordId,
-    patch: Record<string, unknown | null>,
-    existing: Record<string, unknown>,
-    merged: Record<string, unknown>,
-  ): Promise<void> {
-    const family = baseIdOf(typeId);
-    const unique = uniqueBindingFieldsOf(family);
-    for (const field of bindingFieldsOf(family)) {
-      if (!(field in patch)) continue;
-      this.checkBindingImmutable(family, field, existing[field], merged[field]);
-      if (unique.includes(field)) {
-        await this.checkBindingUnique(family, field, merged[field], id);
-      }
-    }
-  }
-
-  /**
-   * Bindings across a migration. `content` is a full replacement, so every
-   * binding field either keeps its value, moves to a new one, or is shed by
-   * omission — and immutability refuses the last two. Asked across the
-   * union of both families' binding fields, so a card can neither shed its
-   * DID by migrating out of `_entity`/`_app` nor pick one up on the way in.
-   *
-   * Uniqueness is asked only of the destination family, excluding the
-   * record itself. See docs/spec/identity.md § DID bindings.
-   */
-  private async checkBindingsOnMigrate(
-    fromTypeId: TypeId,
-    toTypeId: TypeId,
-    id: RecordId,
-    existing: Record<string, unknown>,
-    content: Record<string, unknown>,
-  ): Promise<void> {
-    const fromFamily = baseIdOf(fromTypeId);
-    const toFamily = baseIdOf(toTypeId);
-
-    const checked = new Set<string>();
-    for (const family of fromFamily === toFamily ? [fromFamily] : [fromFamily, toFamily]) {
-      for (const field of bindingFieldsOf(family)) {
-        if (checked.has(field)) continue;
-        checked.add(field);
-        this.checkBindingImmutable(family, field, existing[field], content[field]);
-      }
-    }
-
-    for (const field of uniqueBindingFieldsOf(toFamily)) {
-      await this.checkBindingUnique(toFamily, field, content[field], id);
-    }
-  }
-
-  /**
-   * A unique binding field is what a lookup resolves *by* — an Actor's
-   * `principalId` by `_app.did`, its `subjectId` by `_entity.did`. Two cards
-   * claiming one value would leave that lookup without a single answer, and
-   * ambiguity is all an impersonating card needs. Enforced here rather than
-   * by schema, since uniqueness is a property of the set, not of the value.
-   *
-   * Read-then-write, so two creates racing on one value can both pass:
-   * closing that means a unique index over a JSON field, which is a
-   * decision about where uniqueness lives rather than a local fix.
-   * See docs/spec/identity.md § DID bindings.
-   */
-  private async checkBindingUnique(
-    family: string,
-    field: 'did' | 'appId',
-    value: unknown,
-    excludeId?: RecordId,
-  ): Promise<void> {
-    if (typeof value !== 'string' || value === '') return;
-
-    const clash = await findFirstMatch(
-      (q) => this.query(q),
-      {
-        filter: {
-          baseId: family,
-          includeDeleted: true,
-          includeUnlisted: true,
-          ...(filtersContent(this.capabilities) && { content: { [field]: value } }),
-        },
-      },
-      (r) => r.id !== excludeId && (r.content as Record<string, unknown>)[field] === value,
-    );
-    if (clash) {
-      throw new StackConflictError(
-        `Another ${family} record already claims the ${field} "${value}"`,
-      );
-    }
-  }
-
-  /**
-   * A binding is permanent once made: uniqueness stops a second card
-   * claiming a value, but only immutability stops an existing card being
-   * moved onto one, which reaches the same impersonation by another route.
-   * Adopting a value is therefore a one-way step, and a subject whose key
-   * changes gets a new card — matching identity.md's deferral of key
-   * rotation, where a new key is a new identity rather than the same one
-   * relabelled. See docs/spec/identity.md § DID bindings.
-   */
-  private checkBindingImmutable(
-    family: string,
-    field: 'did' | 'appId',
-    existing: unknown,
-    next: unknown,
-  ): void {
-    if (typeof existing !== 'string' || existing === '') return;
-    if (next === existing) return;
-    throw new StackValidationError([
-      {
-        path: field,
-        message: `${field} is immutable once set; register a new ${family} record instead`,
-      },
-    ]);
-  }
-
   // -------------------------------------------------------
   // Attachments
   // -------------------------------------------------------
-
-  /**
-   * mimeType is a property of the fileId, not the uploader's perspective:
-   * the first metadata record for a fileId fixes it, and a conflicting
-   * later upload is rejected. See docs/spec/attachments.md § The
-   * `_attachment` record type.
-   *
-   * Best-effort by construction — check-then-create with no storage-level
-   * uniqueness behind it, so two racing first uploads can both land on a
-   * concurrent server. What survives that race is the *resolution*:
-   * getAttachmentRecords() returns the candidates in the same total order
-   * a server serving Content-Type applies, so both sides name the same
-   * winner however many records exist.
-   */
-  private async checkAttachmentMimeTypeOnCreate(content: AttachmentContent): Promise<void> {
-    const { fileId, mimeType } = content;
-    if (typeof fileId !== 'string') return; // schema validation already rejected this
-
-    const existing = await this.getAttachmentRecords(fileId);
-    if (existing.length === 0) return;
-
-    const establishedMimeType = existing[0].content.mimeType;
-    if (mimeType !== establishedMimeType) {
-      // Deliberately does not name the established mimeType — that would
-      // confirm a guessed fileId's content type. See the anti-oracle rule
-      // in docs/spec/attachments.md.
-      throw new StackValidationError([
-        {
-          path: 'mimeType',
-          message: 'mimeType conflicts with the mimeType already established for this fileId',
-        },
-      ]);
-    }
-  }
-
-  /**
-   * An attachment association's `attachmentRecordId` names an `_attachment`
-   * record for the same `fileId` — checked here so a reference can't be
-   * annotated with an unrelated record's filename.
-   *
-   * Best-effort, like the mimeType check above: the named record can be
-   * deleted afterwards, so every reader of the field falls back rather than
-   * trusting it. `stored` is what the record already holds, asked so a
-   * change set restating an association is never refused for a pointer the
-   * record has carried since before the named record was deleted.
-   * See docs/spec/attachments.md § Naming the upload a reference came from.
-   */
-  private async checkAttachmentAssociationPointers(
-    associations: Association[] | undefined,
-    stored: Association[] = [],
-  ): Promise<void> {
-    const pointed = (associations ?? []).flatMap((association) =>
-      association.kind === 'attachment' &&
-      association.attachmentRecordId !== undefined &&
-      !stored.some((a) => associationIdentical(a, association))
-        ? [{ fileId: association.fileId, attachmentRecordId: association.attachmentRecordId }]
-        : [],
-    );
-    // One round trip per pointer, taken together: a change set carries a
-    // whole association list, and each pointer is an independent read.
-    const named = await Promise.all(
-      pointed.map(({ attachmentRecordId }) => this.adapter.getRecord(attachmentRecordId)),
-    );
-
-    pointed.forEach(({ fileId }, i) => {
-      const record = named[i];
-      const content = record?.content as AttachmentContent | undefined;
-      if (
-        record &&
-        baseIdOf(record.typeId) === SYSTEM_TYPES.ATTACHMENT &&
-        content?.fileId === fileId
-      ) {
-        return;
-      }
-      // One message for every way of failing: a missing record and a record
-      // for other bytes must not be distinguishable, or this becomes an
-      // existence oracle for records the caller cannot read. A write that
-      // succeeds does confirm the record it names, but only to a caller who
-      // already has file access for those bytes.
-      // See the anti-oracle rule in docs/spec/attachments.md.
-      throw new StackValidationError(
-        [
-          {
-            path: 'attachmentRecordId',
-            message: 'attachmentRecordId must name an `_attachment` record for this fileId',
-          },
-        ],
-        ARGUMENTS_INVALID,
-      );
-    });
-  }
-
-  /**
-   * filename is the only mutable field on an `_attachment@1` record; fileId,
-   * size and mimeType are immutable, and the correction flow is delete +
-   * re-upload. `violates` decides what counts as touching one, because the
-   * two write shapes disagree: a patch names only what it changes, while a
-   * migration replaces content wholesale and necessarily re-sends all three.
-   *
-   * Repointing `fileId` is the one that matters most: an `_attachment@1`
-   * record naming a fileId is what canAccessFile()'s uploader clause reads,
-   * so moving an existing record onto another file's hash is a route to
-   * bytes the record's author never uploaded.
-   * See docs/spec/attachments.md § The `_attachment` record type.
-   */
-  private assertAttachmentImmutable(violates: (field: AttachmentImmutableField) => boolean): void {
-    const errors = ATTACHMENT_IMMUTABLE_FIELDS.filter(([field]) => violates(field)).map(
-      ([path, message]) => ({ path, message }),
-    );
-    if (errors.length > 0) {
-      throw new StackValidationError(errors);
-    }
-  }
-
-  /**
-   * `_config.entityId` defines stack ownership; neither patchContent() nor
-   * restoreVersion() may change it. A conflict with stack integrity, not a
-   * schema violation — hence StackConflictError. See docs/spec.md § The
-   * `_config` record.
-   */
-  private checkConfigEntityIdUnchanged(existingEntityId: EntityId, newEntityId: EntityId): void {
-    if (newEntityId !== existingEntityId) {
-      throw new StackConflictError(
-        'Cannot change _config.entityId: it defines stack ownership. ' +
-          'Ownership transfer is not a supported operation.',
-      );
-    }
-  }
 
   /**
    * Store bytes and create an _attachment@1 metadata record (owner-
