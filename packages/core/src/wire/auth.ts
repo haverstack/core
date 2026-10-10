@@ -17,7 +17,7 @@
  * single-use enforcement and token issuance are the server's.
  */
 
-import { isValidDid, signWithDid, verifyDidSignature, type DidKeypair } from './did.js';
+import { isValidDid, signWithDid, verifyDidSignature, type DidKeypair } from '../did/did.js';
 
 // -------------------------------------------------------
 // Errors

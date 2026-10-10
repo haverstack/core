@@ -13,7 +13,7 @@ import {
   parsePositiveInt,
   parseDate,
   assertQueryTravels,
-} from '../src/wire-entry.js';
+} from '../src/wire/index.js';
 import { StackBadRequestError } from '../src/errors.js';
 
 const url = (qs: string): URL => new URL(`https://stack.example.com/records${qs}`);

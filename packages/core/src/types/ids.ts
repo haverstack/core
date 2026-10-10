@@ -31,7 +31,7 @@ export type AppId = string;
 /**
  * Identifies a "who" — a DID string, e.g. "did:key:z6Mk...". A
  * self-certifying identifier that means the same thing in every stack,
- * unlike a RecordId. did:key is the mandatory floor method (see did.ts).
+ * unlike a RecordId. did:key is the mandatory floor method (see did/did.ts).
  * See docs/spec/identity.md.
  */
 export type EntityId = string;

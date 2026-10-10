@@ -14,7 +14,7 @@ One claim in the served topology falls outside that guarantee, and it is named r
 | `did:web` | a domain in DID clothing             | optional, for those who _want_ domain identity |
 | `did:plc` | ATProto's rotation directory         | optional, for a future ATProto bridge          |
 
-`@haverstack/core/did` generates and verifies `did:key` (Ed25519) via `generateDidKeypair()` / `verifyDidSignature()` / etc. (`did.ts`) using Web Crypto only — zero infrastructure, zero resolution, zero registry, no dependency. Other methods are valid `entityId` values but core doesn't mint or resolve them.
+`@haverstack/core/did` generates and verifies `did:key` (Ed25519) via `generateDidKeypair()` / `verifyDidSignature()` / etc. (`did/did.ts`) using Web Crypto only — zero infrastructure, zero resolution, zero registry, no dependency. Other methods are valid `entityId` values but core doesn't mint or resolve them.
 
 **Key custody is not this library's job.** `generateDidKeypair()` returns a `privateKey`; nothing in `@haverstack/core` or any adapter stores it — only the public DID travels with stack data. Where the private key lives (OS keychain, encrypted file, hardware key) and how it's backed up is an app/UX concern.
 

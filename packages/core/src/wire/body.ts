@@ -17,11 +17,17 @@
  * See docs/spec/wire-format.md § Unrecognized input.
  */
 
-import { ARGUMENTS_INVALID, StackBadRequestError, StackValidationError } from './errors.js';
-import type { DefineTypeOptions } from './stack.js';
-import { assertKnownKeys, validateAssociation } from './query-validation.js';
-import type { AppManifest } from './install.js';
-import type { AssociationEdit, GrantAction, StackType, TypeId, TypeSchema } from './types/index.js';
+import { ARGUMENTS_INVALID, StackBadRequestError, StackValidationError } from '../errors.js';
+import type { DefineTypeOptions } from '../stack.js';
+import { assertKnownKeys, validateAssociation } from '../query-validation.js';
+import type { AppManifest } from '../install.js';
+import type {
+  AssociationEdit,
+  GrantAction,
+  StackType,
+  TypeId,
+  TypeSchema,
+} from '../types/index.js';
 
 export function requireBody(body: unknown, label: string): Record<string, unknown> {
   if (typeof body !== 'object' || body === null || Array.isArray(body))

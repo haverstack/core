@@ -5,8 +5,8 @@ export default defineConfig({
   resolve: {
     alias: {
       '@haverstack/wire-types': resolve(__dirname, '../wire-types/src/index.ts'),
-      '@haverstack/core/wire': resolve(__dirname, '../core/src/wire-entry.ts'),
-      '@haverstack/core/adapter': resolve(__dirname, '../core/src/adapter-entry.ts'),
+      '@haverstack/core/wire': resolve(__dirname, '../core/src/wire/index.ts'),
+      '@haverstack/core/adapter': resolve(__dirname, '../core/src/adapter/index.ts'),
       '@haverstack/core': resolve(__dirname, '../core/src/index.ts'),
     },
   },
