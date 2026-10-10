@@ -179,11 +179,9 @@ export type DataAssociation = TagAssociation | AttachmentAssociation | Relations
 export type Association = DataAssociation | AuthorityAssociation;
 
 /**
- * One association a write moved, and what it moved from. Every inverse is
- * local to one element — there is no join back to a sibling list, so there
- * is no join key to get wrong. `previous` is carried in full, annotation
- * included, which is what makes a `repoint` undoable; a `remove` names the
- * element it took away in `association`, in full.
+ * One association a write moved, and what it moved from. Each inverse is
+ * local to one element, so there is no join key to get wrong; `previous`
+ * is carried in full, which is what makes a `repoint` undoable.
  * See docs/spec/journal.md § The entry.
  */
 export type AssociationChange =
@@ -199,14 +197,9 @@ export type AssociationEdit = Exclude<AssociationChange, { op: 'repoint' }>;
 
 /**
  * The aspects of an existing record one mutate() call may move, in any
- * combination. Every key replaces the aspect it names except
- * `contentPatch`, which merges at the top level — omitted keeps, `null`
- * removes. Keys are read for presence, so `unlisted: false` and
- * `parentId: null` are changes; an omitted key is untouched.
- *
- * `associations` replaces the whole set. associate()/dissociate() amend it
- * instead, which is the spelling that survives two writers touching one
- * record, so they stay their own verbs rather than folding in here.
+ * combination. Keys are read for presence: `unlisted: false` is a change,
+ * an omitted key is untouched. Each key replaces its aspect whole except
+ * `contentPatch`, which merges at the top level (`null` removes).
  * See docs/spec/data-model.md § Mutations.
  */
 export type RecordChangeSet = {
@@ -263,12 +256,10 @@ export type StackRecord = {
   updatedBy?: Actor;
   deletedAt?: Date; // Present if soft-deleted
   /**
-   * Present when the record is withheld from enumeration — absent from
-   * `query()` and the change feed by default, but still reachable by
-   * `get()` for anyone who may read it. Orthogonal to `permissions`: it
-   * says nothing about who may read the record, only whether its
-   * existence is discoverable without already holding its ID. See
-   * docs/spec/unlisted.md.
+   * Present when the record is withheld from enumeration: absent from
+   * `query()` and the change feed by default, but reachable by `get()` for
+   * anyone who may read it. Says nothing about who that is.
+   * See docs/spec/unlisted.md.
    */
   unlistedAt?: Date;
   /**
@@ -416,12 +407,10 @@ export type AppContent = {
   /** Semver string e.g. "1.0.0". `appId` is the machine-readable identity, so no handle is needed here. */
   version?: string;
   /**
-   * The DID this app authenticates with, when it holds a key of its own.
-   * Lets an attribution UI resolve an Actor's `principalId` to this card,
-   * and a server check a self-reported `appId` against the principal that
-   * wrote it. Absent for apps that ride their user's identity. Unique per
-   * stack and immutable once set, like `appId` above — see
-   * docs/spec/identity.md § DID bindings.
+   * The DID this app authenticates with, when it holds a key of its own —
+   * what an Actor's `principalId` resolves to, and what a self-reported
+   * `appId` is checked against. Absent for apps that ride their user's
+   * identity. Unique and immutable: docs/spec/identity.md § DID bindings.
    */
   did?: string;
 };
@@ -459,18 +448,9 @@ export const GRANT_ACTIONS = [
 export type GrantAction = (typeof GRANT_ACTIONS)[number];
 
 /**
- * Who a Grant reaches, spelled affirmatively. Each tier names itself, so
- * no dropped field turns one into another: a `_grant` Record that lost its
- * grantee names nobody rather than everybody.
- *
- * `{ kind: 'authenticated' }` reaches any authenticated entity — narrower
- * than a Record permission's `{ kind: 'anyone' }`, which reaches anonymous
- * requesters too. The two tiers deliberately share no word.
- *
- * `role` is required on the group arm — `member` is the wider set, `admin`
- * the narrower, matching the roster labels where admin implies member (see
- * docs/spec/identity.md § Group). A group grantee never satisfies the
- * principal half of a delegated request.
+ * Who a Grant reaches. `authenticated` is any authenticated entity —
+ * narrower than a Record permission's `anyone`, which reaches anonymous
+ * requesters too, so the two tiers deliberately share no word.
  * See docs/spec/access-control.md § Type-level grants.
  */
 export type GrantGrantee = Grantee | { kind: 'authenticated' };
@@ -485,22 +465,19 @@ export type TypeGrant = {
   grantee: GrantGrantee;
 };
 
-/** Content for _grant records */
-export type GrantContent = {
-  /** The type family the grant applies to: a bare baseId, never a versioned TypeId. */
+/**
+ * Content for _grant records: a TypeGrant pinned to the type family it
+ * applies to — a bare baseId, never a versioned TypeId.
+ */
+export type GrantContent = TypeGrant & {
   baseId: BaseId;
-  /** Which actions are permitted. */
-  actions: GrantAction[];
-  /** Who the grant reaches. Required — see GrantGrantee. */
-  grantee: GrantGrantee;
 };
 
-/** One type-level grant an app's manifest asks for. */
-export type InstallRequest = {
-  /** The type family, as `grantType()` takes it. */
-  baseId: BaseId;
-  actions: GrantAction[];
-};
+/**
+ * One type-level grant an app's manifest asks for. No grantee: the app's
+ * own keys are who it reaches. See docs/spec/apps.md.
+ */
+export type InstallRequest = Omit<GrantContent, 'grantee'>;
 
 /**
  * Content for _install records: what the owner approved of an app's
@@ -615,12 +592,10 @@ export type RecordFilter = {
   // Native fields
   typeId?: TypeId | TypeId[];
   /**
-   * Match every version of a type family — e.g. baseId: "com.example/note"
-   * matches both "com.example/note@1" and "com.example/note@2" records.
-   * Resolved against registered Types, not parsed from typeId strings, so
-   * it works regardless of which versions happen to exist. Combined with
-   * typeId (if both given) as an intersection. A value carrying an
-   * `@version` suffix is refused with StackValidationError.
+   * Match every version of a type family, resolved against registered
+   * Types rather than parsed from typeId strings. Intersects with `typeId`
+   * when both are given. A value carrying an `@version` suffix is refused
+   * with StackValidationError.
    */
   baseId?: BaseId | BaseId[];
   parentId?: RecordId | null; // null = root records only
@@ -654,21 +629,16 @@ export type RecordFilter = {
 
   /**
    * Exact match on content fields, keyed by a dot-separated path
-   * (`'emails.value'`). An array anywhere along the path is matched
-   * element-wise, so the motivating question — which contact holds this
-   * email address — is one filter. A multi-segment key needs the
-   * `filter.content: 'path'` capability. POST /records/query only.
-   * See docs/spec/data-model.md § Filter.
+   * (`'emails.value'`); an array along the path matches element-wise. A
+   * multi-segment key needs `filter.content: 'path'`. POST /records/query
+   * only. See docs/spec/data-model.md § Filter.
    */
   content?: Record<string, unknown>;
 
   /**
-   * Paths that must hold a value: the question `content` cannot ask,
-   * since a filter value matches what is there rather than whether
-   * anything is. Element-wise like `content`, so a path holds a value
-   * when at least one non-null value is reachable at it. Needs the
-   * filter.contentPresent capability. POST /records/query only.
-   * See docs/spec/data-model.md § Filter.
+   * Paths that must hold a non-null value — the question `content` cannot
+   * ask. Element-wise like `content`. Needs `filter.contentPresent`.
+   * POST /records/query only. See docs/spec/data-model.md § Filter.
    */
   contentPresent?: string[];
 
@@ -689,25 +659,18 @@ export type RecordFilter = {
 
 /**
  * The Record columns every adapter stores natively, and can order by. The
- * array is the source of truth — NativeSortField is derived from it so the
- * runtime checks that narrow a wire value or a cursor to this set (see
- * parseQuery(), normalizeCapabilities(), and the SQLite adapters' cursor
- * decoding) can't drift from the type.
+ * array is the source of truth, so the runtime checks that narrow a wire
+ * value or a cursor to this set can't drift from NativeSortField.
  */
 export const NATIVE_SORT_FIELDS = ['createdAt', 'updatedAt', 'version'] as const;
 
 export type NativeSortField = (typeof NATIVE_SORT_FIELDS)[number];
 
 /**
- * Order by a native column or by a top-level content field — two members
- * rather than one widened `field`, because a content field named
- * `version` would otherwise be indistinguishable from the native column.
- * A `'content.'` prefix can't carry the distinction either: `.` is the
- * path separator `parseContentFilterKey()` splits on.
- * `direction` defaults to `asc` for any named sort, native or content, as
- * `ORDER BY` does; a query with no sort is `createdAt`, newest first.
- * See docs/spec/data-model.md § Sorting by a content field and
- * § Sorting and pagination.
+ * Order by a native column or a top-level content field — two members, so
+ * a content field named `version` stays distinct from the native column.
+ * `direction` defaults to `asc`; a query with no sort is `createdAt`,
+ * newest first. See docs/spec/data-model.md § Sorting by a content field.
  */
 export type QuerySort =
   | { field: NativeSortField; contentField?: never; direction?: 'asc' | 'desc' }
@@ -719,10 +682,9 @@ export type StackQuery = {
   limit?: number;
   cursor?: string; // Opaque cursor for page-based pagination
   /**
-   * Records are returned exactly as stored by default ("stored"). Pass
-   * "latest" to apply the registered migration chain in memory before
-   * returning — never written back. Throws StackMigrationError if any
-   * matched record has no registered path to the latest version.
+   * "stored" (the default) returns records as stored; "latest" applies the
+   * migration chain in memory, never written back. Throws
+   * StackMigrationError if a matched record has no path to the latest.
    */
   presentAt?: 'stored' | 'latest';
 };
@@ -741,12 +703,10 @@ export type QueryResult = {
 // -------------------------------------------------------
 
 /**
- * How far into `content` a filter key may reach. The rungs nest —
- * `'path'` is `'field'` plus traversal — so they are one ordered value
- * rather than a pair of booleans that can spell a state no adapter can be
- * in. A value a client does not recognize reads as `'none'`: refusing a
- * query is recoverable, answering it with an unfiltered superset presented
- * as a filtered result is not.
+ * How far into `content` a filter key may reach. The rungs nest, so they
+ * are one ordered value rather than booleans that can spell an impossible
+ * state. An unrecognized value reads as `'none'`: a refusal is recoverable,
+ * an unfiltered superset passed off as filtered is not.
  * See docs/spec/adapters.md § Adapter capabilities.
  */
 export type ContentFilterReach =
@@ -758,12 +718,10 @@ export type ContentFilterReach =
   | 'path';
 
 /**
- * What a Stack — and the adapter under it — honors, grouped by the query surface each entry gates:
- * every flag under `filter`/`sort` is named for the query key it answers
- * for, so the capability a query needs is derivable from the query rather
- * than memorized. `limits` sits apart because a byte ceiling is not a
- * feature to gate on but a number to pre-check against.
- * See docs/spec/adapters.md § Adapter capabilities.
+ * What a Stack — and the adapter under it — honors. Every `filter`/`sort`
+ * entry is named for the query key it gates, so the capability a query
+ * needs is derivable from the query. `limits` are numbers to pre-check
+ * against, not features. See docs/spec/adapters.md § Adapter capabilities.
  */
 export type StackCapabilities = {
   filter: {
@@ -774,13 +732,9 @@ export type StackCapabilities = {
      */
     content: ContentFilterReach;
     /**
-     * Whether `filter.contentPresent` is honored. Beside the reach ladder
-     * rather than a rung on it: a server promising to match a content
-     * value has not thereby promised to answer whether one is there at
-     * all, and reading it as such hands a client the unfiltered superset
-     * that ignoring the filter produces. Meaningful only where `content`
-     * is not `'none'` — presence travels in the `POST /records/query`
-     * body, which a server reaching no content does not expose.
+     * Whether `filter.contentPresent` is honored. Beside the reach ladder,
+     * not on it: matching a value promises nothing about answering whether
+     * one is there. Meaningful only where `content` is not `'none'`.
      */
     contentPresent: boolean;
     /**
@@ -795,22 +749,15 @@ export type StackCapabilities = {
     fields: NativeSortField[];
     /**
      * Whether `sort.contentField` is honored. A boolean rather than names
-     * in `fields`: content fields are app-defined and unbounded, and an
-     * adapter that indexes content for sorting indexes every top-level
-     * scalar, so there is nothing per-field left to declare. Independent
-     * of `filter.content` — a server may order by a content field without
-     * offering to filter on one, and filtering is a scan where ordering
-     * wants an index.
+     * in `fields`: an adapter that sorts by content indexes every top-level
+     * scalar. Independent of `filter.content`.
      */
     contentField: boolean;
   };
   /**
-   * Ceilings a client can check before spending a request, never a
-   * substitute for the server's own limit, which stays authoritative.
-   * `null` means this client cannot pre-check, not that nothing is
-   * enforced. Local adapters declare `null` for both: nothing at the
-   * storage layer imposes a ceiling, and a caller with in-process access
-   * to the database can spend its own memory however it likes.
+   * Ceilings a client can check before spending a request; the server's
+   * own limit stays authoritative. `null` means this client cannot
+   * pre-check, not that nothing is enforced — local adapters declare it.
    * See docs/spec/adapters.md § Adapter capabilities.
    */
   limits: {
@@ -843,11 +790,9 @@ export type MissingCapability =
 // -------------------------------------------------------
 
 /**
- * Opt-in optimistic-concurrency precondition, accepted by every mutation
- * that bumps a record's version. On mismatch the mutation throws
- * StackVersionConflictError and changes nothing; omit to keep
- * last-writer-wins. An adapter checks it atomically inside its write, never
- * as a read-then-write. See docs/spec/versioning.md § Optimistic
+ * Opt-in optimistic-concurrency precondition. On mismatch the mutation
+ * throws StackVersionConflictError and changes nothing; an adapter checks
+ * it atomically inside its write. See docs/spec/versioning.md § Optimistic
  * concurrency (`ifVersion`).
  */
 export type IfVersionOptions = {
@@ -865,13 +810,9 @@ export type SnapshotOptions = {
 };
 
 /**
- * Whether a mutateRecord() call advances `version`/`updatedAt` at all.
- * `Stack` computes this from which aspects a change set actually moves — a
- * change set touching only `associations`, `parentId` and/or `unlisted`
- * doesn't bump, the same rule StackRecordAdapter.amendAssociations()
- * follows unconditionally. Absent means `true`; every other mutating method
- * bumps every time, so only mutateRecord() takes this. See
- * docs/spec/versioning.md § Version history.
+ * Whether a mutateRecord() call advances `version`/`updatedAt`. `Stack`
+ * computes it from what the change set moves; absent means `true`.
+ * See docs/spec/versioning.md § Version history.
  */
 export type BumpVersionOptions = {
   bumpsVersion?: boolean;
@@ -888,15 +829,10 @@ export type ActorOptions = {
 };
 
 /**
- * The part of a change that the record cannot report once the write has
+ * The part of a change the record cannot report once the write has
  * landed: which aspects moved, who moved them, and what an association
- * mutation added, removed or overwrote. Everything else a journal entry
- * carries — `seq`, `at`, `version`, `typeId`, `parentId` — the adapter
- * stamps from the row it just wrote, so the two can never drift.
- *
- * That split is the whole argument for the tier: content's prior state is
- * recoverable from a snapshot, and nothing else's is recoverable from
- * anything but this. See docs/spec/journal.md.
+ * mutation displaced. The adapter stamps the rest of the entry from the
+ * row it just wrote, so the two never drift. See docs/spec/journal.md.
  */
 export type JournalEntryInput = {
   ops: ChangeOp[];
@@ -905,32 +841,23 @@ export type JournalEntryInput = {
   /** The container a move took the record out of, `null` for the root. */
   previousParentId?: RecordId | null;
   /**
-   * What an association mutation moved, one tagged edit per association.
-   * The journal's own shape, not the feed's two flat lists: a log whose
-   * whole argument is prior state carries `previous` beside the thing that
-   * displaced it, rather than leaving a consumer to re-derive which entry
-   * of one list overwrote which entry of another. See
-   * docs/spec/journal.md § The entry.
+   * What an association mutation moved, one tagged edit per association,
+   * with `previous` beside whatever displaced it.
+   * See docs/spec/journal.md § The entry.
    */
   associations?: AssociationChange[];
 };
 
 /**
- * One durable entry in a record's change journal.
- *
- * Envelope-level by design — `content` lives on a RecordVersion, and
- * duplicating it here would make the journal the larger of the two stores
- * for no recovery anyone asked for.
- * See docs/spec/journal.md § Ordering for why `seq` is the only ordering.
+ * One durable entry in a record's change journal. Envelope only — content
+ * lives on a RecordVersion. See docs/spec/journal.md § Ordering for why
+ * `seq` is the only ordering.
  */
 export type RecordJournalEntry = JournalEntryInput & {
   seq: number;
   /** When the entry was appended — not the record's `updatedAt`, which an association change leaves alone. */
   at: Date;
-  /**
-   * The version this change produced; unchanged from before on
-   * associate/dissociate, reparent, unlist and list.
-   */
+  /** The version this change produced — unchanged on an op that doesn't bump; see ChangeOp. */
   version: number;
   typeId: TypeId;
   /** Where the record sat after the change, absent for the root. */
@@ -938,18 +865,19 @@ export type RecordJournalEntry = JournalEntryInput & {
 };
 
 /**
- * Accepted by every mutating StackRecordAdapter method, and by
- * amendAssociations(), which takes no other options. The adapter
- * appends the entry inside the SAME write as the mutation, so a crash
- * between the two cannot leave a change unjournaled.
- *
- * Unlike SnapshotOptions there is no collision to heal: `seq` is
- * allocated by the adapter inside that write rather than computed by
- * `Stack` from a value it read earlier.
+ * Accepted by every mutating StackRecordAdapter method. The adapter
+ * appends the entry, allocating its `seq`, inside the SAME write as the
+ * mutation, so a crash cannot leave a change unjournaled.
  */
 export type JournalOptions = {
   journal?: JournalEntryInput;
 };
+
+/**
+ * What every mutating StackRecordAdapter method that bumps `version` takes.
+ * mutateRecord() adds BumpVersionOptions and deleteRecord() adds `purge`.
+ */
+export type MutateOptions = IfVersionOptions & SnapshotOptions & ActorOptions & JournalOptions;
 
 /** Window into a record's journal. Omitting both reads the whole log, oldest first. */
 export type JournalQuery = {
@@ -1037,11 +965,8 @@ export type ChangeActor = Actor & {
 export type RecordChange = {
   kind: ChangeKind;
   /**
-   * Every aspect this version moved, derived by diffing the record against
-   * its prior state rather than read off the request — a change set that
-   * names an aspect without moving it is not reported as moving it. Never
-   * empty; multi-entry only for a mutate() change set, since every other op
-   * names a whole-record transition and is emitted alone.
+   * Every aspect this version moved, diffed against prior state rather
+   * than read off the request. Never empty; multi-entry only for mutate().
    * See docs/spec/events.md § The event shape.
    */
   ops: ChangeOp[];
@@ -1104,68 +1029,39 @@ export type ChangeFilter = Pick<RecordFilter, 'typeId' | 'baseId' | 'parentId' |
 /** Ends a subscription. Safe to call more than once. */
 export type Unsubscribe = () => void;
 
+/**
+ * What a subscriber asks for, and what `Stack` forwards unchanged to an
+ * adapter's `subscribeChanges()` relay — the relay honors every key.
+ * See docs/spec/events.md § Subscribing and § Where events come from.
+ */
 export type SubscribeOptions = {
   filter?: ChangeFilter;
   /** Ask the emitter to include `record`. Honored when it can; never assume it. */
   includeRecords?: boolean;
   /**
    * Receive events for unlisted records too. Owner-only under
-   * `ScopedStack`, same authority as `RecordFilter.includeUnlisted` — the
-   * feed excludes unlisted records by default so it never delivers more
-   * than an equivalent `query()` would return. See
-   * docs/spec/unlisted.md.
+   * `ScopedStack`, same authority as `RecordFilter.includeUnlisted`.
+   * See docs/spec/unlisted.md.
    */
   includeUnlisted?: boolean;
   /**
-   * Resume from this cursor rather than the present — the last `cursor`
-   * that was present on a delivered `RecordChange`. A relaying stack delivers
-   * its own local writes through the same handler and those carry none, so
-   * a consumer that stores every change's `cursor` unconditionally erases its
-   * own cursor on its next write.
-   *
-   * Forwarded to the adapter as `SubscribeChangesOptions.since`, so it
-   * only means something where a relay exists: a stack with none has no
-   * third-party writes to have missed, and therefore no cursor it could
-   * ever have minted. Passing `since` there throws `StackBadRequestError`
-   * rather than silently starting from the present, which would let the
-   * caller believe it resumed when it did not. A cursor outside the
-   * framable charset is refused the same way, so a malformed one reports
-   * identically whatever adapter is underneath. See
-   * docs/spec/events.md § Subscribing.
+   * Resume from this cursor — the last `cursor` that was *present* on a
+   * delivered `RecordChange`. Refused with `StackBadRequestError` on a
+   * stack with no relay, which has no cursor it could have minted.
+   * See docs/spec/events.md § Subscribing.
    */
   since?: string;
   /**
-   * Where a throwing handler's error goes. Without one the error is
-   * rethrown asynchronously rather than swallowed; either way it never
-   * reaches the caller of the mutation that produced the event.
+   * Where a throwing handler's error goes, and on a relaying stack a
+   * connection the relay could not restore. Without one a handler error is
+   * rethrown asynchronously; it never reaches the mutation's caller.
    */
   onError?: (err: unknown) => void;
   /**
    * A gap opened that resumption could not close: reconcile by query.
-   * Never fires on a local stack, which has no gap to open. Can fire on
-   * the very first connection when `since` names a cursor the far end
-   * will not honor — that is a gap too, and the one an app most needs to
-   * hear about.
+   * Never fires on a local stack. Can fire on the first connection when
+   * the far end will not honor `since`.
    */
-  onReset?: () => void;
-};
-
-/**
- * What a relay is asked for. The subscriber's options minus the ones only
- * a local emitter answers: a relay reports changes it is told about and
- * decides nothing, so there is no handler of its own to route errors from.
- * `onError` here is the relay's own trouble — a connection it could not
- * restore — and `onReset` the gap that leaves.
- * See docs/spec/events.md § Where events come from.
- */
-export type SubscribeChangesOptions = {
-  filter?: ChangeFilter;
-  /** Resume from this cursor. A relay with none starts from the present. */
-  since?: string;
-  includeRecords?: boolean;
-  /** See SubscribeOptions.includeUnlisted. */
-  includeUnlisted?: boolean;
-  onError?: (err: unknown) => void;
   onReset?: () => void;
 };
 
@@ -1195,32 +1091,16 @@ export interface StackRecordAdapter {
   createRecord(record: StackRecord, opts?: JournalOptions): Promise<StackRecord>;
   getRecord(id: RecordId): Promise<StackRecord | null>;
   /**
-   * Apply a change set — any combination of content patch, `parentId`,
-   * `permissions`, `associations` and `unlisted` — in one write. It is the
-   * only multi-aspect atomic write a record has: a publish is one act, so
-   * separate per-aspect methods would leave it able to half-land.
-   *
-   * The content patch merges at the top level only — each key it names is
-   * replaced whole. Never touches `typeId`; a type change goes through
-   * commitMigration() instead. `associations` replaces the stored set,
-   * where amendAssociations() amends it.
-   *
-   * `opts.bumpsVersion` says whether this call advances `version`/
-   * `updatedAt` and stores the snapshot — `false` for a change set that
-   * touches only association sets, `permissions` among them, matching
-   * amendAssociations() below, which never bumps. `Stack` computes it; an adapter never has to infer it
-   * from the change set's own keys.
-   *
-   * `Stack` owns everything above storage: validation, the acyclicity
-   * walk, the per-key gates, and deciding there is anything to write at
-   * all — an adapter is never handed a change set that changes nothing.
-   * See docs/spec/data-model.md § Mutations and docs/spec/versioning.md
-   * § Version history.
+   * Apply a change set in one write — the only multi-aspect atomic write a
+   * record has, so a publish cannot half-land. Never touches `typeId`; see
+   * commitMigration(). `Stack` validates it and computes `bumpsVersion`,
+   * and never hands an adapter a change set that changes nothing.
+   * See docs/spec/data-model.md § Mutations.
    */
   mutateRecord(
     id: RecordId,
     changes: RecordChangeSet,
-    opts?: IfVersionOptions & SnapshotOptions & BumpVersionOptions & ActorOptions & JournalOptions,
+    opts?: MutateOptions & BumpVersionOptions,
   ): Promise<StackRecord>;
   /**
    * Returns the record this call acted on: as it now stands after a soft
@@ -1231,13 +1111,10 @@ export interface StackRecordAdapter {
    */
   deleteRecord(
     id: RecordId,
-    opts?: { purge?: boolean } & IfVersionOptions & SnapshotOptions & ActorOptions & JournalOptions,
+    opts?: { purge?: boolean } & MutateOptions,
   ): Promise<StackRecord | null>;
   /** Reverse a soft delete. Returns the record as it now stands. */
-  undeleteRecord(
-    id: RecordId,
-    opts?: IfVersionOptions & SnapshotOptions & ActorOptions & JournalOptions,
-  ): Promise<StackRecord>;
+  undeleteRecord(id: RecordId, opts?: MutateOptions): Promise<StackRecord>;
   /**
    * `query.sort`, when present, always carries a `direction`: `Stack`
    * resolves the defaults before any adapter sees the query.
@@ -1287,11 +1164,7 @@ export interface StackRecordAdapter {
    * Bumps version internally; throws StackNotFoundError if the version
    * doesn't exist.
    */
-  restoreVersion(
-    id: RecordId,
-    version: number,
-    opts?: IfVersionOptions & SnapshotOptions & ActorOptions & JournalOptions,
-  ): Promise<StackRecord>;
+  restoreVersion(id: RecordId, version: number, opts?: MutateOptions): Promise<StackRecord>;
 
   /**
    * Commit a migration: write new content under a new typeId in one step.
@@ -1303,7 +1176,7 @@ export interface StackRecordAdapter {
     id: RecordId,
     toTypeId: TypeId,
     content: Record<string, unknown>,
-    opts?: IfVersionOptions & SnapshotOptions & ActorOptions & JournalOptions,
+    opts?: MutateOptions,
   ): Promise<StackRecord>;
 
   // Types
@@ -1312,15 +1185,11 @@ export interface StackRecordAdapter {
   listTypes(): Promise<StackType[]>;
 
   /**
-   * Atomically verify fileId is unreferenced, then purge its
-   * metadata records in the same adapter call, returning the deleted records.
-   * Throws StackConflictError if still referenced. Optional —
-   * Stack.deleteAttachment() has a non-atomic fallback. See
-   * docs/spec/attachments.md § Deleting attachments.
-   *
-   * `metadataTypeIds` is the resolved `_attachment` family, passed as
-   * concrete typeIds so an adapter never needs a baseId concept of its
-   * own — the same split Stack.query() makes for `filter.baseId`.
+   * Atomically verify fileId is unreferenced and purge its metadata
+   * records, returning them; StackConflictError if still referenced.
+   * Optional — Stack.deleteAttachment() has a non-atomic fallback.
+   * `metadataTypeIds` is the resolved `_attachment` family, so an adapter
+   * needs no baseId concept. See docs/spec/attachments.md § Deleting attachments.
    */
   deleteUnreferencedAttachmentRecords?(
     fileId: FileId,
@@ -1335,7 +1204,7 @@ export interface StackRecordAdapter {
    * been missed. See docs/spec/events.md § Where events come from.
    */
   subscribeChanges?(
-    opts: SubscribeChangesOptions,
+    opts: SubscribeOptions,
     handler: (change: RecordChange) => void,
   ): Promise<Unsubscribe>;
 
@@ -1414,16 +1283,11 @@ export type TokenInfo = TokenSession & {
 };
 
 /**
- * Bearer-token issuance and lookup for server implementations — a
- * standalone interface, not a slot on StackAdapter. createToken() trusts
- * its caller: DID verification happens first, via the challenge-response
- * handshake. Tokens SHOULD be stored outside the portable stack file.
+ * Bearer-token issuance and lookup for servers — standalone, not a slot on
+ * StackAdapter. createToken() trusts its caller: the handshake verifies the
+ * principal's DID first, and a differing `subjectId` is asserted by the
+ * owner out of band. Store tokens outside the portable stack file.
  * See docs/spec/wire-format.md § Authentication.
- *
- * The actor's `subjectId`, where it differs from `principalId`, is the
- * delegation binding, and no handshake can establish it — proving key
- * possession proves the principal and nothing about whom it may act for. It is asserted by the owner out of band, which is safe
- * because effective authority is the intersection of both parties' grants.
  */
 export interface StackTokenStore {
   createToken(

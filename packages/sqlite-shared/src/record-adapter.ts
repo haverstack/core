@@ -23,7 +23,6 @@ import type {
   TypeId,
   FileId,
   RecordVersion,
-  ActorOptions,
   StackRecord,
   StackQuery,
   QueryResult,
@@ -31,7 +30,12 @@ import type {
   RecordChangeSet,
   StackCapabilities,
 } from '@haverstack/core';
-import type { StackRecordAdapter, JournalOptions } from '@haverstack/core/adapter';
+import type {
+  StackRecordAdapter,
+  BumpVersionOptions,
+  JournalOptions,
+  MutateOptions,
+} from '@haverstack/core/adapter';
 import type { SqlExecutor } from './executor.js';
 import type { StackConfig } from './config.js';
 import { SharedSqlRecordLogic } from './record-logic.js';
@@ -87,36 +91,23 @@ export abstract class SharedSqlRecordAdapter implements StackRecordAdapter {
   mutateRecord(
     id: string,
     changes: RecordChangeSet,
-    opts?: {
-      ifVersion?: number;
-      snapshot?: RecordVersion;
-      bumpsVersion?: boolean;
-    } & ActorOptions &
-      JournalOptions,
+    opts?: MutateOptions & BumpVersionOptions,
   ): Promise<StackRecord> {
     return this.record.mutateRecord(id, changes, opts);
   }
 
   deleteRecord(
     id: string,
-    opts?: { purge?: boolean; ifVersion?: number; snapshot?: RecordVersion } & ActorOptions &
-      JournalOptions,
+    opts?: { purge?: boolean } & MutateOptions,
   ): Promise<StackRecord | null> {
     return this.record.deleteRecord(id, opts);
   }
 
-  undeleteRecord(
-    id: string,
-    opts?: { ifVersion?: number; snapshot?: RecordVersion } & ActorOptions & JournalOptions,
-  ): Promise<StackRecord> {
+  undeleteRecord(id: string, opts?: MutateOptions): Promise<StackRecord> {
     return this.record.undeleteRecord(id, opts);
   }
 
-  restoreVersion(
-    id: string,
-    version: number,
-    opts?: { ifVersion?: number; snapshot?: RecordVersion } & ActorOptions & JournalOptions,
-  ): Promise<StackRecord> {
+  restoreVersion(id: string, version: number, opts?: MutateOptions): Promise<StackRecord> {
     return this.record.restoreVersion(id, version, opts);
   }
 
@@ -124,7 +115,7 @@ export abstract class SharedSqlRecordAdapter implements StackRecordAdapter {
     id: string,
     toTypeId: TypeId,
     content: Record<string, unknown>,
-    opts?: { ifVersion?: number; snapshot?: RecordVersion } & ActorOptions & JournalOptions,
+    opts?: MutateOptions,
   ): Promise<StackRecord> {
     return this.record.commitMigration(id, toTypeId, content, opts);
   }

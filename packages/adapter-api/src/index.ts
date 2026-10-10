@@ -52,8 +52,9 @@ import type {
   MissingCapability,
   AppManifest,
   InstallContent,
+  SubscribeOptions,
 } from '@haverstack/core';
-import type { StackAdapter, SubscribeChangesOptions } from '@haverstack/core/adapter';
+import type { StackAdapter } from '@haverstack/core/adapter';
 import {
   OwnerMismatchError,
   assertQueryCapabilities,
@@ -615,7 +616,7 @@ const parseChange = (raw: WireRecordChange): RecordChange => {
   return change;
 };
 
-const buildChangeParams = (opts: SubscribeChangesOptions): URLSearchParams => {
+const buildChangeParams = (opts: SubscribeOptions): URLSearchParams => {
   const p = new URLSearchParams();
   const f: ChangeFilter = opts.filter ?? {};
 
@@ -1465,7 +1466,7 @@ export class APIAdapter implements StackAdapter {
    * See docs/spec/change-feed.md.
    */
   async subscribeChanges(
-    opts: SubscribeChangesOptions,
+    opts: SubscribeOptions,
     handler: (change: RecordChange) => void,
   ): Promise<() => void> {
     // Refused locally, before any request: a server advertising no feed has

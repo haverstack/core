@@ -9,7 +9,7 @@ import type {
   RecordChangeSet,
   FileId,
   TypeId,
-  SubscribeChangesOptions,
+  SubscribeOptions,
 } from '../src/types.js';
 
 const purgedRecord: StackRecord = {
@@ -278,11 +278,11 @@ describe('combineAdapters', () => {
     });
 
     test('subscribeChanges is present when the record adapter implements it', async () => {
-      let received: SubscribeChangesOptions | undefined;
+      let received: SubscribeOptions | undefined;
       const stop = () => {};
       const adapter = combineAdapters({
         record: makeRecordAdapter({
-          subscribeChanges: async (opts: SubscribeChangesOptions) => {
+          subscribeChanges: async (opts: SubscribeOptions) => {
             received = opts;
             return stop;
           },

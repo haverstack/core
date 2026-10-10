@@ -23,7 +23,6 @@ import type {
   TypeId,
   RecordVersion,
   Actor,
-  ActorOptions,
   StackQuery,
   QueryResult,
   AssociationEdit,
@@ -36,7 +35,9 @@ import type {
   StackAdapter,
   BlobInfo,
   StackBlobAdapter,
+  BumpVersionOptions,
   JournalOptions,
+  MutateOptions,
 } from '@haverstack/core/adapter';
 import type { TokenSession, TokenInfo } from '@haverstack/core/wire';
 import {
@@ -137,26 +138,19 @@ export class LocalAdapter implements StackAdapter {
   async mutateRecord(
     id: RecordId,
     changes: RecordChangeSet,
-    opts?: {
-      ifVersion?: number;
-      snapshot?: RecordVersion;
-      bumpsVersion?: boolean;
-    } & ActorOptions,
+    opts?: MutateOptions & BumpVersionOptions,
   ): Promise<StackRecord> {
     return this.record.mutateRecord(id, changes, opts);
   }
 
   async deleteRecord(
     id: RecordId,
-    opts?: { purge?: boolean; ifVersion?: number; snapshot?: RecordVersion } & ActorOptions,
+    opts?: { purge?: boolean } & MutateOptions,
   ): Promise<StackRecord | null> {
     return this.record.deleteRecord(id, opts);
   }
 
-  async undeleteRecord(
-    id: RecordId,
-    opts?: { ifVersion?: number; snapshot?: RecordVersion } & ActorOptions,
-  ): Promise<StackRecord> {
+  async undeleteRecord(id: RecordId, opts?: MutateOptions): Promise<StackRecord> {
     return this.record.undeleteRecord(id, opts);
   }
 
@@ -195,11 +189,7 @@ export class LocalAdapter implements StackAdapter {
     return this.record.saveVersion(id, version);
   }
 
-  async restoreVersion(
-    id: RecordId,
-    version: number,
-    opts?: { ifVersion?: number; snapshot?: RecordVersion } & ActorOptions,
-  ): Promise<StackRecord> {
+  async restoreVersion(id: RecordId, version: number, opts?: MutateOptions): Promise<StackRecord> {
     return this.record.restoreVersion(id, version, opts);
   }
 
@@ -207,7 +197,7 @@ export class LocalAdapter implements StackAdapter {
     id: RecordId,
     toTypeId: TypeId,
     content: Record<string, unknown>,
-    opts?: { ifVersion?: number; snapshot?: RecordVersion } & ActorOptions,
+    opts?: MutateOptions,
   ): Promise<StackRecord> {
     return this.record.commitMigration(id, toTypeId, content, opts);
   }

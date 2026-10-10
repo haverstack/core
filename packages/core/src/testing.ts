@@ -7,6 +7,8 @@ import type {
   RecordJournalEntry,
   JournalEntryInput,
   JournalOptions,
+  MutateOptions,
+  BumpVersionOptions,
   JournalQuery,
   VersionsQuery,
   RecordChangeSet,
@@ -186,12 +188,7 @@ export class MemoryAdapter implements StackAdapter {
   async mutateRecord(
     id: string,
     changes: RecordChangeSet,
-    opts: {
-      ifVersion?: number;
-      snapshot?: RecordVersion;
-      bumpsVersion?: boolean;
-    } & ActorOptions &
-      JournalOptions = {},
+    opts: MutateOptions & BumpVersionOptions = {},
   ) {
     const existing = this.records.get(id);
     if (!existing) throw new StackNotFoundError(`Record not found: "${id}"`);
@@ -230,15 +227,7 @@ export class MemoryAdapter implements StackAdapter {
     return updated;
   }
 
-  async deleteRecord(
-    id: string,
-    opts: {
-      purge?: boolean;
-      ifVersion?: number;
-      snapshot?: RecordVersion;
-    } & ActorOptions &
-      JournalOptions = {},
-  ) {
+  async deleteRecord(id: string, opts: { purge?: boolean } & MutateOptions = {}) {
     const record = this.records.get(id);
     if (!record) {
       // A purge with nothing to fence is the one case the SQL
@@ -266,10 +255,7 @@ export class MemoryAdapter implements StackAdapter {
     return deleted;
   }
 
-  async undeleteRecord(
-    id: string,
-    opts: { ifVersion?: number; snapshot?: RecordVersion } & ActorOptions & JournalOptions = {},
-  ) {
+  async undeleteRecord(id: string, opts: MutateOptions = {}) {
     const record = this.records.get(id);
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
     this.checkExpectedVersion(record, opts.ifVersion);
@@ -569,15 +555,7 @@ export class MemoryAdapter implements StackAdapter {
     );
   }
 
-  async restoreVersion(
-    id: string,
-    version: number,
-    opts: {
-      ifVersion?: number;
-      snapshot?: RecordVersion;
-    } & ActorOptions &
-      JournalOptions = {},
-  ) {
+  async restoreVersion(id: string, version: number, opts: MutateOptions = {}) {
     const record = this.records.get(id);
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
     this.checkExpectedVersion(record, opts.ifVersion);
@@ -597,7 +575,7 @@ export class MemoryAdapter implements StackAdapter {
     id: string,
     toTypeId: TypeId,
     content: Record<string, unknown>,
-    opts: { ifVersion?: number; snapshot?: RecordVersion } & ActorOptions & JournalOptions = {},
+    opts: MutateOptions = {},
   ) {
     const record = this.records.get(id);
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);

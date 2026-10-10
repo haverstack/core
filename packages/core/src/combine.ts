@@ -3,7 +3,7 @@ import type {
   StackAdapter,
   StackRecordAdapter,
   StackBlobAdapter,
-  SubscribeChangesOptions,
+  SubscribeOptions,
 } from './types.js';
 
 /**
@@ -62,7 +62,7 @@ export function combineAdapters(parts: {
     // leave a combined stack quietly emitting only its own writes while a
     // remote record backend's feed went unread.
     ...(parts.record.subscribeChanges && {
-      subscribeChanges: (opts: SubscribeChangesOptions, handler: (change: RecordChange) => void) =>
+      subscribeChanges: (opts: SubscribeOptions, handler: (change: RecordChange) => void) =>
         parts.record.subscribeChanges!(opts, handler),
     }),
 
