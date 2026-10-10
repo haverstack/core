@@ -59,6 +59,9 @@ export async function checkAccess(
   // No permissions = private.
   if (!perms || perms.length === 0) return false;
 
+  // Two elements can name one group (a `member` and an `admin` read), and
+  // the roster answers both the same way within one check.
+  const roles = new Map<string, GroupRole | null>();
   for (const p of perms) {
     if (p?.kind === 'anyone') {
       if (mode === 'read' && isWorldRead(p)) return true;
@@ -72,7 +75,7 @@ export async function checkAccess(
     // write by validatePermissions() and again here.
     // See docs/spec/access-control.md § Write implies read.
     if (mode === 'write' && !holdsRead(perms, p.grantee)) continue;
-    if (await granteeCovers(p.grantee, subjectEntityId, resolveRecord)) return true;
+    if (await granteeCovers(p.grantee, subjectEntityId, resolveRecord, roles)) return true;
   }
 
   return false;
@@ -110,10 +113,11 @@ async function granteeCovers(
   grantee: Grantee,
   subjectEntityId: EntityId | null,
   resolveRecord: RecordResolver,
+  roles: Map<string, GroupRole | null>,
 ): Promise<boolean> {
   if (!subjectEntityId) return false;
   if (grantee.kind === 'entity') return grantee.entityId === subjectEntityId;
-  const role = await resolveGroupRole(grantee.groupId, subjectEntityId, resolveRecord);
+  const role = await resolveGroupRole(grantee.groupId, subjectEntityId, resolveRecord, roles);
   return roleSatisfies(role, grantee.role);
 }
 

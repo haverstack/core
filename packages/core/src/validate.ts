@@ -502,11 +502,11 @@ export const validatePatchValues = (patch: Record<string, unknown>): ValidationE
     }));
 
 /**
- * Characters a field name may not contain, since a content filter key is a
- * dot-separated path: a field named `emails.value` would make one filter
- * mean two things, and the write side is where that is an error a caller
- * can act on. `*` and `#` are reserved ahead of the path grammar, because
- * narrowing a legal charset later costs every stored record. See docs/spec/data-model.md § Content field names.
+ * Characters a field name may not contain: a filter key is a dot-separated
+ * path, so a field named `emails.value` would make one filter mean two
+ * things. `*` and `#` are reserved ahead of the path grammar, as narrowing
+ * a legal charset later costs every stored record.
+ * See docs/spec/data-model.md § Content field names.
  */
 export const CONTENT_KEY_PATH_METACHARACTERS = ['.', '[', ']', '$', '"', '*', '#'] as const;
 

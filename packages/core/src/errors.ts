@@ -171,9 +171,9 @@ export class StackPayloadTooLargeError extends StackError {
 
 /**
  * A server abandoned an operation for taking too long — in practice a
- * full-text search. Never produced in-process, since both SQLite engines
- * run synchronously; it lets an app tell "too expensive, narrow and retry"
- * from `bad_request`'s "malformed". See docs/spec/data-model.md § Capability-gated filters.
+ * full-text search. Never produced in-process; it lets an app tell "too
+ * expensive, narrow and retry" from `bad_request`'s "malformed".
+ * See docs/spec/data-model.md § Capability-gated filters.
  */
 export class StackTimeoutError extends StackError {
   static readonly code = 'timeout' as const;

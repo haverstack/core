@@ -11,12 +11,7 @@
 
 import { baseIdOf, familyIdProblem } from './schema.js';
 import { ARGUMENTS_INVALID, StackBadRequestError, StackValidationError } from './errors.js';
-import {
-  assertKnownKeys,
-  GRANTEE_KEYS,
-  granteeErrors,
-  unknownKeys,
-} from './associations/validation.js';
+import { granteeErrors } from './associations/validation.js';
 import { SYSTEM_TYPES, GRANT_ACTIONS } from './types/index.js';
 import { resolveGroupRole, roleSatisfies } from './access.js';
 import type {
@@ -123,13 +118,18 @@ export function matchesGrantTarget(content: GrantContent, target: GrantQuery): b
  * `allowAny` admits the listing-only `role: 'any'`.
  */
 export function validateGrantTarget(target: GrantQuery, allowAny = false): void {
-  const t = target as { kind?: unknown } | null;
-  if (t?.kind === 'authenticated' || t?.kind === 'entity' || t?.kind === 'group')
-    assertKnownKeys(t, GRANTEE_KEYS[t.kind], 'grant target');
   // No format check on a groupId: it is a reference, like parentId or an
   // association's recordId. One that resolves to nothing simply denies.
-  const errors = granteeErrors(t, 'grant target', { authenticated: true, anyRole: allowAny });
-  if (errors.length > 0) throw new StackBadRequestError(errors[0]!.message);
+  const errors = granteeErrors(target, 'grant target', {
+    unknownKeys: 'throw',
+    authenticated: true,
+    anyRole: allowAny,
+  });
+  if (errors.length > 0) {
+    throw new StackBadRequestError(
+      `Invalid grant target: ${errors.map((e) => e.message).join(' ')}`,
+    );
+  }
 }
 
 /**
@@ -140,18 +140,10 @@ export function validateGrantTarget(target: GrantQuery, allowAny = false): void 
  */
 export function validateGrantee(typeId: TypeId, content: unknown): ValidationError[] {
   if (baseIdOf(typeId) !== SYSTEM_TYPES.GRANT) return [];
-  const g = (content as { grantee?: unknown } | null)?.grantee as { kind?: unknown } | null;
+  const g = (content as { grantee?: unknown } | null)?.grantee;
   // An absent or non-object grantee is the schema's to refuse, and it does.
   if (!g || typeof g !== 'object') return [];
-  if (g.kind === 'authenticated' || g.kind === 'entity' || g.kind === 'group') {
-    const unknown = unknownKeys(g, GRANTEE_KEYS[g.kind]);
-    if (unknown.length > 0)
-      return unknown.map((key) => ({
-        path: `grantee.${key}`,
-        message: `A ${String(g.kind)} grantee does not carry ${key}`,
-      }));
-  }
-  return granteeErrors(g, 'grantee', { authenticated: true });
+  return granteeErrors(g, 'grantee', { unknownKeys: 'collect', authenticated: true });
 }
 
 /**

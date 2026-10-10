@@ -2946,7 +2946,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
         code: 'validation',
         message: 'Content validation failed',
         details: [
-          { path: 'grantee.role', message: "A group grantee requires role 'member' or 'admin'" },
+          { path: 'grantee.role', message: "A group grantee requires role 'member' or 'admin'." },
         ],
       },
     },
@@ -2983,7 +2983,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
         details: [
           {
             path: 'grantee.entityId',
-            message: 'An entity grantee requires a non-empty entityId',
+            message: 'An entity grantee requires a non-empty entityId.',
           },
         ],
       },
@@ -3020,7 +3020,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
         details: [
           {
             path: 'grantee.entityId',
-            message: 'An entity grantee requires a non-empty entityId',
+            message: 'An entity grantee requires a non-empty entityId.',
           },
         ],
       },
@@ -3053,7 +3053,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
         code: 'validation',
         message: 'Content validation failed',
         details: [
-          { path: 'grantee.groupId', message: 'A group grantee requires a non-empty groupId' },
+          { path: 'grantee.groupId', message: 'A group grantee requires a non-empty groupId.' },
         ],
       },
     },
@@ -3089,7 +3089,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
         code: 'validation',
         message: 'Content validation failed',
         details: [
-          { path: 'grantee.role', message: "A group grantee requires role 'member' or 'admin'" },
+          { path: 'grantee.role', message: "A group grantee requires role 'member' or 'admin'." },
         ],
       },
     },
@@ -3124,7 +3124,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
         details: [
           {
             path: 'grantee.kind',
-            message: "A grantee must name its tier: 'entity', 'group' or 'authenticated'",
+            message: "A grantee must name its tier: 'entity', 'group' or 'authenticated'.",
           },
         ],
       },

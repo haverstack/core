@@ -38,6 +38,7 @@ import {
   validateSchemaShape,
 } from '../validate.js';
 import { applyMergePatch } from '../merge.js';
+import { compareRecordedAttachments } from '../attachment-records.js';
 import { stampGroupAdmin, validatePermissions } from '../access.js';
 import { ChangeEmitter, RelayDelivery, PendingChange, assertSinceUsable } from './changes.js';
 import { SYSTEM_TYPES } from '../types/index.js';
@@ -1583,7 +1584,7 @@ export class Stack implements StackClient {
     });
     return results
       .filter((r) => (r.content as AttachmentContent).fileId === fileId)
-      .sort(attachments.compareRecordedAttachments) as (StackRecord & {
+      .sort(compareRecordedAttachments) as (StackRecord & {
       content: AttachmentContent;
     })[];
   }

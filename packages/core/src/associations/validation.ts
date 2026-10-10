@@ -205,63 +205,66 @@ function permissionErrors(
   if (!grantee || typeof grantee !== 'object') {
     return [{ path: `${path}.grantee`, message: 'A permission requires a grantee.' }];
   }
-  if (grantee.kind === 'entity' || grantee.kind === 'group')
-    assertKnownKeys(grantee, GRANTEE_KEYS[grantee.kind], `${path}.grantee`);
-  return granteeErrors(grantee, `${path}.grantee`);
+  return granteeErrors(grantee, `${path}.grantee`, { unknownKeys: 'throw' });
 }
 
 /**
- * What makes a grantee malformed, under `path`. `role` is required: there is
- * no "any member" default to fall back on. `authenticated` is a tier on a
- * `_grant` alone, and `anyRole` admits a listing's `role: 'any'`. Unknown keys
- * are the caller's, since whether one is a 400 depends on the surface.
+ * What makes a grantee malformed, under `path`: first a key its tier does not
+ * define — a 400 under `throw`, as on a request body, or collected on a
+ * stored `_grant` — then its tier's own fields. `role` has no default to fall
+ * back on. `authenticated` is a `_grant` tier alone; `anyRole` admits `'any'`.
  */
 export function granteeErrors(
   grantee: unknown,
   path: string,
-  opts: { authenticated?: boolean; anyRole?: boolean } = {},
+  opts: { unknownKeys: 'throw' | 'collect'; authenticated?: boolean; anyRole?: boolean },
 ): ValidationError[] {
   const g = (grantee ?? {}) as Partial<Record<'kind' | 'entityId' | 'groupId' | 'role', unknown>>;
-  switch (g.kind) {
-    case 'authenticated':
-      if (opts.authenticated) return [];
-      break;
-    case 'entity':
-      return typeof g.entityId === 'string' && g.entityId.length > 0
-        ? []
-        : [
-            {
-              path: `${path}.entityId`,
-              message: 'An entity grantee requires a non-empty entityId',
-            },
-          ];
-    case 'group': {
-      const errors: ValidationError[] = [];
-      if (typeof g.groupId !== 'string' || g.groupId.length === 0) {
-        errors.push({
-          path: `${path}.groupId`,
-          message: 'A group grantee requires a non-empty groupId',
-        });
-      }
-      if (g.role !== 'member' && g.role !== 'admin' && !(opts.anyRole && g.role === 'any')) {
-        errors.push({
-          path: `${path}.role`,
-          message: opts.anyRole
-            ? "A group grantee requires role 'member', 'admin' or 'any'"
-            : "A group grantee requires role 'member' or 'admin'",
-        });
-      }
-      return errors;
-    }
+  const tier =
+    g.kind === 'entity' || g.kind === 'group' || (opts.authenticated && g.kind === 'authenticated')
+      ? g.kind
+      : null;
+  if (tier === null) {
+    return [
+      {
+        path: `${path}.kind`,
+        message: opts.authenticated
+          ? "A grantee must name its tier: 'entity', 'group' or 'authenticated'."
+          : "A grantee must name its tier: 'entity' or 'group'.",
+      },
+    ];
   }
-  return [
-    {
-      path: `${path}.kind`,
-      message: opts.authenticated
-        ? "A grantee must name its tier: 'entity', 'group' or 'authenticated'"
-        : "A grantee must name its tier: 'entity' or 'group'",
-    },
-  ];
+  if (opts.unknownKeys === 'throw') assertKnownKeys(g, GRANTEE_KEYS[tier], path);
+  const unknown = unknownKeys(g, GRANTEE_KEYS[tier]);
+  if (unknown.length > 0) {
+    const article = tier === 'group' ? 'A' : 'An';
+    return unknown.map((key) => ({
+      path: `${path}.${key}`,
+      message: `${article} ${tier} grantee does not carry ${key}.`,
+    }));
+  }
+  if (tier === 'authenticated') return [];
+  if (tier === 'entity') {
+    return typeof g.entityId === 'string' && g.entityId.length > 0
+      ? []
+      : [{ path: `${path}.entityId`, message: 'An entity grantee requires a non-empty entityId.' }];
+  }
+  const errors: ValidationError[] = [];
+  if (typeof g.groupId !== 'string' || g.groupId.length === 0) {
+    errors.push({
+      path: `${path}.groupId`,
+      message: 'A group grantee requires a non-empty groupId.',
+    });
+  }
+  if (g.role !== 'member' && g.role !== 'admin' && !(opts.anyRole && g.role === 'any')) {
+    errors.push({
+      path: `${path}.role`,
+      message: opts.anyRole
+        ? "A group grantee requires role 'member', 'admin' or 'any'."
+        : "A group grantee requires role 'member' or 'admin'.",
+    });
+  }
+  return errors;
 }
 
 /**
