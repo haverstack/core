@@ -5,14 +5,13 @@
  * See docs/spec/change-feed.md.
  */
 
-import type {
-  ChangeActor,
-  ChangeKind,
-  ChangeOp,
-  DataAssociation,
-  RecordChange,
-} from '@haverstack/core';
-import { serializeActor, serializeRecord, type WireRecord } from './records.js';
+import type { ChangeKind, ChangeOp, DataAssociation, RecordChange } from '@haverstack/core';
+import {
+  serializeChangeActor,
+  serializeRecord,
+  type WireChangeActor,
+  type WireRecord,
+} from './records.js';
 
 /**
  * The change feed a server offers, absent when it offers none. An object
@@ -67,16 +66,6 @@ export type WireRecordChange = {
   record?: WireRecord;
   cursor?: string;
 };
-
-/** Who performed a change. Never who authored the record. Same shape as core's. */
-export type WireChangeActor = ChangeActor;
-
-/** Shared by a change frame and a journal entry — one actor encoding, not two. */
-export function serializeChangeActor(actor: ChangeActor): WireChangeActor {
-  const w: WireChangeActor = serializeActor(actor);
-  if (actor.appId !== undefined) w.appId = actor.appId;
-  return w;
-}
 
 /**
  * A change as a server frames it. A purge carries neither the record nor

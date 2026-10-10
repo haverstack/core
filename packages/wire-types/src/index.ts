@@ -10,13 +10,19 @@
 
 export type {
   WireActor,
+  WireChangeActor,
   WireRecord,
   WireQueryResponse,
   WireType,
   WireVersion,
   WireVersionsResponse,
 } from './records.js';
-export { serializeRecord, serializeType, serializeVersion } from './records.js';
+export {
+  serializeChangeActor,
+  serializeRecord,
+  serializeType,
+  serializeVersion,
+} from './records.js';
 
 export type { WireJournalEntry, WireJournalResponse } from './journal.js';
 export { serializeJournalEntry } from './journal.js';
@@ -61,7 +67,6 @@ export type {
   DiscoveryChanges,
   ChangeTransport,
   WireRecordChange,
-  WireChangeActor,
   WireReadyFrame,
   ChangeResetReason,
   WireResetFrame,
@@ -69,7 +74,6 @@ export type {
 export {
   CHANGE_TRANSPORT_SSE,
   supportsChangeFeed,
-  serializeChangeActor,
   serializeChange,
   CHANGE_FRAME_READY,
   CHANGE_FRAME_RECORD,

@@ -6,7 +6,7 @@
  */
 
 import type { AssociationChange, ChangeKind, ChangeOp, RecordJournalEntry } from '@haverstack/core';
-import { serializeChangeActor, type WireChangeActor } from './change-feed.js';
+import { serializeChangeActor, type WireChangeActor } from './records.js';
 
 /**
  * Every field a `RecordJournalEntry` holds, since the whole entry is what

@@ -1,5 +1,5 @@
 /**
- * Records, types and versions
+ * Records, types, versions and actors
  * -------------------------------------------------------
  * The stored shapes as a response carries them — dates as ISO strings,
  * optional fields absent rather than undefined — and the envelopes that
@@ -8,6 +8,7 @@
 
 import type {
   Actor,
+  ChangeActor,
   RecordVersion,
   StackRecord,
   StackType,
@@ -22,9 +23,19 @@ import type {
 export type WireActor = Actor;
 
 /** Copied field by field, so a response never aliases a stored record's object. */
-export function serializeActor(a: Actor): WireActor {
+function serializeActor(a: Actor): WireActor {
   const w: WireActor = { subjectId: a.subjectId };
   if (a.principalId !== undefined) w.principalId = a.principalId;
+  return w;
+}
+
+/** Who performed a change. Never who authored the record. Same shape as core's. */
+export type WireChangeActor = ChangeActor;
+
+/** Shared by a change frame and a journal entry — one actor encoding, not two. */
+export function serializeChangeActor(actor: ChangeActor): WireChangeActor {
+  const w: WireChangeActor = serializeActor(actor);
+  if (actor.appId !== undefined) w.appId = actor.appId;
   return w;
 }
 
