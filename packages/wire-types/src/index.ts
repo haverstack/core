@@ -50,8 +50,8 @@ export type {
   AuthMethod,
   WireAuthChallengeRequest,
   WireAuthTokenRequest,
-  AuthChallengeResponse,
-  AuthTokenResponse,
+  WireAuthChallengeResponse,
+  WireAuthTokenResponse,
   WireAuthErrorCode,
   WireAuthError,
 } from './auth.js';

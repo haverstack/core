@@ -35,7 +35,7 @@ export function supportsDidChallenge(discovery: { auth?: DiscoveryAuth }): boole
 export type { WireAuthChallengeRequest, WireAuthTokenRequest } from '@haverstack/core/wire';
 
 /** POST /auth/challenge response. */
-export type AuthChallengeResponse = {
+export type WireAuthChallengeResponse = {
   /** Opaque, single-use, base64url-charset. Bound to the requested DID. */
   nonce: string;
   expiresAt: string;
@@ -48,7 +48,7 @@ export type AuthChallengeResponse = {
  * anyway so an issuance path that does delegate needs no new shape.
  * See docs/spec/wire-format.md § Authentication.
  */
-export type AuthTokenResponse = {
+export type WireAuthTokenResponse = {
   token: string;
   expiresAt?: string;
   principalId: string;
