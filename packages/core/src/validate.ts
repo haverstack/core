@@ -36,6 +36,19 @@ export type ValidationError = {
 // Internal helpers
 // -------------------------------------------------------
 
+/**
+ * A stored Type is not re-validated on read, so an enum def may arrive
+ * without `values`; it then allows nothing rather than throwing.
+ */
+export const enumAllows = (values: readonly string[] | undefined, value: unknown): boolean =>
+  Array.isArray(values) && values.includes(value as string);
+
+export const enumMismatchMessage = (
+  values: readonly string[] | undefined,
+  value: unknown,
+): string =>
+  `Expected one of ${(values ?? []).map((v) => JSON.stringify(v)).join(', ')}, got ${JSON.stringify(value)}`;
+
 const jsTypeForScalar = (kind: ScalarFieldKind): string => {
   switch (kind) {
     case 'string':
@@ -198,11 +211,8 @@ const validateField = (
     });
   } else if (typeof value === 'number' && !Number.isFinite(value)) {
     errors.push({ path, message: `Expected a finite number, got ${value}` });
-  } else if (def.kind === 'enum' && !def.values.includes(value as string)) {
-    errors.push({
-      path,
-      message: `Expected one of ${def.values.map((v) => JSON.stringify(v)).join(', ')}, got ${JSON.stringify(value)}`,
-    });
+  } else if (def.kind === 'enum' && !enumAllows(def.values, value)) {
+    errors.push({ path, message: enumMismatchMessage(def.values, value) });
   }
 };
 
@@ -393,6 +403,11 @@ const validateFieldDefShape = (
 
   if (def.values !== undefined && def.kind !== 'enum') {
     errors.push({ path, message: `"values" is only allowed on an enum field, not "${def.kind}"` });
+  }
+  // Unknown keys are otherwise ignored, but this one would silently drop
+  // the constraint its author meant to declare.
+  if (def.enum !== undefined) {
+    errors.push({ path, message: '"enum" is not a field modifier; use { kind: "enum", values }' });
   }
 
   if (def.kind === 'array') {

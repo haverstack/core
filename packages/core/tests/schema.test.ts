@@ -335,6 +335,11 @@ describe('isCompatible enum', () => {
     expect(isCompatible(abc, ab)).toBe(false);
   });
 
+  test('a candidate enum with no values list is incompatible, not a throw', () => {
+    const malformed = { s: { kind: 'enum', required: true } } as unknown as TypeSchema;
+    expect(isCompatible(malformed, abc)).toBe(false);
+  });
+
   test('a required enum refuses a string or text candidate, which may hold any value', () => {
     expect(isCompatible(field({ kind: 'string' }), abc)).toBe(false);
     expect(isCompatible(field({ kind: 'text' }), abc)).toBe(false);

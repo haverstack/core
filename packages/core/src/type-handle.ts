@@ -13,7 +13,7 @@
 
 import { StackBadRequestError, StackMigrationError, StackValidationError } from './errors.js';
 import { lineageProblem, parseTypeId } from './schema.js';
-import type { ValidationError } from './validate.js';
+import { enumAllows, enumMismatchMessage, type ValidationError } from './validate.js';
 import type { CreateRecordOptions, StackClient } from './stack.js';
 import type {
   BaseId,
@@ -274,11 +274,8 @@ const unknownEnumValues = (
 ): void => {
   if (value === undefined || value === null) return;
   if (def.kind === 'enum') {
-    if (typeof value === 'string' && !def.values.includes(value)) {
-      errors.push({
-        path,
-        message: `Expected one of ${def.values.map((v) => JSON.stringify(v)).join(', ')}, got ${JSON.stringify(value)}`,
-      });
+    if (typeof value === 'string' && !enumAllows(def.values, value)) {
+      errors.push({ path, message: enumMismatchMessage(def.values, value) });
     }
     return;
   }

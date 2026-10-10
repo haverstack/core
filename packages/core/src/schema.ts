@@ -11,6 +11,7 @@
 
 import type { TypeSchema, FieldDef, ScalarFieldKind } from './types.js';
 import type { ReadonlyTypeSchema } from './type-handle.js';
+import { enumAllows } from './validate.js';
 
 // -------------------------------------------------------
 // Canonical schema serialization
@@ -109,6 +110,7 @@ const READ_COMPATIBLE: Record<ScalarFieldKind, ScalarFieldKind[]> = {
   date: ['date'],
   'record-ref': ['record-ref'],
   'file-ref': ['file-ref'],
+  // Never consulted: a required enum takes the subset rule in isFieldCompatible.
   enum: ['enum'],
 };
 
@@ -150,9 +152,14 @@ const isFieldCompatible = (candidate: FieldDef, required: FieldDef, depth: numbe
     );
   }
   if (candidate.kind === 'array' || candidate.kind === 'object') return false;
-  // A consumer expecting an enum can handle only the values it lists.
+  // A consumer expecting an enum can handle only the values it lists. An
+  // enum candidate with no `values` list promises nothing, so it fails closed.
   if (required.kind === 'enum') {
-    return candidate.kind === 'enum' && candidate.values.every((v) => required.values.includes(v));
+    return (
+      candidate.kind === 'enum' &&
+      Array.isArray(candidate.values) &&
+      candidate.values.every((v) => enumAllows(required.values, v))
+    );
   }
   return READ_COMPATIBLE[required.kind].includes(candidate.kind);
 };
@@ -187,7 +194,8 @@ export const isCompatible = (
 // -------------------------------------------------------
 //
 // Deliberately distinct from isCompatible() above: read compatibility and
-// evolution legality are different relations that disagree on text/string.
+// evolution legality are different relations that disagree on text/string
+// and on enum.
 // See docs/spec/data-model.md § Type compatibility.
 
 export type SchemaDriftViolation = {

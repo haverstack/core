@@ -663,6 +663,11 @@ describe('enum', () => {
     };
     expect(paths({ tags: ['a', 'c'] }, tags)).toEqual(['tags[1]']);
   });
+
+  test('a stored enum with no values list refuses every value rather than throwing', () => {
+    const malformed = { status: { kind: 'enum' } } as unknown as TypeSchema;
+    expect(paths({ status: 'want' }, malformed)).toEqual(['status']);
+  });
 });
 
 describe('validateSchemaShape enum', () => {
@@ -697,6 +702,12 @@ describe('validateSchemaShape enum', () => {
     ]);
     expect(messages('{"o": {"kind": "object", "open": true, "values": ["a"]}}')).toEqual([
       '"values" is only allowed on an enum field, not "object"',
+    ]);
+  });
+
+  test('an enum key on any field is refused, not ignored', () => {
+    expect(messages('{"s": {"kind": "string", "enum": ["a"]}}')).toEqual([
+      '"enum" is not a field modifier; use { kind: "enum", values }',
     ]);
   });
 });

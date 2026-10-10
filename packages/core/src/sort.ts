@@ -78,6 +78,9 @@ export function contentSortEntry(kind: ScalarFieldKind, value: unknown): SortEnt
       return typeof value === 'string'
         ? { kind: 'text', text: value, key: contentSortKey(value) }
         : null;
+    default:
+      // A stored schema is not re-validated, so its kind may be outside the union.
+      return null;
   }
 }
 
