@@ -953,7 +953,7 @@ describe('attachment upload fixtures', () => {
       }
 
       const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
-      const query = fixture.appId ? `?appId=${encodeURIComponent(fixture.appId)}` : '';
+      const query = fixture.appId ? `?${new URLSearchParams({ appId: fixture.appId })}` : '';
       expect(url).toBe(`${BASE_URL}/attachments${query}`);
       expect(init.method).toBe('POST');
       const headers = init.headers as Record<string, string>;

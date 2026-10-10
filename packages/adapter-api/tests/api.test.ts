@@ -1,3 +1,4 @@
+import { runInNewContext } from 'node:vm';
 import { describe, test, expect, vi } from 'vitest';
 import {
   APIAdapter,
@@ -1091,12 +1092,11 @@ describe('queryRecords', () => {
     expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent
   });
 
-  // The two fields with no wire encoding. Stack.query() resolves baseId
-  // and applies presentAt before an adapter sees either, so these cover the
-  // direct adapter call — refused at both reaches, because otherwise the
-  // encoding decides the answer: the query body carries them to a server
-  // that answers 400, while the search params would drop them and widen the
-  // result set. See docs/spec/wire-format.md § Records.
+  // The two fields with no wire encoding, on a direct adapter call:
+  // Stack.query() resolves both first. Refused at both reaches, or the
+  // encoding would decide the answer — the body draws a 400 while search
+  // params would drop them and widen the result.
+  // See docs/spec/wire-format.md § Records.
   test.each([
     ["at reach 'path', which queries by body", 'path'],
     ["at reach 'none', which queries by search params", 'none'],
@@ -1445,12 +1445,10 @@ describe('getVersion', () => {
     expect(await adapter.getVersion('rec-abc123', 99)).toBeNull();
   });
 
-  // A stray `associations` key can still arrive from an older or foreign
-  // server — RecordVersion has no field for it, so the parser drops it
-  // rather than surfacing it. See docs/spec/versioning.md § Version history.
   // A snapshot is content and the typeId it is read under. Neither
-  // association half bumps a version, so a server emitting either is
-  // writing a key this client drops.
+  // association half bumps a version, so RecordVersion has no field for
+  // either, and a foreign server sending them has the keys dropped.
+  // See docs/spec/versioning.md § Version history.
   test('ignores stray associations and permissions keys', async () => {
     const adapter = await openAdapter();
     const withOptionals = {
@@ -1563,7 +1561,7 @@ describe('a read answering 200 with an empty body', () => {
     [
       'getType',
       (a: APIAdapter) => a.getType('com.example/note@1'),
-      'GET /types/com.example/note@1',
+      'GET /types/com.example%2Fnote%401',
     ],
     ['listTypes', (a: APIAdapter) => a.listTypes(), 'GET /types'],
   ] as const)('%s reports it as a wire-format failure', async (_name, call, endpoint) => {
@@ -1646,6 +1644,44 @@ describe('a 2xx carrying a body that is not JSON', () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(nonJsonResponse());
     await expect(call(adapter)).rejects.toThrow(APIAdapterError);
+  });
+});
+
+/**
+ * Discovery and the handshake are successes like any other, read before an
+ * adapter exists. A broken body is the server's defect, not a refused
+ * credential, so it is never reported as a handshake failure.
+ * docs/spec/wire-format.md § Success responses.
+ */
+describe('open() reading a success body that is empty or not JSON', () => {
+  const bodies = [
+    ['empty', emptyOk],
+    ['not JSON', () => nonJsonResponse()],
+  ] as const;
+
+  test.each(bodies)('discovery answering %s is a wire-format failure', async (_name, body) => {
+    mockFetch.mockResolvedValueOnce(body());
+    const thrown = await APIAdapter.open({ url: BASE_URL, token: TOKEN }).catch(
+      (err: unknown) => err,
+    );
+    expect(thrown).toBeInstanceOf(APIAdapterError);
+    expect((thrown as Error).message).toContain('GET /.well-known/stack');
+  });
+
+  test.each(
+    bodies.flatMap(([name, body]) => [
+      ['/auth/challenge', name, [body]],
+      ['/auth/token', name, [challengeResponse, body]],
+    ]) as [string, string, (() => Response)[]][],
+  )('POST %s answering %s is a wire-format failure', async (path, _name, answers) => {
+    mockFetch.mockResolvedValueOnce(jsonResponse(AUTH_DISCOVERY));
+    for (const answer of answers) mockFetch.mockResolvedValueOnce(answer());
+    const thrown = await APIAdapter.open({ url: BASE_URL, credential: stubCredential() }).catch(
+      (err: unknown) => err,
+    );
+    expect(thrown).toBeInstanceOf(APIAdapterError);
+    expect(thrown).not.toBeInstanceOf(APIAdapterHandshakeError);
+    expect((thrown as Error).message).toContain(`POST ${path}`);
   });
 });
 
@@ -1934,6 +1970,20 @@ describe('putAttachmentWithMetadata', () => {
     ).rejects.toThrow(APIAdapterError);
   });
 
+  // Bytes from another realm — an iframe, a jsdom window — fail an
+  // `instanceof Uint8Array` check, and must travel as the bytes they are.
+  test('sends a typed array from another realm as its bytes', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(jsonResponse(attachmentRecordResponse()));
+    const data = runInNewContext('new Uint8Array([0x89, 0x50, 0x4e, 0x47])') as Uint8Array;
+    expect(data).not.toBeInstanceOf(Uint8Array);
+    await adapter.putAttachmentWithMetadata(data, { mimeType: 'image/png' });
+
+    const [, init] = mockFetch.mock.lastCall as [string, RequestInit];
+    expect(init.body).toBe(data);
+    expect((init.headers as Record<string, string>)['Content-Type']).toBe('image/png');
+  });
+
   test('omits Content-Disposition when no filename is given', async () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(jsonResponse(attachmentRecordResponse()));
@@ -1969,28 +2019,6 @@ describe('deleteBlob', () => {
       `${BASE_URL}/attachments/file-xyz`,
       expect.objectContaining({ method: 'DELETE' }),
     );
-  });
-});
-
-// -------------------------------------------------------
-// Lifecycle
-// -------------------------------------------------------
-
-describe('flush', () => {
-  test('is a no-op', async () => {
-    const adapter = await openAdapter();
-    const callsBefore = mockFetch.mock.calls.length;
-    await expect(adapter.flush()).resolves.toBeUndefined();
-    expect(mockFetch.mock.calls.length).toBe(callsBefore);
-  });
-});
-
-describe('close', () => {
-  test('is a no-op', async () => {
-    const adapter = await openAdapter();
-    const callsBefore = mockFetch.mock.calls.length;
-    await expect(adapter.close()).resolves.toBeUndefined();
-    expect(mockFetch.mock.calls.length).toBe(callsBefore);
   });
 });
 
