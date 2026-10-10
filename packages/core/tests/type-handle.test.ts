@@ -1,9 +1,14 @@
-import { describe, test, expect, expectTypeOf, beforeEach } from 'vitest';
+import { describe, test, expect, expectTypeOf, beforeEach, vi } from 'vitest';
 import { Stack } from '../src/stack.js';
 import { MemoryAdapter } from '../src/testing.js';
 import { migration, typeHandle } from '../src/type-handle.js';
 import type { ContentOf, PatchOf, TypedChange, TypedRecord } from '../src/type-handle.js';
-import { StackBadRequestError, StackMigrationError, StackValidationError } from '../src/errors.js';
+import {
+  StackBadRequestError,
+  StackMigrationError,
+  StackNotFoundError,
+  StackValidationError,
+} from '../src/errors.js';
 import type { StackClient } from '../src/stack.js';
 import type { TypeId, TypeSchema } from '../src/types.js';
 
@@ -446,12 +451,35 @@ describe.each([
     expect(seen[0].record).toBeUndefined();
   });
 
-  test('a typed write to a record of another Type throws before writing', async () => {
+  test('a typed write to a record of another family finds no record and writes nothing', async () => {
     const shelf = await client.create(Shelf, { name: 'Fiction' });
     await expect(client.patchContent(Book, shelf.id, { title: 'x' })).rejects.toThrow(
-      StackBadRequestError,
+      StackNotFoundError,
     );
     expect((await stack.get(shelf.id))?.version).toBe(shelf.version);
+  });
+
+  test('a typed write to another version of the family throws before writing', async () => {
+    await stack.defineType(BookV1);
+    const old = await client.create(BookV1, { title: 'Dune', status: 'want' });
+    await expect(client.patchContent(Book, old.id, { title: 'x' })).rejects.toThrow(
+      `Record "${old.id}" is com.example.reading/book@1, not com.example.reading/book@2`,
+    );
+    await expect(
+      client.mutate(Book, old.id, { associations: [{ kind: 'tag', label: 'x' }] }),
+    ).rejects.toThrow(StackBadRequestError);
+    expect(await adapter.getRecord(old.id)).toEqual(old);
+  });
+
+  test('a typed write reads the record no more often than an untyped one', async () => {
+    const book = await client.create(Book, { title: 'Dune', status: 'want' });
+    const spy = vi.spyOn(adapter, 'getRecord');
+    await client.patchContent(book.id, { title: 'Emma' });
+    const untyped = spy.mock.calls.length;
+    spy.mockClear();
+    await client.patchContent(Book, book.id, { title: 'Dune' });
+    expect(spy.mock.calls.length).toBe(untyped);
+    spy.mockRestore();
   });
 
   test('a typed write to a tombstone is refused as an untyped one is', async () => {
