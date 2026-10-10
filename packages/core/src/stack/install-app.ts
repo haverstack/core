@@ -1,5 +1,5 @@
 /**
- * App installs
+ * App install verbs
  * -------------------------------------------------------
  * Planning, applying and withdrawing an app's install over an unscoped
  * Stack: the bodies of Stack.planInstall(), installApp() and

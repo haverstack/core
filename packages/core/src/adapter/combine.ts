@@ -1,3 +1,11 @@
+/**
+ * Combining adapters
+ * -------------------------------------------------------
+ * A full StackAdapter assembled from a record half and a blob half, so a
+ * deployment can keep records and bytes in different backends without
+ * either adapter knowing about the other.
+ */
+
 import type {
   RecordChange,
   StackAdapter,

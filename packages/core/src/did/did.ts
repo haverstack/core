@@ -197,10 +197,9 @@ export const verifyDidSignature = async (
 // Private-key export/import
 // -------------------------------------------------------
 //
-// Core never stores a private key itself — these exist so callers can
-// persist the key material returned by generateDidKeypair() (encrypted key
-// backup, OS keychain, etc.) and reconstruct it on a later run. Where that
-// key lives is an app/UX concern, not this library's.
+// Core never stores a private key: these let a caller persist what
+// generateDidKeypair() returned and reconstruct it on a later run. Where
+// the key lives is the app's concern.
 
 export const exportDidPrivateKeyJwk = async (privateKey: CryptoKey): Promise<JsonWebKey> =>
   crypto.subtle.exportKey('jwk', privateKey);

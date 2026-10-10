@@ -2946,7 +2946,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
         code: 'validation',
         message: 'Content validation failed',
         details: [
-          { path: 'grantee.role', message: "A group grantee requires role 'member' or 'admin'" },
+          { path: 'grantee.role', message: "A group grantee requires role 'member' or 'admin'." },
         ],
       },
     },
@@ -2983,7 +2983,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
         details: [
           {
             path: 'grantee.entityId',
-            message: 'An entity grantee requires a non-empty entityId',
+            message: 'An entity grantee requires a non-empty entityId.',
           },
         ],
       },
@@ -3020,7 +3020,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
         details: [
           {
             path: 'grantee.entityId',
-            message: 'An entity grantee requires a non-empty entityId',
+            message: 'An entity grantee requires a non-empty entityId.',
           },
         ],
       },
@@ -3053,7 +3053,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
         code: 'validation',
         message: 'Content validation failed',
         details: [
-          { path: 'grantee.groupId', message: 'A group grantee requires a non-empty groupId' },
+          { path: 'grantee.groupId', message: 'A group grantee requires a non-empty groupId.' },
         ],
       },
     },
@@ -3089,7 +3089,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
         code: 'validation',
         message: 'Content validation failed',
         details: [
-          { path: 'grantee.role', message: "A group grantee requires role 'member' or 'admin'" },
+          { path: 'grantee.role', message: "A group grantee requires role 'member' or 'admin'." },
         ],
       },
     },
@@ -3124,7 +3124,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
         details: [
           {
             path: 'grantee.kind',
-            message: "A grantee must name its tier: 'entity', 'group' or 'authenticated'",
+            message: "A grantee must name its tier: 'entity', 'group' or 'authenticated'.",
           },
         ],
       },
@@ -3445,8 +3445,9 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       'A content key of __proto__, constructor or prototype is refused with 422 and code ' +
       '"validation" on POST /records and PATCH /records/:id alike. Undeclared content fields are ' +
       'permitted by design, but these three name JavaScript object machinery rather than fields, ' +
-      'and the write paths disagree about them: a merge patch to __proto__ reaches the prototype ' +
-      'setter and vanishes, while the same key through create() stores as an ordinary property. ' +
+      'and whether one survives a write depends on how an implementation sets keys: assigning ' +
+      '__proto__ reaches the prototype setter and drops the write, while JSON.parse stores it as ' +
+      'an ordinary property. ' +
       'A server built on core inherits the refusal through ordinary record validation; one ' +
       'mapping request bodies onto storage directly applies it itself. See ' +
       'docs/spec/data-model.md § Reserved content keys.',
@@ -3662,7 +3663,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
     responseBody: {
       error: {
         code: 'bad_request',
-        message: 'ID "_hk153x00001" uses the reserved "_" prefix.',
+        message: 'Invalid ID "_hk153x00001": uses the reserved "_" prefix.',
       },
     },
   },

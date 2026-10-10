@@ -4,7 +4,6 @@ import {
   validateSchemaShape,
   validatePatchValues,
   validateReservedKeys,
-  isValid,
 } from '../src/validate.js';
 import type { TypeSchema, FieldDef } from '../src/types/index.js';
 
@@ -537,27 +536,6 @@ describe('object field validation', () => {
     };
     const errors = errorsFor({ a: { b: {} } }, schema);
     expect(errors.some((e) => e.path === 'a.b.c')).toBe(true);
-  });
-});
-
-// -------------------------------------------------------
-// isValid
-// -------------------------------------------------------
-
-describe('isValid', () => {
-  test('returns true for valid content', () => {
-    const schema: TypeSchema = { name: { kind: 'string', required: true } };
-    expect(isValid({ name: 'Alice' }, schema)).toBe(true);
-  });
-
-  test('returns false for invalid content', () => {
-    const schema: TypeSchema = { name: { kind: 'string', required: true } };
-    expect(isValid({}, schema)).toBe(false);
-  });
-
-  test('an empty schema declares no fields, so it accepts no content', () => {
-    expect(isValid({}, {})).toBe(true);
-    expect(isValid({ anything: 'goes' }, {})).toBe(false);
   });
 });
 

@@ -32,7 +32,7 @@ import {
   IncapableMemoryAdapter,
   type MemoryAdapterOpenOptions,
 } from '../src/testing.js';
-import { firstRecordedAttachment } from '../src/wire/attachment-download.js';
+import { firstRecordedAttachment } from '../src/attachment-records.js';
 import type {
   DataAssociation,
   AttachmentContent,
@@ -4413,6 +4413,46 @@ describe('revokeType', () => {
     expect(
       await stack.listTypeGrants({ kind: 'group', groupId: 'group-abc', role: 'any' }),
     ).toHaveLength(1);
+  });
+
+  // A grant's actions are a set: the order they were named in, or a verb
+  // named twice, is not part of what the grant says.
+  test('matches the stored actions as a set, whatever their order', async () => {
+    const granted = await stack.grantType(fam(NOTE_V1), {
+      actions: ['read-any', 'update-any'],
+      grantee: { kind: 'entity', entityId: 'entity-abc' },
+    });
+    const withdrawn = await stack.revokeType(fam(NOTE_V1), {
+      actions: ['update-any', 'read-any'],
+      grantee: { kind: 'entity', entityId: 'entity-abc' },
+    });
+    expect(withdrawn.map((r) => r.id)).toEqual([granted.id]);
+  });
+
+  test('withdraws a stored grant that names an action twice', async () => {
+    const granted = await stack.create('_grant@1', {
+      baseId: fam(NOTE_V1),
+      actions: ['read-any', 'read-any'],
+      grantee: { kind: 'entity', entityId: 'entity-abc' },
+    });
+    const withdrawn = await stack.revokeType(fam(NOTE_V1), {
+      actions: ['read-any'],
+      grantee: { kind: 'entity', entityId: 'entity-abc' },
+    });
+    expect(withdrawn.map((r) => r.id)).toEqual([granted.id]);
+  });
+
+  test('a subset of the stored actions withdraws nothing', async () => {
+    await stack.grantType(fam(NOTE_V1), {
+      actions: ['read-any', 'update-any'],
+      grantee: { kind: 'entity', entityId: 'entity-abc' },
+    });
+    expect(
+      await stack.revokeType(fam(NOTE_V1), {
+        actions: ['read-any'],
+        grantee: { kind: 'entity', entityId: 'entity-abc' },
+      }),
+    ).toEqual([]);
   });
 
   test("role 'any' is listing-only — grantType() and revokeType() refuse it", async () => {

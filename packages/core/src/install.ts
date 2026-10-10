@@ -16,11 +16,11 @@
  *
  * This module holds the parts that read an install as data: the write-time
  * shape rules, the family claim, and the plan diff. The verbs that write
- * live on `Stack`. See docs/spec/apps.md.
+ * are in stack/install-app.ts. See docs/spec/apps.md.
  */
 
 import { baseIdOf, familyIdProblem, parseTypeId } from './schema.js';
-import { GRANT_ACTION_SET, UNGRANTABLE_SYSTEM_TYPES } from './grants.js';
+import { GRANT_ACTION_SET, UNGRANTABLE_SYSTEM_TYPES, sameActions } from './grants.js';
 import { SYSTEM_TYPES } from './types/index.js';
 import type {
   AppId,
@@ -140,10 +140,10 @@ export function linkedIds(record: StackRecord, label: string): RecordId[] {
 
 const SYSTEM_FAMILIES: ReadonlySet<string> = new Set(Object.values(SYSTEM_TYPES));
 
-export const isSystemFamily = (baseId: BaseId): boolean => SYSTEM_FAMILIES.has(baseId);
+const isSystemFamily = (baseId: BaseId): boolean => SYSTEM_FAMILIES.has(baseId);
 
 /** The Schema Commons namespace: families no app owns. See docs/commons/README.md. */
-export const COMMONS_NAMESPACE = 'org.haverstack';
+const COMMONS_NAMESPACE = 'org.haverstack';
 
 /** The part of a family before its `/` — `com.example.notes` for `com.example.notes/note`. */
 export const namespaceOf = (baseId: BaseId): string | null => {
@@ -259,10 +259,7 @@ function deepFreeze<T>(value: T): T {
 
 /** Whether two requests ask for the same family and exactly the same actions. */
 export function sameRequest(a: InstallRequest, b: InstallRequest): boolean {
-  if (a.baseId !== b.baseId) return false;
-  const as = new Set(a.actions);
-  const bs = new Set(b.actions);
-  return as.size === bs.size && [...bs].every((x) => as.has(x));
+  return a.baseId === b.baseId && sameActions(a.actions, b.actions);
 }
 
 /** Whether a stored grant is exactly `request`, made out to `did`. */

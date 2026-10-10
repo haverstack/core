@@ -27,7 +27,8 @@ import type {
   Unsubscribe,
 } from '../types/index.js';
 import { StackBadRequestError } from '../errors.js';
-import { bumpsVersion, feedAssociationDelta } from '../record-changes.js';
+import { bumpsVersion } from '../record-changes.js';
+import { feedAssociationDelta } from '../associations/identity.js';
 
 /**
  * What the emitter knows: the envelope, plus the record it describes.

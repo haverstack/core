@@ -289,7 +289,7 @@ export type TypedChangeSet<S extends ReadonlyTypeSchema> = Omit<RecordChangeSet,
  * handle's Type. A record of another Type throws, and so does one whose
  * family has moved past the handle's version.
  */
-export const narrowRecord = <S extends ReadonlyTypeSchema>(
+const narrowRecord = <S extends ReadonlyTypeSchema>(
   handle: TypeHandle<S>,
   record: StackRecord,
 ): TypedRecord<S> => {
@@ -300,7 +300,7 @@ export const narrowRecord = <S extends ReadonlyTypeSchema>(
 };
 
 /** The ways a typed read can be asked to see a tombstone. */
-export const assertLiveFilter = (filter: object | undefined): void => {
+const assertLiveFilter = (filter: object | undefined): void => {
   if ((filter as RecordFilter | undefined)?.includeDeleted) {
     throw new StackBadRequestError(
       'A typed read sees live records only; use the untyped read to include soft-deleted records.',

@@ -1,7 +1,10 @@
 /**
  * Stack — Schema Utilities
  * -------------------------------------------------------
- * Schema hashing and type compatibility checks.
+ * What can be said about a TypeSchema and a TypeId without a stack: a
+ * schema's hash, whether one schema reads as another, whether one is a
+ * legal in-place evolution of another, and how a TypeId splits into its
+ * family and version.
  *
  * Hashing produces a stable SHA-256 fingerprint of a TypeSchema
  * by canonicalizing it first (alphabetical keys, minified JSON).
@@ -189,10 +192,8 @@ export const isCompatible = (
 // Schema evolution legality (drift detection)
 // -------------------------------------------------------
 //
-// Deliberately distinct from isCompatible() above: read compatibility and
-// evolution legality are different relations that disagree on text/string
-// and on enum.
-// See docs/spec/data-model.md § Type compatibility.
+// Distinct from isCompatible(): the two relations disagree on text/string
+// and enum. See docs/spec/data-model.md § Type compatibility.
 
 export type SchemaDriftViolation = {
   /** Field path where the drift was detected, e.g. "title" or "author.name". Empty string means array-item context. */
@@ -309,6 +310,16 @@ export const diffSchemas = (stored: TypeSchema, candidate: TypeSchema): SchemaDr
   return violations;
 };
 
+/**
+ * A schema's top-level `file-ref` fields — the content half of what a
+ * record references, beside its attachment associations. A nested one is
+ * validated but is not a reference. See docs/spec/data-model.md § Types.
+ */
+export const fileRefFields = (schema: ReadonlyTypeSchema): string[] =>
+  Object.entries(schema)
+    .filter(([, def]) => def.kind === 'file-ref')
+    .map(([field]) => field);
+
 // -------------------------------------------------------
 // Type ID parsing
 // -------------------------------------------------------
@@ -323,12 +334,6 @@ export const parseTypeId = (typeId: string): { baseId: string; version: number }
   if (!match) return null;
   return { baseId: match[1], version: parseInt(match[2], 10) };
 };
-
-/**
- * Build a versioned TypeId from a base ID and version number.
- * e.g. ("com.example.myapp/note", 2) → "com.example.myapp/note@2"
- */
-export const buildTypeId = (baseId: string, version: number): string => `${baseId}@${version}`;
 
 /**
  * Extract the base (family) ID from a TypeId, tolerating an already-bare

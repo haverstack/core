@@ -9,8 +9,8 @@
 export { InvalidDidError, generateDidKeypair, verifyDidSignature } from './did.js';
 export type { DidKeypair } from './did.js';
 
-// No in-repo caller: haverstack/server#54 validates ENTITY_ID as a DID at
-// server startup.
+// No in-repo caller: a server validates its configured owner DID with this
+// at startup.
 export { isValidDid } from './did.js';
 
 // No in-repo caller: it exists for callers needing the did:key narrowing

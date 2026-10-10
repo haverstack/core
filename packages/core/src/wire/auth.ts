@@ -86,13 +86,10 @@ export const authOriginFromUrl = (url: string): string => {
 };
 
 /**
- * Build the exact bytes a client signs and a server verifies.
- *
- * The origin is in the payload because the nonce alone doesn't scope a
- * signature to a server: one that a client connects to can fetch a
- * challenge from the client's real stack, pass that nonce along, and
- * redeem the returned signature as a token. Signing the origin the client
- * believes it is talking to makes such a signature verify nowhere else.
+ * Build the exact bytes a client signs and a server verifies. The origin is
+ * signed because a nonce alone doesn't scope a signature: a server a client
+ * connects to could relay a challenge from the client's real stack and
+ * redeem the signature there.
  */
 export const buildAuthChallengePayload = (challenge: AuthChallenge): Uint8Array => {
   const origin = authOriginFromUrl(challenge.origin);
