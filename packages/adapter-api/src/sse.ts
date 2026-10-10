@@ -34,9 +34,9 @@ export class SseDecoder {
       text = text.slice(0, -1);
     }
     this.buffer += text.replace(/\r\n|\r/g, '\n');
-    if (this.buffer.length > MAX_SSE_BUFFER_BYTES) {
+    if (this.buffer.length > MAX_SSE_BUFFER_CHARS) {
       throw new APIAdapterError(
-        `Change feed frame exceeded ${MAX_SSE_BUFFER_BYTES} bytes without a frame boundary.`,
+        `Change feed frame exceeded ${MAX_SSE_BUFFER_CHARS} characters without a frame boundary.`,
       );
     }
     const frames: SseFrame[] = [];
@@ -54,11 +54,11 @@ export class SseDecoder {
 
 /**
  * How large a single unterminated SSE frame may grow before the connection
- * is abandoned. Generous next to any real change frame — a record body is
- * bounded by the server's own content limit — but finite, so a peer that
- * streams without ever closing a frame cannot exhaust client memory.
+ * is abandoned, in the UTF-16 code units the buffer holds — up to three
+ * bytes each on the wire. Generous next to any real change frame, but
+ * finite, so a peer that never closes a frame cannot exhaust client memory.
  */
-const MAX_SSE_BUFFER_BYTES = 8 * 1024 * 1024;
+const MAX_SSE_BUFFER_CHARS = 8 * 1024 * 1024;
 
 /** Null for a block carrying only comments — a keepalive is not a frame. */
 function decodeFrame(block: string): SseFrame | null {

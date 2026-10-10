@@ -10,7 +10,7 @@ import type { DidCredential } from '@haverstack/core/wire';
 import { isWireAuthError, isRetryableAuthError } from '@haverstack/wire-types';
 import type { WireAuthChallengeResponse, WireAuthTokenResponse } from '@haverstack/wire-types';
 import { APIAdapterHandshakeError } from './errors.js';
-import { fetchOrThrow, readJsonBody, parseJsonBody, requireBody } from './transport.js';
+import { fetchOrThrow, readJsonBody, successBody } from './transport.js';
 
 /** Build the typed error for a rejected handshake response. */
 const handshakeError = async (res: Response, path: string): Promise<Error> => {
@@ -20,10 +20,6 @@ const handshakeError = async (res: Response, path: string): Promise<Error> => {
   }
   return new APIAdapterHandshakeError(undefined, `HTTP ${res.status}: POST ${path}`);
 };
-
-/** A handshake step's body, held to the same contract as every other success. */
-const successBody = async <T>(res: Response, path: string): Promise<T> =>
-  requireBody((await parseJsonBody(res, 'POST', path)) as T | undefined, `POST ${path}`);
 
 /**
  * Earn a bearer token by proving possession of the credential's key. The
@@ -46,7 +42,11 @@ export const performHandshake = async (
 
   const challengeRes = await post('/auth/challenge', { did: credential.did });
   if (!challengeRes.ok) throw await handshakeError(challengeRes, '/auth/challenge');
-  const challenge = await successBody<WireAuthChallengeResponse>(challengeRes, '/auth/challenge');
+  const challenge = await successBody<WireAuthChallengeResponse>(
+    challengeRes,
+    'POST',
+    '/auth/challenge',
+  );
 
   const signature = await credential.sign(
     buildAuthChallengePayload({ origin: baseUrl, did: credential.did, nonce: challenge.nonce }),
@@ -69,5 +69,5 @@ export const performHandshake = async (
     }
     throw err;
   }
-  return successBody<WireAuthTokenResponse>(tokenRes, '/auth/token');
+  return successBody<WireAuthTokenResponse>(tokenRes, 'POST', '/auth/token');
 };

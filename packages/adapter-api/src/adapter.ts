@@ -110,6 +110,7 @@ import {
   parseJsonBody,
   requireRecordBody,
   requireBody,
+  successBody,
   requireNullableBody,
 } from './transport.js';
 
@@ -148,6 +149,18 @@ export type APIAdapterOpenOptions = {
    * a sidecar server are unaffected.
    */
   allowInsecure?: boolean;
+};
+
+/**
+ * `bytes` is sent as-is under the Content-Type in `headers`, in place of a
+ * JSON body. The caller names it because a typed array from another realm
+ * is not `instanceof Uint8Array`, so the body's type cannot tell.
+ */
+type RequestOptions = {
+  nullOn404?: boolean;
+  ifMatch?: number;
+  bytes?: Uint8Array;
+  headers?: Record<string, string>;
 };
 
 // -------------------------------------------------------
@@ -246,10 +259,7 @@ export class APIAdapter implements StackAdapter {
       throw new APIAdapterError(`Discovery failed: server returned ${res.status}`, res.status);
     }
 
-    const discovery = requireBody(
-      (await parseJsonBody(res, 'GET', '/.well-known/stack')) as DiscoveryResponse | undefined,
-      'GET /.well-known/stack',
-    );
+    const discovery = await successBody<DiscoveryResponse>(res, 'GET', '/.well-known/stack');
 
     if (!isProtocolCompatible(discovery.version ?? '')) {
       throw new APIAdapterVersionError(
@@ -384,28 +394,17 @@ export class APIAdapter implements StackAdapter {
     method: string,
     path: string,
     body?: unknown,
-    {
-      nullOn404 = false,
-      ifMatch,
-      headers: extra,
-    }: { nullOn404?: boolean; ifMatch?: number; headers?: Record<string, string> } = {},
+    { nullOn404 = false, ifMatch, bytes, headers: extra }: RequestOptions = {},
   ): Promise<T | null | undefined> {
-    // Bytes travel as-is under the Content-Type the caller supplies; any
-    // other body is JSON.
-    const bytes = body instanceof Uint8Array;
     const res = await this.send(`${this.baseUrl}${path}`, (token) => {
       const headers = authHeaders(token, extra);
-      if (body !== undefined && !bytes) headers['Content-Type'] = 'application/json';
+      if (body !== undefined) headers['Content-Type'] = 'application/json';
       // Opt-in optimistic-concurrency precondition (see Stack's ifVersion).
       // A mismatch gets a 412 with a version_conflict wire body, which
       // errorForResponse() below reconstructs as StackVersionConflictError.
       if (ifMatch !== undefined) headers['If-Match'] = `"${ifMatch}"`;
-      const encoded = bytes
-        ? (body as BodyInit)
-        : body !== undefined
-          ? JSON.stringify(body)
-          : undefined;
-      return { method, headers, body: encoded };
+      const encoded = bytes ?? (body !== undefined ? JSON.stringify(body) : undefined);
+      return { method, headers, body: encoded as BodyInit | undefined };
     });
 
     if (res.status === 404 && nullOn404) return null;
@@ -420,9 +419,9 @@ export class APIAdapter implements StackAdapter {
     method: string,
     path: string,
     body?: unknown,
-    ifVersion?: number,
+    opts: Omit<RequestOptions, 'nullOn404'> = {},
   ): Promise<StackRecord> {
-    const raw = await this.request<WireRecord>(method, path, body, { ifMatch: ifVersion });
+    const raw = await this.request<WireRecord>(method, path, body, opts);
     return requireRecordBody(raw, `${method} ${path}`);
   }
 
@@ -472,7 +471,9 @@ export class APIAdapter implements StackAdapter {
     // updatedAt) ride along. The server applies it against its own current
     // state and assigns the new version/updatedAt; the response is
     // authoritative. One If-Match fences the whole set.
-    return this.requestRecord('PATCH', `/records/${pathSegment(id)}`, changes, opts.ifVersion);
+    return this.requestRecord('PATCH', `/records/${pathSegment(id)}`, changes, {
+      ifMatch: opts.ifVersion,
+    });
   }
 
   /**
@@ -513,7 +514,7 @@ export class APIAdapter implements StackAdapter {
       'POST',
       `/records/${pathSegment(id)}/migrate`,
       { toTypeId, content },
-      opts.ifVersion,
+      { ifMatch: opts.ifVersion },
     );
   }
 
@@ -543,12 +544,9 @@ export class APIAdapter implements StackAdapter {
   }
 
   async undeleteRecord(id: RecordId, opts: { ifVersion?: number } = {}): Promise<StackRecord> {
-    return this.requestRecord(
-      'POST',
-      `/records/${pathSegment(id)}/undelete`,
-      undefined,
-      opts.ifVersion,
-    );
+    return this.requestRecord('POST', `/records/${pathSegment(id)}/undelete`, undefined, {
+      ifMatch: opts.ifVersion,
+    });
   }
 
   async queryRecords(query: StackQuery): Promise<QueryResult> {
@@ -738,7 +736,7 @@ export class APIAdapter implements StackAdapter {
       'POST',
       `/records/${pathSegment(id)}/restore/${pathSegment(version)}`,
       undefined,
-      opts.ifVersion,
+      { ifMatch: opts.ifVersion },
     );
   }
 
@@ -791,14 +789,15 @@ export class APIAdapter implements StackAdapter {
     const { mimeType, filename, appId } = opts;
     const params = new URLSearchParams();
     if (appId) params.set('appId', appId);
-    const path = withParams('/attachments', params);
     const headers: Record<string, string> = { 'Content-Type': mimeType };
     if (filename) {
       headers['Content-Disposition'] =
         `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`;
     }
-    const raw = await this.request<WireRecord>('POST', path, data, { headers });
-    return requireRecordBody(raw, `POST ${path}`);
+    return this.requestRecord('POST', withParams('/attachments', params), undefined, {
+      bytes: data,
+      headers,
+    });
   }
 
   async getBlob(fileId: FileId): Promise<Uint8Array> {

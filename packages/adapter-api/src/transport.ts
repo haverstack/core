@@ -164,3 +164,11 @@ export const requireNullableBody = <T>(raw: T | null | undefined, endpoint: stri
   if (raw === undefined) throw emptyBodyError(endpoint);
   return raw;
 };
+
+/**
+ * A success body read whole: parsed, and required to be there. For the
+ * responses that are not routed through APIAdapter's request helpers —
+ * discovery and the handshake. See docs/spec/wire-format.md § Success responses.
+ */
+export const successBody = async <T>(res: Response, method: string, path: string): Promise<T> =>
+  requireBody((await parseJsonBody(res, method, path)) as T | undefined, `${method} ${path}`);

@@ -1,3 +1,4 @@
+import { runInNewContext } from 'node:vm';
 import { describe, test, expect, vi } from 'vitest';
 import {
   APIAdapter,
@@ -1646,6 +1647,44 @@ describe('a 2xx carrying a body that is not JSON', () => {
   });
 });
 
+/**
+ * Discovery and the handshake are successes like any other, read before an
+ * adapter exists. A broken body is the server's defect, not a refused
+ * credential, so it is never reported as a handshake failure.
+ * docs/spec/wire-format.md § Success responses.
+ */
+describe('open() reading a success body that is empty or not JSON', () => {
+  const bodies = [
+    ['empty', emptyOk],
+    ['not JSON', () => nonJsonResponse()],
+  ] as const;
+
+  test.each(bodies)('discovery answering %s is a wire-format failure', async (_name, body) => {
+    mockFetch.mockResolvedValueOnce(body());
+    const thrown = await APIAdapter.open({ url: BASE_URL, token: TOKEN }).catch(
+      (err: unknown) => err,
+    );
+    expect(thrown).toBeInstanceOf(APIAdapterError);
+    expect((thrown as Error).message).toContain('GET /.well-known/stack');
+  });
+
+  test.each(
+    bodies.flatMap(([name, body]) => [
+      ['/auth/challenge', name, [body]],
+      ['/auth/token', name, [challengeResponse, body]],
+    ]) as [string, string, (() => Response)[]][],
+  )('POST %s answering %s is a wire-format failure', async (path, _name, answers) => {
+    mockFetch.mockResolvedValueOnce(jsonResponse(AUTH_DISCOVERY));
+    for (const answer of answers) mockFetch.mockResolvedValueOnce(answer());
+    const thrown = await APIAdapter.open({ url: BASE_URL, credential: stubCredential() }).catch(
+      (err: unknown) => err,
+    );
+    expect(thrown).toBeInstanceOf(APIAdapterError);
+    expect(thrown).not.toBeInstanceOf(APIAdapterHandshakeError);
+    expect((thrown as Error).message).toContain(`POST ${path}`);
+  });
+});
+
 describe('saveVersion', () => {
   test('is a no-op — does not make any HTTP requests', async () => {
     const adapter = await openAdapter();
@@ -1929,6 +1968,20 @@ describe('putAttachmentWithMetadata', () => {
     await expect(
       adapter.putAttachmentWithMetadata(new Uint8Array([1]), { mimeType: 'image/png' }),
     ).rejects.toThrow(APIAdapterError);
+  });
+
+  // Bytes from another realm — an iframe, a jsdom window — fail an
+  // `instanceof Uint8Array` check, and must travel as the bytes they are.
+  test('sends a typed array from another realm as its bytes', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(jsonResponse(attachmentRecordResponse()));
+    const data = runInNewContext('new Uint8Array([0x89, 0x50, 0x4e, 0x47])') as Uint8Array;
+    expect(data).not.toBeInstanceOf(Uint8Array);
+    await adapter.putAttachmentWithMetadata(data, { mimeType: 'image/png' });
+
+    const [, init] = mockFetch.mock.lastCall as [string, RequestInit];
+    expect(init.body).toBe(data);
+    expect((init.headers as Record<string, string>)['Content-Type']).toBe('image/png');
   });
 
   test('omits Content-Disposition when no filename is given', async () => {
