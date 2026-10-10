@@ -11,10 +11,10 @@
 
 import { hasGroupAdmin } from '../access.js';
 import { ARGUMENTS_INVALID, StackConflictError, StackValidationError } from '../errors.js';
-import { bindingFieldsOf, uniqueBindingFieldsOf } from '../identity-bindings.js';
+import { bindingFieldsOf, uniqueBindingFieldsOf } from './identity-bindings.js';
 import { filtersContent } from '../query-validation.js';
 import { associationIdentical, isGroupRecord } from '../record-changes.js';
-import { validateParentId } from '../record-id.js';
+import { validateParentId } from './record-id.js';
 import { baseIdOf } from '../schema.js';
 import { findFirstMatch } from './reads.js';
 import { SYSTEM_TYPES } from '../types/index.js';

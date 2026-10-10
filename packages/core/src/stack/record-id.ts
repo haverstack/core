@@ -9,9 +9,9 @@
  * See docs/spec/data-model.md § Record IDs.
  */
 
-import { isValidIdFormat, idTimestamp, MAX_ID_TIMESTAMP } from './id.js';
-import { ARGUMENTS_INVALID, StackBadRequestError, StackValidationError } from './errors.js';
-import type { ValidationError } from './validate.js';
+import { isValidIdFormat, idTimestamp, MAX_ID_TIMESTAMP } from '../id.js';
+import { ARGUMENTS_INVALID, StackBadRequestError, StackValidationError } from '../errors.js';
+import type { ValidationError } from '../validate.js';
 
 // -------------------------------------------------------
 // Record ID validation

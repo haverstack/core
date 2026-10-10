@@ -21,7 +21,7 @@
 
 import { baseIdOf } from '../schema.js';
 import { validatePatchValues } from '../validate.js';
-import { ChangeEmitter, assertSinceUsable } from '../changes.js';
+import { ChangeEmitter, assertSinceUsable } from '../stack/changes.js';
 import { SYSTEM_TYPES } from '../types/index.js';
 import type {
   ActorOptions,
@@ -73,12 +73,16 @@ import {
   assertValidSort,
   filtersContent,
 } from '../query-validation.js';
-import { bindingFieldsOf } from '../identity-bindings.js';
-import { checkFamily, storedVersionDiffers, WRITE_EXPECTATION } from '../write-expectation.js';
-import type { ExpectationOptions } from '../write-expectation.js';
+import { bindingFieldsOf } from '../stack/identity-bindings.js';
+import {
+  checkFamily,
+  storedVersionDiffers,
+  WRITE_EXPECTATION,
+} from '../stack/write-expectation.js';
+import type { ExpectationOptions } from '../stack/write-expectation.js';
 import { claimedFamilies, familyStanding, linkedIds, INSTALL_APP_LABEL } from '../install.js';
-import { assertAttachmentSize } from '../limits.js';
-import { validateIdTimestampSkew, validateRecordId } from '../record-id.js';
+import { assertAttachmentSize } from '../stack/limits.js';
+import { validateIdTimestampSkew, validateRecordId } from '../stack/record-id.js';
 import {
   DEFAULT_QUERY_LIMIT,
   MAX_QUERY_LIMIT,

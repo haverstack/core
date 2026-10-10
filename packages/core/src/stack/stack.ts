@@ -37,7 +37,7 @@ import {
 import { applyMergePatch } from '../merge.js';
 import { validatePermissions } from '../access.js';
 import { compareRecordedAttachments } from '../wire/attachment-download.js';
-import { ChangeEmitter, RelayDelivery, PendingChange, assertSinceUsable } from '../changes.js';
+import { ChangeEmitter, RelayDelivery, PendingChange, assertSinceUsable } from './changes.js';
 import { SYSTEM_TYPES } from '../types/index.js';
 import type { ValidationError } from '../validate.js';
 import type {
@@ -110,16 +110,16 @@ import {
 } from '../query-validation.js';
 import { validateGrantee, validateGrantBaseId } from '../grants.js';
 import type { GrantQuery } from '../grants.js';
-import { bindingFieldsOf } from '../identity-bindings.js';
+import { bindingFieldsOf } from './identity-bindings.js';
 import { validateInstall } from '../install.js';
 import type { AppManifest, InstallPlan } from '../install.js';
-import { assertAttachmentSize, assertContentSize } from '../limits.js';
+import { assertAttachmentSize, assertContentSize } from './limits.js';
 import {
   validateRecordId,
   validateClockField,
   validateIdTimestampSkew,
   DEFAULT_ID_TIMESTAMP_SKEW_MS,
-} from '../record-id.js';
+} from './record-id.js';
 import { queryAllPages, lookupEntityByDid, MAX_QUERY_LIMIT } from './reads.js';
 import {
   applyAssociationEdits,
@@ -172,8 +172,8 @@ import {
   typedQuery,
   typedSubscribe,
 } from '../type-handle.js';
-import { checkFamily, checkStoredVersion, WRITE_EXPECTATION } from '../write-expectation.js';
-import type { ExpectationOptions } from '../write-expectation.js';
+import { checkFamily, checkStoredVersion, WRITE_EXPECTATION } from './write-expectation.js';
+import type { ExpectationOptions } from './write-expectation.js';
 import type {
   ContentOf,
   PatchOf,

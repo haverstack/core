@@ -13,7 +13,7 @@
 
 import { StackBadRequestError, StackMigrationError } from './errors.js';
 import { lineageProblem, parseTypeId } from './schema.js';
-import { StoredVersionError, WRITE_EXPECTATION } from './write-expectation.js';
+import { StoredVersionError, WRITE_EXPECTATION } from './stack/write-expectation.js';
 import type { CreateRecordOptions, StackClient } from './stack/client.js';
 import type {
   BaseId,

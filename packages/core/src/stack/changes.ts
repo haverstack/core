@@ -25,9 +25,9 @@ import type {
   StackRecord,
   SubscribeOptions,
   Unsubscribe,
-} from './types/index.js';
-import { StackBadRequestError } from './errors.js';
-import { bumpsVersion, feedAssociationDelta } from './record-changes.js';
+} from '../types/index.js';
+import { StackBadRequestError } from '../errors.js';
+import { bumpsVersion, feedAssociationDelta } from '../record-changes.js';
 
 /**
  * What the emitter knows: the envelope, plus the record it describes.

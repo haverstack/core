@@ -10,7 +10,7 @@
  * See docs/spec/wire-format.md § Request size limits.
  */
 
-import { StackPayloadTooLargeError } from './errors.js';
+import { StackPayloadTooLargeError } from '../errors.js';
 
 /** Shared by Stack.putAttachment() and ScopedStack.putAttachment(). */
 export function assertAttachmentSize(byteLength: number, attachmentBytes: number | null): void {

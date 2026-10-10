@@ -8,8 +8,8 @@
  */
 
 import { baseIdOf } from '../schema.js';
-import { Subscription, matchesFilter, passesUnlistedBoundary } from '../changes.js';
-import type { EmittedChange } from '../changes.js';
+import { Subscription, matchesFilter, passesUnlistedBoundary } from '../stack/changes.js';
+import type { EmittedChange } from '../stack/changes.js';
 import { presentDeleted } from '../record-changes.js';
 import { SYSTEM_TYPES } from '../types/index.js';
 import type { GroupRole, RecordChange, StackRecord, SubscribeOptions } from '../types/index.js';

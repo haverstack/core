@@ -9,7 +9,7 @@
  * See docs/spec/identity.md § DID bindings.
  */
 
-import { SYSTEM_TYPES } from './types/index.js';
+import { SYSTEM_TYPES } from '../types/index.js';
 
 /**
  * Content fields that are lookup keys rather than display values: a card

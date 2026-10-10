@@ -16,9 +16,9 @@
  * write landing in between is a conflict rather than an unchecked write.
  */
 
-import { StackNotFoundError } from './errors.js';
-import { baseIdOf } from './schema.js';
-import type { BaseId, StackRecord, TypeId } from './types/index.js';
+import { StackNotFoundError } from '../errors.js';
+import { baseIdOf } from '../schema.js';
+import type { BaseId, StackRecord, TypeId } from '../types/index.js';
 
 export const WRITE_EXPECTATION = Symbol('haverstack.writeExpectation');
 
