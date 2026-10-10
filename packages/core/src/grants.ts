@@ -40,11 +40,9 @@ import type { ValidationError } from './validate.js';
 export const GRANT_ACTION_SET: ReadonlySet<GrantAction> = new Set(GRANT_ACTIONS);
 
 /**
- * The read actions that make a mutate action coherent, scope for scope: a
- * `-any` verb needs read over the same reach it can mutate, a `-own` verb
- * needs read over its author's own. A grant carrying neither conveys the
- * verb to nobody. `create` has no companion — writing a Record you then
- * cannot read is the drop-box, and it discloses nothing.
+ * The read actions that make a mutate action coherent, scope for scope. A
+ * grant carrying none conveys the verb to nobody. `create` has none:
+ * writing a Record you cannot read is the drop-box, and discloses nothing.
  * See docs/spec/access-control.md § Write implies read.
  */
 const READ_COMPANIONS: ReadonlyMap<GrantAction, readonly GrantAction[]> = new Map([
@@ -55,14 +53,10 @@ const READ_COMPANIONS: ReadonlyMap<GrantAction, readonly GrantAction[]> = new Ma
 ]);
 
 /**
- * Whether one grant's action list conveys `action`. The companion has to
- * sit in the same `_grant` Record: a grant is revoked whole, so a rule
- * satisfied across two records would let revoking the read one leave a
- * mutate-without-read grant standing.
- *
- * Takes the list grantReach() produced, never a stored field: `includes()`
- * over a string is substring matching, so one would answer for every verb
- * spelled inside it.
+ * Whether one grant's action list conveys `action`. The companion must sit
+ * in the same `_grant`: a grant is revoked whole, so a rule met across two
+ * records could leave mutate-without-read standing. Takes grantReach()'s
+ * list, never a stored field, whose `includes()` would match substrings.
  */
 export function grantConveys(actions: readonly GrantAction[], action: GrantAction): boolean {
   if (!actions.includes(action)) return false;
@@ -72,12 +66,10 @@ export function grantConveys(actions: readonly GrantAction[], action: GrantActio
 
 /**
  * What a stored `_grant` reaches, or null where it names nothing the
- * evaluator recognizes. Read as data, like the grantee beside it: a grant
- * Record can arrive from an import, a direct adapter write or a foreign
- * server, where no schema saw it, so both fields are asked for their shape
- * rather than taken from the type. An unknown action is dropped from the
- * list, on the same terms an unknown grantee `kind` confers nothing.
- * See docs/spec/access-control.md § Refused at the write, and again at evaluation.
+ * evaluator recognizes. Read as data — a grant can arrive from an import or
+ * a foreign server no schema saw — so an unknown action is dropped, as an
+ * unknown grantee confers nothing. See docs/spec/access-control.md
+ * § Refused at the write, and again at evaluation.
  */
 export function grantReach(content: unknown): { familyId: string; actions: GrantAction[] } | null {
   const c = content as { baseId?: unknown; actions?: unknown } | null;
@@ -125,13 +117,10 @@ export function matchesGrantTarget(content: GrantContent, target: GrantQuery): b
 }
 
 /**
- * Reject a grant target that names no tier, or whose tier names nobody. An
- * empty groupId or entityId reaches no one, so storing it would leave a
- * grant that can only ever deny while looking like a share that worked.
- * Read as data, not as the type: a target reaching Stack from a request
- * body or an import has whatever shape it arrived with, so a key its tier
- * does not define is refused too. `allowAny` admits
- * the listing-only `role: 'any'`, which grantType() and revokeType() refuse.
+ * Reject a grant target that names no tier, or whose tier names nobody: it
+ * would store a grant that can only deny while looking like a share that
+ * worked. Read as data, so a key its tier does not define is refused too.
+ * `allowAny` admits the listing-only `role: 'any'`.
  */
 export function validateGrantTarget(target: GrantQuery, allowAny = false): void {
   const t = target as { kind?: unknown } | null;

@@ -40,13 +40,10 @@ export type AccessMode = 'read' | 'write';
 export type RecordResolver = (id: RecordId) => Promise<StackRecord | null>;
 
 /**
- * Whether an entity has read or write access to a Record.
- *
- * The entity here is the **subject** — record-level permissions are written
- * about who data is for, never about the software that carried the request.
- * A delegated app's own authority is a separate question, asked of the
- * principal. See docs/spec/access-control.md § Record-level permissions and
- * § Delegation: principal and subject.
+ * Whether an entity may read or write a Record. The entity is the
+ * **subject**: record-level permissions are written about who data is for,
+ * never the software carrying the request, whose authority is asked of the
+ * principal. See docs/spec/access-control.md § Delegation: principal and subject.
  */
 export async function checkAccess(
   record: StackRecord,
@@ -180,24 +177,19 @@ export function isGroupRecord(record: StackRecord): boolean {
 }
 
 /**
- * Whether a Record is a roster anything may resolve against, on two counts.
- * The family check: without it an app modelling its own `member` links
- * would turn every record it points a permission at into an ACL. The
- * tombstone check: deleting a Group is how a Group is withdrawn. Shared
- * with the grant path, so the two layers cannot disagree about which Groups
- * still reach anyone. See docs/spec/identity.md § Group.
+ * Whether a Record is a roster anything may resolve against: a `_group`,
+ * or an app's own `member` links would turn records into ACLs, and not
+ * deleted, since deleting a Group withdraws it. Shared with the grant path
+ * so the two cannot disagree. See docs/spec/identity.md § Group.
  */
 export function carriesRoster(record: StackRecord): boolean {
   return isGroupRecord(record) && !record.deletedAt;
 }
 
 /**
- * An entity's role within a `_group` Record's roster. `admin`
- * short-circuits, so a matching admin association wins regardless of order.
- *
- * Reads associations alone and cannot tell whose they are: callers pass
- * carriesRoster() first, or an app's own `member` relationships become a
- * roster.
+ * An entity's role on a `_group` roster; a matching `admin` wins regardless
+ * of order. Reads associations alone and cannot tell whose they are, so
+ * callers pass carriesRoster() first.
  */
 export function groupRoleFromAssociations(
   associations: DataAssociation[] | undefined,
@@ -214,13 +206,10 @@ export function groupRoleFromAssociations(
 }
 
 /**
- * Whether a roster carries at least one `admin` — the invariant every write
- * to a `_group` Record must leave standing. Asked of the roster a write
- * would *produce*, never the one it started from: that is what lets an
- * admin remove themselves while another remains, and refuses the same
- * removal when they are the last, without either case naming who is going.
- * Reads associations alone, on the same terms as
- * groupRoleFromAssociations() above.
+ * Whether a roster carries at least one `admin` — the invariant every
+ * `_group` write must leave standing. Asked of the roster the write would
+ * *produce*, which lets an admin leave while another remains and refuses
+ * the last. Reads associations alone, like groupRoleFromAssociations().
  */
 export function hasGroupAdmin(associations: DataAssociation[] | undefined): boolean {
   return (associations ?? []).some(isGroupAdminAssociation);

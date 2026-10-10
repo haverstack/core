@@ -22,8 +22,7 @@ export {
 export type { AuthChallenge, DidCredential } from './auth.js';
 
 // No in-repo caller: a server must derive the signing origin from its own
-// configured public origin (haverstack/server#53) — this is the primitive
-// it does that with.
+// configured public origin — this is the primitive it does that with.
 export { authOriginFromUrl } from './auth.js';
 
 // Thrown by authOriginFromUrl, buildAuthChallengePayload and
@@ -43,7 +42,7 @@ export type { AttachmentDownloadContentType } from './attachment-download.js';
 // No in-repo caller: resolveAttachmentDownloadContentType() takes
 // storedMimeType as an input rather than selecting the record itself — a
 // server must call these to pick the record a download describes and pass
-// the winner in. Contract, not internal. haverstack/server#37
+// the winner in. Contract, not internal.
 export { firstRecordedAttachment, resolveReferencedAttachment } from '../stack/attachments.js';
 
 // Server-facing: bearer-token issuance and lookup, backed by its own file
@@ -51,12 +50,9 @@ export { firstRecordedAttachment, resolveReferencedAttachment } from '../stack/a
 export type { StackTokenStore, TokenInfo, TokenSession } from '../types/index.js';
 
 // No in-repo caller: the parse half of the request encoding adapter-api
-// builds, so a server decodes GET /records, POST /records/query,
-// GET /changes, GET /records/:id/journal, GET /records/:id/versions, GET /records/:id,
-// DELETE /records/:id, GET /attachments/:fileId and GET /records/:id/associations with these
-// rather than transcribing the parameter table.
-// Contract, not internal — and the round trip against the builders is
-// pinned by a test, which is what having both halves here buys.
+// builds, so a server decodes every query-bearing route with these rather
+// than transcribing the parameter table. Contract, not internal — the
+// round trip against the builders is pinned by a test.
 export {
   parseQueryParams,
   parseQueryBody,

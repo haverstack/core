@@ -134,15 +134,10 @@ const VALID_SORT_FIELDS: ReadonlySet<string> = new Set(NATIVE_SORT_FIELDS);
 const VALID_SORT_DIRECTIONS = new Set(['asc', 'desc']);
 
 /**
- * Reject a sort whose field or direction is outside the closed set the
- * types promise. `QuerySort` is typed `'asc' | 'desc'`, but a type is not a
- * runtime guard: a server mapping `?direction=` onto a query, or a
- * delegated app calling query(), supplies a raw string. A SQLite record
- * adapter interpolates the direction straight into `ORDER BY`, so an
- * unvalidated value there is a SQL-injection sink reachable from every
- * untrusted caller. Validating in the invariant layer — the same reason
- * emission and _config protection live here — means no adapter can forget
- * it. See docs/spec/data-model.md § Sorting and pagination.
+ * Reject a sort outside the closed set the types promise. A type is not a
+ * runtime guard, and a SQLite adapter interpolates the direction straight
+ * into `ORDER BY`, so an unvalidated one is an injection sink reachable by
+ * any untrusted caller. See docs/spec/data-model.md § Sorting and pagination.
  */
 export function assertValidSort(sort: QuerySort | undefined): void {
   if (!sort) return;
@@ -277,17 +272,10 @@ export function assertValidBaseIdFilter(filter: { baseId?: string | string[] } |
 }
 
 /**
- * Hold a journal window to the shape both adapters can honor identically.
- *
- * Unvalidated, a negative `limit` diverges rather than failing: a JS
- * `slice(0, -1)` drops the newest entry, while SQLite reads a negative
- * LIMIT as "no ceiling" and returns the whole log. Neither is what the
- * caller asked for, and the disagreement is invisible until a stack
- * changes adapters. Refuse at the surface so no adapter has to guess.
- *
- * No ceiling is imposed: unlike a query, omitting `limit` reads the whole
- * log by contract, so a clamp would silently truncate exactly the caller
- * reconstructing an association's full history.
+ * Hold a journal window to a shape both adapters honor identically: a
+ * negative `limit` drops the newest entry from a JS slice but reads as no
+ * ceiling in SQLite. No ceiling is imposed — omitting `limit` reads the
+ * whole log by contract, which a clamp would silently truncate.
  */
 export function assertValidJournalQuery(query: JournalQuery | undefined): void {
   if (!query) return;

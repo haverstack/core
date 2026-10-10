@@ -20,42 +20,28 @@ import type { ScalarFieldKind } from '../types/index.js';
 export type SortEntry = { kind: 'num'; num: number } | { kind: 'text'; text: string; key: string };
 
 /**
- * Fold text into the key it sorts by: compatibility-decompose, drop
- * combining marks, lowercase. `Émile` files with `emile` and `Zebra` with
- * `zebra`, which is what a person reading a list expects and what raw
- * code-point order gets wrong.
- *
- * `toLowerCase()`, never `toLocaleLowerCase()` — a locale-sensitive fold
- * would order Turkish `İstanbul` differently from every other runtime's,
- * and the key is stored, so the divergence would be baked into an index.
- * What this deliberately does not promise is in
- * docs/spec/data-model.md § Text ordering.
+ * Fold text into the key it sorts by — decompose, drop combining marks,
+ * lowercase — so `Émile` files with `emile`. `toLowerCase()`, never the
+ * locale form: the key is stored, so a locale-sensitive fold would bake one
+ * runtime's order into the index. See docs/spec/data-model.md § Text ordering.
  */
 export const contentSortKey = (value: string): string =>
   value.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase();
 
 /**
- * A `date` field may hold an offset-less date-time — the offset is
- * optional in the shape validate.ts pins — and bare `Date.parse` resolves
- * one of those in the *host's* zone. The stored index value and a cursor
- * value re-derived elsewhere would then disagree, skipping or repeating a
- * record at a page boundary, and two adapters in two zones would answer
- * one query in two orders. A zone-less date-time is read as UTC, which is
- * what `Date.parse` already does for a date-only string.
+ * A zone-less date-time, read as UTC as `Date.parse` already reads a
+ * date-only string. Read in the host's zone, a stored index value and a
+ * cursor re-derived elsewhere would disagree at a page boundary, and two
+ * adapters in two zones would order one query two ways.
  */
 const ZONELESS_DATE_TIME_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?$/;
 
 /**
- * The ordered form of `value` held in a field of the declared `kind`, or
- * null when there is nothing to order by. The kind comes from the schema
- * rather than from the value's runtime type: a field that is numeric on
- * the records that carry it must not order as text on the ones that
- * spell it differently.
- *
- * `date` normalizes to epoch milliseconds so a date field orders the way
- * `createdAt` does instead of by ISO string collation, and `boolean` to
- * 0/1 so false precedes true. An enum orders as text: its declaration
- * order is not part of the schema.
+ * The ordered form of `value` in a field of the declared `kind`, or null
+ * when there is nothing to order by. The kind comes from the schema, not
+ * the value, so a field orders one way on every record. `date` orders as
+ * epoch ms like `createdAt`, `boolean` as 0/1, and an enum as text, since
+ * its declaration order is not part of the schema.
  */
 export function contentSortEntry(kind: ScalarFieldKind, value: unknown): SortEntry | null {
   switch (kind) {

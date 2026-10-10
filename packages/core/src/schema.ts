@@ -192,10 +192,8 @@ export const isCompatible = (
 // Schema evolution legality (drift detection)
 // -------------------------------------------------------
 //
-// Deliberately distinct from isCompatible() above: read compatibility and
-// evolution legality are different relations that disagree on text/string
-// and on enum.
-// See docs/spec/data-model.md § Type compatibility.
+// Distinct from isCompatible(): the two relations disagree on text/string
+// and enum. See docs/spec/data-model.md § Type compatibility.
 
 export type SchemaDriftViolation = {
   /** Field path where the drift was detected, e.g. "title" or "author.name". Empty string means array-item context. */

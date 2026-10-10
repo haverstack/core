@@ -68,12 +68,10 @@ const spreadValue = (value: unknown): unknown[] => (Array.isArray(value) ? value
 const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
 
 /**
- * Every value reachable by walking `segments`, spreading arrays
- * element-wise at each step — the same walk sqlite-shared's
- * contentPathExists() performs in SQL, and the reason a filter answers the
- * same question against either. An empty result means the path reaches
- * nothing, which is what a `null` filter value matches.
- * See docs/spec/data-model.md § Nested content paths.
+ * Every value reachable by walking `segments`, spreading arrays at each
+ * step — sqlite-shared's contentPathExists() walk, so a filter answers the
+ * same against either. Empty means the path reaches nothing, which a `null`
+ * filter value matches. See docs/spec/data-model.md § Nested content paths.
  */
 const valuesAtContentPath = (content: Record<string, unknown>, segments: string[]): unknown[] => {
   let current: unknown[] = [content];
@@ -727,14 +725,10 @@ function allAssociations(record: StackRecord): Association[] {
 }
 
 /**
- * Sets a record's association set, keyed by identity as every adapter's
- * association table is: a list naming one identity twice collapses to one
- * entry, last wins. Core refuses such a list before an adapter sees it —
- * this is what keeps a direct caller from reaching a state a SQL store
- * cannot represent. Both projections are written, omitting either key when
- * empty — mirroring the SQL adapters' rowToRecord, so the same mutation
- * sequence produces identically-shaped records on the test double and real
- * storage. See docs/spec/adapters.md § Associations are keyed by identity.
+ * Sets a record's associations keyed by identity, as every adapter's table
+ * is: a repeated identity collapses, last wins. Both projections are
+ * written and an empty one omitted, as the SQL adapters' rowToRecord does.
+ * See docs/spec/adapters.md § Associations are keyed by identity.
  */
 function withAssociationSet(record: StackRecord, associations: Association[]): StackRecord {
   const keyed = associations.reduce<Association[]>(

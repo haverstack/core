@@ -42,20 +42,11 @@ export function uploadContent(
 }
 
 /**
- * Which `_attachment@1` record establishes a fileId's mimeType — the
- * "first-recorded" rule of docs/spec/attachments.md, as a total order:
- * earliest `createdAt`, ties broken by the lower `id`.
- *
- * The tiebreak is what makes it a rule rather than a coincidence of scan
- * order. Rejecting a conflicting mimeType at write time is check-then-act
- * with no storage-level uniqueness behind it, so two racing first uploads
- * of the same bytes can both land on a concurrent server. Determinism
- * doesn't depend on that never happening — it depends on every reader
- * ordering the records the same way, which is why core's write-time
- * conflict check and a server's serving choice both come through here.
- *
- * Generic over the record shape so a server can pass its own row type.
- * Records for other fileIds must be filtered out by the caller.
+ * Which `_attachment@1` record establishes a fileId's mimeType: earliest
+ * `createdAt`, ties to the lower `id`. Two racing first uploads can both
+ * land, so determinism rests on core's conflict check and every server
+ * ordering through here. Generic over the record shape; the caller filters
+ * to one fileId. See docs/spec/attachments.md § Finding a `fileId`'s metadata records.
  */
 export function firstRecordedAttachment<T extends { id: string; createdAt: Date }>(
   records: readonly T[],
@@ -83,21 +74,10 @@ export function compareRecordedAttachments<T extends { id: string; createdAt: Da
 }
 
 /**
- * Which `_attachment` record describes a *reference* to a fileId, as
- * opposed to the fileId itself: the association's own
+ * Which `_attachment` record a *reference* to a fileId names: its
  * `attachmentRecordId`, else the requester's own upload, else the
- * first-recorded record. Where `filename` comes from on a download when
- * `?filename` is not given, and the name a consumer shows for an
- * attachment association. See docs/spec/attachments.md § Naming the upload
- * a reference came from.
- *
- * Every step falls back rather than failing: a pointer at a record that is
- * gone, or at nothing this caller collected, lands on the same answer a
- * reference with no pointer at all gets.
- *
- * Generic over the record shape, like firstRecordedAttachment(), so a
- * server can pass its own row type. Records for other fileIds must be
- * filtered out by the caller.
+ * first-recorded — each step falling back rather than failing. Generic like
+ * firstRecordedAttachment(). See docs/spec/attachments.md § Naming the upload a reference came from.
  */
 export function resolveReferencedAttachment<
   T extends { id: string; createdAt: Date; createdBy?: { subjectId: string } },

@@ -238,11 +238,10 @@ export const validateContent = (
     return errors;
   }
 
-  // A field the schema does not declare is refused rather than stored.
-  // The schema is the record's shape; a key outside it is a typo, a stale
-  // writer, or a caller reaching for something that isn't content at all,
-  // and storing it makes all three look like a write that worked. Declare
-  // an `object` field `open` for a shape a schema cannot describe.
+  // An undeclared field is refused rather than stored: a key outside the
+  // schema is a typo, a stale writer or not content at all, and storing it
+  // makes each look like a write that worked. An `open` object field holds
+  // what a schema cannot describe.
   // See docs/spec/data-model.md § Undeclared content fields.
   for (const key of Object.keys(content)) {
     if (Object.hasOwn(schema, key)) continue;
@@ -309,23 +308,11 @@ const dropAbsentValue = (value: unknown, def: FieldDef, depth: number): unknown 
 };
 
 /**
- * Content keys that name JavaScript's object machinery rather than a
- * field. Undeclared content fields are allowed by design, so without this
- * they reach `merged[key] = value` in applyMergePatch — where `__proto__`
- * invokes the prototype setter instead of setting a field.
- *
- * That is not a prototype-pollution gadget today: JSON.stringify writes
- * only own-enumerable properties, so a reassigned prototype never reaches
- * storage, and JSON.parse recreates `__proto__` as an own property rather
- * than invoking the setter, so a stored one round-trips inertly. The
- * defect is that the two write paths disagree — a merge patch to
- * `__proto__` silently vanishes, while the same key through create()
- * stores as an ordinary field — and that a future refactor deepening the
- * shallow merge would turn a quiet inconsistency into a real one.
- *
- * Rejecting is more honest than skipping: a caller who sends one of these
- * finds out, rather than watching a write appear to succeed and do
- * nothing. See docs/spec/data-model.md § Reserved content keys.
+ * Content keys naming JavaScript's object machinery rather than a field.
+ * A write path that sets a key by assignment and one that defines it
+ * disagree about `__proto__`, so all three are refused at the write rather
+ * than skipped, and the caller finds out.
+ * See docs/spec/data-model.md § Reserved content keys.
  */
 export const RESERVED_CONTENT_KEYS: readonly string[] = ['__proto__', 'constructor', 'prototype'];
 
@@ -457,18 +444,10 @@ const validateFieldDefShape = (
 };
 
 /**
- * Check that a schema is actually a schema, before anything reads it as
- * one. `defineType()` takes a TypeSchema, but a schema off the wire is
- * parsed JSON that TypeScript never saw, so every shape below is reachable
- * at runtime: a container declaring neither its interior nor `open` throws
- * out of hashSchema() rather than reporting anything, and a definition with
- * an unknown `kind` — or none — defines a field whose every write fails
- * against an expectation the schema never actually stated, sending the
- * caller looking through their content for a bug that is in their type.
- *
- * Refused at definition time for the reason a field name no filter could
- * address is: a schema is a promise, and one nothing can satisfy is worth
- * catching where it is written. See docs/spec/data-model.md § Types.
+ * Check that a schema is a schema before anything reads it as one: off the
+ * wire it is JSON TypeScript never saw. A container declaring neither its
+ * interior nor `open` would throw out of hashSchema(), and an unknown `kind`
+ * would define a field every write fails. See docs/spec/data-model.md § Types.
  */
 export const validateSchemaShape = (
   schema: unknown,
@@ -497,19 +476,10 @@ export const validateSchemaShape = (
 };
 
 /**
- * The same three names, refused where a schema declares them. Top-level
- * only, exactly matching the content rule's scope above: a nested
- * declaration names a field a record can actually carry, so refusing one
- * would deny a writable shape.
- *
- * A declaration cannot license what the content rule refuses, so accepting
- * one would define a field no record could ever hold — and, where the
- * declaration is `required`, a type no record could satisfy at all: supply
- * the field and the write is refused as a reserved key, omit it and the
- * write is refused as a missing required field. Refused at definition time
- * for the reason a field name no filter could address is
- * (validateSchemaFieldNames): a schema is a promise that a field is
- * meaningful. See docs/spec/data-model.md § Reserved content keys.
+ * The same names, refused where a schema declares them, top-level only like
+ * the content rule. A declaration cannot license what that rule refuses, so
+ * it would define a field no record could hold — and if `required`, a type
+ * no record could satisfy. See docs/spec/data-model.md § Reserved content keys.
  */
 export const validateSchemaReservedNames = (schema: TypeSchema): ValidationError[] =>
   RESERVED_CONTENT_KEYS.filter((key) => Object.hasOwn(schema, key)).map((key) => ({
@@ -518,11 +488,9 @@ export const validateSchemaReservedNames = (schema: TypeSchema): ValidationError
   }));
 
 /**
- * `undefined` is not a value a merge patch can carry: `null` is the
- * deletion sentinel, JSON drops the key on the way to storage, and the
- * presence checks a patch runs through read the key as a claim on the
- * field it names. Top-level only, matching the shallow merge — a nested
- * one is part of a value being replaced wholesale.
+ * `undefined` is not a value a merge patch can carry: `null` deletes, JSON
+ * drops the key, and the presence checks read the key as a claim on its
+ * field. Top-level only, matching the shallow merge.
  * See docs/spec/data-model.md § Undefined values in a patch.
  */
 export const validatePatchValues = (patch: Record<string, unknown>): ValidationError[] =>
@@ -534,21 +502,11 @@ export const validatePatchValues = (patch: Record<string, unknown>): ValidationE
     }));
 
 /**
- * Characters a content field name may not contain, because a content
- * filter key is a dot-separated path: `{ content: { 'emails.value': x } }`
- * addresses `value` inside `emails`. A field literally named `emails.value`
- * would make that filter mean two things at once, so the ambiguity is
- * removed from the write side — where it is a validation error a caller
- * can act on — rather than from the query side, where it would need an
- * escape convention that silently misreads when a caller forgets it.
- *
- * Wider than what SQLite's JSON path grammar treats as syntax today (`.`,
- * `[`, `]`, `$`, `"`): `*` and `#` are reserved against a path grammar
- * that grows a wildcard or a last-element form. Narrowing a legal charset
- * is a one-way door, so the cost of reserving a character now is nothing
- * and the cost of reserving it later is every stored record.
- *
- * See docs/spec/data-model.md § Content field names.
+ * Characters a field name may not contain, since a content filter key is a
+ * dot-separated path: a field named `emails.value` would make one filter
+ * mean two things, and the write side is where that is an error a caller
+ * can act on. `*` and `#` are reserved ahead of the path grammar, because
+ * narrowing a legal charset later costs every stored record. See docs/spec/data-model.md § Content field names.
  */
 export const CONTENT_KEY_PATH_METACHARACTERS = ['.', '[', ']', '$', '"', '*', '#'] as const;
 

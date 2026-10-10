@@ -298,17 +298,11 @@ function assertNoUntravelableFields(hasBaseId: boolean, hasPresentAt: boolean): 
 }
 
 /**
- * The client half of the same refusal, applied before a request is built
- * rather than after one arrives. `Stack.query()` resolves `filter.baseId`
- * against registered Types and applies `presentAt` itself, so neither
- * reaches an adapter through it — this catches the direct adapter call,
- * where the encoding would otherwise decide the answer: a query body
- * carries both fields to a server that refuses them, while search params
- * have nowhere to put them and would drop them into a wider result set.
- *
- * Absent and explicitly `undefined` are the same thing here, as they are
- * to `Stack.query()`. The parsers above test key presence instead, because
- * over the wire writing the key at all is a client that meant to send it.
+ * The client half of the same refusal, before a request is built.
+ * `Stack.query()` resolves `baseId` and `presentAt` itself, so this catches
+ * the direct adapter call, where search params would drop them into a wider
+ * result. Absent and `undefined` are one here; the parsers test presence,
+ * since over the wire a written key is one the client meant to send.
  */
 export function assertQueryTravels(query: StackQuery): void {
   assertNoUntravelableFields(query.filter?.baseId !== undefined, query.presentAt !== undefined);
@@ -364,12 +358,10 @@ function parseRelatedToBody(raw: unknown): RelatedToFilter {
 }
 
 /**
- * The `relatedTo*` URL params. Scope is implied by which of them appear and
- * the three are mutually exclusive. An empty value passes through raw
- * rather than as absent — that is what lets core's target validation tell
+ * The `relatedTo*` URL params, mutually exclusive, scope implied by which
+ * appear. An empty value passes through raw so target validation can tell
  * "omitted" from "empty" for `relatedToStack` and `relatedToId`, where the
- * two mean different things and neither is a wildcard.
- * See docs/spec/wire-format.md § Records.
+ * two differ. See docs/spec/wire-format.md § Records.
  */
 function parseRelatedToParams(url: URL): RelatedToFilter | undefined {
   const hasRecord = url.searchParams.has('relatedTo');
@@ -545,11 +537,9 @@ function parseLimitValue(raw: unknown): number {
 }
 
 /**
- * Build a `StackQuery` from a `POST /records/query` JSON body — the
- * superset form, which additionally carries `filter.content`. Dates arrive
- * as the ISO strings `JSON.stringify` made of them and are decoded back to
- * `Date`. `undefined` is the absent body; `null` or any other non-object
- * is refused, so a server hands over no body as `undefined`.
+ * Build a `StackQuery` from a `POST /records/query` body — the superset
+ * form, which also carries `filter.content`, with ISO date strings decoded.
+ * `undefined` is the absent body; any other non-object is refused.
  * See docs/spec/wire-format.md § Records.
  */
 export function parseQueryBody(raw: unknown): StackQuery {
@@ -681,13 +671,10 @@ export function parseChangeParams(url: URL): ParsedChangeParams {
 }
 
 /**
- * Parse `GET /records/:id/journal`'s query params into the `JournalQuery`
- * `getJournal()` takes. Absent params stay absent rather than defaulting:
- * omitting `limit` reads the whole log by contract, so supplying a page
- * size here would truncate exactly the caller that omitted it.
- *
- * `afterSeq` is a journal `seq` — a dense per-record integer, never the
- * change feed's opaque cursor. See docs/spec/wire-format.md § Journal.
+ * Parse `GET /records/:id/journal`'s params into a `JournalQuery`. Absent
+ * stays absent: omitting `limit` reads the whole log, which a default page
+ * size would truncate. `afterSeq` is a journal `seq`, never a feed cursor.
+ * See docs/spec/wire-format.md § Journal.
  */
 export function parseJournalParams(url: URL): JournalQuery {
   requireKnownParams(url, ['afterSeq', 'limit']);
@@ -700,11 +687,8 @@ export function parseJournalParams(url: URL): JournalQuery {
 }
 
 /**
- * Parse `GET /records/:id/versions`'s query params into the `VersionsQuery`
- * `getVersions()` takes. Absent params stay absent, for the reason
- * parseJournalParams() leaves them so.
- *
- * `beforeVersion` is a snapshot's `version`, exclusive.
+ * Parse `GET /records/:id/versions`'s params into a `VersionsQuery`; absent
+ * stays absent, as in parseJournalParams(). `beforeVersion` is exclusive.
  * See docs/spec/wire-format.md § Versions.
  */
 export function parseVersionsParams(url: URL): VersionsQuery {
@@ -801,13 +785,10 @@ export function parseAssociationParams(url: URL): ParsedAssociationParams {
 // -------------------------------------------------------
 
 /**
- * Parse an `If-Match: "5"` header into the version for `ifVersion`.
- * A value that is not a bare, optionally quoted version is refused rather
- * than read as absent: the header exists to fence a write, so degrading a
- * malformed one to an unconditional last-writer-wins mutation defeats the
- * only thing it was sent to do. Weak comparators (`W/"5"`) are refused for
- * the same reason — a version match is exact or it is nothing.
- * See docs/spec/wire-format.md § Records.
+ * Parse `If-Match: "5"` into `ifVersion`. Anything but a bare, optionally
+ * quoted version — weak `W/"5"` included — is refused, not read as absent:
+ * degrading the fence to last-writer-wins defeats the one thing it was
+ * sent for. See docs/spec/wire-format.md § Records.
  */
 export function parseIfMatch(header: string | undefined): number | undefined {
   if (header === undefined) return undefined;

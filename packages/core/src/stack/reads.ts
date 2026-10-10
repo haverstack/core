@@ -154,14 +154,10 @@ export async function loadInstallRecords(
 }
 
 /**
- * Every `_grant` Record, cursor-walked. Read through an unscoped query at
- * every call site: a grant is what decides who may read, so it can never
- * itself sit behind a read check.
- *
- * `includeUnlisted`, because withholding a Record from enumeration decides
- * nothing about what it confers. Deleted grants are excluded on the
- * opposite grounds — a soft delete is how revokeType() withdraws one.
- * See docs/spec/unlisted.md.
+ * Every `_grant` Record, cursor-walked through an unscoped query: a grant
+ * decides who may read, so it can't sit behind a read check. Unlisted ones
+ * count, as listing decides nothing about what a grant confers; deleted
+ * ones don't, as soft-deleting is revoking. See docs/spec/unlisted.md.
  */
 export async function loadGrantRecords(
   run: (query: StackQuery) => Promise<QueryResult>,

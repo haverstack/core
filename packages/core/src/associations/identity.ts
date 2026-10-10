@@ -20,14 +20,11 @@ import type {
 } from '../types/index.js';
 
 /**
- * Association identity — what dissociate() matches and a second associate()
- * of the same reference is a repeat of. Matches the SQLite adapter's
- * association primary key (kind, label, file_id, related_scope, related_id,
- * related_ns, related_stack, related_role), which is why an attachment's
- * `attachmentRecordId` is absent here: it annotates a reference rather than
- * naming one. `related_role` is in both because member and admin name two
- * different sets of people, so two group grantees differing only by role
- * are two elements. See docs/spec/data-model.md § Associations.
+ * Association identity — what dissociate() matches and a repeat associate()
+ * collides with; the SQLite adapter's primary key. An attachment's
+ * `attachmentRecordId` annotates a reference rather than naming one, so it
+ * is outside; a group grantee's `role` names a different set of people, so
+ * it is inside. See docs/spec/data-model.md § Associations.
  */
 export function associationEqual(a: Association, b: Association): boolean {
   // Never "the same one": naming a malformed association is
@@ -84,11 +81,9 @@ export function associationIdentical(a: Association, b: Association): boolean {
 }
 
 /**
- * An association's identity, stripped of every annotation outside it — an
- * attachment's `attachmentRecordId` dropped, everything else unchanged.
- * What a change event reports for an association that's gone: the same
- * thing a `purged` frame does for a destroyed record's content, naming
- * what happened without repeating a payload that's no longer current.
+ * An association's identity alone, its annotation dropped — what a change
+ * event reports for an association that's gone, as a `purged` frame names
+ * a destroyed record without repeating its content.
  * See docs/spec/events.md § The event shape.
  */
 function stripAssociationAnnotation(association: Association): Association {
@@ -122,14 +117,10 @@ export function partitionAssociations(associations: Association[]): {
 }
 
 /**
- * What a `changes.associations` list moves against a record's current
- * associations, one tagged edit per association.
- *
- * An entry matching something already there by identity displaced it rather
- * than joining it, which is a `repoint`: the association is still on the
- * record and only its annotation moved, so no `remove` can describe it.
- * `previous` is the prior association in full, annotation included — the
- * only place an overwritten or removed `attachmentRecordId` survives.
+ * What a `changes.associations` list moves against a record's current set,
+ * one tagged edit each. An entry matching an existing identity displaced it:
+ * a `repoint`, carrying the prior association in full as `previous` — the
+ * only place an overwritten `attachmentRecordId` survives.
  * See docs/spec/journal.md § The entry.
  */
 export function associationDelta(before: Association[], after: Association[]): AssociationChange[] {

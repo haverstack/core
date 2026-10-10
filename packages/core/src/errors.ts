@@ -41,20 +41,11 @@ export type StackErrorCode =
   | 'timeout';
 
 /**
- * Root of the Stack error taxonomy. A single `instanceof StackError` answers
- * "is this a Stack-domain error or a bug?" — the question a server's error
- * middleware asks before serializing a wire body, and one an instanceof
- * ladder answers only by exhaustion. Every subclass carries its
- * discriminator as an instance `code`, so serialization is a lookup rather
- * than a chain of class tests.
- *
- * Membership implies a wire mapping: every code has an entry in
- * WIRE_ERROR_STATUS. Errors with no wire representation (IdGenerationError,
- * InvalidDidError) deliberately stay outside this hierarchy.
- *
- * Subclassing adds no hierarchy beyond this root — notably
- * StackVersionConflictError is a sibling of StackConflictError, not a
- * subtype. See docs/spec/wire-format.md § Error responses.
+ * Root of the taxonomy: `instanceof StackError` is the one question a
+ * server's error middleware asks, and each subclass's `code` makes
+ * serialization a lookup. Every code has a WIRE_ERROR_STATUS entry.
+ * Subclasses add no hierarchy — StackVersionConflictError is a sibling of
+ * StackConflictError. See docs/spec/wire-format.md § Error responses.
  */
 export abstract class StackError extends Error {
   abstract readonly code: StackErrorCode;
@@ -141,16 +132,10 @@ export class StackVersionConflictError extends StackError {
 }
 
 /**
- * Thrown when a request is structurally malformed — not a content-validation
- * failure, but input the adapter/server can't even interpret (e.g. an
- * undecodable pagination cursor, a malformed TypeId, search text the engine
- * cannot parse, or a typeId no definition exists for). Distinct from
- * StackValidationError, which means the request was well-formed but content
- * failed schema validation.
- *
- * Naming something absent belongs here rather than under `not_found`: a
- * request whose *type* is undefined never addressed a record, so answering
- * 404 would say a record was missing when none was asked for.
+ * A request structurally malformed — an undecodable cursor, a malformed
+ * TypeId, unparseable search text — as opposed to StackValidationError's
+ * well-formed request with invalid content. Naming an undefined type is
+ * here, not `not_found`: no record was asked for, so none is missing.
  */
 export class StackBadRequestError extends StackError {
   static readonly code = 'bad_request' as const;
@@ -158,12 +143,9 @@ export class StackBadRequestError extends StackError {
   constructor(
     message: string,
     /**
-     * Which declared capability the query asked for and the adapter lacks,
-     * or undefined when the query's own shape is what was wrong — a
-     * malformed content path is a caller error at every capability level.
-     * A client mapping this onto an error of its own reads the name from
-     * here rather than re-deriving it from the query, which is how one
-     * rule becomes two answers that can disagree.
+     * The declared capability the query needed and the adapter lacks, or
+     * undefined when the query's own shape was wrong. A client reads it from
+     * here rather than re-deriving it, so one rule has one answer.
      */
     public readonly capability?: MissingCapability,
   ) {
@@ -188,17 +170,10 @@ export class StackPayloadTooLargeError extends StackError {
 }
 
 /**
- * Thrown when a server abandons an operation for taking too long — in
- * practice a full-text search, the one query whose cost the sanitizers
- * bound the *grammar* of but not the execution of (see
- * docs/spec/data-model.md § Capability-gated filters).
- *
- * Never produced in-process: both SQLite engines run synchronously, so
- * there is nothing to interrupt from inside the call. It exists so a
- * server that bounds query time has a class to serialize, and so the app
- * catching it can tell "too expensive, narrow it and retry" from
- * StackBadRequestError's "malformed, don't bother retrying" — the distinction
- * that would be lost if a timeout reused `bad_request`.
+ * A server abandoned an operation for taking too long — in practice a
+ * full-text search. Never produced in-process, since both SQLite engines
+ * run synchronously; it lets an app tell "too expensive, narrow and retry"
+ * from `bad_request`'s "malformed". See docs/spec/data-model.md § Capability-gated filters.
  */
 export class StackTimeoutError extends StackError {
   static readonly code = 'timeout' as const;
@@ -282,17 +257,10 @@ export class OwnerMismatchError extends Error {
 }
 
 /**
- * Thrown when a scoped view is asked to observe a stack whose adapter
- * relays a remote feed. Outside the StackError taxonomy for the same
- * reason UseAfterCloseError is: it reports a topology the caller assembled,
- * not a state a request can be in.
- *
- * A relayed frame is scoped by the authority that opened the feed, and a
- * narrower scope cannot re-derive that decision — a purge leaves no record
- * to check `canRead` against. Delivering anyway would break the promise
- * that a subscriber never sees what it may not read; delivering only local
- * writes would silently drop every change made elsewhere, which is the
- * failure that looks fine in testing. So it refuses.
+ * A scoped view asked to observe a stack that relays a remote feed. A
+ * relayed frame was scoped by the authority that opened the feed, and a
+ * narrower scope cannot re-derive that — a purge leaves nothing to check —
+ * so it refuses rather than leak frames or silently drop remote changes.
  * See docs/spec/events.md § Permission scoping.
  */
 export class RelayScopeError extends Error {

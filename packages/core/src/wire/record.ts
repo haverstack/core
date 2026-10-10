@@ -90,13 +90,9 @@ function ownerDate(body: Record<string, unknown>, key: string): Date | undefined
 }
 
 /**
- * Read a `POST /records` body as a create. Takes the session rather than a
- * pre-computed boolean so the owner-acting-alone determination stays with
- * the rule that needs it.
- *
- * Beyond shape, values are `Stack`'s to judge — an id's legality, a
- * permission's contents, the content's schema — since judging them twice
- * would let the two answers drift.
+ * Read a `POST /records` body as a create. Takes the session, not a
+ * precomputed boolean, so the owner-acting-alone decision stays with its
+ * rule. Values beyond shape are `Stack`'s to judge, or two answers drift.
  */
 export function createOptionsFromWireRecord(
   body: unknown,
@@ -146,18 +142,10 @@ export function createOptionsFromWireRecord(
 }
 
 /**
- * Read a `PATCH /records/:id` body as a change set. The envelope's keys
- * are native aspects, so an unrecognized one is a client reaching for
- * something this endpoint does not have — refused rather than ignored,
- * since a dropped `permissions` silently fails to share and a dropped
- * `unlisted` silently fails to publish.
- *
- * `StackBadRequestError` (400) for a key that addresses nothing and
- * `StackValidationError` (422) for one whose value is the wrong shape —
- * the same split every other write endpoint makes. Content keys are
- * `Stack`'s to judge, so `contentPatch` is checked for being an object and
- * nothing more.
- * See docs/spec/wire-format.md § Records.
+ * Read a `PATCH /records/:id` body as a change set. An unrecognized key is
+ * refused (400), not ignored — a dropped `permissions` silently fails to
+ * share — and a wrong-shaped value is a 422. `contentPatch` is checked for
+ * being an object only; content is `Stack`'s. See docs/spec/wire-format.md § Records.
  */
 export function changesFromWireBody(body: unknown): RecordChangeSet {
   const envelope = requireBody(body, 'record body');

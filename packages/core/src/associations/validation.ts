@@ -145,16 +145,10 @@ function namesKind(association: Association): boolean {
 }
 
 /**
- * Reject a relationship target outside the closed set the types promise.
- * A discriminated union is not a runtime guard — a server mapping a
- * request body onto an association supplies raw JSON — and an
- * unrecognized kind would otherwise be stored under the one arm that
- * names a Record in this stack. See docs/spec/data-model.md
- * § Relationship targets.
- *
- * A key the element's kind does not define is thrown as a 400 rather than
- * collected, at every depth: it addresses nothing, the way an unknown key
- * on a request body does. See docs/spec/data-model.md § Associations.
+ * Reject an association outside the closed set the types promise: a request
+ * body is raw JSON, and an unknown target kind would otherwise be stored as
+ * a Record in this stack. A key its kind does not define is a 400 at every
+ * depth, as on a request body. See docs/spec/data-model.md § Associations.
  */
 export function validateAssociation(
   association: Association,
@@ -271,15 +265,10 @@ export function granteeErrors(
 }
 
 /**
- * Refuse an authority element reaching the data half of the partition.
- * The two share a table, a delta shape and a durability tier; they never
- * share a call, because an app editing tags would otherwise be able to
- * replace an ACL it was never shown. Thrown rather than collected: the
- * caller named the wrong surface, not a malformed value, and the verb it
- * wanted is `grantAccess()`/`revokeAccess()`.
- *
- * Lives here, in the invariant layer, so an unscoped `Stack`, an import
- * and a server mapping a request body are all held to it.
+ * Refuse an authority element on the data surface. The two halves share
+ * storage but never a call, or an app editing tags could replace an ACL it
+ * was never shown. Thrown, not collected: the caller named the wrong
+ * surface, and wanted grantAccess()/revokeAccess().
  * See docs/spec/access-control.md § Record-level permissions.
  */
 export function assertDataAssociations(
@@ -312,14 +301,10 @@ export function assertAuthorityAssociations(
 }
 
 /**
- * Every association in a list, plus the one rule a list has that a single
- * association does not: **identities are distinct**. A list naming one
- * identity twice describes a state no store can hold — an adapter keys
- * associations by identity, so the second entry displaces the first — and
- * which of the two the record ends up with is a question the caller did
- * not mean to ask. Refused rather than collapsed, for the reason an empty
- * change set is refused: every way of producing one is a caller bug.
- * See docs/spec/data-model.md § Associations.
+ * Every association in a list, plus the list's own rule: identities are
+ * distinct. An adapter keys associations by identity, so a repeat would
+ * displace the first and leave which one stands to chance — a caller bug,
+ * refused rather than collapsed. See docs/spec/data-model.md § Associations.
  */
 export function validateAssociations(
   associations: Association[] | undefined,
@@ -347,12 +332,10 @@ function duplicateIdentityErrors(list: Association[], path: string): ValidationE
 }
 
 /**
- * Hold an association edit list to the rules every verb shares: non-empty,
- * every element a known `op` over a well-formed association, one surface,
- * and each identity named once — a list that both removes and adds one
- * identity is the same ambiguity as naming it twice. `repoint` is the
- * journal's word, never a request. Asked of the whole list before anything
- * is read or written. See docs/spec/data-model.md § Mutations.
+ * Hold an edit list to the rules every verb shares: non-empty, known `op`s
+ * over well-formed associations, one surface, each identity once — removing
+ * and adding one identity is as ambiguous as naming it twice. `repoint` is
+ * the journal's word, never a request. See docs/spec/data-model.md § Mutations.
  */
 export function assertAssociationEdits(
   changes: unknown,
@@ -397,12 +380,10 @@ export function assertAssociationEdits(
 }
 
 /**
- * assertAssociationEdits() for the verbs taking a bare association list —
- * associate(), grantAccess() and their inverses — asked before the list is
- * wrapped as edits, so each problem is reported under `param`, the name the
- * caller passed it as, rather than the wrapped list's `changes`. The checks
- * run in the same order, so a wrong-surface element is refused as such
- * before its duplicates are counted.
+ * assertAssociationEdits() for the verbs taking a bare list — associate(),
+ * grantAccess() and their inverses — asked before wrapping, so problems are
+ * reported under `param`, the name the caller used. Same order of checks,
+ * so a wrong-surface element is refused as such before duplicates count.
  */
 export function assertAssociationList(
   associations: unknown,

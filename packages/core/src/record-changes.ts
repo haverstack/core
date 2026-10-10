@@ -147,12 +147,10 @@ export function effectiveChanges(changes: RecordChangeSet, ops: ChangeOp[]): Rec
 }
 
 /**
- * Whether a merge patch produced the content the record already held.
- * Compared by serialization: content is JSON by construction and a patch
- * preserves key order for every field it does not name, so an unchanged
- * record encodes stably. A reordering patch that changes nothing else is
- * the one case this reports as a change, costing an empty version rather
- * than a wrong answer.
+ * Whether a merge patch produced the content already held, compared by
+ * serialization: a patch preserves the order of every key it does not name.
+ * A pure reordering is the one false "change", costing an empty version
+ * rather than a wrong answer.
  */
 function contentEqual(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
