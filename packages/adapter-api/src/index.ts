@@ -82,8 +82,8 @@ import type {
   WireReadyFrame,
   DiscoveryChanges,
   DiscoveryResponse,
-  AuthChallengeResponse,
-  AuthTokenResponse,
+  WireAuthChallengeResponse,
+  WireAuthTokenResponse,
   WireAuthErrorCode,
   WireInstallResponse,
 } from '@haverstack/wire-types';
@@ -775,7 +775,7 @@ const performHandshake = async (
   baseUrl: string,
   credential: DidCredential,
   allowRetry = true,
-): Promise<AuthTokenResponse> => {
+): Promise<WireAuthTokenResponse> => {
   const post = (path: string, body: unknown): Promise<Response> =>
     fetchOrThrow(baseUrl, `${baseUrl}${path}`, {
       method: 'POST',
@@ -785,7 +785,7 @@ const performHandshake = async (
 
   const challengeRes = await post('/auth/challenge', { did: credential.did });
   if (!challengeRes.ok) throw await handshakeError(challengeRes, '/auth/challenge');
-  const challenge = (await challengeRes.json()) as AuthChallengeResponse;
+  const challenge = (await challengeRes.json()) as WireAuthChallengeResponse;
 
   const signature = await credential.sign(
     buildAuthChallengePayload({ origin: baseUrl, did: credential.did, nonce: challenge.nonce }),
@@ -808,7 +808,7 @@ const performHandshake = async (
     }
     throw err;
   }
-  return (await tokenRes.json()) as AuthTokenResponse;
+  return (await tokenRes.json()) as WireAuthTokenResponse;
 };
 
 // -------------------------------------------------------

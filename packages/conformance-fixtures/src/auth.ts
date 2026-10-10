@@ -1,8 +1,8 @@
 import type {
-  AuthChallengeRequest,
-  AuthChallengeResponse,
-  AuthTokenRequest,
-  AuthTokenResponse,
+  WireAuthChallengeRequest,
+  WireAuthChallengeResponse,
+  WireAuthTokenRequest,
+  WireAuthTokenResponse,
   WireAuthError,
 } from '@haverstack/wire-types';
 import type { ConformanceFixture, ConformanceSequenceFixture } from './types.js';
@@ -46,8 +46,8 @@ export const AUTH_FIXTURE_OTHER_DID_SIGNATURE =
   'HV-vmd5p9cj6V4HjTUWLt1ySnFpp-hT4P_Lh_JXueTV8D992L4V-oEyL6koGY-kbkMB3ulJTLf7SYfnuXkXZDQ';
 
 export const authChallengeFixtures: ConformanceFixture<
-  AuthChallengeRequest,
-  AuthChallengeResponse | WireAuthError
+  WireAuthChallengeRequest,
+  WireAuthChallengeResponse | WireAuthError
 >[] = [
   {
     name: 'auth-challenge-issues-nonce',
@@ -80,8 +80,8 @@ export const authChallengeFixtures: ConformanceFixture<
 ];
 
 export const authTokenFixtures: ConformanceFixture<
-  AuthTokenRequest,
-  AuthTokenResponse | WireAuthError
+  WireAuthTokenRequest,
+  WireAuthTokenResponse | WireAuthError
 >[] = [
   {
     name: 'auth-token-issues-bearer-token',
