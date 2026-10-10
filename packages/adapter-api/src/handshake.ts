@@ -9,16 +9,22 @@ import { buildAuthChallengePayload, base64urlEncode } from '@haverstack/core/wir
 import type { DidCredential } from '@haverstack/core/wire';
 import { isWireAuthError, isRetryableAuthError } from '@haverstack/wire-types';
 import type { WireAuthChallengeResponse, WireAuthTokenResponse } from '@haverstack/wire-types';
-import { APIAdapterHandshakeError } from './errors.js';
+import { APIAdapterError, APIAdapterHandshakeError } from './errors.js';
 import { fetchOrThrow, readJsonBody, successBody } from './transport.js';
 
-/** Build the typed error for a rejected handshake response. */
+/**
+ * The typed error for a failed handshake step. An auth error body or a
+ * 4xx refuses the credential; a bare 5xx is the server's own trouble, which
+ * says nothing about the credential and may clear on a retry.
+ */
 const handshakeError = async (res: Response, path: string): Promise<Error> => {
   const body = await readJsonBody(res);
   if (isWireAuthError(body)) {
     return new APIAdapterHandshakeError(body.error.code, body.error.message);
   }
-  return new APIAdapterHandshakeError(undefined, `HTTP ${res.status}: POST ${path}`);
+  const message = `HTTP ${res.status}: POST ${path}`;
+  if (res.status >= 500) return new APIAdapterError(message, res.status);
+  return new APIAdapterHandshakeError(undefined, message);
 };
 
 /**

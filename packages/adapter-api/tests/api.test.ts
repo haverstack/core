@@ -413,6 +413,29 @@ describe('open — DID credential handshake', () => {
     );
   });
 
+  // A server in trouble has passed no verdict on the credential, so its
+  // failure is not reported as one.
+  test('a bare 5xx from the handshake is the server failing, not a refusal', async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse(AUTH_DISCOVERY));
+    mockFetch.mockResolvedValueOnce(new Response(null, { status: 503 }));
+    const err = await APIAdapter.open({ url: BASE_URL, credential: stubCredential() }).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(APIAdapterError);
+    expect(err).not.toBeInstanceOf(APIAdapterAuthError);
+    expect((err as APIAdapterError).statusCode).toBe(503);
+  });
+
+  test('a 4xx without an auth error body is still a refusal', async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse(AUTH_DISCOVERY));
+    mockFetch.mockResolvedValueOnce(new Response(null, { status: 403 }));
+    const err = await APIAdapter.open({ url: BASE_URL, credential: stubCredential() }).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(APIAdapterHandshakeError);
+    expect((err as APIAdapterHandshakeError).code).toBeUndefined();
+  });
+
   test('refuses a server that does not advertise the handshake', async () => {
     mockFetch.mockResolvedValueOnce(jsonResponse(DISCOVERY));
     await expect(APIAdapter.open({ url: BASE_URL, credential: stubCredential() })).rejects.toThrow(
@@ -582,6 +605,28 @@ describe('re-authentication', () => {
     const err = await adapter.getRecord('rec-abc123').catch((e: unknown) => e);
     expect(err).toBeInstanceOf(APIAdapterReauthError);
     expect((err as APIAdapterReauthError).cause).toBeInstanceOf(APIAdapterHandshakeError);
+  });
+
+  // Only a refused credential is a failed renewal: anything else may clear,
+  // and reporting it as an auth failure would tell a caller to stop trying.
+  test('a dropped connection during renewal surfaces as itself', async () => {
+    const adapter = await openWithCredential();
+    mockFetch.mockResolvedValueOnce(new Response(null, { status: 401 }));
+    mockFetch.mockRejectedValueOnce(new TypeError('fetch failed'));
+
+    const err = await adapter.getRecord('rec-abc123').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(APIAdapterConnectionError);
+  });
+
+  test('a 5xx during renewal surfaces as the server failing', async () => {
+    const adapter = await openWithCredential();
+    mockFetch.mockResolvedValueOnce(new Response(null, { status: 401 }));
+    mockFetch.mockResolvedValueOnce(challengeResponse('SecondNonce123'));
+    mockFetch.mockResolvedValueOnce(new Response(null, { status: 502 }));
+
+    const err = await adapter.getRecord('rec-abc123').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(APIAdapterError);
+    expect(err).not.toBeInstanceOf(APIAdapterAuthError);
   });
 
   // Concurrent requests finding the same token stale share one handshake:

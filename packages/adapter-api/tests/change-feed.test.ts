@@ -4,8 +4,13 @@
  * ends. See docs/spec/change-feed.md.
  */
 import { describe, test, expect, vi, afterEach } from 'vitest';
-import { APIAdapterCapabilityError, APIAdapterError, APIAdapterAuthError } from '../src/index.js';
-import type { APIAdapter } from '../src/index.js';
+import {
+  APIAdapter,
+  APIAdapterCapabilityError,
+  APIAdapterConnectionError,
+  APIAdapterError,
+  APIAdapterAuthError,
+} from '../src/index.js';
 import {
   BASE_URL,
   CHANGE_FEED,
@@ -566,6 +571,44 @@ describe('reconnection', () => {
     const calls = mockFetch.mock.calls.length;
     await vi.advanceTimersByTimeAsync(120_000);
     expect(mockFetch.mock.calls.length).toBe(calls);
+    stop();
+  });
+
+  // An expired token renewed over a connection that drops is not a refused
+  // credential: the next reconnect renews again rather than ending the feed.
+  test('keeps reconnecting when renewal fails on a dropped connection', async () => {
+    vi.useFakeTimers();
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ ...DISCOVERY, auth: { methods: ['did-challenge'] } }),
+    );
+    mockFetch.mockResolvedValueOnce(jsonResponse({ nonce: 'FirstNonce1' }));
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ token: 'earned', principalId: EDITOR, subjectId: EDITOR }),
+    );
+    const credential = { did: EDITOR, sign: vi.fn().mockResolvedValue(new Uint8Array([1])) };
+    const adapter = await APIAdapter.open({ url: BASE_URL, credential });
+
+    const first = feed();
+    mockFetch.mockResolvedValueOnce(first.response);
+    const onError = vi.fn();
+    const subscription = adapter.subscribeChanges({ onError }, () => {});
+    first.write(READY);
+    const stop = await subscription;
+
+    mockFetch.mockResolvedValueOnce(new Response(null, { status: 401 }));
+    mockFetch.mockRejectedValueOnce(new TypeError('fetch failed'));
+    const recovered = feed();
+    mockFetch.mockResolvedValueOnce(recovered.response);
+    first.end();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.waitFor(() => expect(onError).toHaveBeenCalledOnce());
+    expect(onError.mock.calls[0]![0]).toBeInstanceOf(APIAdapterConnectionError);
+
+    // discovery + handshake (2) + first + the 401 + the dropped renewal +
+    // the attempt that reaches the server again.
+    await vi.advanceTimersByTimeAsync(120_000);
+    await vi.waitFor(() => expect(mockFetch.mock.calls.length).toBe(7));
     stop();
   });
 

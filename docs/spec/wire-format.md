@@ -131,6 +131,8 @@ The retryable column is the reason these carry codes at all, rather than being b
 
 **A server MUST NOT distinguish never-issued from already-spent** in the code it returns. The two differ only in what an attacker learns.
 
+**Only a refusal is an auth failure.** An auth error body, or any `4xx`, refuses the credential. A bare `5xx`, or a connection that never answered, says nothing about it and may clear on a retry. `APIAdapter` reports a refusal as `APIAdapterHandshakeError` — wrapped in `APIAdapterReauthError` when it ends a 401-driven renewal — and anything else as the server or connection failure it is. That keeps a renewal that fails mid-outage from reading as an unrenewable credential, which a caller stops on: the [change feed](./change-feed.md#backpressure-and-reconnection) reconnects through it instead.
+
 ### Server implementation checklist
 
 Core runs no server, so every control below lives in the implementer's code — and the fixtures cannot check any of them. A fixture pins the shape of a request and its response; each of these is a property of state or configuration, so **a server can pass every fixture in this spec and still be unsafe.** They are collected here rather than left scattered through the prose above because that is exactly the reading order that misses one.
