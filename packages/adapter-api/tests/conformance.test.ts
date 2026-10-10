@@ -34,7 +34,7 @@ import {
   parentChangeFixtures,
   getVersionsFixtures,
   getVersionFixtures,
-  getVersionsAfterMutateFixtures,
+  getVersionsSequenceFixtures,
   restoreVersionFixtures,
   getJournalFixtures,
   commitMigrationFixtures,
@@ -54,7 +54,7 @@ import {
   AUTH_FIXTURE_FOREIGN_SIGNATURE,
 } from '@haverstack/conformance-fixtures';
 import type { AssociationEdit, RecordChangeSet, StackType } from '@haverstack/core';
-import type { WireAuthError } from '@haverstack/wire-types';
+import type { WireAuthError, WireVersionsResponse } from '@haverstack/wire-types';
 import {
   StackPermissionError,
   StackNotFoundError,
@@ -620,28 +620,45 @@ describe('getVersion fixtures', () => {
   }
 });
 
-// pins the response shape a version-count-increment check would parse
-// after POST /migrate or POST /restore/:version. See the fixtures'
-// description for why this suite (mocked transport, no real backing store)
-// can't itself observe the count actually growing — a real server-side
-// conformance run dispatches the paired mutating fixture first.
-describe('getVersions after migrate/restore fixtures', () => {
-  for (const fixture of getVersionsAfterMutateFixtures) {
-    test(fixture.name, async () => {
+// A mocked transport cannot observe the server writing a snapshot; that is
+// the sequence's obligation on a server. What it pins here is that every
+// step goes out as documented and each history read parses.
+describe('getVersions sequence fixtures', () => {
+  for (const sequence of getVersionsSequenceFixtures) {
+    test(sequence.name, async () => {
       const adapter = await openAdapter();
-      mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
 
-      const result = await adapter.getVersions(idFromPath(fixture.path));
+      for (const step of sequence.steps) {
+        mockFetch.mockResolvedValueOnce(jsonResponse(step.responseBody, step.responseStatus));
+        const id = idFromPath(step.path);
 
-      const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
-      expect(url).toBe(`${BASE_URL}${fixture.path}`);
-      expect(init.method).toBe(fixture.method);
-      expect(result.map((v) => v.version)).toEqual(
-        fixture.responseBody!.versions.map((v) => v.version),
-      );
-      // A snapshot never captures an association set, so neither the
-      // fixture nor what the adapter parses out of it may name one.
-      for (const version of result) expect(Object.keys(version)).not.toContain('associations');
+        if (step.method === 'GET') {
+          const result = await adapter.getVersions(id);
+          const documented = (step.responseBody as WireVersionsResponse).versions;
+          expect(
+            result.map((v) => v.version),
+            step.name,
+          ).toEqual(documented.map((v) => v.version));
+          // A snapshot never captures an association set, so neither the
+          // fixture nor what the adapter parses out of it may name one.
+          for (const version of result) expect(Object.keys(version)).not.toContain('associations');
+        } else if (step.path.endsWith('/associations')) {
+          const { changes } = step.requestBody as { changes: AssociationEdit[] };
+          await adapter.amendAssociations(id, changes);
+        } else if (step.path.endsWith('/migrate')) {
+          const { toTypeId, content } = step.requestBody as {
+            toTypeId: string;
+            content: Record<string, unknown>;
+          };
+          await adapter.commitMigration(id, toTypeId, content);
+        } else {
+          await adapter.restoreVersion(id, Number(step.path.split('/').pop()));
+        }
+
+        const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
+        expect(url, step.name).toBe(`${BASE_URL}${step.path}`);
+        expect(init.method, step.name).toBe(step.method);
+      }
     });
   }
 });
