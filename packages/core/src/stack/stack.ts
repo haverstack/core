@@ -150,7 +150,7 @@ import {
   checkBindingsOnUpdate,
   checkConfigEntityIdUnchanged,
 } from './integrity.js';
-import { SYSTEM_TYPE_DEFINITIONS } from './system-types.js';
+import { systemTypeDefinitions } from './system-types.js';
 import type {
   BackdatableCreateRecordOptions,
   CollectAttachmentGarbageOptions,
@@ -319,7 +319,7 @@ export class Stack implements StackClient {
       opts.idTimestampSkewMs === undefined ? DEFAULT_ID_TIMESTAMP_SKEW_MS : opts.idTimestampSkewMs,
       new MigrationRegistry(opts.migrations ?? []),
     );
-    for (const type of SYSTEM_TYPE_DEFINITIONS) await stack.defineType(type);
+    for (const type of systemTypeDefinitions()) await stack.defineType(type);
     if (opts.ownerProfile) {
       await stack.ensureOwnerEntity(opts.ownerProfile);
     }
@@ -644,7 +644,7 @@ export class Stack implements StackClient {
       await checkAttachmentMimeTypeOnCreate(this, content as unknown as AttachmentContent);
     }
 
-    await checkAttachmentAssociationPointers(this, opts.associations);
+    await checkAttachmentAssociationPointers(this.readRecord, opts.associations);
 
     await checkBindingsOnCreate(this, typeId, content as Record<string, unknown>);
 
@@ -665,7 +665,8 @@ export class Stack implements StackClient {
       // already point at it, and the chain above the parent can lead back
       // to it — so the walk is asked only for that combination.
       // See docs/spec/data-model.md § Reparenting.
-      if (opts.parentId !== undefined) await assertNoParentCycle(this, opts.id, opts.parentId);
+      if (opts.parentId !== undefined)
+        await assertNoParentCycle(this.readRecord, opts.id, opts.parentId);
     }
 
     const createdBy = normalizeActor(opts.createdBy);
@@ -694,7 +695,7 @@ export class Stack implements StackClient {
 
     // Every create naming a parent owes the reference check, whether or not
     // it supplied an id: a destination a caller names has to exist.
-    if (opts.parentId !== undefined) await assertParentExists(this, id, opts.parentId);
+    if (opts.parentId !== undefined) await assertParentExists(this.readRecord, id, opts.parentId);
 
     const record: StackRecord = {
       id,
@@ -902,7 +903,7 @@ export class Stack implements StackClient {
       : [];
     throwValidation(patchErrors, argumentErrors);
 
-    await checkAttachmentAssociationPointers(this, associations, existing.associations);
+    await checkAttachmentAssociationPointers(this.readRecord, associations, existing.associations);
 
     let merged: Record<string, unknown> | undefined;
     if (contentPatch) {
@@ -954,8 +955,8 @@ export class Stack implements StackClient {
     }
 
     if (parentId !== undefined && parentId !== null && parentId !== (existing.parentId ?? null)) {
-      await assertParentExists(this, id, parentId);
-      await assertNoParentCycle(this, id, parentId);
+      await assertParentExists(this.readRecord, id, parentId);
+      await assertNoParentCycle(this.readRecord, id, parentId);
     }
 
     return merged;
@@ -1017,7 +1018,7 @@ export class Stack implements StackClient {
     // Only a roster can lose its last admin, and only the post-state says so.
     assertGroupAdminRemains(existing, next);
     await checkAttachmentAssociationPointers(
-      this,
+      this.readRecord,
       changes.flatMap((c) => (c.op === 'add' ? [c.association] : [])),
       current,
     );
@@ -1119,6 +1120,14 @@ export class Stack implements StackClient {
     }
   }
 
+  /**
+   * A by-id read straight from the adapter, for the integrity checks a write
+   * runs once it is under way: they read past the open-check, as the write
+   * they belong to was admitted before any close() began.
+   */
+  private readonly readRecord = (id: RecordId): Promise<StackRecord | null> =>
+    this.adapter.getRecord(id);
+
   /** The record, or the not-found refusal every mutating verb owes. */
   private async requireRecord(id: string): Promise<StackRecord> {
     const record = await this.adapter.getRecord(id);
@@ -1203,7 +1212,7 @@ export class Stack implements StackClient {
    * deleteAttachment() and the garbage sweep use: attachment associations
    * and top-level `file-ref` content fields. An `_attachment` record's own
    * `fileId` is a plain string by design and is not one, which is why
-   * purging a metadata record reports nothing — see SYSTEM_TYPE_DEFINITIONS.
+   * purging a metadata record reports nothing — see systemTypeDefinitions().
    */
   private async referencedFileIds(record: StackRecord): Promise<FileId[]> {
     const fromAssociations = (record.associations ?? []).flatMap((a) =>

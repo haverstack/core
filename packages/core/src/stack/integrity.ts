@@ -5,11 +5,12 @@
  * bindings, containment, attachment metadata, `_config` ownership and a
  * group's admin roster. They bind every requester, the stack owner
  * included, which is why they live beneath `ScopedStack`'s permission
- * gates rather than among them. Each reads through the unscoped Stack it
- * is handed.
+ * gates rather than among them. Each reads unscoped: through the Stack it
+ * is handed, or a by-id `read` straight from its adapter.
  */
 
 import { hasGroupAdmin } from '../access.js';
+import type { RecordResolver } from '../access.js';
 import { ARGUMENTS_INVALID, StackConflictError, StackValidationError } from '../errors.js';
 import { bindingFieldsOf, uniqueBindingFieldsOf } from './identity-bindings.js';
 import { filtersContent } from '../query-validation.js';
@@ -174,12 +175,12 @@ const MAX_PARENT_DEPTH = 64;
  * See docs/spec/data-model.md § Reparenting.
  */
 export async function assertParentExists(
-  stack: Stack,
+  read: RecordResolver,
   id: string,
   parentId: string,
 ): Promise<void> {
   validateParentId(parentId);
-  if (!(await stack.get(parentId, { includeDeleted: true }))) {
+  if (!(await read(parentId))) {
     throw new StackConflictError(
       `Cannot parent record "${id}" to "${parentId}": no such record. A container has to ` +
         'exist when it is named.',
@@ -188,13 +189,13 @@ export async function assertParentExists(
 }
 
 /**
- * Refuse an edge that would make a record its own ancestor. Walks the
- * unscoped Stack, since links a requester cannot read could otherwise
+ * Refuse an edge that would make a record its own ancestor. Walks with an
+ * unscoped `read`, since links a requester cannot read could otherwise
  * close a cycle. Read-then-write, so racing moves can both pass.
  * See docs/spec/data-model.md § Reparenting.
  */
 export async function assertNoParentCycle(
-  stack: Stack,
+  read: RecordResolver,
   id: string,
   parentId: string,
 ): Promise<void> {
@@ -211,7 +212,7 @@ export async function assertNoParentCycle(
     // past what the check can speak to, not evidence of a loop, and
     // refusing it would claim an invariant core does not maintain.
     if (depth >= MAX_PARENT_DEPTH) return;
-    cursor = (await stack.get(cursor, { includeDeleted: true }))?.parentId;
+    cursor = (await read(cursor))?.parentId;
   }
 }
 
@@ -269,7 +270,7 @@ export async function checkAttachmentMimeTypeOnCreate(
  * See docs/spec/attachments.md § Naming the upload a reference came from.
  */
 export async function checkAttachmentAssociationPointers(
-  stack: Stack,
+  read: RecordResolver,
   associations: Association[] | undefined,
   stored: Association[] = [],
 ): Promise<void> {
@@ -283,9 +284,7 @@ export async function checkAttachmentAssociationPointers(
   // One round trip per pointer, taken together: a change set carries a
   // whole association list, and each pointer is an independent read.
   const named = await Promise.all(
-    pointed.map(({ attachmentRecordId }) =>
-      stack.get(attachmentRecordId, { includeDeleted: true }),
-    ),
+    pointed.map(({ attachmentRecordId }) => read(attachmentRecordId)),
   );
 
   pointed.forEach(({ fileId }, i) => {

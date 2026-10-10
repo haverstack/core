@@ -11,7 +11,11 @@
 import { SYSTEM_TYPES } from '../types/index.js';
 import type { DefineTypeOptions } from './client.js';
 
-export const SYSTEM_TYPE_DEFINITIONS: readonly DefineTypeOptions[] = [
+/**
+ * Built afresh on each call, so no two Stacks share a schema object:
+ * defineType() caches the one it is handed by reference.
+ */
+export const systemTypeDefinitions = (): DefineTypeOptions[] => [
   {
     id: `${SYSTEM_TYPES.CONFIG}@1`,
     name: 'Config',
