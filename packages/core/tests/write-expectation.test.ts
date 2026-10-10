@@ -2,7 +2,11 @@ import { describe, test, expect, beforeEach, vi } from 'vitest';
 import { Stack } from '../src/stack.js';
 import { MemoryAdapter } from '../src/testing.js';
 import { typeHandle } from '../src/type-handle.js';
-import { StackNotFoundError } from '../src/errors.js';
+import {
+  StackConflictError,
+  StackNotFoundError,
+  StackVersionConflictError,
+} from '../src/errors.js';
 import { StoredVersionError, WRITE_EXPECTATION } from '../src/write-expectation.js';
 import type { WriteExpectation } from '../src/write-expectation.js';
 import type { ScopedStack } from '../src/scoped-stack.js';
@@ -74,11 +78,12 @@ beforeEach(async () => {
   await stack.defineType(Shelf);
 });
 
-/** A shelf at version 2 carrying TAG and SHARE, so every verb has something to move. */
+/** A shelf with a version 1 to restore, carrying TAG and SHARE, so every verb has something to move. */
 const seedShelf = async (): Promise<RecordId> => {
   const shelf = await stack.create(Shelf.id, { name: 'Kitchen' });
   await stack.patchContent(shelf.id, { name: 'Hall' });
   await stack.associate(shelf.id, [TAG]);
+  await stack.grantAccess(shelf.id, [SHARE]);
   return shelf.id;
 };
 
@@ -139,6 +144,48 @@ describe.each(Object.keys(clients))('a write expectation on %s', (clientName) =>
     expect(err).toBeInstanceOf(StoredVersionError);
     expect((err as StoredVersionError).record).toEqual(old);
     expect(await adapter.getRecord(old.id)).toEqual(old);
+  });
+
+  test('a deleted record is refused as deleted, whatever version it is stored at', async () => {
+    const old = await stack.create(BookV1.id, { title: 'Dune' });
+    await stack.delete(old.id);
+
+    const err = await client()
+      .patchContent(old.id, { pages: 412 }, expecting(BOOK_FAMILY))
+      .catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(StackConflictError);
+    expect(err).not.toBeInstanceOf(StoredVersionError);
+  });
+
+  test('a stale ifVersion is refused ahead of the stored version', async () => {
+    const old = await stack.create(BookV1.id, { title: 'Dune' });
+    await stack.patchContent(old.id, { title: 'Dune Messiah' });
+
+    await expect(
+      client().patchContent(old.id, { pages: 412 }, expecting(BOOK_FAMILY, { ifVersion: 1 })),
+    ).rejects.toThrow(StackVersionConflictError);
+  });
+
+  test('a purge under an expectation is pinned to the version it checked', async () => {
+    const book = await stack.create(Book.id, { title: 'Dune' });
+    const getRecord = adapter.getRecord.bind(adapter);
+    vi.spyOn(adapter, 'getRecord').mockImplementationOnce(async (id) => {
+      const read = await getRecord(id);
+      await stack.patchContent(book.id, { pages: 412 });
+      return read;
+    });
+
+    await expect(client().delete(book.id, expecting(BOOK_FAMILY, { purge: true }))).rejects.toThrow(
+      StackVersionConflictError,
+    );
+    expect(await adapter.getRecord(book.id)).not.toBeNull();
+  });
+
+  test('a purge under an expectation of a missing record purges nothing', async () => {
+    if (clientName === 'ScopedStack') return;
+    const result = await stack.deleteAndReturn('missing', expecting(BOOK_FAMILY, { purge: true }));
+    expect(result).toEqual({ record: null, referencedFileIds: [] });
   });
 
   test('a write that leaves content alone holds only the family', async () => {

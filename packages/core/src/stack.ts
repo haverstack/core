@@ -180,7 +180,7 @@ import {
   typedQuery,
   typedSubscribe,
 } from './type-handle.js';
-import { checkExpectation, WRITE_EXPECTATION } from './write-expectation.js';
+import { checkFamily, checkStoredVersion, WRITE_EXPECTATION } from './write-expectation.js';
 import type { ExpectationOptions } from './write-expectation.js';
 import type {
   ContentOf,
@@ -1294,7 +1294,7 @@ export class Stack implements StackClient {
     if (!existing) {
       throw new StackNotFoundError(`Record not found: "${id}"`);
     }
-    checkExpectation(existing, opts, changes.contentPatch !== undefined);
+    checkFamily(existing, opts);
     this.refuseIfDeleted(existing);
 
     // Checked before validation, so a caller that lost the race learns its
@@ -1302,6 +1302,7 @@ export class Stack implements StackClient {
     // no-op short-circuit below, so a precondition is never satisfied by a
     // write that turned out to move nothing.
     if (takesIfVersion(changes)) this.checkIfVersion(existing, opts.ifVersion);
+    checkStoredVersion(existing, opts, changes.contentPatch !== undefined);
 
     const merged = await this.validateChangeSet(id, existing, changes);
 
@@ -1557,7 +1558,7 @@ export class Stack implements StackClient {
     this.assertOpen();
     assertAssociationEdits(changes, surface, 'data');
     const existing = await this.requireRecord(id);
-    checkExpectation(existing, opts, false);
+    checkFamily(existing, opts);
     this.refuseIfDeleted(existing);
     const current = existing.associations ?? [];
     const next = applyAssociationEdits(current, changes) as DataAssociation[];
@@ -1636,7 +1637,7 @@ export class Stack implements StackClient {
     this.assertOpen();
     assertAssociationEdits(changes, surface, 'authority');
     const existing = await this.requireRecord(id);
-    checkExpectation(existing, opts, false);
+    checkFamily(existing, opts);
     this.refuseIfDeleted(existing);
     const current = existing.permissions ?? [];
     const next = applyAssociationEdits(current, changes) as AuthorityAssociation[];
@@ -1785,10 +1786,14 @@ export class Stack implements StackClient {
     }
     if (opts.purge) {
       // A purge otherwise reads nothing first, so an expectation costs it
-      // one read. The family cannot change between the read and the write.
+      // one read, and the purge is pinned to that read: a write in between
+      // is a conflict, never a purge of a record that was not checked.
+      let ifVersion = opts.ifVersion;
       if (opts[WRITE_EXPECTATION]) {
         const current = await this.adapter.getRecord(id);
-        if (current) checkExpectation(current, opts, false);
+        if (!current) return { record: null, referencedFileIds: [] };
+        checkFamily(current, opts);
+        ifVersion ??= current.version;
       }
       // The adapter hands back what it destroyed, captured inside the same
       // write: a read here instead would race the delete, and afterwards
@@ -1797,7 +1802,7 @@ export class Stack implements StackClient {
       const change = new PendingChange('purge', { actor: normalizeActor(opts.actor) });
       const purged = await this.adapter.deleteRecord(id, {
         purge: true,
-        ifVersion: opts.ifVersion,
+        ifVersion,
         journal: change.journal,
       });
       if (!purged) return { record: null, referencedFileIds: [] };
@@ -1809,7 +1814,7 @@ export class Stack implements StackClient {
     if (!existing) {
       throw new StackNotFoundError(`Record not found: "${id}"`);
     }
-    checkExpectation(existing, opts, false);
+    checkFamily(existing, opts);
     this.checkIfVersion(existing, opts.ifVersion);
     // A tombstone's references stand — undelete() must find its
     // attachments intact — so nothing is stranded and nothing is reported.
@@ -1858,7 +1863,7 @@ export class Stack implements StackClient {
     if (!existing) {
       throw new StackNotFoundError(`Record not found: "${id}"`);
     }
-    checkExpectation(existing, opts, false);
+    checkFamily(existing, opts);
     this.checkIfVersion(existing, opts.ifVersion);
     if (!existing.deletedAt) return existing;
 
@@ -1988,7 +1993,7 @@ export class Stack implements StackClient {
     }
     // A snapshot is validated against its own stored Type, never the
     // record's current one, so only the family is held to the expectation.
-    checkExpectation(existing, opts, false);
+    checkFamily(existing, opts);
     this.refuseIfDeleted(existing);
     this.checkIfVersion(existing, opts.ifVersion);
 

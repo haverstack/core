@@ -411,7 +411,7 @@ A handle names exactly one version. A call that means the whole family takes `ha
 
 A typed `subscribe()` delivers only changes to records of exactly the handle's `id`, with `record`, when present, typed as the content. An event carries its record as stored, which a subscription cannot migrate, so other versions of the family are not delivered. A record holding an enum value the handle does not list arrives without its `record`, as it does wherever the emitter cannot supply one; the typed `get()` then says why. The change filter takes every key but `typeId` and `baseId`.
 
-A typed `query()` matches the handle's whole family, then applies the checks above to every record. A typed write first reads the record and refuses one stored at another `typeId`, since a patch is validated against the record's own stored Type; a missing, unreadable or deleted record is left to the untyped write to refuse.
+A typed `query()` matches the handle's whole family, then applies the checks above to every record. A typed write is checked against the read the write already makes, before anything lands. A record of another family is not found. A record of the family stored at another `typeId` is refused with `StackBadRequestError`, since a patch is validated against the record's own stored Type and the result could not be typed; a deleted record, or a stale `ifVersion`, is refused first, as the untyped write refuses it.
 
 The derived types are a convenience over [runtime validation](#types), which stays the guarantee. A Type known only at runtime has no static shape and stays `Record<string, unknown>`.
 

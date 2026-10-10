@@ -91,7 +91,7 @@ import {
   UNGRANTABLE_SYSTEM_TYPES,
 } from './grants.js';
 import { bindingFieldsOf } from './identity-bindings.js';
-import { checkFamily, WRITE_EXPECTATION } from './write-expectation.js';
+import { checkFamily, storedVersionDiffers, WRITE_EXPECTATION } from './write-expectation.js';
 import type { ExpectationOptions } from './write-expectation.js';
 import { claimedFamilies, familyStanding, linkedIds, INSTALL_APP_LABEL } from './install.js';
 import { assertAttachmentSize } from './limits.js';
@@ -1155,7 +1155,13 @@ export class ScopedStack implements StackClient {
       }
     }
 
-    if (changes.contentPatch) {
+    // A patch for another version is refused by `Stack`, which owes the
+    // tombstone and `ifVersion` refusals first; the content gates would read
+    // a stored Type it was not written for. Pinned to this read, `Stack`
+    // cannot find a record the patch lands on.
+    const mismatched = storedVersionDiffers(record, opts, changes.contentPatch !== undefined);
+
+    if (changes.contentPatch && !mismatched) {
       const patch = changes.contentPatch;
       // Value-wise, not presence-wise: a client that reads a card, edits
       // its `name` and sends the whole content object back is not setting
@@ -1188,7 +1194,8 @@ export class ScopedStack implements StackClient {
       );
     }
 
-    return this.stack.mutate(id, authorized, { ...opts, ...this.actor });
+    const ifVersion = mismatched ? (opts.ifVersion ?? record.version) : opts.ifVersion;
+    return this.stack.mutate(id, authorized, { ...opts, ifVersion, ...this.actor });
   }
 
   async patchContent<S extends ReadonlyTypeSchema>(
@@ -1482,14 +1489,19 @@ export class ScopedStack implements StackClient {
     id: RecordId,
     opts: DeleteRecordOptions & ExpectationOptions = {},
   ): Promise<DeleteAndReturnResult> {
-    await this.requireDeletable(id, opts);
+    const record = await this.requireDeletable(id, opts);
     if (opts.purge && !this.ownerActingAlone) {
       throw new StackPermissionError('Purge is owner-only');
     }
-    // Checked against the read above. Forwarded, it would cost a purge the
-    // read `Stack` otherwise skips, and a family cannot change in between.
+    if (!opts[WRITE_EXPECTATION]) return this.stack.deleteAndReturn(id, { ...opts, ...this.actor });
+    // Checked against the read above, which the delete is pinned to.
+    // Forwarded, it would cost a purge the read `Stack` otherwise skips.
     const { [WRITE_EXPECTATION]: _checked, ...rest } = opts;
-    return this.stack.deleteAndReturn(id, { ...rest, ...this.actor });
+    return this.stack.deleteAndReturn(id, {
+      ...rest,
+      ifVersion: opts.ifVersion ?? record.version,
+      ...this.actor,
+    });
   }
 
   /**

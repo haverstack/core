@@ -11,7 +11,9 @@
  * symbol key on a write verb's options, which `StackClient` never declares
  * and the wire never carries. It needs no server-side counterpart because a
  * record's family never changes — `typeId` moves only through a migration,
- * and a migration stays within its family — so the check cannot race.
+ * and a migration stays within its family. A write that does not re-read
+ * the record pins `ifVersion` to the read the check was made against, so a
+ * write landing in between is a conflict rather than an unchecked write.
  */
 
 import { StackNotFoundError } from './errors.js';
@@ -22,8 +24,10 @@ export const WRITE_EXPECTATION = Symbol('haverstack.writeExpectation');
 
 export type WriteExpectation = {
   readonly baseId: BaseId;
-  /** Checked only on a write that patches content. */
+  /** Checked only on a write that patches content, unless `exact`. */
   readonly typeId?: TypeId;
+  /** Hold every write to `typeId`, as a typed handle's write is. */
+  readonly exact?: boolean;
 };
 
 export type ExpectationOptions = { readonly [WRITE_EXPECTATION]?: WriteExpectation };
@@ -52,18 +56,25 @@ export const checkFamily = (record: StackRecord, opts: ExpectationOptions | unde
 };
 
 /**
- * checkFamily(), then the exact version when the write patches content: a
- * patch is validated against the record's stored Type, so one written for
- * another version would be checked by a schema it was not written for.
+ * The exact version, on a write that patches content: a patch is validated
+ * against the record's stored Type, so one written for another version
+ * would be checked by a schema it was not written for. Called after the
+ * tombstone and `ifVersion` refusals, which a caller is owed first.
  */
-export const checkExpectation = (
+export const checkStoredVersion = (
   record: StackRecord,
   opts: ExpectationOptions | undefined,
   patchesContent: boolean,
 ): void => {
-  checkFamily(record, opts);
-  const typeId = opts?.[WRITE_EXPECTATION]?.typeId;
-  if (patchesContent && typeId !== undefined && record.typeId !== typeId) {
-    throw new StoredVersionError(record);
-  }
+  if (storedVersionDiffers(record, opts, patchesContent)) throw new StoredVersionError(record);
+};
+
+export const storedVersionDiffers = (
+  record: StackRecord,
+  opts: ExpectationOptions | undefined,
+  patchesContent: boolean,
+): boolean => {
+  const expected = opts?.[WRITE_EXPECTATION];
+  if (expected?.typeId === undefined || record.typeId === expected.typeId) return false;
+  return patchesContent || expected.exact === true;
 };
