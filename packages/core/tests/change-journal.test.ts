@@ -8,7 +8,7 @@ import type {
   AuthorityAssociation,
   RecordChange,
   RecordJournalEntry,
-} from '../src/types.js';
+} from '../src/types/index.js';
 
 const NOTE = 'com.example.test/note@1';
 const NOTE_V2 = 'com.example.test/note@2';

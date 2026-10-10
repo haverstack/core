@@ -27,7 +27,7 @@
 
 import { StackBadRequestError } from './errors.js';
 import { TARGET_KEYS } from './query-validation.js';
-import { NATIVE_SORT_FIELDS } from './types.js';
+import { NATIVE_SORT_FIELDS } from './types/index.js';
 import type {
   DataAssociation,
   ChangeFilter,
@@ -41,7 +41,7 @@ import type {
   AttachmentFilter,
   RelationshipTargetPattern,
   StackQuery,
-} from './types.js';
+} from './types/index.js';
 
 // -------------------------------------------------------
 // Shared primitives

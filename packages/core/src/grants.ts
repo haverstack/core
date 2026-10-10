@@ -12,7 +12,7 @@
 import { baseIdOf, familyIdProblem } from './schema.js';
 import { StackBadRequestError } from './errors.js';
 import { assertKnownKeys, GRANTEE_KEYS, unknownKeys } from './query-validation.js';
-import { SYSTEM_TYPES, GRANT_ACTIONS } from './types.js';
+import { SYSTEM_TYPES, GRANT_ACTIONS } from './types/index.js';
 import { carriesRoster, groupRoleFromAssociations } from './access.js';
 import type {
   EntityId,
@@ -25,7 +25,7 @@ import type {
   StackQuery,
   StackRecord,
   TypeId,
-} from './types.js';
+} from './types/index.js';
 import { queryAllPages } from './stack-reads.js';
 import type { ValidationError } from './validate.js';
 

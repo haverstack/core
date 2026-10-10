@@ -18,7 +18,7 @@ export type {
   JournalEntryInput,
   JournalOptions,
   MutateOptions,
-} from './types.js';
+} from './types/index.js';
 export { OwnerMismatchError } from './errors.js';
 export { combineAdapters } from './combine.js';
 export {

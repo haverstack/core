@@ -10,7 +10,7 @@ import type {
   FileId,
   TypeId,
   SubscribeOptions,
-} from '../src/types.js';
+} from '../src/types/index.js';
 
 const purgedRecord: StackRecord = {
   id: 'meta1',

@@ -10,7 +10,7 @@ import {
 import { StoredVersionError, WRITE_EXPECTATION } from '../src/write-expectation.js';
 import type { WriteExpectation } from '../src/write-expectation.js';
 import type { ScopedStack } from '../src/scoped-stack.js';
-import type { AuthorityAssociation, DataAssociation, RecordId } from '../src/types.js';
+import type { AuthorityAssociation, DataAssociation, RecordId } from '../src/types/index.js';
 
 const OWNER = 'owner-123';
 const MEMBER = 'member-456';

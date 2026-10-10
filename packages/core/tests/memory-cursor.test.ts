@@ -9,7 +9,7 @@
 import { describe, test, expect, beforeEach } from 'vitest';
 import { MemoryAdapter } from '../src/testing.js';
 import { StackBadRequestError } from '../src/errors.js';
-import type { StackRecord } from '../src/types.js';
+import type { StackRecord } from '../src/types/index.js';
 
 const makeRecord = (id: string, priority: number): StackRecord => ({
   id,

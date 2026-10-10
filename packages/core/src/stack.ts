@@ -38,7 +38,7 @@ import { applyMergePatch } from './merge.js';
 import { hasGroupAdmin, validatePermissions } from './access.js';
 import { compareRecordedAttachments } from './attachment-download.js';
 import { ChangeEmitter, RelayDelivery, PendingChange, assertSinceUsable } from './changes.js';
-import { SYSTEM_TYPES } from './types.js';
+import { SYSTEM_TYPES } from './types/index.js';
 import type { ValidationError } from './validate.js';
 import type {
   StackRecord,
@@ -82,7 +82,7 @@ import type {
   JournalQuery,
   VersionsQuery,
   RecordJournalEntry,
-} from './types.js';
+} from './types/index.js';
 
 import {
   UseAfterCloseError,

@@ -11,7 +11,7 @@ import {
 import { Stack } from '../src/stack.js';
 import { StackBadRequestError, StackValidationError } from '../src/errors.js';
 import { MemoryAdapter } from '../src/testing.js';
-import type { TypeSchema } from '../src/types.js';
+import type { TypeSchema } from '../src/types/index.js';
 
 const DID = 'did:key:z6Mkfsz9oK6i2355mvEwtDYdAmqCN6kmQETThJtARfj9iGum';
 

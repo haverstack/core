@@ -4,7 +4,7 @@ import type {
   StackRecordAdapter,
   StackBlobAdapter,
   SubscribeOptions,
-} from './types.js';
+} from './types/index.js';
 
 /**
  * Compose a StackRecordAdapter and a StackBlobAdapter into a single StackAdapter.

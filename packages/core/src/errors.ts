@@ -19,7 +19,7 @@
 import { baseIdOf, parseTypeId } from './schema.js';
 import type { SchemaDriftViolation } from './schema.js';
 import type { ValidationError } from './validate.js';
-import type { EntityId, MissingCapability, TypeId } from './types.js';
+import type { EntityId, MissingCapability, TypeId } from './types/index.js';
 
 /**
  * The wire-protocol discriminator vocabulary, one code per Stack-domain

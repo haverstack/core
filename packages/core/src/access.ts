@@ -13,7 +13,7 @@
  * or carrying no kind at all — confers nothing.
  */
 
-import { SYSTEM_TYPES } from './types.js';
+import { SYSTEM_TYPES } from './types/index.js';
 import type {
   Association,
   AuthorityAssociation,
@@ -23,7 +23,7 @@ import type {
   Grantee,
   RecordId,
   StackRecord,
-} from './types.js';
+} from './types/index.js';
 import { granteeEqual } from './record-changes.js';
 import { baseIdOf } from './schema.js';
 import type { ValidationError } from './validate.js';

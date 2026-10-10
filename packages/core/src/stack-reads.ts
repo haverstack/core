@@ -11,8 +11,14 @@
  */
 
 import { StackBadRequestError } from './errors.js';
-import { SYSTEM_TYPES } from './types.js';
-import type { EntityContent, EntityId, QueryResult, StackQuery, StackRecord } from './types.js';
+import { SYSTEM_TYPES } from './types/index.js';
+import type {
+  EntityContent,
+  EntityId,
+  QueryResult,
+  StackQuery,
+  StackRecord,
+} from './types/index.js';
 
 /** Default page size used to fill a permission-filtered query result. */
 export const DEFAULT_QUERY_LIMIT = 50;

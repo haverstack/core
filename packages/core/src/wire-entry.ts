@@ -48,7 +48,7 @@ export { firstRecordedAttachment, resolveReferencedAttachment } from './attachme
 
 // Server-facing: bearer-token issuance and lookup, backed by its own file
 // outside the portable stack database — not a slot on StackAdapter.
-export type { StackTokenStore, TokenInfo, TokenSession } from './types.js';
+export type { StackTokenStore, TokenInfo, TokenSession } from './types/index.js';
 
 // No in-repo caller: the parse half of the request encoding adapter-api
 // builds, so a server decodes GET /records, POST /records/query,

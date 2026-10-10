@@ -12,7 +12,7 @@ import type {
   AuthorityAssociation,
   DataAssociation,
   RecordJournalEntry,
-} from '../src/types.js';
+} from '../src/types/index.js';
 
 const NOTE = 'com.example.test/note@1';
 const OWNER = 'did:key:zOwner';

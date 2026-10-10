@@ -3,7 +3,7 @@ import { Stack } from '../src/stack.js';
 import type { StackClient } from '../src/stack.js';
 import { StackBadRequestError, StackValidationError } from '../src/errors.js';
 import { MemoryAdapter } from '../src/testing.js';
-import type { DataAssociation, TypeGrant } from '../src/types.js';
+import type { DataAssociation, TypeGrant } from '../src/types/index.js';
 
 const NOTE = 'com.example.test/note@1';
 const OWNER = 'did:key:owner';

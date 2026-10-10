@@ -22,7 +22,7 @@ import { familyIdProblem } from './schema.js';
 import { associationEqual, isAuthorityAssociation } from './record-changes.js';
 import { CONTENT_SEGMENT_METACHARACTERS, SEGMENT_METACHARACTER_RE } from './validate.js';
 import type { ValidationError } from './validate.js';
-import { NATIVE_SORT_FIELDS } from './types.js';
+import { NATIVE_SORT_FIELDS } from './types/index.js';
 import type {
   AnyoneAssociation,
   Association,
@@ -45,7 +45,7 @@ import type {
   RelationshipTarget,
   RelationshipTargetPattern,
   StackCapabilities,
-} from './types.js';
+} from './types/index.js';
 
 /**
  * Fail loud rather than silently widen: a filter the adapter can't honor

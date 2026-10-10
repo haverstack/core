@@ -25,7 +25,7 @@ import type {
   StackRecord,
   SubscribeOptions,
   Unsubscribe,
-} from './types.js';
+} from './types/index.js';
 import { StackBadRequestError } from './errors.js';
 import { bumpsVersion, feedAssociationDelta } from './record-changes.js';
 

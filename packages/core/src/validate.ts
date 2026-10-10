@@ -8,7 +8,7 @@
  * Coercion is never performed — types must match exactly.
  */
 
-import type { TypeSchema, FieldDef, ScalarFieldKind } from './types.js';
+import type { TypeSchema, FieldDef, ScalarFieldKind } from './types/index.js';
 
 const MAX_VALIDATION_DEPTH = 32;
 

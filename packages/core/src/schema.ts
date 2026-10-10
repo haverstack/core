@@ -9,7 +9,7 @@
  * the namespaced ID controlled by the app author.
  */
 
-import type { TypeSchema, FieldDef, ScalarFieldKind } from './types.js';
+import type { TypeSchema, FieldDef, ScalarFieldKind } from './types/index.js';
 import type { ReadonlyTypeSchema } from './type-handle.js';
 import { formatEnumValues } from './validate.js';
 

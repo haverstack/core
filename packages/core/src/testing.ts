@@ -23,8 +23,8 @@ import type {
   StackCapabilities,
   BlobInfo,
   QuerySort,
-} from './types.js';
-import { SYSTEM_TYPES } from './types.js';
+} from './types/index.js';
+import { SYSTEM_TYPES } from './types/index.js';
 import { applyMergePatch } from './merge.js';
 import { compareSortEntries, contentSortEntry } from './sort.js';
 import type { SortEntry } from './sort.js';
