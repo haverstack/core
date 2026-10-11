@@ -39,6 +39,7 @@ import type {
   JournalOptions,
   MutateOptions,
 } from '@haverstack/core/adapter';
+import { AUTHORITY_ASSOCIATION_KINDS } from '@haverstack/core/adapter';
 import type { SqlExecutor } from './executor.js';
 import { isForeignKeyViolation, isUniqueConstraintViolation } from './executor.js';
 import { buildQueryPlan, atBudget } from './query.js';
@@ -783,10 +784,6 @@ export class SharedSqlRecordLogic {
     return this.reread(recordId, 'amendAssociations');
   }
 
-  /** The kinds each change-set key replaces, and nothing else. */
-  private static readonly DATA_KINDS = ['tag', 'attachment', 'relationship'];
-  private static readonly AUTHORITY_KINDS = ['permission', 'anyone'];
-
   /**
    * Each key replaces only within its own half of the partition, which is
    * why a tag write cannot drop an ACL. Caller-transactional.
@@ -794,25 +791,27 @@ export class SharedSqlRecordLogic {
    */
   private replaceAssociationHalves(recordId: string, changes: RecordChangeSet): void {
     if (changes.associations !== undefined) {
-      this.replaceAssociations(recordId, changes.associations, SharedSqlRecordLogic.DATA_KINDS);
+      this.replaceAssociations(recordId, changes.associations, 'data');
     }
     if (changes.permissions !== undefined) {
-      this.replaceAssociations(recordId, changes.permissions, SharedSqlRecordLogic.AUTHORITY_KINDS);
+      this.replaceAssociations(recordId, changes.permissions, 'authority');
     }
   }
 
   /**
    * Swap one half of a record's association set wholesale — the "replace,
-   * don't merge" semantics a change set's association list carries.
+   * don't merge" semantics a change set's association list carries. The data
+   * half is "not an authority kind", so core's list is the only one.
    */
   private replaceAssociations(
     recordId: string,
     associations: Association[],
-    kinds: string[],
+    half: 'data' | 'authority',
   ): void {
     this.exec.run(
-      `DELETE FROM associations WHERE record_id = ? AND kind IN (${kinds.map(() => '?').join(', ')})`,
-      [recordId, ...kinds],
+      `DELETE FROM associations WHERE record_id = ? AND kind ${half === 'data' ? 'NOT IN' : 'IN'} ` +
+        `(${AUTHORITY_ASSOCIATION_KINDS.map(() => '?').join(', ')})`,
+      [recordId, ...AUTHORITY_ASSOCIATION_KINDS],
     );
     if (associations.length) this.insertAssociations(recordId, associations);
   }
