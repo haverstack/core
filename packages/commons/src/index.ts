@@ -10,9 +10,9 @@
  * markdown, which is the drift the Schema Commons' governance process exists
  * to prevent.
  *
- * Each constant is also a type handle, so `stack.create(NOTE, …)` and the
- * other typed overloads derive content types from the same literal. See
- * docs/spec/data-model.md § Type handles.
+ * Each constant is also a type handle, so `stack.collection(NOTE)` derives
+ * its content type from the same literal. See docs/spec/data-model.md
+ * § Type handles.
  *
  * Only Draft-status types are exported here. Proposed types (not yet backed
  * by a concrete intended writer) stay docs-only until they graduate.

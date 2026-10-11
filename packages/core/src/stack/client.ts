@@ -32,18 +32,8 @@ import type {
   Unsubscribe,
   VersionsQuery,
 } from '../types/index.js';
-import type {
-  ContentOf,
-  Migration,
-  PatchOf,
-  ReadonlyTypeSchema,
-  TypedChange,
-  TypedChangeSet,
-  TypedQuery,
-  TypedRecord,
-  TypedSubscribeOptions,
-  TypeHandle,
-} from '../type-handle.js';
+import type { ContentOf, Migration, ReadonlyTypeSchema, TypeHandle } from '../type-handle.js';
+import type { Collection } from '../collection.js';
 
 export type CreateRecordOptions = {
   /**
@@ -220,33 +210,19 @@ export type DefineTypeOptions = {
  */
 export interface StackClient {
   readonly capabilities: StackCapabilities;
-  create<S extends ReadonlyTypeSchema>(
-    handle: TypeHandle<S>,
-    content: ContentOf<S>,
-    opts?: CreateRecordOptions,
-  ): Promise<TypedRecord<S>>;
+  /**
+   * Typed access to `handle`'s whole family, every record migrated in
+   * memory to the handle's version. Throws `StackMigrationError` when the
+   * handle's `migratesFrom` has no migration passed to `Stack.open()`.
+   * See docs/spec/data-model.md § Type handles.
+   */
+  collection<S extends ReadonlyTypeSchema>(handle: TypeHandle<S>): Collection<ContentOf<S>>;
   create<T extends Record<string, unknown> = Record<string, unknown>>(
     typeId: TypeId,
     content: T,
     opts?: CreateRecordOptions,
   ): Promise<StackRecord & { content: T }>;
-  /**
-   * Typed read: the record at `presentAt: 'latest'`, checked to be exactly
-   * the handle's Type, else it throws. An enum field may hold a value the
-   * handle does not list. Live records only — a tombstone reads as `null`,
-   * and there is no `includeDeleted`.
-   * See docs/spec/data-model.md § Type handles.
-   */
-  get<S extends ReadonlyTypeSchema>(
-    handle: TypeHandle<S>,
-    id: RecordId,
-  ): Promise<TypedRecord<S> | null>;
   get(id: RecordId, opts?: GetRecordOptions): Promise<StackRecord | null>;
-  /** Typed read of the handle's whole family — see the typed `get()`. */
-  query<S extends ReadonlyTypeSchema>(
-    handle: TypeHandle<S>,
-    query?: TypedQuery,
-  ): Promise<{ records: TypedRecord<S>[]; cursor: string | null }>;
   query(query?: StackQuery): Promise<QueryResult>;
   /**
    * Resolve a DID to its `_entity` card — family-wide and soft-deleted
@@ -264,20 +240,8 @@ export interface StackClient {
    * it names `contentPatch`. Keys are read for presence; under ScopedStack
    * one refused key refuses the call. See docs/spec/data-model.md § Mutations.
    */
-  mutate<S extends ReadonlyTypeSchema>(
-    handle: TypeHandle<S>,
-    id: RecordId,
-    changes: TypedChangeSet<S>,
-    opts?: IfVersionOptions,
-  ): Promise<TypedRecord<S>>;
   mutate(id: RecordId, changes: RecordChangeSet, opts?: IfVersionOptions): Promise<StackRecord>;
   /** mutate() with `contentPatch` alone — the common case, named for it. */
-  patchContent<S extends ReadonlyTypeSchema>(
-    handle: TypeHandle<S>,
-    id: RecordId,
-    patch: PatchOf<S>,
-    opts?: IfVersionOptions,
-  ): Promise<TypedRecord<S>>;
   patchContent(
     id: RecordId,
     patch: Record<string, unknown | null>,
@@ -354,15 +318,5 @@ export interface StackClient {
   collectAttachmentGarbage(
     opts?: CollectAttachmentGarbageOptions,
   ): Promise<CollectAttachmentGarbageResult>;
-  /**
-   * Typed subscription: delivers only changes to records of exactly the
-   * handle's Type, each `record` typed as its content. See
-   * docs/spec/data-model.md § Type handles.
-   */
-  subscribe<S extends ReadonlyTypeSchema>(
-    handle: TypeHandle<S>,
-    handler: (change: TypedChange<S>) => void,
-    opts?: TypedSubscribeOptions,
-  ): Promise<Unsubscribe>;
   subscribe(handler: (change: RecordChange) => void, opts?: SubscribeOptions): Promise<Unsubscribe>;
 }

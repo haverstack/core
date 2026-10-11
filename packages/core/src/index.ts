@@ -46,15 +46,24 @@ export type {
   ContentOf,
   StoredContentOf,
   UnlistedValue,
-  PatchOf,
-  TypedRecord,
-  TypedQuery,
-  TypedChange,
-  TypedChangeSet,
-  TypedSubscribeOptions,
   ReadonlyFieldDef,
   ReadonlyTypeSchema,
 } from './type-handle.js';
+
+// Collections
+export { MisfitError } from './collection.js';
+export type {
+  Collection,
+  CollectionRecord,
+  CollectionPage,
+  CollectionQuery,
+  CollectionChange,
+  CollectionChangeSet,
+  CollectionSubscribeOptions,
+  ContentPatch,
+  Misfit,
+  StoredContent,
+} from './collection.js';
 
 // The error taxonomy
 export {

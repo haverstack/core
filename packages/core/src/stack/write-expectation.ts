@@ -18,7 +18,19 @@
 
 import { StackNotFoundError } from '../errors.js';
 import { baseIdOf } from '../schema.js';
-import type { BaseId, StackRecord, TypeId } from '../types/index.js';
+import type { DeleteRecordOptions, DeleteResult, StackClient } from './client.js';
+import type {
+  AssociationEdit,
+  AuthorityAssociation,
+  BaseId,
+  DataAssociation,
+  IfVersionOptions,
+  RecordChangeSet,
+  RecordId,
+  RecordVersion,
+  StackRecord,
+  TypeId,
+} from '../types/index.js';
 
 export const WRITE_EXPECTATION = Symbol('haverstack.writeExpectation');
 
@@ -56,6 +68,22 @@ export const checkFamily = (record: StackRecord, opts: ExpectationOptions | unde
 };
 
 /**
+ * A restore puts back the snapshot's `typeId`, so the snapshot is held to
+ * the family too: one from before the record migrated into it is not a
+ * version of a record in that family.
+ */
+export const checkSnapshotFamily = (
+  id: RecordId,
+  snapshot: RecordVersion,
+  opts: ExpectationOptions | undefined,
+): void => {
+  const expected = opts?.[WRITE_EXPECTATION];
+  if (expected && baseIdOf(snapshot.typeId) !== expected.baseId) {
+    throw new StackNotFoundError(`Version ${snapshot.version} not found for record "${id}"`);
+  }
+};
+
+/**
  * The exact version, on a write that patches content: a patch is validated
  * against the record's stored Type, so one written for another version
  * would be checked by a schema it was not written for. Called after the
@@ -77,4 +105,73 @@ export const storedVersionDiffers = (
   const expected = opts?.[WRITE_EXPECTATION];
   if (expected?.typeId === undefined || record.typeId === expected.typeId) return false;
   return patchesContent || expected.exact === true;
+};
+
+/**
+ * The write verbs of `StackClient` as `Stack` and `ScopedStack` implement
+ * them, each taking an expectation. Internal: a collection casts its client
+ * to this once, so the key stays off the public surface and every call that
+ * passes one is still type-checked.
+ */
+export type ExpectingClient = Omit<
+  StackClient,
+  | 'mutate'
+  | 'patchContent'
+  | 'associate'
+  | 'dissociate'
+  | 'amendAssociations'
+  | 'grantAccess'
+  | 'revokeAccess'
+  | 'amendAccess'
+  | 'delete'
+  | 'undelete'
+  | 'restoreVersion'
+> & {
+  mutate(
+    id: RecordId,
+    changes: RecordChangeSet,
+    opts?: IfVersionOptions & ExpectationOptions,
+  ): Promise<StackRecord>;
+  patchContent(
+    id: RecordId,
+    patch: Record<string, unknown | null>,
+    opts?: IfVersionOptions & ExpectationOptions,
+  ): Promise<StackRecord>;
+  associate(
+    id: RecordId,
+    associations: DataAssociation[],
+    opts?: ExpectationOptions,
+  ): Promise<StackRecord>;
+  dissociate(
+    id: RecordId,
+    associations: DataAssociation[],
+    opts?: ExpectationOptions,
+  ): Promise<StackRecord>;
+  amendAssociations(
+    id: RecordId,
+    changes: AssociationEdit[],
+    opts?: ExpectationOptions,
+  ): Promise<StackRecord>;
+  grantAccess(
+    id: RecordId,
+    permissions: AuthorityAssociation[],
+    opts?: ExpectationOptions,
+  ): Promise<StackRecord>;
+  revokeAccess(
+    id: RecordId,
+    permissions: AuthorityAssociation[],
+    opts?: ExpectationOptions,
+  ): Promise<StackRecord>;
+  amendAccess(
+    id: RecordId,
+    changes: AssociationEdit[],
+    opts?: ExpectationOptions,
+  ): Promise<StackRecord>;
+  delete(id: RecordId, opts?: DeleteRecordOptions & ExpectationOptions): Promise<DeleteResult>;
+  undelete(id: RecordId, opts?: IfVersionOptions & ExpectationOptions): Promise<StackRecord>;
+  restoreVersion(
+    id: RecordId,
+    version: number,
+    opts?: IfVersionOptions & ExpectationOptions,
+  ): Promise<StackRecord>;
 };

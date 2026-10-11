@@ -58,17 +58,20 @@ const Note = typeHandle({
 });
 await stack.defineType(Note);
 
+// Typed access to the Note family
+const notes = stack.collection(Note);
+
 // Create a record
-const note = await stack.create(Note, {
+const note = await notes.create({
   text: 'Hello, Haverstack!',
   title: 'My first note',
 });
 
 // Update its content (partial merge — only changed fields needed)
-await stack.patchContent(Note, note.id, { title: 'Updated title' });
+await notes.patchContent(note.id, { title: 'Updated title' });
 
 // Read it back, typed: `content.text` is a string
-const same = await stack.get(Note, note.id);
+const same = await notes.get(note.id);
 
 // Tag it
 await stack.associate(note.id, [{ kind: 'tag', label: 'favourite' }]);
@@ -82,7 +85,7 @@ await stack.mutate(note.id, {
 
 // Query. With no filter, query() returns every record you can read, from every
 // app and system types included, so filter by typeId, baseId or appId to get your own.
-const notes = await stack.query({
+const favourites = await stack.query({
   filter: { typeId: 'com.example.myapp/note@1', tags: ['favourite'] },
   sort: { field: 'createdAt', direction: 'desc' },
 });
@@ -101,7 +104,8 @@ An app has two layers, because the stack draws a line between them:
 Migrations belong to neither. They are passed to `Stack.open()` on **every startup**, so the chain is complete before the first read.
 
 ```ts
-import { Stack, migration, typeHandle, type StackClient } from '@haverstack/core';
+import { Stack, migration, typeHandle } from '@haverstack/core';
+import type { Collection, ContentOf, StackClient } from '@haverstack/core';
 
 const NoteV1 = typeHandle({
   id: 'com.example.myapp/note@1',
@@ -126,15 +130,18 @@ export const noteMigrations = [
 
 // Data layer: whoever the stack lets in.
 export class Notes {
-  constructor(private readonly client: StackClient) {}
+  private readonly notes: Collection<ContentOf<typeof Note.schema>>;
+  constructor(client: StackClient) {
+    this.notes = client.collection(Note);
+  }
   add(text: string) {
-    return this.client.create(Note, { text, pinned: false });
+    return this.notes.create({ text, pinned: false });
   }
   pin(id: string) {
-    return this.client.patchContent(Note, id, { pinned: true });
+    return this.notes.patchContent(id, { pinned: true });
   }
   list() {
-    return this.client.query(Note);
+    return this.notes.query();
   }
 }
 
