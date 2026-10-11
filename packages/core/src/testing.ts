@@ -52,6 +52,7 @@ import {
   applyAssociationEdits,
   assertOneSurface,
   associationEqual,
+  partitionAssociations,
 } from './associations/identity.js';
 
 /** Core resolves the default direction; an adapter only ever sees an explicit one. */
@@ -712,10 +713,6 @@ export class IncapableMemoryAdapter extends MemoryAdapter {
   }
 }
 
-/** Whether an association carries authority — mirrors core's own predicate. */
-const isAuthority = (a: Association): a is AuthorityAssociation =>
-  a.kind === 'permission' || a.kind === 'anyone';
-
 /**
  * A record's whole association table, both projections rejoined — what
  * amendAssociations() acts on, since storage keys all kinds alike.
@@ -739,8 +736,7 @@ function withAssociationSet(record: StackRecord, associations: Association[]): S
     [],
   );
   const { associations: _dropA, permissions: _dropP, ...rest } = record;
-  const data = keyed.filter((a): a is DataAssociation => !isAuthority(a));
-  const authority = keyed.filter(isAuthority);
+  const { associations: data, permissions: authority } = partitionAssociations(keyed);
   return {
     ...(rest as StackRecord),
     ...(data.length && { associations: data }),

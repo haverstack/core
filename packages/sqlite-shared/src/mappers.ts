@@ -6,8 +6,6 @@
 
 import type {
   Actor,
-  AuthorityAssociation,
-  DataAssociation,
   GroupRole,
   Grantee,
   RecordJournalEntry,
@@ -17,6 +15,7 @@ import type {
   Association,
   RelationshipTarget,
 } from '@haverstack/core';
+import { partitionAssociations } from '@haverstack/core/adapter';
 
 export const toMs = (d: Date): number => d.getTime();
 
@@ -32,23 +31,6 @@ const actorFromColumns = (subject: unknown, principal: unknown): Actor | undefin
         ...(principal != null && { principalId: principal as string }),
       };
 export const fromMs = (ms: number): Date => new Date(ms);
-
-/**
- * A record's stored edges, split into the two fields it presents.
- * Partitioned by kind rather than stored apart: one table, one delta, one
- * durability tier, and an app editing tags never sees the authority half.
- * See docs/spec/access-control.md § Record-level permissions.
- */
-export const partitionAssociations = (
-  associations: Association[],
-): { associations: DataAssociation[]; permissions: AuthorityAssociation[] } => ({
-  associations: associations.filter(
-    (a): a is DataAssociation => a.kind !== 'permission' && a.kind !== 'anyone',
-  ),
-  permissions: associations.filter(
-    (a): a is AuthorityAssociation => a.kind === 'permission' || a.kind === 'anyone',
-  ),
-});
 
 export const rowToRecord = (
   row: Record<string, unknown>,
@@ -75,6 +57,8 @@ export const rowToRecord = (
   if (updatedBy) record.updatedBy = updatedBy;
   if (row.deleted_at != null) record.deletedAt = fromMs(row.deleted_at as number);
   if (row.unlisted_at != null) record.unlistedAt = fromMs(row.unlisted_at as number);
+  // One table, partitioned on read. See docs/spec/access-control.md
+  // § Record-level permissions.
   const partitioned = partitionAssociations(associations);
   if (partitioned.associations.length) record.associations = partitioned.associations;
   if (partitioned.permissions.length) record.permissions = partitioned.permissions;

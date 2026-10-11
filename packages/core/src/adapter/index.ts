@@ -33,3 +33,4 @@ export {
 } from '../query-validation.js';
 export { contentSortEntry, contentSortKey, compareSortEntries } from './sort.js';
 export type { SortEntry } from './sort.js';
+export { partitionAssociations } from '../associations/identity.js';
