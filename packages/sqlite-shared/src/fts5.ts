@@ -125,8 +125,11 @@ export const sanitizeFts5Query = (query: string, maxDepth = 2): string => {
   // this is where the long runs come from.
   clean = collapseWhitespace(clean);
 
-  // Strip bare NOT with no left operand — FTS5 requires "term NOT term", not "NOT term"
-  clean = clean.replace(/(?:^|\(\s*)NOT\s+/gi, (m) => m.replace(/NOT\s+/i, ''));
+  // Strip bare NOT with no left operand — FTS5 requires "term NOT term", not
+  // "NOT term". A phrase is matched first and kept whole, so a NOT inside one
+  // stays the word it is; the closing quote is optional because an odd one
+  // is only closed further down.
+  clean = clean.replace(/"[^"]*"?|(^|\(\s*)NOT\s+/gi, (m, lead?: string) => lead ?? m);
 
   // Enforce max nesting depth; replace excess ( with a space and discard
   // unmatched ). Parens inside a phrase are literal text to FTS5, so the

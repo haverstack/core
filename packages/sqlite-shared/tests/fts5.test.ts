@@ -150,6 +150,12 @@ describe('sanitizeFts5Query', () => {
       expect(sanitizeFts5Query('"cats AND"')).toBe('"cats AND"');
     });
 
+    test('leaves a NOT inside a phrase alone, even after a paren', () => {
+      expect(sanitizeFts5Query('"NOT cats"')).toBe('"NOT cats"');
+      expect(sanitizeFts5Query('"cats (not dogs"')).toBe('"cats (not dogs"');
+      expect(sanitizeFts5Query('x "a (NOT b')).toBe('x "a (NOT b"');
+    });
+
     // The mask a phrase leaves behind is an operand, so neither of these
     // operators is dangling.
     test('a phrase counts as an operand on either side', () => {
