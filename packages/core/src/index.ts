@@ -61,7 +61,9 @@ export type {
   CollectionChangeSet,
   CollectionSubscribeOptions,
   ContentPatch,
+  ContentPathOf,
   Misfit,
+  SortableFieldOf,
   StoredContent,
 } from './collection.js';
 

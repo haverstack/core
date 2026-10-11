@@ -33,6 +33,7 @@ import type {
   ChangeFilter,
   DataAssociation,
   IfVersionOptions,
+  NativeSortField,
   RecordChange,
   RecordChangeSet,
   RecordFilter,
@@ -98,13 +99,79 @@ export type CollectionPage<C> = {
 };
 
 /**
+ * Path typing stops at this depth and accepts any suffix below it, since a
+ * recursive path type otherwise exceeds the compiler's instantiation limit.
+ * A typing limit, not a query limit: see docs/spec/data-model.md § Nested
+ * content paths.
+ */
+type PathDepth = [never, 0, 1, 2, 3, 4, 5];
+
+/**
+ * Each content path of `V` reached at `P`, paired with the value a filter
+ * compares there. An array is matched element-wise, so it is its element.
+ */
+type PathEntry<P extends string, V, D extends number> = [D] extends [never]
+  ? [P | `${P}.${string}`, unknown]
+  : V extends readonly (infer E)[]
+    ? unknown extends E
+      ? [P | `${P}.${string}`, unknown]
+      : PathEntry<P, E, PathDepth[D]>
+    : V extends object
+      ? string extends keyof V
+        ? [P, V] | [`${P}.${string}`, unknown]
+        : [P, V] | FieldEntry<V, `${P}.`, PathDepth[D]>
+      : [P, V];
+
+/** `Required<C>[K]` rather than `NonNullable`, which would leak into errors. */
+type FieldEntry<C, Prefix extends string, D extends number> = [D] extends [never]
+  ? [`${Prefix}${string}`, unknown]
+  : {
+      [K in keyof C & string]-?: PathEntry<`${Prefix}${K}`, Required<C>[K], D>;
+    }[keyof C & string];
+
+/**
+ * Every content path of `C`: its fields, and dotted paths through declared
+ * objects and arrays. Below an `open` object or array, or six segments
+ * deep, any suffix is a path.
+ */
+export type ContentPathOf<C> = FieldEntry<C, '', 6>[0];
+
+/** The top-level scalar fields of `C`, the ones a content sort reaches. */
+export type SortableFieldOf<C> = string extends keyof C
+  ? string
+  : {
+      [K in keyof C & string]-?: Required<C>[K] extends string | number | boolean ? K : never;
+    }[keyof C & string];
+
+/**
  * A collection reads live records of its own family only, as stored, so
  * none of `typeId`, `baseId`, `includeDeleted` or `presentAt` is offered.
- * `C` is reserved for typing content filters and sorts.
+ * Content filter keys and the sort field are checked against `C`, the
+ * handle's version, while matching runs on content as stored. See
+ * docs/spec/data-model.md § Type handles.
  */
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-export type CollectionQuery<C> = Omit<StackQuery, 'filter' | 'presentAt'> & {
-  filter?: Omit<RecordFilter, 'typeId' | 'baseId' | 'includeDeleted'>;
+export type CollectionQuery<C> = Omit<StackQuery, 'filter' | 'presentAt' | 'sort'> & {
+  filter?: Omit<
+    RecordFilter,
+    'typeId' | 'baseId' | 'includeDeleted' | 'content' | 'contentPresent'
+  > & {
+    content?: { [E in FieldEntry<C, '', 6> as E[0]]?: E[1] | null };
+    contentPresent?: FieldEntry<C, '', 6>[0][];
+  };
+  sort?:
+    | { field: NativeSortField; contentField?: never; direction?: 'asc' | 'desc' }
+    | {
+        field?: never;
+        // Spelled out rather than SortableFieldOf<C>, so an error lists the fields.
+        contentField: string extends keyof C
+          ? string
+          : {
+              [K in keyof C & string]-?: Required<C>[K] extends string | number | boolean
+                ? K
+                : never;
+            }[keyof C & string];
+        direction?: 'asc' | 'desc';
+      };
 };
 
 /** The family is the collection's, so neither `typeId` nor `baseId` is a filter key. */
