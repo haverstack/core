@@ -7,29 +7,13 @@
  * code can use it wherever it has no `defineType()` result.
  *
  * The derived types layer over runtime validation, which stays the guarantee.
- * What a typed read adds is a runtime check that the record is the handle's
- * Type. See docs/spec/data-model.md § Type handles.
+ * A handle reaches records through `client.collection(handle)`; see
+ * collection.ts and docs/spec/data-model.md § Type handles.
  */
 
 import { StackBadRequestError, StackMigrationError } from './errors.js';
 import { lineageProblem, parseTypeId } from './schema.js';
-import { StoredVersionError, WRITE_EXPECTATION } from './stack/write-expectation.js';
-import type { CreateRecordOptions, StackClient } from './stack/client.js';
-import type {
-  BaseId,
-  ChangeFilter,
-  IfVersionOptions,
-  RecordChange,
-  RecordChangeSet,
-  RecordId,
-  RecordFilter,
-  ScalarFieldKind,
-  StackQuery,
-  StackRecord,
-  SubscribeOptions,
-  TypeId,
-  Unsubscribe,
-} from './types/index.js';
+import type { BaseId, ScalarFieldKind, TypeId } from './types/index.js';
 
 // -------------------------------------------------------
 // Schema literal types
@@ -146,11 +130,6 @@ export type PatchOf<S extends ReadonlyTypeSchema> = Simplify<{
     : ValueOf<S[K], 'write'> | null;
 }>;
 
-/** A record whose content is the handle's, as a typed read returns it. */
-export type TypedRecord<S extends ReadonlyTypeSchema> = Omit<StackRecord, 'content'> & {
-  content: StoredContentOf<S>;
-};
-
 // -------------------------------------------------------
 // The handle
 // -------------------------------------------------------
@@ -171,7 +150,7 @@ export type TypeHandle<S extends ReadonlyTypeSchema = ReadonlyTypeSchema> = {
 /**
  * Name a Type, its display name, its schema and the version it migrates
  * from in one literal. Pass the result to `defineType()`, a manifest's
- * `types` and the typed overloads of `StackClient`. A handle names exactly
+ * `types` and `StackClient.collection()`. A handle names exactly
  * one version: `Book.baseId` is the argument a call about the whole family
  * takes.
  */
@@ -204,13 +183,6 @@ export const typeHandle = <const S extends ReadonlyTypeSchema>({
     ...(from !== undefined && { migratesFrom: from }),
   });
 };
-
-export const isTypeHandle = (value: unknown): value is TypeHandle =>
-  typeof value === 'object' &&
-  value !== null &&
-  typeof (value as TypeHandle).id === 'string' &&
-  typeof (value as TypeHandle).baseId === 'string' &&
-  typeof (value as TypeHandle).schema === 'object';
 
 // -------------------------------------------------------
 // Migrations
@@ -248,141 +220,3 @@ export const migration = <F extends ReadonlyTypeSchema, T extends ReadonlyTypeSc
   }
   return Object.freeze({ from: from.id, to: to.id, migrate: fn });
 };
-
-// -------------------------------------------------------
-// Typed read and write options
-// -------------------------------------------------------
-
-/**
- * A typed read sees live records only and always reads at `presentAt:
- * 'latest'`, so neither knob is offered. See docs/spec/data-model.md § Type
- * handles.
- */
-export type TypedQuery = Omit<StackQuery, 'filter' | 'presentAt'> & {
-  filter?: Omit<RecordFilter, 'typeId' | 'baseId' | 'includeDeleted'>;
-};
-
-/**
- * A change whose `record`, when present, is the handle's content. Absent
- * where an untyped change's would be, and when the record has migrated off
- * the handle's version; the typed `get()` then says why.
- */
-export type TypedChange<S extends ReadonlyTypeSchema> = Omit<RecordChange, 'record'> & {
-  record?: TypedRecord<S>;
-};
-
-/** The family and version are the handle's, so neither is a filter key. */
-export type TypedSubscribeOptions = Omit<SubscribeOptions, 'filter'> & {
-  filter?: Omit<ChangeFilter, 'typeId' | 'baseId'>;
-};
-
-export type TypedChangeSet<S extends ReadonlyTypeSchema> = Omit<RecordChangeSet, 'contentPatch'> & {
-  contentPatch?: PatchOf<S>;
-};
-
-// -------------------------------------------------------
-// Runtime narrowing
-// -------------------------------------------------------
-
-/**
- * Narrow a record to a handle's content type: it must be exactly the
- * handle's Type. A record of another Type throws, and so does one whose
- * family has moved past the handle's version.
- */
-const narrowRecord = <S extends ReadonlyTypeSchema>(
-  handle: TypeHandle<S>,
-  record: StackRecord,
-): TypedRecord<S> => {
-  if (record.typeId !== handle.id) {
-    throw new StackBadRequestError(`Record "${record.id}" is ${record.typeId}, not ${handle.id}`);
-  }
-  return record as TypedRecord<S>;
-};
-
-/** The ways a typed read can be asked to see a tombstone. */
-const assertLiveFilter = (filter: object | undefined): void => {
-  if ((filter as RecordFilter | undefined)?.includeDeleted) {
-    throw new StackBadRequestError(
-      'A typed read sees live records only; use the untyped read to include soft-deleted records.',
-    );
-  }
-};
-
-// -------------------------------------------------------
-// Typed operations, shared by Stack and ScopedStack
-// -------------------------------------------------------
-
-type TypedOps = Pick<StackClient, 'get' | 'query' | 'create' | 'mutate' | 'subscribe'>;
-
-export const typedGet = async <S extends ReadonlyTypeSchema>(
-  client: TypedOps,
-  handle: TypeHandle<S>,
-  id: RecordId,
-): Promise<TypedRecord<S> | null> => {
-  const record = await client.get(id, { presentAt: 'latest' });
-  return record && narrowRecord(handle, record);
-};
-
-export const typedQuery = async <S extends ReadonlyTypeSchema>(
-  client: TypedOps,
-  handle: TypeHandle<S>,
-  query: TypedQuery = {},
-): Promise<{ records: TypedRecord<S>[]; cursor: string | null }> => {
-  assertLiveFilter(query.filter);
-  // The family, not the handle's version: a record still at an older
-  // version must be migrated up, or refused as stale, never skipped.
-  const result = await client.query({
-    ...query,
-    filter: { ...query.filter, baseId: handle.baseId },
-    presentAt: 'latest',
-  });
-  return { ...result, records: result.records.map((r) => narrowRecord(handle, r)) };
-};
-
-export const typedCreate = async <S extends ReadonlyTypeSchema>(
-  client: TypedOps,
-  handle: TypeHandle<S>,
-  content: ContentOf<S>,
-  opts?: CreateRecordOptions,
-): Promise<TypedRecord<S>> => client.create(handle.id, content, opts) as Promise<TypedRecord<S>>;
-
-export const typedMutate = async <S extends ReadonlyTypeSchema>(
-  client: TypedOps,
-  handle: TypeHandle<S>,
-  id: RecordId,
-  changes: TypedChangeSet<S>,
-  opts?: IfVersionOptions,
-): Promise<TypedRecord<S>> => {
-  // Checked against the read the write already makes, so nothing lands on
-  // a record the handle does not type. See docs/spec/data-model.md § Type handles.
-  const expect = {
-    [WRITE_EXPECTATION]: { baseId: handle.baseId, typeId: handle.id, exact: true },
-  };
-  try {
-    return narrowRecord(handle, await client.mutate(id, changes, { ...opts, ...expect } as never));
-  } catch (err) {
-    if (!(err instanceof StoredVersionError)) throw err;
-    throw new StackBadRequestError(`Record "${id}" is ${err.record.typeId}, not ${handle.id}`);
-  }
-};
-
-export const typedSubscribe = <S extends ReadonlyTypeSchema>(
-  client: TypedOps,
-  handle: TypeHandle<S>,
-  handler: (change: TypedChange<S>) => void,
-  opts: TypedSubscribeOptions = {},
-): Promise<Unsubscribe> =>
-  // Exactly the handle's version: an event carries its record as stored, so
-  // a subscription cannot migrate it the way a typed read does, and a
-  // record of another version has no honest typing here.
-  client.subscribe(
-    (change) => {
-      const { record, ...rest } = change;
-      // A record migrated off the handle's version still matches the filter
-      // by its previous typeId, and arrives without `record`.
-      handler(
-        record?.typeId === handle.id ? { ...rest, record: narrowRecord(handle, record) } : rest,
-      );
-    },
-    { ...opts, filter: { ...opts.filter, typeId: handle.id } },
-  );

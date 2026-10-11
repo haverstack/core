@@ -167,27 +167,11 @@ import type {
   StackClient,
   StackOptions,
 } from './client.js';
-import {
-  isTypeHandle,
-  typedCreate,
-  typedGet,
-  typedMutate,
-  typedQuery,
-  typedSubscribe,
-} from '../type-handle.js';
 import { checkFamily, checkStoredVersion, WRITE_EXPECTATION } from './write-expectation.js';
 import type { ExpectationOptions } from './write-expectation.js';
-import type {
-  ContentOf,
-  PatchOf,
-  ReadonlyTypeSchema,
-  TypedChange,
-  TypedChangeSet,
-  TypedQuery,
-  TypedSubscribeOptions,
-  TypedRecord,
-  TypeHandle,
-} from '../type-handle.js';
+import type { ContentOf, ReadonlyTypeSchema, TypeHandle } from '../type-handle.js';
+import { createCollection } from '../collection.js';
+import type { Collection } from '../collection.js';
 
 // -------------------------------------------------------
 // Supporting definitions
@@ -400,7 +384,13 @@ export class Stack implements StackClient {
       changes: this.changes,
       assertOpen: () => this.assertOpen(),
       relaysChanges: this.relaysChanges,
+      migrations: this.migrations,
     });
+  }
+
+  collection<S extends ReadonlyTypeSchema>(handle: TypeHandle<S>): Collection<ContentOf<S>> {
+    this.assertOpen();
+    return createCollection(this, this.migrations, handle);
   }
 
   // -------------------------------------------------------
@@ -580,24 +570,11 @@ export class Stack implements StackClient {
    * Backdating is accepted unconditionally here; ScopedStack decides who may.
    * See docs/spec/data-model.md § Backdating on import.
    */
-  async create<S extends ReadonlyTypeSchema>(
-    handle: TypeHandle<S>,
-    content: ContentOf<S>,
-    opts?: BackdatableCreateRecordOptions,
-  ): Promise<TypedRecord<S>>;
   async create<T extends Record<string, unknown> = Record<string, unknown>>(
     typeId: TypeId,
-    content: T,
-    opts?: BackdatableCreateRecordOptions,
-  ): Promise<StackRecord & { content: T }>;
-  async create(
-    typeIdOrHandle: TypeId | TypeHandle,
-    input: Record<string, unknown>,
+    input: T,
     opts: BackdatableCreateRecordOptions = {},
-  ): Promise<StackRecord> {
-    if (isTypeHandle(typeIdOrHandle))
-      return typedCreate(this, typeIdOrHandle, input as never, opts);
-    const typeId = typeIdOrHandle;
+  ): Promise<StackRecord & { content: T }> {
     this.assertOpen();
     const type = await this.getTypeCached(typeId);
     if (!type) {
@@ -723,7 +700,7 @@ export class Stack implements StackClient {
     const change = new PendingChange('create', { actor: Stack.createActor(record) });
     const created = await this.adapter.createRecord(record, { journal: change.journal });
     this.announce(change, created);
-    return created;
+    return created as StackRecord & { content: T };
   }
 
   /**
@@ -732,18 +709,7 @@ export class Stack implements StackClient {
    * commits migrations to disk. A soft-deleted record answers `null` unless
    * { includeDeleted: true } is passed.
    */
-  async get<S extends ReadonlyTypeSchema>(
-    handle: TypeHandle<S>,
-    id: RecordId,
-  ): Promise<TypedRecord<S> | null>;
-  async get(id: RecordId, opts?: GetRecordOptions): Promise<StackRecord | null>;
-  async get(
-    idOrHandle: RecordId | TypeHandle,
-    idOrOpts: RecordId | GetRecordOptions = {},
-  ): Promise<StackRecord | null> {
-    if (isTypeHandle(idOrHandle)) return typedGet(this, idOrHandle, idOrOpts as RecordId);
-    const id = idOrHandle;
-    const opts = idOrOpts as GetRecordOptions;
+  async get(id: RecordId, opts: GetRecordOptions = {}): Promise<StackRecord | null> {
     this.assertOpen();
     const record = await this.adapter.getRecord(id);
     if (!record) return null;
@@ -757,35 +723,11 @@ export class Stack implements StackClient {
    * against the record's current stored type.
    * See docs/spec/data-model.md § Mutations.
    */
-  async mutate<S extends ReadonlyTypeSchema>(
-    handle: TypeHandle<S>,
-    id: RecordId,
-    changes: TypedChangeSet<S>,
-    opts?: IfVersionOptions & ActorOptions,
-  ): Promise<TypedRecord<S>>;
   async mutate(
     id: RecordId,
     changes: RecordChangeSet,
-    opts?: IfVersionOptions & ActorOptions,
-  ): Promise<StackRecord>;
-  async mutate(
-    first: RecordId | TypeHandle,
-    second: RecordId | RecordChangeSet | TypedChangeSet<ReadonlyTypeSchema>,
-    third?: (IfVersionOptions & ActorOptions) | RecordChangeSet,
-    fourth: IfVersionOptions & ActorOptions = {},
+    opts: IfVersionOptions & ActorOptions & ExpectationOptions = {},
   ): Promise<StackRecord> {
-    if (isTypeHandle(first)) {
-      return typedMutate(
-        this,
-        first,
-        second as RecordId,
-        third as TypedChangeSet<ReadonlyTypeSchema>,
-        fourth,
-      );
-    }
-    const id = first;
-    const changes = second as RecordChangeSet;
-    const opts = (third ?? {}) as IfVersionOptions & ActorOptions & ExpectationOptions;
     this.assertOpen();
     assertNonEmptyChangeSet(changes);
 
@@ -848,27 +790,12 @@ export class Stack implements StackClient {
    * and named for what it does rather than for a symmetry with create()
    * that a patch does not have.
    */
-  async patchContent<S extends ReadonlyTypeSchema>(
-    handle: TypeHandle<S>,
-    id: RecordId,
-    patch: PatchOf<S>,
-    opts?: IfVersionOptions & ActorOptions,
-  ): Promise<TypedRecord<S>>;
   async patchContent(
     id: RecordId,
     patch: Record<string, unknown | null>,
-    opts?: IfVersionOptions & ActorOptions,
-  ): Promise<StackRecord>;
-  async patchContent(
-    first: RecordId | TypeHandle,
-    second: RecordId | Record<string, unknown | null>,
-    third?: Record<string, unknown | null> | (IfVersionOptions & ActorOptions),
-    fourth?: IfVersionOptions & ActorOptions,
+    opts?: IfVersionOptions & ActorOptions & ExpectationOptions,
   ): Promise<StackRecord> {
-    if (isTypeHandle(first)) {
-      return this.mutate(first, second as RecordId, { contentPatch: third as never }, fourth);
-    }
-    return this.mutate(first, { contentPatch: second as Record<string, unknown | null> }, third);
+    return this.mutate(id, { contentPatch: patch }, opts);
   }
 
   /**
@@ -1260,17 +1187,7 @@ export class Stack implements StackClient {
    * stored; pass presentAt: 'latest' to migrate in memory. See
    * docs/spec/data-model.md § Queries.
    */
-  async query<S extends ReadonlyTypeSchema>(
-    handle: TypeHandle<S>,
-    query?: TypedQuery,
-  ): Promise<{ records: TypedRecord<S>[]; cursor: string | null }>;
-  async query(query?: StackQuery): Promise<QueryResult>;
-  async query(
-    first: TypeHandle | StackQuery = {},
-    typedQueryArg?: TypedQuery,
-  ): Promise<QueryResult> {
-    if (isTypeHandle(first)) return typedQuery(this, first, typedQueryArg);
-    const query = first;
+  async query(query: StackQuery = {}): Promise<QueryResult> {
     this.assertOpen();
     const { presentAt, filter, limit: rawLimit, ...rest } = query;
     assertQueryCapabilities(filter, this.adapter.capabilities);
@@ -1659,30 +1576,10 @@ export class Stack implements StackClient {
    * remote stack resolves once its feed is live, making subscribe-then-query
    * gap-free. See docs/spec/events.md § Subscribing.
    */
-  async subscribe<S extends ReadonlyTypeSchema>(
-    handle: TypeHandle<S>,
-    handler: (change: TypedChange<S>) => void,
-    opts?: TypedSubscribeOptions,
-  ): Promise<Unsubscribe>;
   async subscribe(
     handler: (change: RecordChange) => void,
-    opts?: SubscribeOptions,
-  ): Promise<Unsubscribe>;
-  async subscribe(
-    first: TypeHandle | ((change: RecordChange) => void),
-    second?: ((change: TypedChange<ReadonlyTypeSchema>) => void) | SubscribeOptions,
-    third?: TypedSubscribeOptions,
+    opts: SubscribeOptions = {},
   ): Promise<Unsubscribe> {
-    if (isTypeHandle(first)) {
-      return typedSubscribe(
-        this,
-        first,
-        second as (change: TypedChange<ReadonlyTypeSchema>) => void,
-        third,
-      );
-    }
-    const handler = first;
-    const opts = (second ?? {}) as SubscribeOptions;
     this.assertOpen();
     assertSinceUsable(opts.since, this.relaysChanges);
     assertValidBaseIdFilter(opts.filter);

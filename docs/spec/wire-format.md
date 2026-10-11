@@ -221,7 +221,7 @@ The body parsers split errors the way [Records](#records) does for a create: a b
 
 ### The taxonomy root
 
-Every class in the table above extends the abstract `StackError`, so `err instanceof StackError` answers the one question a server's error middleware asks first: is this a Stack-domain failure with a wire representation, or an ordinary bug that should surface as a bare 500? Membership is exactly that guarantee — a `StackError` always has a `code`, and every code has a status. Errors with no wire mapping (`IdGenerationError`, `InvalidDidError`, `InvalidAuthChallengeError`, `UseAfterCloseError`, `InvalidAdapterError`, `OwnerMismatchError`, `RelayScopeError`) stay outside the hierarchy for that reason.
+Every class in the table above extends the abstract `StackError`, so `err instanceof StackError` answers the one question a server's error middleware asks first: is this a Stack-domain failure with a wire representation, or an ordinary bug that should surface as a bare 500? Membership is exactly that guarantee — a `StackError` always has a `code`, and every code has a status. Errors with no wire mapping (`IdGenerationError`, `InvalidDidError`, `InvalidAuthChallengeError`, `UseAfterCloseError`, `InvalidAdapterError`, `OwnerMismatchError`, `RelayScopeError`, `MisfitError`) stay outside the hierarchy for that reason.
 
 **The `Stack` prefix is reserved for members.** A class named `Stack…Error` extends `StackError`, and no error outside the hierarchy carries the prefix, so the name alone says whether a server can serialize it.
 

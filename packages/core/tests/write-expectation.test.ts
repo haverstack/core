@@ -8,8 +8,11 @@ import {
   StackVersionConflictError,
 } from '../src/errors.js';
 import { StoredVersionError, WRITE_EXPECTATION } from '../src/stack/write-expectation.js';
-import type { WriteExpectation } from '../src/stack/write-expectation.js';
-import type { ScopedStack } from '../src/scoped-stack/scoped-stack.js';
+import type {
+  ExpectationOptions,
+  ExpectingClient,
+  WriteExpectation,
+} from '../src/stack/write-expectation.js';
 import type { AuthorityAssociation, DataAssociation, RecordId } from '../src/types/index.js';
 
 const OWNER = 'owner-123';
@@ -42,29 +45,28 @@ const SHARE: AuthorityAssociation = {
 };
 
 // The options a collection passes; the verbs' public types never name the key.
-const expecting = (expectation: WriteExpectation, rest: object = {}) =>
-  ({ ...rest, [WRITE_EXPECTATION]: expectation }) as never;
+const expecting = <O extends object>(expectation: WriteExpectation, rest?: O) =>
+  ({ ...rest, [WRITE_EXPECTATION]: expectation }) as O & ExpectationOptions;
 
 const BOOK_FAMILY: WriteExpectation = { baseId: Book.baseId, typeId: Book.id };
 
-type Verb = (client: Stack | ScopedStack, id: RecordId, opts?: object) => Promise<unknown>;
+type Verb = (client: ExpectingClient, id: RecordId, opts?: ExpectationOptions) => Promise<unknown>;
 
 // Each verb with arguments that would write had the family matched. A
 // call without options passes `undefined`, as an untyped caller would.
 const VERBS: Record<string, Verb> = {
-  mutate: (c, id, o) => c.mutate(id, { contentPatch: { name: 'Moved' } }, o as never),
-  patchContent: (c, id, o) => c.patchContent(id, { name: 'Moved' }, o as never),
-  associate: (c, id, o) => c.associate(id, [TAG], o as never),
-  dissociate: (c, id, o) => c.dissociate(id, [TAG], o as never),
-  amendAssociations: (c, id, o) =>
-    c.amendAssociations(id, [{ op: 'add', association: TAG }], o as never),
-  grantAccess: (c, id, o) => c.grantAccess(id, [SHARE], o as never),
-  revokeAccess: (c, id, o) => c.revokeAccess(id, [SHARE], o as never),
-  amendAccess: (c, id, o) => c.amendAccess(id, [{ op: 'add', association: SHARE }], o as never),
-  delete: (c, id, o) => c.delete(id, o as never),
-  purge: (c, id, o) => c.delete(id, { ...o, purge: true } as never),
-  undelete: (c, id, o) => c.undelete(id, o as never),
-  restoreVersion: (c, id, o) => c.restoreVersion(id, 1, o as never),
+  mutate: (c, id, o) => c.mutate(id, { contentPatch: { name: 'Moved' } }, o),
+  patchContent: (c, id, o) => c.patchContent(id, { name: 'Moved' }, o),
+  associate: (c, id, o) => c.associate(id, [TAG], o),
+  dissociate: (c, id, o) => c.dissociate(id, [TAG], o),
+  amendAssociations: (c, id, o) => c.amendAssociations(id, [{ op: 'add', association: TAG }], o),
+  grantAccess: (c, id, o) => c.grantAccess(id, [SHARE], o),
+  revokeAccess: (c, id, o) => c.revokeAccess(id, [SHARE], o),
+  amendAccess: (c, id, o) => c.amendAccess(id, [{ op: 'add', association: SHARE }], o),
+  delete: (c, id, o) => c.delete(id, o),
+  purge: (c, id, o) => c.delete(id, { ...o, purge: true }),
+  undelete: (c, id, o) => c.undelete(id, o),
+  restoreVersion: (c, id, o) => c.restoreVersion(id, 1, o),
 };
 
 let adapter: MemoryAdapter;
@@ -87,7 +89,7 @@ const seedShelf = async (): Promise<RecordId> => {
   return shelf.id;
 };
 
-const clients: Record<string, () => Stack | ScopedStack> = {
+const clients: Record<string, () => ExpectingClient> = {
   Stack: () => stack,
   ScopedStack: () => stack.asEntity(OWNER),
 };

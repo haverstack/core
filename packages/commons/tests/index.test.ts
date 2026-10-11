@@ -118,13 +118,14 @@ describe('typed handles', () => {
 
   test('typed create and get round-trip through the constant', async () => {
     await defineCommonsTypes(stack, [TASK]);
-    const created = await stack.create(TASK, { title: 'Write tests', done: false });
+    const tasks = stack.collection(TASK);
+    const created = await tasks.create({ title: 'Write tests', done: false });
     expectTypeOf(created.content.done).toEqualTypeOf<boolean>();
 
-    const read = await stack.get(TASK, created.id);
+    const read = await tasks.get(created.id);
     expect(read?.content).toEqual({ title: 'Write tests', done: false });
 
     // @ts-expect-error a required field is missing
-    await expect(stack.create(TASK, { title: 'No done flag' })).rejects.toThrow();
+    await expect(tasks.create({ title: 'No done flag' })).rejects.toThrow();
   });
 });

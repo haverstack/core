@@ -103,25 +103,10 @@ import {
   presentDeleted,
   withoutAuthorityChanges,
 } from '../record-changes.js';
-import {
-  isTypeHandle,
-  typedCreate,
-  typedGet,
-  typedMutate,
-  typedQuery,
-  typedSubscribe,
-} from '../type-handle.js';
-import type {
-  ContentOf,
-  PatchOf,
-  ReadonlyTypeSchema,
-  TypedChange,
-  TypedChangeSet,
-  TypedQuery,
-  TypedSubscribeOptions,
-  TypedRecord,
-  TypeHandle,
-} from '../type-handle.js';
+import type { ContentOf, ReadonlyTypeSchema, TypeHandle } from '../type-handle.js';
+import { createCollection } from '../collection.js';
+import type { Collection } from '../collection.js';
+import type { MigrationRegistry } from '../stack/migrations.js';
 import { uploadContent } from '../stack/attachments.js';
 // Type-only: a ScopedStack never constructs a Stack, so nothing here
 // closes a runtime cycle with stack.ts, which does construct a ScopedStack.
@@ -164,6 +149,8 @@ export type ScopedStackInit = {
   assertOpen: () => void;
   /** Whether changes reach the stack from elsewhere — see subscribe(). */
   relaysChanges: boolean;
+  /** The app's migrations, which collection() migrates records through. */
+  migrations: MigrationRegistry;
 };
 
 /**
@@ -180,6 +167,7 @@ export class ScopedStack implements StackClient {
   private readonly changes: ChangeEmitter;
   private readonly assertStackOpen: () => void;
   private readonly relaysChanges: boolean;
+  private readonly migrations: MigrationRegistry;
 
   /** Not callable from outside the package — see ScopedStackInit. */
   constructor(token: typeof scopeToken, init: ScopedStackInit) {
@@ -193,6 +181,12 @@ export class ScopedStack implements StackClient {
     this.changes = init.changes;
     this.assertStackOpen = init.assertOpen;
     this.relaysChanges = init.relaysChanges;
+    this.migrations = init.migrations;
+  }
+
+  collection<S extends ReadonlyTypeSchema>(handle: TypeHandle<S>): Collection<ContentOf<S>> {
+    this.assertStackOpen();
+    return createCollection(this, this.migrations, handle);
   }
 
   /**
@@ -267,7 +261,7 @@ export class ScopedStack implements StackClient {
     const record = await this.stack.get(id, { includeDeleted: true });
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
     // Ahead of the gate, so another family's record is not found whatever
-    // this requester may do to it — the answer a typed get() gives.
+    // this requester may do to it — the answer a collection's get() gives.
     checkFamily(record, opts.expect);
     if (opts.fenceGrantRecord) await this.requireOwnerForGrantRecord(record);
     if (isGroupRecord(record)) {
@@ -363,25 +357,11 @@ export class ScopedStack implements StackClient {
    * refused rather than dropped, so an app never believes it published
    * something it didn't. See docs/spec/data-model.md § Backdating on import.
    */
-  async create<S extends ReadonlyTypeSchema>(
-    handle: TypeHandle<S>,
-    content: ContentOf<S>,
-    opts?: BackdatableCreateRecordOptions,
-  ): Promise<TypedRecord<S>>;
   async create<T extends Record<string, unknown> = Record<string, unknown>>(
     typeId: TypeId,
     content: T,
-    opts?: BackdatableCreateRecordOptions,
-  ): Promise<StackRecord & { content: T }>;
-  async create(
-    typeIdOrHandle: TypeId | TypeHandle,
-    content: Record<string, unknown>,
     opts: BackdatableCreateRecordOptions = {},
-  ): Promise<StackRecord> {
-    if (isTypeHandle(typeIdOrHandle)) {
-      return typedCreate(this, typeIdOrHandle, content as never, opts);
-    }
-    const typeId = typeIdOrHandle;
+  ): Promise<StackRecord & { content: T }> {
     const principal = this.#authority.principalId;
     if (!principal) throw new StackPermissionError('Anonymous requesters cannot create records');
     // A grantee is exactly the untrusted actor the `id` skew check below
@@ -452,18 +432,7 @@ export class ScopedStack implements StackClient {
    * one does, so a caller learns only what it may read.
    * See docs/spec/disclosure.md § Which refusal a Record answers with.
    */
-  async get<S extends ReadonlyTypeSchema>(
-    handle: TypeHandle<S>,
-    id: RecordId,
-  ): Promise<TypedRecord<S> | null>;
-  async get(id: RecordId, opts?: GetRecordOptions): Promise<StackRecord | null>;
-  async get(
-    idOrHandle: RecordId | TypeHandle,
-    idOrOpts: RecordId | GetRecordOptions = {},
-  ): Promise<StackRecord | null> {
-    if (isTypeHandle(idOrHandle)) return typedGet(this, idOrHandle, idOrOpts as RecordId);
-    const id = idOrHandle;
-    const opts = idOrOpts as GetRecordOptions;
+  async get(id: RecordId, opts: GetRecordOptions = {}): Promise<StackRecord | null> {
     const record = await this.stack.get(id, opts);
     if (!record) return null;
     if (!(await this.#authority.canRead(record))) return null;
@@ -495,17 +464,7 @@ export class ScopedStack implements StackClient {
    * never skips a record. Grants are prefetched once, cursor-walked to
    * exhaustion.
    */
-  async query<S extends ReadonlyTypeSchema>(
-    handle: TypeHandle<S>,
-    query?: TypedQuery,
-  ): Promise<{ records: TypedRecord<S>[]; cursor: string | null }>;
-  async query(query?: StackQuery): Promise<QueryResult>;
-  async query(
-    first: TypeHandle | StackQuery = {},
-    typedQueryArg?: TypedQuery,
-  ): Promise<QueryResult> {
-    if (isTypeHandle(first)) return typedQuery(this, first, typedQueryArg);
-    const query = first;
+  async query(query: StackQuery = {}): Promise<QueryResult> {
     assertValidSort(query.sort);
     assertSortCapability(query.sort, this.stack.capabilities);
     assertValidAssociationFilters(query.filter);
@@ -549,35 +508,11 @@ export class ScopedStack implements StackClient {
    * refused key refuses the call. See docs/spec/access-control.md
    * § Composing a change set.
    */
-  async mutate<S extends ReadonlyTypeSchema>(
-    handle: TypeHandle<S>,
-    id: RecordId,
-    changes: TypedChangeSet<S>,
-    opts?: IfVersionOptions,
-  ): Promise<TypedRecord<S>>;
   async mutate(
     id: RecordId,
     changes: RecordChangeSet,
-    opts?: IfVersionOptions,
-  ): Promise<StackRecord>;
-  async mutate(
-    first: RecordId | TypeHandle,
-    second: RecordId | RecordChangeSet,
-    third?: RecordChangeSet | IfVersionOptions,
-    fourth: IfVersionOptions = {},
+    opts: IfVersionOptions & ExpectationOptions = {},
   ): Promise<StackRecord> {
-    if (isTypeHandle(first)) {
-      return typedMutate(
-        this,
-        first,
-        second as RecordId,
-        third as TypedChangeSet<ReadonlyTypeSchema>,
-        fourth,
-      );
-    }
-    const id = first;
-    const changes = second as RecordChangeSet;
-    const opts = (third ?? {}) as IfVersionOptions & ExpectationOptions;
     // Ahead of every gate: a malformed change set is a validation error
     // for every requester, rather than one for the owner and a permission
     // refusal for everyone else.
@@ -667,27 +602,12 @@ export class ScopedStack implements StackClient {
     return this.stack.mutate(id, authorized, { ...opts, ifVersion, ...this.actor });
   }
 
-  async patchContent<S extends ReadonlyTypeSchema>(
-    handle: TypeHandle<S>,
-    id: RecordId,
-    patch: PatchOf<S>,
-    opts?: IfVersionOptions,
-  ): Promise<TypedRecord<S>>;
   async patchContent(
     id: RecordId,
     patch: Record<string, unknown | null>,
-    opts?: IfVersionOptions,
-  ): Promise<StackRecord>;
-  async patchContent(
-    first: RecordId | TypeHandle,
-    second: RecordId | Record<string, unknown | null>,
-    third?: Record<string, unknown | null> | IfVersionOptions,
-    fourth?: IfVersionOptions,
+    opts?: IfVersionOptions & ExpectationOptions,
   ): Promise<StackRecord> {
-    if (isTypeHandle(first)) {
-      return this.mutate(first, second as RecordId, { contentPatch: third as never }, fourth);
-    }
-    return this.mutate(first, { contentPatch: second as Record<string, unknown | null> }, third);
+    return this.mutate(id, { contentPatch: patch }, opts);
   }
 
   /**
@@ -1092,30 +1012,10 @@ export class ScopedStack implements StackClient {
    * no event at all, since a change's existence is itself a disclosure.
    * See docs/spec/events.md § Permission scoping.
    */
-  async subscribe<S extends ReadonlyTypeSchema>(
-    handle: TypeHandle<S>,
-    handler: (change: TypedChange<S>) => void,
-    opts?: TypedSubscribeOptions,
-  ): Promise<Unsubscribe>;
   async subscribe(
     handler: (change: RecordChange) => void,
-    opts?: SubscribeOptions,
-  ): Promise<Unsubscribe>;
-  async subscribe(
-    first: TypeHandle | ((change: RecordChange) => void),
-    second?: ((change: TypedChange<ReadonlyTypeSchema>) => void) | SubscribeOptions,
-    third?: TypedSubscribeOptions,
+    opts: SubscribeOptions = {},
   ): Promise<Unsubscribe> {
-    if (isTypeHandle(first)) {
-      return typedSubscribe(
-        this,
-        first,
-        second as (change: TypedChange<ReadonlyTypeSchema>) => void,
-        third,
-      );
-    }
-    const handler = first;
-    const opts = (second ?? {}) as SubscribeOptions;
     this.assertStackOpen();
     if (this.relaysChanges) {
       throw new RelayScopeError(
