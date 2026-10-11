@@ -269,14 +269,14 @@ describe.each([
     expect(records.map((r) => r.content.title)).toEqual(['Emma']);
   });
 
-  test("a content filter reaches only the handle's version and flags older records", async () => {
+  test("a content filter reaches only the handle's version and flags both sides", async () => {
     const book = await books.create({ title: 'Dune', status: 'finished' });
     await createV1('Emma', 'done');
     await stack.create(BookV3.id, { title: 'Ulysses', status: 'finished' });
     const page = await books.query({ filter: { content: { status: 'finished' } } });
     expect(page.records.map((r) => r.id)).toEqual([book.id]);
     expect(page.misfits).toEqual([]);
-    expect(page.skippedOlder).toBe(true);
+    expect(page.skipped).toEqual({ older: true, newer: true });
   });
 
   test('a content sort and a presence filter narrow the same way', async () => {
@@ -284,17 +284,18 @@ describe.each([
     await createV1();
     const sorted = await books.query({ sort: { contentField: 'title' } });
     expect(sorted.records.map((r) => r.id)).toEqual([book.id]);
-    expect(sorted.skippedOlder).toBe(true);
+    expect(sorted.skipped).toEqual({ older: true, newer: false });
     const present = await books.query({ filter: { contentPresent: ['title'] } });
     expect(present.records.map((r) => r.id)).toEqual([book.id]);
-    expect(present.skippedOlder).toBe(true);
+    expect(present.skipped).toEqual({ older: true, newer: false });
   });
 
-  test('skippedOlder applies the rest of the filter', async () => {
+  test('skipped applies the rest of the filter', async () => {
     await books.create({ title: 'Dune', status: 'want' });
     await createV1();
+    await stack.create(BookV3.id, { title: 'Ulysses', status: 'want' });
     const page = await books.query({ filter: { content: { status: 'want' }, tags: ['fantasy'] } });
-    expect(page.skippedOlder).toBe(false);
+    expect(page.skipped).toEqual({ older: false, newer: false });
   });
 
   test('a query without content keys reads the whole family and flags nothing', async () => {
@@ -302,7 +303,15 @@ describe.each([
     await createV1();
     const page = await books.query({ filter: { content: {}, contentPresent: [] } });
     expect(page.records).toHaveLength(2);
-    expect(page.skippedOlder).toBe(false);
+    expect(page.skipped).toEqual({ older: false, newer: false });
+  });
+
+  test('an undefined content value is a filter, as an adapter reads it', async () => {
+    await books.create({ title: 'Dune', status: 'want' });
+    await createV1();
+    const page = await books.query({ filter: { content: { pages: undefined } } });
+    expect(page.records).toHaveLength(1);
+    expect(page.skipped).toEqual({ older: true, newer: false });
   });
 
   test('query() drops typeId and presentAt from an untyped caller', async () => {
@@ -737,10 +746,12 @@ describe('content filter and sort typing', () => {
         }>;
       }>
     >;
-    const ok: DeepQ = { filter: { content: { 'a.b.c.d.e': {}, 'a.b.c.d.e.f.g.anything': 1 } } };
+    const ok: DeepQ = { filter: { content: { 'a.b.c.d.e': {}, 'a.b.c.d.e.f.anything': 1 } } };
+    // @ts-expect-error the sixth segment is still typed
+    const sixth: DeepQ = { filter: { content: { 'a.b.c.d.e.x': 1 } } };
     // @ts-expect-error a typo above the limit is still caught
     const typo: DeepQ = { filter: { content: { 'a.x': 1 } } };
-    expect([ok, typo]).toHaveLength(2);
+    expect([ok, sixth, typo]).toHaveLength(3);
   });
 
   test('an untyped handle takes any path and sort field', () => {

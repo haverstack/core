@@ -39,6 +39,8 @@ import type {
   RecordFilter,
   RecordId,
   StackQuery,
+  StackType,
+  TypeId,
   StackRecord,
   SubscribeOptions,
   Unsubscribe,
@@ -98,11 +100,11 @@ export type CollectionPage<C> = {
   cursor: string | null;
   /**
    * A content filter or sort reaches only records at the handle's version.
-   * True when records at an older version match the rest of the query, so
-   * the page may be missing records the filter was meant to find. See
-   * docs/spec/data-model.md § Type handles.
+   * Each flag is set when records at an older or newer version match, or
+   * may match, the rest of the query: the page may be missing records the
+   * filter was meant to find. See docs/spec/data-model.md § Type handles.
    */
-  skippedOlder: boolean;
+  skipped: { older: boolean; newer: boolean };
 };
 
 /**
@@ -111,7 +113,7 @@ export type CollectionPage<C> = {
  * A typing limit, not a query limit: see docs/spec/data-model.md § Nested
  * content paths.
  */
-type PathDepth = [never, 0, 1, 2, 3, 4, 5];
+type PathDepth = [never, 0, 1, 2, 3, 4];
 
 /**
  * Each content path of `V` reached at `P`, paired with the value a filter
@@ -141,7 +143,7 @@ type FieldEntry<C, Prefix extends string, D extends number> = [D] extends [never
  * objects and arrays. Below an `open` object or array, or six segments
  * deep, any suffix is a path.
  */
-export type ContentPathOf<C> = FieldEntry<C, '', 6>[0];
+export type ContentPathOf<C> = FieldEntry<C, '', 5>[0];
 
 /** The top-level scalar fields of `C`, the ones a content sort reaches. */
 export type SortableFieldOf<C> = string extends keyof C
@@ -162,21 +164,14 @@ export type CollectionQuery<C> = Omit<StackQuery, 'filter' | 'presentAt' | 'sort
     RecordFilter,
     'typeId' | 'baseId' | 'includeDeleted' | 'content' | 'contentPresent'
   > & {
-    content?: { [E in FieldEntry<C, '', 6> as E[0]]?: E[1] | null };
-    contentPresent?: FieldEntry<C, '', 6>[0][];
+    content?: { [E in FieldEntry<C, '', 5> as E[0]]?: E[1] | null };
+    contentPresent?: ContentPathOf<C>[];
   };
   sort?:
     | { field: NativeSortField; contentField?: never; direction?: 'asc' | 'desc' }
     | {
         field?: never;
-        // Spelled out rather than SortableFieldOf<C>, so an error lists the fields.
-        contentField: string extends keyof C
-          ? string
-          : {
-              [K in keyof C & string]-?: Required<C>[K] extends string | number | boolean
-                ? K
-                : never;
-            }[keyof C & string];
+        contentField: SortableFieldOf<C>;
         direction?: 'asc' | 'desc';
       };
 };
@@ -281,19 +276,21 @@ const withoutTypeId = <F extends object>(filter: F | undefined): Omit<F, 'typeId
  * version are guaranteed to hold in the handle's shape.
  */
 const readsContent = (filter: RecordFilter | undefined, sort: StackQuery['sort']): boolean =>
-  (filter?.content !== undefined && Object.keys(filter.content).length > 0) ||
+  Object.keys(filter?.content ?? {}).length > 0 ||
   (filter?.contentPresent?.length ?? 0) > 0 ||
   sort?.contentField !== undefined;
 
 /**
  * The collection over `handle`, shared by `Stack.collection()` and
  * `ScopedStack.collection()`. `registry` is the opening `Stack`'s, which
- * the app's own process filled.
+ * the app's own process filled. `listTypes` names the family's versions,
+ * which `StackClient` does not offer.
  */
 export const createCollection = <S extends ReadonlyTypeSchema>(
   client: StackClient,
   registry: MigrationRegistry,
   handle: TypeHandle<S>,
+  listTypes: () => Promise<StackType[]>,
 ): Collection<ContentOf<S>> => {
   type C = ContentOf<S>;
   if (handle.migratesFrom !== undefined && !registry.path(handle.migratesFrom, handle.id)) {
@@ -377,25 +374,30 @@ export const createCollection = <S extends ReadonlyTypeSchema>(
   };
 
   /**
-   * Whether a record stored at an older version matches `filter` without
-   * its content keys. A scoped page can be empty with a cursor set, so this
-   * reads on until it finds one or the results end.
+   * Whether a record stored at one of `typeIds` matches, or may match,
+   * `filter` without its content keys. A scoped page can be empty with a
+   * cursor set, and reading on is unbounded, so that page counts as a match.
    */
-  const hasOlder = async (filter: RecordFilter): Promise<boolean> => {
-    if (handleVersion === 1) return false;
+  const anyAt = async (typeIds: TypeId[], filter: RecordFilter): Promise<boolean> => {
+    if (typeIds.length === 0) return false;
     const { content: _content, contentPresent: _present, ...rest } = filter;
-    const older = Array.from({ length: handleVersion - 1 }, (_, i) => `${handle.baseId}@${i + 1}`);
-    let cursor: string | undefined;
-    do {
-      const page = await client.query({
-        filter: { ...rest, typeId: older },
-        limit: 1,
-        ...(cursor && { cursor }),
-      });
-      if (page.records.length > 0) return true;
-      cursor = page.cursor ?? undefined;
-    } while (cursor);
-    return false;
+    const page = await client.query({ filter: { ...rest, typeId: typeIds }, limit: 1 });
+    return page.records.length > 0 || page.cursor !== null;
+  };
+
+  const skippedVersions = async (filter: RecordFilter): Promise<CollectionPage<C>['skipped']> => {
+    const family = (await listTypes()).filter((t) => t.baseId === handle.baseId);
+    const [older, newer] = await Promise.all([
+      anyAt(
+        family.filter((t) => versionOf(t.id) < handleVersion).map((t) => t.id),
+        filter,
+      ),
+      anyAt(
+        family.filter((t) => versionOf(t.id) > handleVersion).map((t) => t.id),
+        filter,
+      ),
+    ]);
+    return { older, newer };
   };
 
   const mutate = async (
@@ -433,16 +435,14 @@ export const createCollection = <S extends ReadonlyTypeSchema>(
       const { presentAt: _presentAt, filter, ...rest } = query as StackQuery;
       const narrowed = readsContent(filter, rest.sort);
       const familyFilter = { ...withoutTypeId(filter), baseId: handle.baseId };
-      const { records, cursor } = await client.query({
-        ...rest,
-        filter: narrowed ? { ...familyFilter, typeId: handle.id } : familyFilter,
-      });
-      const page: CollectionPage<C> = {
-        records: [],
-        misfits: [],
-        cursor,
-        skippedOlder: narrowed && (await hasOlder(familyFilter)),
-      };
+      const [{ records, cursor }, skipped] = await Promise.all([
+        client.query({
+          ...rest,
+          filter: narrowed ? { ...familyFilter, typeId: handle.id } : familyFilter,
+        }),
+        narrowed ? skippedVersions(familyFilter) : { older: false, newer: false },
+      ]);
+      const page: CollectionPage<C> = { records: [], misfits: [], cursor, skipped };
       for (const stored of records) {
         const result = classify(stored);
         if ('misfit' in result) page.misfits.push(result.misfit);

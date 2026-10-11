@@ -186,7 +186,7 @@ export class ScopedStack implements StackClient {
 
   collection<S extends ReadonlyTypeSchema>(handle: TypeHandle<S>): Collection<ContentOf<S>> {
     this.assertStackOpen();
-    return createCollection(this, this.migrations, handle);
+    return createCollection(this, this.migrations, handle, () => this.stack.listTypes());
   }
 
   /**
