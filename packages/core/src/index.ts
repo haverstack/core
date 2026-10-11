@@ -46,7 +46,6 @@ export type {
   ContentOf,
   StoredContentOf,
   UnlistedValue,
-  PatchOf,
   ReadonlyFieldDef,
   ReadonlyTypeSchema,
 } from './type-handle.js';

@@ -2,8 +2,8 @@
  * Stack — Type handles
  * -------------------------------------------------------
  * A Type's schema written once as a literal, from which the compiler derives
- * the content type: `ContentOf` for a create, `StoredContentOf` for a read,
- * `PatchOf` for a `contentPatch`. A handle is a plain value, so `StackClient`
+ * the content type: `ContentOf` for a create, `StoredContentOf` for a read.
+ * A handle is a plain value, so `StackClient`
  * code can use it wherever it has no `defineType()` result.
  *
  * The derived types layer over runtime validation, which stays the guarantee.
@@ -118,17 +118,6 @@ export type ContentOf<S extends ReadonlyTypeSchema> = ContentAs<S, 'write'>;
 
 /** `ContentOf`, as a read returns it: an enum may hold an unlisted value. */
 export type StoredContentOf<S extends ReadonlyTypeSchema> = ContentAs<S, 'read'>;
-
-/**
- * The `contentPatch` a schema accepts: every field optional, and `null`
- * (removal) only on a field that is not required — a required field can be
- * replaced but not removed.
- */
-export type PatchOf<S extends ReadonlyTypeSchema> = Simplify<{
-  -readonly [K in keyof S]?: IsRequired<S[K]> extends true
-    ? ValueOf<S[K], 'write'>
-    : ValueOf<S[K], 'write'> | null;
-}>;
 
 // -------------------------------------------------------
 // The handle

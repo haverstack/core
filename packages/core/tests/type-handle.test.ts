@@ -2,7 +2,7 @@ import { describe, test, expect, expectTypeOf } from 'vitest';
 import { Stack } from '../src/stack/stack.js';
 import { MemoryAdapter } from '../src/testing.js';
 import { migration, typeHandle } from '../src/type-handle.js';
-import type { ContentOf, PatchOf, StoredContentOf, UnlistedValue } from '../src/type-handle.js';
+import type { ContentOf, StoredContentOf, UnlistedValue } from '../src/type-handle.js';
 import { StackBadRequestError, StackMigrationError } from '../src/errors.js';
 import type { TypeId, TypeSchema } from '../src/types/index.js';
 
@@ -132,27 +132,6 @@ describe('StoredContentOf', () => {
       tags: ('x' | UnlistedValue)[];
       meta: { mood: 'y' | UnlistedValue };
     }>();
-  });
-});
-
-describe('PatchOf', () => {
-  test('makes every field optional and allows null only on optional fields', () => {
-    expectTypeOf<PatchOf<typeof Book.schema>>().toEqualTypeOf<{
-      title?: string;
-      status?: 'want' | 'reading' | 'finished' | 'abandoned';
-      pages?: number | null;
-    }>();
-  });
-
-  test('rejects a typo, a null on a required field, and a value outside the enum', () => {
-    const ok: PatchOf<typeof Book.schema> = { pages: null, status: 'finished' };
-    // @ts-expect-error a typo'd key
-    const typo: PatchOf<typeof Book.schema> = { titel: 'x' };
-    // @ts-expect-error a required field can be replaced but not removed
-    const nullRequired: PatchOf<typeof Book.schema> = { title: null };
-    // @ts-expect-error a value outside the enum
-    const wrongEnum: PatchOf<typeof Book.schema> = { status: 'paused' };
-    expect([ok, typo, nullRequired, wrongEnum]).toHaveLength(4);
   });
 });
 

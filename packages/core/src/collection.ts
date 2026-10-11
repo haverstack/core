@@ -194,6 +194,15 @@ export class MisfitError extends Error {
 const versionOf = (typeId: string): number => parseTypeId(typeId)!.version;
 
 /**
+ * A filter's `typeId` would narrow the family to one version, so an untyped
+ * caller passing one has it dropped rather than honoured.
+ */
+const withoutTypeId = <F extends object>(filter: F | undefined): Omit<F, 'typeId'> => {
+  const { typeId: _typeId, ...rest } = (filter ?? {}) as F & { typeId?: unknown };
+  return rest;
+};
+
+/**
  * The collection over `handle`, shared by `Stack.collection()` and
  * `ScopedStack.collection()`. `registry` is the opening `Stack`'s, which
  * the app's own process filled.
@@ -316,11 +325,10 @@ export const createCollection = <S extends ReadonlyTypeSchema>(
       }
       // Stripped as well as untyped: either would change which records a
       // page holds, or the shape they arrive in.
-      const { presentAt: _presentAt, filter = {}, ...rest } = query as StackQuery;
-      const { typeId: _typeId, ...filterRest } = filter;
+      const { presentAt: _presentAt, filter, ...rest } = query as StackQuery;
       const { records, cursor } = await client.query({
         ...rest,
-        filter: { ...filterRest, baseId: handle.baseId },
+        filter: { ...withoutTypeId(filter), baseId: handle.baseId },
       });
       const page: CollectionPage<C> = { records: [], misfits: [], cursor };
       for (const stored of records) {
@@ -351,7 +359,7 @@ export const createCollection = <S extends ReadonlyTypeSchema>(
           }
           handler({ ...rest, ...result });
         },
-        { ...opts, filter: { ...opts.filter, baseId: handle.baseId } },
+        { ...opts, filter: { ...withoutTypeId(opts.filter), baseId: handle.baseId } },
       );
     },
 

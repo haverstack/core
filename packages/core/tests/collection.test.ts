@@ -122,6 +122,17 @@ describe.each([
     >();
   });
 
+  test('ContentPatch refuses a typo, a null on a required field, and a bad enum', () => {
+    const ok: ContentPatch<BookContent> = { pages: null, status: 'finished' };
+    // @ts-expect-error a typo'd key
+    const typo: ContentPatch<BookContent> = { titel: 'x' };
+    // @ts-expect-error a required field can be replaced but not removed
+    const nullRequired: ContentPatch<BookContent> = { title: null };
+    // @ts-expect-error a value outside the enum
+    const wrongEnum: ContentPatch<BookContent> = { status: 'paused' };
+    expect([ok, typo, nullRequired, wrongEnum]).toHaveLength(4);
+  });
+
   test('create() refuses content outside the schema at compile time', async () => {
     // @ts-expect-error a value outside the enum
     await books.create({ title: 'x', status: 'paused' }).catch(() => undefined);
@@ -433,6 +444,17 @@ describe.each([
     expect(seen.map((c) => c.kind)).toEqual(['removed']);
     expect(seen[0].record).toBeUndefined();
     expect(seen[0].misfit).toBeUndefined();
+  });
+
+  test('subscribe() drops typeId from an untyped caller', async () => {
+    const seen: string[] = [];
+    const stop = await books.subscribe((c) => seen.push(c.recordId), {
+      filter: { typeId: Shelf.id },
+    } as never);
+    const book = await books.create({ title: 'Dune', status: 'want' });
+    await settle();
+    stop();
+    expect(seen).toEqual([book.id]);
   });
 
   test('subscribe() takes the rest of the change filter', async () => {
