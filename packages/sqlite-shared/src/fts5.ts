@@ -40,42 +40,41 @@
  * Bounding execution time belongs to whoever drives the engine under load
  * — see docs/spec/wire-format.md § Bounding query cost for the server-side
  * expectation and the `timeout` wire error that goes with it.
+ *
+ * Backtracking. The input is untrusted text, so every regex here is
+ * written not to backtrack quadratically on it:
+ *
+ * - Whitespace runs are collapsed before any rule that spells "beside an
+ *   operator or paren" as `\s*`; a `\s*` facing a long run re-tries the
+ *   whole run per starting position. The rewrite is still a little
+ *   worse than linear overall, so bounding a search's length belongs to
+ *   whoever accepts it.
+ * - The NEAR rule has no `\s*` after its paren (its `[^,()]*` already
+ *   takes a space, and two quantifiers matching the same character give
+ *   the engine an ambiguous split), and neither of its runs crosses a
+ *   `(`, so an unclosed `NEAR(NEAR(NEAR(` doesn't re-scan to the end once
+ *   per occurrence.
+ * - The no-right-operand rule has no leading `\s*`, for the same reason
+ *   as the collapse.
+ * - The operand-before-paren rule's lookbehind pins each match to the
+ *   start of a word; without it every position inside a long word is a
+ *   start, each re-scanning the rest of it.
+ * - Empty phrases and empty paren pairs are removed by one rule, so a run
+ *   of them becomes one space rather than one per construct.
  */
 
 /**
  * Outside a phrase, everything but a letter, digit, mark, underscore,
- * whitespace, paren or quote becomes a separator.
- *
- * An allow-list rather than a list of metacharacters to strip, because
- * FTS5's column-filter syntax is wider than it looks and an enumeration
- * kept missing parts of it: `-name` and `{a b}` filter columns with no
- * colon in sight, so `-cats` and even the hyphen inside `cats-dogs` were
- * read as column names and answered "no such column". `+` is a bare
- * syntax error. Listing what may pass means the next piece of syntax
- * nobody here anticipated arrives as a separator instead of as an error.
- *
- * Nothing is lost by it: FTS5's default tokenizer already splits terms on
- * these characters, so `cats-dogs` searches for the same two tokens it was
- * indexed as.
+ * whitespace, paren or quote becomes a separator. An allow-list because
+ * FTS5's column-filter syntax is wider than any list of metacharacters.
+ * See docs/spec/data-model.md § Capability-gated filters.
  */
 const OUTSIDE_PHRASE_DISALLOWED = /[^\p{L}\p{N}\p{M}_\s()"]/gu;
 
 /**
- * Collapse every whitespace run to a single space.
- *
- * Every rule below that reasons about what sits beside an operator or a
- * paren spells "beside" as `\s*`, and a `\s*` with a long run to chew on
- * re-tries the whole run once per starting position — quadratic in the
- * run, on text a caller types into a box. Keeping runs collapsed bounds
- * what any of them can backtrack over to a single character. What it does
- * not buy is linearity overall: the rewrite still costs a little more
- * than proportionally as the text grows, which is why bounding a search's
- * length belongs to whoever accepts it.
- *
- * Nothing is lost by it: FTS5's tokenizer splits on whitespace, so a
- * collapsed run tokenizes exactly as the original did — inside a phrase
- * as well as outside, since a phrase matches a sequence of tokens rather
- * than the spacing between them.
+ * Bounds what any `\s*` can backtrack over (see Backtracking above). Safe
+ * inside a phrase too: FTS5 matches a phrase as a sequence of tokens, not
+ * the spacing between them.
  */
 const collapseWhitespace = (query: string): string => query.replace(/\s+/g, ' ');
 
@@ -90,21 +89,9 @@ export const sanitizeFts5Query = (query: string, maxDepth = 2): string => {
 
   clean = clean.replace(/\*/g, '');
 
-  // Replace NEAR(terms, distance) with just its terms — see note above.
-  //
-  // Two things here are about what the engine does when the closing paren
-  // never arrives, on text a caller types into a box.
-  //
-  // No `\s*` after the paren, though the terms it captures may open with
-  // whitespace: `[^,()]*` already matches a space, so a second quantifier
-  // that also does gives the engine an ambiguous split to backtrack
-  // through. The captured space is collapsed with all the rest on the way
-  // out.
-  //
-  // And neither run crosses a `(`, which bounds where a failed match gives
-  // up: without it, `NEAR(NEAR(NEAR(` re-scans to the end of the string
-  // once per occurrence. A NEAR's terms are words and phrases and its
-  // distance a number, so neither holds a paren FTS5 would accept anyway.
+  // NEAR(terms, distance) keeps its terms — see the note above. The
+  // pattern's shape is about backtracking (see Backtracking); excluding `(`
+  // costs nothing, since a NEAR's terms and distance never hold one.
   clean = clean.replace(/\bNEAR\s*\(([^,()]*)(?:,[^()]*)?\)/gi, '$1');
 
   // A NEAR( with no closing paren isn't the function-call form the rule
@@ -112,15 +99,12 @@ export const sanitizeFts5Query = (query: string, maxDepth = 2): string => {
   // call it never meant to write. Keep the grouping, drop the keyword.
   clean = clean.replace(/\bNEAR\s*\(/gi, '(');
 
-  // Reduce to the characters that carry meaning outside a phrase — see note
-  // above. Everything else becomes a separator, which is what FTS5's own
-  // tokenizer would do with it anyway.
+  // See OUTSIDE_PHRASE_DISALLOWED.
   clean = clean.replace(/"[^"]*"|[^"]+/g, (span) =>
     span.startsWith('"') ? span : span.replace(OUTSIDE_PHRASE_DISALLOWED, ' '),
   );
 
-  // The reduction above turns every disallowed character into a space, so
-  // this is where the long runs come from.
+  // The reduction above is where long whitespace runs come from.
   clean = collapseWhitespace(clean);
 
   // Strip bare NOT with no left operand — FTS5 requires "term NOT term", not
@@ -162,20 +146,15 @@ export const sanitizeFts5Query = (query: string, maxDepth = 2): string => {
 
   if (currentDepth > 0) result += ')'.repeat(currentDepth);
 
-  // Remove empty paren pairs left behind by NEAR/NOT stripping, and drop
-  // operators left without an operand. Looped together because each can
-  // create work for the other: removing an operator can empty a paren pair
-  // ("(a AND)" -> "(a)" -> ...), and removing a pair can strand the
-  // operator that pointed at it ("x AND ()" -> "x AND").
+  // Looped to a fixpoint because each rule can create work for another:
+  // dropping an operator can empty a pair ("(a AND)"), dropping a pair can
+  // strand an operator ("x AND ()"), and an empty phrase's quotes can
+  // re-pair once text is inserted beside it.
   let prev: string;
   do {
     prev = result;
-    // Empty phrases and empty paren pairs, each of which matches nothing,
-    // in one rule so that a run of them collapses to a single space
-    // rather than to one space apiece — a run of spaces is what the rules
-    // below would have to backtrack over. An empty phrase is also the one
-    // construct whose quotes can re-pair differently once a rule inserts
-    // text beside it, which is why this repeats to a fixpoint.
+    // Empty phrases and empty paren pairs match nothing. One rule for both
+    // (see Backtracking).
     result = result.replace(/(?:""|\(\s*\))+/g, ' ');
     result = dropDanglingOperators(result);
     result = restoreImplicitAnd(result);
@@ -189,23 +168,17 @@ const OPERATOR = String.raw`(?:AND|OR|NOT)`;
 
 /**
  * Stands in for a phrase while operators are rewritten. A private-use
- * character is not a word character, so `\b` still sees the operator
- * beside it, while `^`, `$` and the paren anchors see an operand — which
- * is what a phrase is. Nothing reaches here holding one: `clean` is
- * rewritten from the caller's string, and a literal U+E000 in it would be
- * a term character FTS5 tokenizes away regardless.
+ * character is not a word character, so `\b` still sees an operator beside
+ * it, while the anchors see an operand. A literal U+E000 in the input is
+ * one FTS5 tokenizes away regardless.
  */
 const PHRASE_HOLE = '\u{E000}';
 
 /**
- * Drop operators left without an operand — the shape a person types on
- * their way to a longer query ("cats AND") or lands on once the rules
- * above have removed a term. FTS5 rejects each of them outright, so what
- * would otherwise be a syntax error becomes the search for the terms that
- * are actually there.
- *
- * Phrases are masked out first: `"cats AND dogs"` is literal text to FTS5,
- * and rewriting inside it would change what the user asked for.
+ * Drop operators left without an operand — typed on the way to a longer
+ * query ("cats AND"), or left behind once a rule above removed a term.
+ * FTS5 rejects each outright. Phrases are masked: inside one, an operator
+ * is a word the user searched for.
  */
 const dropDanglingOperators = (query: string): string =>
   withPhrasesMasked(query, (masked) => {
@@ -221,9 +194,8 @@ const dropDanglingOperators = (query: string): string =>
       // No left operand: at the start of the query or straight after "(".
       out = out.replace(new RegExp(String.raw`(^|\()\s*\b${OPERATOR}\b\s*`, 'gi'), '$1');
       // No right operand: at the end of the query or straight before ")".
-      // No leading `\s*` — whitespace before the operator is left for the
-      // collapse on the way out, and a `\s*` here would re-scan a run of
-      // spaces once per position in it before failing to find an operator.
+      // No leading `\s*` (see Backtracking); the collapse on the way out
+      // takes that whitespace.
       out = out.replace(new RegExp(String.raw`\b${OPERATOR}\b\s*($|\))`, 'gi'), '$1');
     } while (out !== prev);
     return out;
@@ -245,24 +217,17 @@ const withPhrasesMasked = (query: string, rewrite: (masked: string) => string): 
   return rewrite(masked).replace(new RegExp(PHRASE_HOLE, 'g'), () => phrases[i++]);
 };
 
-/**
- * Put back the operator FTS5 requires around a group. Two terms side by
- * side are an implicit AND (`cats dogs`), but a group is not: `cats (dogs)`
- * is a syntax error where `cats AND (dogs)` is fine. Grouping survives a
- * rewrite that strips the operator beside it, so this
- * names the AND that was always meant rather than dropping the parens.
- *
- * Both rules test a *whole* word against the operator list. Matching a
- * prefix instead reads the `D` of a preceding `AND` as a term and inserts
- * a second one beside it.
- *
- * Phrases are masked for the same reason as elsewhere — a phrase is an
- * operand, so `"a b" (c)` needs the operator too.
- */
 const OPERAND_CHAR = String.raw`[\p{L}\p{N}_${PHRASE_HOLE}]`;
 
+/** A whole word, never a prefix: the `D` of `AND` is not a term. */
 const isOperator = (word: string): boolean => /^(?:AND|OR|NOT)$/i.test(word);
 
+/**
+ * Put back the operator FTS5 requires beside a group: `cats dogs` is an
+ * implicit AND, but `cats (dogs)` is a syntax error. A rewrite that strips
+ * the operator beside a group keeps the grouping, so this writes back the
+ * AND that was meant. A masked phrase is an operand like any other.
+ */
 const restoreImplicitAnd = (query: string): string =>
   withPhrasesMasked(query, (masked) =>
     masked
@@ -275,11 +240,8 @@ const restoreImplicitAnd = (query: string): string =>
           return next && isOperator(next[1]) ? match : ') AND ';
         },
       )
-      // An operand then "(", unless the operand is an operator.
-      // The lookbehind pins the match to the start of the operand run.
-      // Without it every position inside a run is a start position, and
-      // each one re-scans the rest of the run before the lookahead
-      // rejects it — quadratic in a long word before a paren.
+      // An operand then "(", unless the operand is an operator. The
+      // lookbehind is load-bearing (see Backtracking).
       .replace(
         new RegExp(String.raw`(?<!${OPERAND_CHAR})(${OPERAND_CHAR}+)\s*(?=\()`, 'gu'),
         (match, word: string) => (isOperator(word) ? match : `${word} AND `),

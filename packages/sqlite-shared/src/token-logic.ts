@@ -1,6 +1,6 @@
 /**
  * The actual StackTokenStore logic (createToken/lookupToken/listTokens/
- * revokeToken), parametrized over a SqlExecutor. Currently consumed by
+ * revokeToken), parametrized over a SqlExecutor. Consumed by
  * record-adapter-sqlite's NativeTokenStore, which points it at a file
  * separate from records — see TOKENS_SCHEMA_SQL in schema.ts.
  */

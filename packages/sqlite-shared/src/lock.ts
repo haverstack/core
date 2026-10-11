@@ -47,13 +47,10 @@ export const acquireLock = (dbPath: string, force?: boolean): void => {
 };
 
 /**
- * Read the lock, treating an unreadable one as absent. A lock file is
- * written non-atomically, so a crash mid-write leaves a torn one — and a
- * lock naming no live process is exactly what acquireLock() reclaims. The
- * alternative is a database that cannot be opened again by any means the
- * error message mentions, which is the worse failure: the lock exists to
- * prevent a second writer, not to outrank the data it guards.
- * releaseLock() takes the same view.
+ * Read the lock, treating an unreadable one as absent. A crash mid-write
+ * leaves a torn lock naming no live process, which is what acquireLock()
+ * reclaims anyway; refusing it would lock the data out for good. The lock
+ * exists to stop a second writer, not to outrank the data it guards.
  */
 const readLock = (lockPath: string): LockInfo | null => {
   try {

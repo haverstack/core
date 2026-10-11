@@ -55,15 +55,10 @@ import {
 import { makeCursor } from './cursor.js';
 
 /**
- * Run a query statement, restating an engine parse error as the wire
- * taxonomy's `bad_request` rather than letting it escape as a raw engine
- * error (which a server has no code to map, so it becomes a 500).
- *
- * Scoped to the one filter that carries a query language: `filter.search`
- * is FTS5 source text, and sanitizeFts5Query() repairs the common shapes
- * but claims no completeness against the grammar. Every other clause here
- * is built from parameters, so a parse error in one is this module's bug —
- * rethrown untouched, where it belongs.
+ * Restate an engine parse error as `bad_request` when the query carries
+ * search text, the one filter with a query language the sanitizer can't
+ * fully repair. Any other clause is built from parameters, so a parse
+ * error there is this module's bug and is rethrown untouched.
  */
 const asStackBadRequestError = <T>(query: StackQuery, run: () => T): T => {
   try {
@@ -78,7 +73,7 @@ const asStackBadRequestError = <T>(query: StackQuery, run: () => T): T => {
 
 /**
  * One spelling of the optimistic-concurrency failure, so the message a
- * caller sees never depends on which of the three places noticed it.
+ * caller sees never depends on which check noticed it.
  */
 const versionConflict = (id: string, expected: number, actual: number): StackVersionConflictError =>
   new StackVersionConflictError(
@@ -133,14 +128,10 @@ export class SharedSqlRecordLogic {
   }
 
   /**
-   * Precondition check for a mutation that has already read the record —
-   * either because it can't fold the check into its own statement
-   * (purgeRecord: children reference the row, so the DELETE can't
-   * carry it), or because it has to settle the precondition *before*
-   * fts5Strategy.remove() runs, which needs the records row still holding
-   * the old content. In the latter case versionedUpdate() re-checks it
-   * inside the statement, and that is the enforcement; this is what lets
-   * the work before it be skipped.
+   * Check `ifVersion` against a record already read: for a purge, whose
+   * DELETE can't carry the guard, and before fts5Strategy.remove(), which
+   * must run first. In the second case versionedUpdate()'s WHERE clause is
+   * the enforcement; this only lets the work before it be skipped.
    */
   private checkExpectedVersion(record: StackRecord, expectedVersion: number | undefined): void {
     if (expectedVersion === undefined || record.version === expectedVersion) return;
@@ -177,15 +168,10 @@ export class SharedSqlRecordLogic {
   }
 
   /**
-   * The one shape every mutating UPDATE in this class has: whatever columns
-   * the caller is changing, then the version bump and the actor/timestamp
-   * stamp that every mutation owes, gated on the opt-in `ifVersion`
-   * precondition and failing loudly when nothing matched.
-   *
-   * The guard rides in the WHERE clause even where the caller has already
-   * checked the version against a record it read: that read is outside this
-   * statement, so a writer slipping in between the two is caught here
-   * rather than silently overwritten.
+   * Every version-bumping UPDATE. The `ifVersion` guard rides in the WHERE
+   * clause even when the caller already checked a record it read: that read
+   * is outside this statement, so a writer slipping in between is caught
+   * here rather than overwritten.
    */
   private versionedUpdate(
     id: string,
@@ -211,15 +197,9 @@ export class SharedSqlRecordLogic {
   }
 
   /**
-   * Read a record back after its own mutation committed, for the caller to
-   * return. Its absence is not a "not found" for the caller to handle — the
-   * mutation just succeeded against it — so it fails as the invariant
-   * breach it would be.
-   *
-   * Synchronous, via readRecord() rather than getRecord(), so the read
-   * cannot be separated from the commit by anything: an async caller
-   * returning this still hands back a record read in the same tick its
-   * transaction committed. See readRecord() for why that matters.
+   * Read a record back after its own mutation committed. Absence here is an
+   * invariant breach, not a "not found". Synchronous, so nothing can run
+   * between the commit and the read — see readRecord().
    */
   private reread(id: string, verb: string): StackRecord {
     const updated = this.readRecord(id);
@@ -232,16 +212,10 @@ export class SharedSqlRecordLogic {
   // -------------------------------------------------------
 
   /**
-   * A duplicate id hits the `records` PK — mapped to StackConflictError
-   * instead of surfacing the raw engine exception, mirroring saveVersion's
-   * collision mapping below.
-   *
-   * One transaction, because a record and the four tables that describe it
-   * are one fact. A half-applied create is worse than a failed one: the
-   * call raises, so the caller believes nothing landed, while the records
-   * row survives to fail their retry on the PK — and the row it leaves is
-   * invisible to `filter.search` and mis-ordered by `sort.contentField`
-   * until something writes it again.
+   * One transaction, because a record and the tables that describe it are
+   * one fact: a half-applied create raises, so the caller believes nothing
+   * landed, while the surviving row fails their retry on the PK and is
+   * missing from both indexes. A duplicate id maps to StackConflictError.
    */
   async createRecord(record: StackRecord, opts: JournalOptions = {}): Promise<StackRecord> {
     this.exec.transaction(() => {
@@ -292,18 +266,10 @@ export class SharedSqlRecordLogic {
   }
 
   /**
-   * The synchronous read behind getRecord(). Callers inside exec.transaction()
-   * use this one: an `await` inside that callback yields the microtask queue
-   * mid-transaction, and the next operation to run would try to open one of
-   * its own — transaction() requires a synchronous callback for exactly this
-   * reason (see SqlExecutor.transaction).
-   *
-   * The same synchrony is what lets the post-commit reads below report the
-   * version their own mutation produced: reread() calls this directly, so
-   * nothing interleaves between the commit and the read even though the
-   * method returning it is async. A backend that made these reads genuinely
-   * asynchronous would open that window, and a concurrent mutation could be
-   * reported under this one's verb.
+   * The synchronous read behind getRecord(), for use inside
+   * exec.transaction(), whose callback can't await. reread() relies on the
+   * same synchrony: nothing interleaves between a commit and its read, so a
+   * concurrent mutation is never reported under this one's verb.
    */
   private readRecord(id: string): StackRecord | null {
     const row = this.exec.get<Record<string, unknown>>('SELECT * FROM records WHERE id = ?', [id]);
@@ -316,26 +282,10 @@ export class SharedSqlRecordLogic {
   }
 
   /**
-   * Apply a change set in one transaction: one UPDATE over the record row
-   * with only the columns the change set names, the association set
-   * replaced when it carries one, and the snapshot written alongside — so
-   * one call is one version whatever it moved.
-   *
-   * `opts.bumpsVersion: false` is a change set that touches only
-   * `associations`, `parentId` and/or `unlisted` — Stack computes this from
-   * which ops the set actually moves. Such a write still lands its columns,
-   * but leaves `version`, `updatedAt` and the actor stamps exactly as they
-   * stood and takes no snapshot. `ifVersion`, if given, is re-checked
-   * synchronously inside the transaction — the CAS guard the bumping path
-   * gets from its UPDATE's WHERE clause, restated as a read because the
-   * UPDATE here carries no version predicate. See
-   * docs/spec/versioning.md § Version history.
-   *
-   * The ifVersion check for a bumping write is standalone rather than
-   * folded into the UPDATE alone, because a content change needs
-   * fts.remove() to run *before* the records-table content changes. The
-   * guard is still in the UPDATE's WHERE, so a writer that slipped in
-   * between the read and the write is caught there rather than overwriting.
+   * One transaction, so one call is one version whatever it moved. A
+   * non-bumping write (see docs/spec/versioning.md § Version history) has
+   * no versioned UPDATE to carry `ifVersion`, so it re-checks it by reading
+   * inside the transaction instead.
    */
   async mutateRecord(
     id: string,
@@ -346,11 +296,9 @@ export class SharedSqlRecordLogic {
 
     const now = toMs(new Date());
 
-    // Assembled rather than written out per aspect: every aspect is the
-    // same column-and-value pair on one row, and a fixed statement per
-    // combination would be 2^4 of them. Built before the no-bump branch
-    // because both paths write the same columns; only `content` is the
-    // bumping path's alone, since a patch always bumps.
+    // Assembled, since a fixed statement per combination of aspects would
+    // be 2^4 of them. Shared by both paths; only `content` is the bumping
+    // path's alone, since a patch always bumps.
     const sets: string[] = [];
     const values: unknown[] = [];
     if (changes.parentId !== undefined) {
@@ -427,13 +375,9 @@ export class SharedSqlRecordLogic {
   }
 
   /**
-   * Deletes a record's FTS entry, associations, versions, file-refs, sort
-   * index rows, and row, returning the record as it stood — the last copy that will ever
-   * exist, read here so that nothing can overtake it between the read and
-   * the deletes. Null when there was no such record. No write() call —
-   * callers batch it. ifVersion is checked first so a lost CAS race
-   * leaves nothing touched (children reference the row, so the check can't
-   * fold into the final DELETE).
+   * Delete a record and everything that refers to it, returning the record
+   * as it stood (null if there was none). Read here, inside the caller's
+   * transaction, so nothing can overtake the last copy that will ever exist.
    */
   private purgeRecord(id: string, ifVersion?: number): StackRecord | null {
     const purged = this.readRecord(id);
@@ -495,12 +439,6 @@ export class SharedSqlRecordLogic {
     content: Record<string, unknown>,
     opts: MutateOptions = {},
   ): Promise<StackRecord> {
-    // Checked against a read record first, rather than left to the
-    // UPDATE's WHERE clause alone: fts5Strategy.remove() has to run before
-    // the content changes, so the precondition has to settle before that
-    // work starts. rewriteContent()'s UPDATE still carries the guard, so a
-    // writer slipping in between the two is caught rather than overwritten
-    // — same shape as mutateRecord() and restoreVersion().
     await this.readForMutation(id, opts.ifVersion);
 
     this.exec.transaction(() => {
@@ -513,14 +451,9 @@ export class SharedSqlRecordLogic {
   }
 
   /**
-   * Replace a record's type and content wholesale — what restoreVersion and
-   * commitMigration each do, differing only in where the content came from.
-   *
-   * The order is the constraint: fts5Strategy.remove() has to read the old
-   * content off the records row, so it runs before the UPDATE, and the
-   * re-index runs after. Every caller must already sit inside
-   * exec.transaction() — a failure between the two halves would otherwise
-   * leave the record unindexed.
+   * Replace a record's type and content wholesale. Unindex, write, re-index,
+   * in that order (docs/spec/adapters.md § The search index is unindexed
+   * before the row moves); callers must be inside exec.transaction().
    */
   private rewriteContent(
     id: string,
@@ -540,11 +473,8 @@ export class SharedSqlRecordLogic {
     // One extra row, to learn whether a further page follows.
     const fetch = limit + 1;
 
-    // A content-field sort answers from two statements, the records that
-    // hold a value at the field and then the records that hold none. They
-    // read in order, each asking only for the rows the ones before it left
-    // of the page, and the second is skipped once the first has filled it —
-    // the common case, since a page rarely straddles the boundary.
+    // A content-field sort is two statements (see buildQueryPlan). Each asks
+    // only for what the page still lacks, so the second usually never runs.
     const rows: Record<string, unknown>[] = [];
     for (const page of buildQueryPlan(query)) {
       const budget = fetch - rows.length;
@@ -574,11 +504,8 @@ export class SharedSqlRecordLogic {
   }
 
   /**
-   * Atomically verify fileId is unreferenced, then purge its
-   * metadata records across every typeId in `metadataTypeIds` (see
-   * deleteUnreferencedAttachmentRecords on the adapter contract). A real
-   * SQL transaction of synchronous calls — no `await` between the check
-   * and the deletes, so nothing interleaves.
+   * The reference check and the purges share one synchronous transaction,
+   * so nothing can add a reference between the two.
    */
   async deleteUnreferencedAttachmentRecords(
     fileId: FileId,
@@ -718,22 +645,16 @@ export class SharedSqlRecordLogic {
   // -------------------------------------------------------
 
   /**
-   * Append one entry, stamping the record-derived half off the row as it
-   * now stands — so every caller must already sit inside the same
-   * transaction as the write it describes, after that write has landed.
-   *
-   * `seq` is allocated here, from the log's own max, rather than computed
-   * by the caller. That is what spares this table the collision healing
-   * versions needs: nothing outside this statement ever holds a seq it
-   * expects to be free. See docs/spec/journal.md § Ordering.
+   * Append one entry, stamped from the row as it now stands, so callers run
+   * this inside their write's transaction, after the write. `seq` is
+   * allocated in the INSERT itself, so no caller ever holds one it expects
+   * to be free. See docs/spec/journal.md § Ordering.
    */
   private appendJournal(recordId: string, entry: JournalEntryInput | undefined): void {
     if (!entry) return;
-    // Three columns, not readRecord(): the stamp needs version/typeId/
-    // parentId and nothing else, and this runs inside every mutating
-    // write — a full row plus its association set, per write, to read
-    // three values. `parent_id` is used raw so the NULL/''/id spelling
-    // reaches the journal exactly as the records table holds it.
+    // Not readRecord(): this runs on every write and needs three columns,
+    // not the row plus its associations. parent_id stays raw so its
+    // NULL/''/id spelling reaches the journal unchanged.
     const row = this.exec.get<{
       version: number;
       type_id: string;
@@ -829,9 +750,8 @@ export class SharedSqlRecordLogic {
 
   /**
    * Never bumps `version`/`updatedAt` and never snapshots — see
-   * StackRecordAdapter.amendAssociations(). The records row is untouched
-   * entirely; only the associations table changes, in one transaction:
-   * removes first, then adds.
+   * StackRecordAdapter.amendAssociations(). Removes apply before adds, so
+   * removing and re-adding one identity in a call leaves it present.
    */
   async amendAssociations(
     recordId: string,
@@ -871,11 +791,8 @@ export class SharedSqlRecordLogic {
   private static readonly AUTHORITY_KINDS = ['permission', 'anyone'];
 
   /**
-   * Apply a change set's two association keys, each replacing only within
-   * its own half of the partition. That partition is the whole reason a
-   * tag write cannot drop an ACL: the `associations` key deletes data
-   * kinds alone, so the authority rows beside them are never in scope.
-   * Caller-transactional, like every write below.
+   * Each key replaces only within its own half of the partition, which is
+   * why a tag write cannot drop an ACL. Caller-transactional.
    * See docs/spec/access-control.md § Record-level permissions.
    */
   private replaceAssociationHalves(recordId: string, changes: RecordChangeSet): void {
@@ -904,14 +821,9 @@ export class SharedSqlRecordLogic {
   }
 
   /**
-   * Upserts on association identity: the primary key decides which row a
-   * write lands on, and `attachment_record_id` — outside it — is whatever
-   * the incoming association says, so re-pointing one costs no second row.
-   *
-   * FK enforcement (PRAGMA_FOREIGN_KEYS_ON) means inserting an
-   * association against a record that doesn't exist throws — mapped
-   * here to StackNotFoundError so amendAssociations() on a nonexistent record
-   * fails loudly instead of silently creating an orphan row.
+   * Upserts on association identity, so re-pointing `attachment_record_id`
+   * (outside the key) costs no second row. A missing record trips the
+   * foreign key, reported as StackNotFoundError rather than an orphan row.
    */
   private insertAssociations(recordId: string, associations: Association[]): void {
     for (const assoc of associations) {
