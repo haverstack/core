@@ -48,14 +48,16 @@ type AssociationEdit = Exclude<AssociationChange, { op: 'repoint' }>;
 Undoing one entry's association changes is at most two calls, one per half of [the partition](./access-control.md#storage-unifies-the-api-does-not), passing each element's inverse to `amendAssociations()` / `amendAccess()`:
 
 ```ts
+import { isAuthorityAssociation } from '@haverstack/core';
+
 const inverse = (change: AssociationChange): AssociationEdit =>
   change.op === 'add'
     ? { op: 'remove', association: change.association }
     : { op: 'add', association: change.op === 'repoint' ? change.previous : change.association };
 
 const edits = (entry.associations ?? []).map(inverse);
-const data = edits.filter((e) => !isAuthority(e.association));
-const authority = edits.filter((e) => isAuthority(e.association));
+const data = edits.filter((e) => !isAuthorityAssociation(e.association));
+const authority = edits.filter((e) => isAuthorityAssociation(e.association));
 if (data.length) await stack.amendAssociations(recordId, data);
 if (authority.length) await stack.amendAccess(recordId, authority);
 ```

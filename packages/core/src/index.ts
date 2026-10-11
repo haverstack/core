@@ -162,4 +162,4 @@ export { hashSchema, isCompatible } from './schema.js';
 export type { SchemaDriftViolation } from './schema.js';
 export type { ValidationError } from './validate.js';
 export { applyMergePatch } from './merge.js';
-export { assertOneSurface } from './associations/identity.js';
+export { assertOneSurface, isAuthorityAssociation } from './associations/identity.js';

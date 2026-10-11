@@ -93,13 +93,23 @@ function stripAssociationAnnotation(association: Association): Association {
 }
 
 /**
+ * The association kinds that carry authority. Every other kind is data.
+ * Storage that partitions by kind in a query reads this list rather than
+ * restating it, so a new authority kind can't fall into the data half.
+ */
+export const AUTHORITY_ASSOCIATION_KINDS: readonly AuthorityAssociation['kind'][] = [
+  'permission',
+  'anyone',
+];
+
+/**
  * Whether an association carries authority rather than data — the partition
  * `StackRecord.permissions` and `StackRecord.associations` project, and the
  * line `associate()`/`dissociate()` refuse to cross.
  * See docs/spec/access-control.md § Record-level permissions.
  */
 export function isAuthorityAssociation(a: Association): a is AuthorityAssociation {
-  return a?.kind === 'permission' || a?.kind === 'anyone';
+  return (AUTHORITY_ASSOCIATION_KINDS as readonly string[]).includes(a.kind);
 }
 
 /**

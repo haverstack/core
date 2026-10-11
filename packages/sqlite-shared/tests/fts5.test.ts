@@ -150,6 +150,12 @@ describe('sanitizeFts5Query', () => {
       expect(sanitizeFts5Query('"cats AND"')).toBe('"cats AND"');
     });
 
+    test('leaves a NOT inside a phrase alone, even after a paren', () => {
+      expect(sanitizeFts5Query('"NOT cats"')).toBe('"NOT cats"');
+      expect(sanitizeFts5Query('"cats (not dogs"')).toBe('"cats (not dogs"');
+      expect(sanitizeFts5Query('x "a (NOT b')).toBe('x "a (NOT b"');
+    });
+
     // The mask a phrase leaves behind is an operand, so neither of these
     // operators is dangling.
     test('a phrase counts as an operand on either side', () => {
@@ -173,14 +179,9 @@ describe('sanitizeFts5Query', () => {
   });
 
   /**
-   * Search text is whatever a caller typed, so no rule may re-scan the
-   * same run of it once per starting position inside that run. Each shape
-   * below did: at this size the cost ran from seven seconds to four
-   * minutes, against the tens of milliseconds each takes now.
-   *
-   * The bound is against that collapse, not a linearity claim — cost
-   * still grows a little faster than length here, as it does on ordinary
-   * input.
+   * No rule may re-scan a run of the input once per starting position in
+   * it; at this size a quadratic rule takes seconds to minutes. The bound
+   * catches that, not non-linearity in general. See Backtracking in fts5.ts.
    */
   describe('adversarial input does not blow up', () => {
     test.each([

@@ -1,6 +1,6 @@
 /**
  * The actual StackTokenStore logic (createToken/lookupToken/listTokens/
- * revokeToken), parametrized over a SqlExecutor. Currently consumed by
+ * revokeToken), parametrized over a SqlExecutor. Consumed by
  * record-adapter-sqlite's NativeTokenStore, which points it at a file
  * separate from records — see TOKENS_SCHEMA_SQL in schema.ts.
  */
@@ -23,10 +23,10 @@ export type SharedTokenLogicDeps = {
 };
 
 export class SharedTokenLogic {
-  constructor(private readonly deps: SharedTokenLogicDeps) {}
+  private readonly exec: SqlExecutor;
 
-  private get exec(): SqlExecutor {
-    return this.deps.exec;
+  constructor({ exec }: SharedTokenLogicDeps) {
+    this.exec = exec;
   }
 
   async createToken(

@@ -27,39 +27,32 @@ export const RECORD_SCHEMA_SQL = `
   ) STRICT;
 
   -- Every edge a record carries, authority and data alike: a permission
-  -- entry has element identity and a delta the same shape as a tag's, so
-  -- it earns the same table and the same durability tier. The permissions
-  -- and associations fields are projections over it, partitioned by
-  -- kind. See docs/spec/access-control.md § Record-level permissions.
-  --
-  -- A relationship's target is (related_scope, related_id) plus one
-  -- qualifier: related_stack for a record in another stack, related_ns for
-  -- a foreign namespace. All four are in the primary key, so two targets
-  -- differing only by namespace are two associations. A permission's
-  -- grantee reuses them — related_scope 'entity' or 'group', related_id the
-  -- DID or group id — plus related_role, which only a group grantee sets
-  -- and which is in the key because member and admin name two different
-  -- sets of people.
-  --
-  -- attachment_record_id stays out of the primary key: it annotates a
-  -- reference rather than naming one, so re-pointing it updates the row an
-  -- an amendAssociations() add lands on instead of writing a second reference to the same
-  -- file. See docs/spec/attachments.md § Naming the upload a reference came from.
-  --
-  -- The primary key leads with record_id, so its implicit index already
-  -- serves every by-record read and delete; the indexes below exist only
-  -- for the filter directions it cannot answer.
+  -- has element identity and a delta shaped like a tag's, so it earns the
+  -- same table. The permissions and associations fields are projections
+  -- over it, partitioned by kind.
+  -- See docs/spec/access-control.md § Record-level permissions.
   CREATE TABLE IF NOT EXISTS associations (
     record_id     TEXT NOT NULL REFERENCES records(id),
     kind          TEXT NOT NULL CHECK (kind IN ('tag', 'attachment', 'relationship', 'permission', 'anyone')),
     label         TEXT NOT NULL,
     file_id       TEXT NOT NULL DEFAULT '',
+    -- A relationship target is (related_scope, related_id) qualified by
+    -- related_ns (a foreign namespace) or related_stack (another stack); a
+    -- permission's grantee reuses scope and id. All are in the key, so
+    -- targets differing only by a qualifier are distinct associations.
     related_scope TEXT NOT NULL DEFAULT '' CHECK (related_scope IN ('', 'record', 'entity', 'external', 'group')),
     related_id    TEXT NOT NULL DEFAULT '',
     related_ns    TEXT NOT NULL DEFAULT '',
     related_stack TEXT NOT NULL DEFAULT '',
+    -- Set only by a group grantee; in the key because member and admin name
+    -- two different sets of people.
     related_role  TEXT NOT NULL DEFAULT '' CHECK (related_role IN ('', 'member', 'admin')),
+    -- Out of the key: it annotates a reference rather than naming one, so
+    -- re-pointing it updates the existing row. See docs/spec/attachments.md
+    -- § Naming the upload a reference came from.
     attachment_record_id TEXT NOT NULL DEFAULT '',
+    -- Leads with record_id, so its implicit index serves every by-record
+    -- read and delete; the indexes below cover only the filter directions.
     PRIMARY KEY (record_id, kind, label, file_id, related_scope, related_id, related_ns, related_stack, related_role)
   ) STRICT;
 
@@ -122,7 +115,6 @@ export const RECORD_SCHEMA_SQL = `
 
   -- One row per top-level scalar content field a record holds a value at:
   -- what it orders as, and the file it references. See
-  -- docs/spec/adapters.md § Adapter backends and
   -- docs/spec/data-model.md § Sorting by a content field.
   --
   -- value_rank is 0 for a numeric value and 1 for a text one — the same
@@ -139,14 +131,11 @@ export const RECORD_SCHEMA_SQL = `
     PRIMARY KEY (record_id, field)
   ) STRICT;
 
-  -- Indexes. Each filter column continues into (created_at, id) — the
-  -- default ordering and its tiebreak — because these columns are
-  -- low-cardinality by design, and a narrow index on one leaves the
-  -- planner sorting the whole matching set before it can honor LIMIT.
-  --
-  -- deleted_at and unlisted_at deliberately have none: nothing searches
-  -- for the rows they mark, and an index on a column every query tests
-  -- for IS NULL only lures the planner off the one answering ORDER BY.
+  -- Each filter column continues into (created_at, id), the default order
+  -- and its tiebreak: these columns are low-cardinality, and a narrow index
+  -- leaves the planner sorting every match before it can honor LIMIT.
+  -- deleted_at and unlisted_at get none: an index on a column every query
+  -- tests IS NULL only lures the planner off the one answering ORDER BY.
   CREATE INDEX IF NOT EXISTS idx_records_type_id      ON records(type_id, created_at, id);
   CREATE INDEX IF NOT EXISTS idx_records_parent_id    ON records(parent_id, created_at, id);
   CREATE INDEX IF NOT EXISTS idx_records_entity_id    ON records(entity_id, created_at, id);
@@ -192,9 +181,9 @@ export const TOKENS_SCHEMA_SQL = `
 `;
 
 /**
- * The full-text index behind `StackQuery.filter.search` (see fts5.ts).
+ * The full-text index behind `StackQuery.filter.search` (see indexes.ts).
  * What `columnsize=0` costs a reader is in docs/spec/adapters.md
- * § Adapter backends. `detail` stays at its default: sanitizeFts5Query
+ * § SQLite-backed adapters. `detail` stays at its default: sanitizeFts5Query
  * passes phrase queries through, and a phrase needs the token positions
  * only that setting records.
  */

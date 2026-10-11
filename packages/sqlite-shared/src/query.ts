@@ -2,7 +2,7 @@
  * StackQuery -> SQL. Engine-independent — shared verbatim between
  * SQLite-backed record adapters. The one caveat is full-text search:
  * `f.search` here assumes a `records_fts` virtual table with a MATCH-able
- * `content` column (see fts5.ts).
+ * `content` column (see FTS5_SCHEMA_SQL in schema.ts).
  *
  * A query compiles to a plan rather than to a single statement, because a
  * content-field sort is two orderings end to end: the records that hold a
@@ -13,15 +13,9 @@
  * fact, which costs a full pass over the table for every page.
  */
 
-import { StackBadRequestError, type StackQuery } from '@haverstack/core';
+import { StackBadRequestError, type NativeSortField, type StackQuery } from '@haverstack/core';
 import { contentSortKey, parseContentFilterKey } from '@haverstack/core/adapter';
-import {
-  decodeCursor,
-  getSortColumn,
-  getSortField,
-  type DecodedCursor,
-  type SortField,
-} from './cursor.js';
+import { decodeCursor, getSortColumn, getSortField, type DecodedCursor } from './cursor.js';
 import { sanitizeFts5Query } from './fts5.js';
 
 /** One statement plus the parameters it binds, in textual order. */
@@ -40,13 +34,10 @@ export const atBudget = (page: QueryStatement, rows: number): QueryStatement => 
 });
 
 /**
- * Reduce `sort.direction` to a keyword this module may interpolate into
- * SQL. Core's assertValidSort() already rejects anything else at the
- * invariant layer, but this builder writes the value straight into
- * `ORDER BY` and the cursor comparison, so it re-checks rather than trust
- * an upstream that a future refactor could bypass: an unvalidated direction
- * here is a SQL-injection sink. A sort without a direction is refused: core
- * resolves the default before any adapter sees the query.
+ * Reduce `sort.direction` to a keyword safe to interpolate. Core's
+ * assertValidSort() already checks it, but this is where it reaches SQL
+ * text, so an unchecked value here would be an injection sink. Core
+ * resolves the default direction before any adapter sees the query.
  */
 const sqlDirection = (query: StackQuery): 'ASC' | 'DESC' => {
   // No sort at all is the unsorted default; a sort always carries its direction.
@@ -135,7 +126,7 @@ const cursorMismatch = (cursor: DecodedCursor, field: string): StackBadRequestEr
     `Cursor sort field "${cursor.field}" does not match query sort field "${field}"`,
   );
 
-const nativeCursor = (cursor: DecodedCursor, field: SortField) => {
+const nativeCursor = (cursor: DecodedCursor, field: NativeSortField) => {
   if (cursor.kind !== 'native' || cursor.field !== field) throw cursorMismatch(cursor, field);
   return cursor;
 };
@@ -212,13 +203,9 @@ const recordConditions = (query: StackQuery): { conditions: string[]; params: un
   rangeFilter('updated_at', f.updatedAt);
 
   // Every association filter below is a semi-join rather than a correlated
-  // EXISTS, so the planner drives from the association side — reading the
-  // matching record ids straight out of idx_assoc_kind_label /
-  // idx_assoc_kind_file_id / idx_assoc_related / idx_content_index_file,
-  // each of which ends with record_id and so needs no table read at all —
-  // instead of scanning every record and probing for each. The work is
-  // proportional to how many records match, not to how many the stack
-  // holds.
+  // EXISTS, so the planner reads matching record ids straight out of an
+  // index ending in record_id instead of probing once per record: the work
+  // scales with the matches, not the stack.
 
   /**
    * The semi-join itself. `kind` is one of this module's own literals, never
@@ -261,14 +248,9 @@ const recordConditions = (query: StackQuery): { conditions: string[]; params: un
     params.push(f.referencesFileId, f.referencesFileId);
   }
 
-  // Relationship filter — each clause is an optional pattern, so a bare
-  // label matches every target under it and an external target with no
-  // `id` matches its whole namespace (docs/spec/data-model.md § Filter).
-  //
-  // A record or entity target always stores '' in related_ns (see
-  // associationKeyColumns). Saying so turns idx_assoc_related's
-  // (related_scope, related_ns, related_id) prefix into a contiguous
-  // equality run for those kinds instead of a seek on related_scope alone.
+  // Each clause is an optional pattern (docs/spec/data-model.md § Filter).
+  // A record or entity target always stores '' in related_ns; saying so
+  // keeps idx_assoc_related's prefix a contiguous equality run.
   if (f.relatedTo) {
     const clauses: string[] = [];
     const target = f.relatedTo.target;
@@ -362,12 +344,10 @@ const recordConditions = (query: StackQuery): { conditions: string[]; params: un
 };
 
 /**
- * Everything ordered after the cursor's record within the partition that
- * holds a value: a later value rank, or the same rank past the cursor's
- * value and id. `op` runs the comparison the same way the ORDER BY does,
- * so one form covers both directions — in the direction where the
- * cursor's rank is the last one, the leading disjunct is simply never
- * true.
+ * Everything after the cursor's record within the partition that holds a
+ * value. `op` compares the way the ORDER BY does, so one form covers both
+ * directions; where the cursor's rank is the last one, the leading
+ * disjunct is simply never true.
  */
 const presentCursorCondition = (
   cursor: Extract<DecodedCursor, { kind: 'num' | 'text' }>,
@@ -417,9 +397,10 @@ export const buildQueryPlan = (query: StackQuery): QueryStatement[] => {
 
   if (contentField === undefined) {
     const { conditions, params } = recordConditions(query);
-    const col = getSortColumn(getSortField(query));
+    const field = getSortField(query);
+    const col = getSortColumn(field);
     if (decoded) {
-      const cursor = nativeCursor(decoded, getSortField(query));
+      const cursor = nativeCursor(decoded, field);
       conditions.push(`(r.${col} ${op} ? OR (r.${col} = ? AND r.id ${op} ?))`);
       params.push(cursor.value, cursor.value, cursor.id);
     }
