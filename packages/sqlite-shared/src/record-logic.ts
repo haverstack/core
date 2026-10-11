@@ -127,15 +127,10 @@ export class SharedSqlRecordLogic {
     return this.deps.exec;
   }
 
-  /**
-   * Check `ifVersion` against a record already read: for a purge, whose
-   * DELETE can't carry the guard, and before fts5Strategy.remove(), which
-   * must run first. In the second case versionedUpdate()'s WHERE clause is
-   * the enforcement; this only lets the work before it be skipped.
-   */
-  private checkExpectedVersion(record: StackRecord, expectedVersion: number | undefined): void {
-    if (expectedVersion === undefined || record.version === expectedVersion) return;
-    throw versionConflict(record.id, expectedVersion, record.version);
+  /** Check `ifVersion` against a version read inside the caller's transaction. */
+  private checkExpectedVersion(id: string, actual: number, expected: number | undefined): void {
+    if (expected === undefined || actual === expected) return;
+    throw versionConflict(id, expected, actual);
   }
 
   /**
@@ -156,22 +151,28 @@ export class SharedSqlRecordLogic {
   }
 
   /**
-   * The read a content-rewriting mutation makes before its transaction, so
-   * the precondition settles before fts5Strategy.remove() runs — see
-   * checkExpectedVersion().
+   * What a mutation builds on, read inside its transaction so nothing can
+   * land between the read and the write: a patch applied to an earlier read
+   * would overwrite whatever changed since. Throws for a missing record or
+   * a failed `ifVersion`.
    */
-  private async readForMutation(id: string, ifVersion: number | undefined): Promise<StackRecord> {
-    const existing = await this.getRecord(id);
-    if (!existing) throw recordNotFound(id);
-    this.checkExpectedVersion(existing, ifVersion);
-    return existing;
+  private readForWrite(
+    id: string,
+    ifVersion: number | undefined,
+  ): { typeId: TypeId; content: Record<string, unknown> } {
+    const row = this.exec.get<{ version: number; type_id: string; content: string }>(
+      'SELECT version, type_id, content FROM records WHERE id = ?',
+      [id],
+    );
+    if (!row) throw recordNotFound(id);
+    this.checkExpectedVersion(id, row.version, ifVersion);
+    return { typeId: row.type_id, content: JSON.parse(row.content) };
   }
 
   /**
    * Every version-bumping UPDATE. The `ifVersion` guard rides in the WHERE
-   * clause even when the caller already checked a record it read: that read
-   * is outside this statement, so a writer slipping in between is caught
-   * here rather than overwritten.
+   * clause, so a write that reads nothing first (a soft delete, an
+   * undelete) enforces it with no separate read.
    */
   private versionedUpdate(
     id: string,
@@ -282,18 +283,14 @@ export class SharedSqlRecordLogic {
   }
 
   /**
-   * One transaction, so one call is one version whatever it moved. A
-   * non-bumping write (see docs/spec/versioning.md § Version history) has
-   * no versioned UPDATE to carry `ifVersion`, so it re-checks it by reading
-   * inside the transaction instead.
+   * One transaction, so one call is one version whatever it moved, and the
+   * patch applies to the content as it stands when the write lands.
    */
   async mutateRecord(
     id: string,
     changes: RecordChangeSet,
     opts: MutateOptions & BumpVersionOptions = {},
   ): Promise<StackRecord> {
-    const existing = await this.readForMutation(id, opts.ifVersion);
-
     const now = toMs(new Date());
 
     // Assembled, since a fixed statement per combination of aspects would
@@ -313,29 +310,28 @@ export class SharedSqlRecordLogic {
       values.push(changes.unlisted ? now : null);
     }
 
-    if (opts.bumpsVersion === false) {
-      this.exec.transaction(() => {
-        const current = this.readRecord(id);
-        if (!current) throw recordNotFound(id);
-        this.checkExpectedVersion(current, opts.ifVersion);
+    this.exec.transaction(() => {
+      const current = this.readForWrite(id, opts.ifVersion);
+
+      // No versioned UPDATE to carry `ifVersion`, so readForWrite() is the
+      // only check. See docs/spec/versioning.md § Version history.
+      if (opts.bumpsVersion === false) {
         if (sets.length > 0) {
           this.exec.run(`UPDATE records SET ${sets.join(', ')} WHERE id = ?`, [...values, id]);
         }
         this.replaceAssociationHalves(id, changes);
         this.appendJournal(id, opts.journal);
-      });
-      return this.reread(id, 'mutateRecord');
-    }
+        return;
+      }
 
-    const merged = changes.contentPatch
-      ? applyMergePatch(existing.content, changes.contentPatch)
-      : undefined;
-    if (merged !== undefined) {
-      sets.unshift('content = ?');
-      values.unshift(JSON.stringify(merged));
-    }
+      const merged = changes.contentPatch
+        ? applyMergePatch(current.content, changes.contentPatch)
+        : undefined;
+      if (merged !== undefined) {
+        sets.unshift('content = ?');
+        values.unshift(JSON.stringify(merged));
+      }
 
-    this.exec.transaction(() => {
       if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
       if (merged !== undefined) fts5Strategy.remove(this.exec, id);
 
@@ -345,7 +341,7 @@ export class SharedSqlRecordLogic {
 
       if (merged !== undefined) {
         fts5Strategy.insert(this.exec, id, JSON.stringify(merged));
-        this.contentIndex.sync(id, existing.typeId, merged);
+        this.contentIndex.sync(id, current.typeId, merged);
       }
       this.appendJournal(id, opts.journal);
     });
@@ -388,7 +384,7 @@ export class SharedSqlRecordLogic {
       if (ifVersion !== undefined) throw recordNotFound(id);
       return null;
     }
-    this.checkExpectedVersion(purged, ifVersion);
+    this.checkExpectedVersion(id, purged.version, ifVersion);
     fts5Strategy.remove(this.exec, id);
     this.exec.run('DELETE FROM associations WHERE record_id = ?', [id]);
     this.exec.run('DELETE FROM versions WHERE record_id = ?', [id]);
@@ -416,15 +412,13 @@ export class SharedSqlRecordLogic {
     version: number,
     opts: MutateOptions = {},
   ): Promise<StackRecord> {
-    await this.readForMutation(id, opts.ifVersion);
-
-    const target = await this.getVersion(id, version);
-    if (!target) throw new StackNotFoundError(`Version not found: "${id}"@${version}`);
-
     // Only content and its type are restored — a snapshot carries nothing
     // else, so there is nothing here to roll containment, listing or the
     // associations table back to.
     this.exec.transaction(() => {
+      this.readForWrite(id, opts.ifVersion);
+      const target = this.readVersion(id, version);
+      if (!target) throw new StackNotFoundError(`Version not found: "${id}"@${version}`);
       if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
       this.rewriteContent(id, target.typeId, target.content, opts);
       this.appendJournal(id, opts.journal);
@@ -439,9 +433,8 @@ export class SharedSqlRecordLogic {
     content: Record<string, unknown>,
     opts: MutateOptions = {},
   ): Promise<StackRecord> {
-    await this.readForMutation(id, opts.ifVersion);
-
     this.exec.transaction(() => {
+      this.readForWrite(id, opts.ifVersion);
       if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
       this.rewriteContent(id, toTypeId, content, opts);
       this.appendJournal(id, opts.journal);
@@ -565,6 +558,10 @@ export class SharedSqlRecordLogic {
   }
 
   async getVersion(id: string, version: number): Promise<RecordVersion | null> {
+    return this.readVersion(id, version);
+  }
+
+  private readVersion(id: string, version: number): RecordVersion | null {
     const row = this.exec.get<Record<string, unknown>>(
       'SELECT * FROM versions WHERE record_id = ? AND version = ?',
       [id, version],
@@ -760,7 +757,7 @@ export class SharedSqlRecordLogic {
   ): Promise<StackRecord> {
     assertOneSurface(changes);
     this.exec.transaction(() => {
-      if (!this.readRecord(recordId)) throw recordNotFound(recordId);
+      if (this.currentVersion(recordId) === undefined) throw recordNotFound(recordId);
       for (const change of changes) {
         if (change.op !== 'remove') continue;
         const { association } = change;

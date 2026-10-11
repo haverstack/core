@@ -598,37 +598,33 @@ describe('ifVersion', () => {
     expect((await adapter.getRecord(record.id))?.version).toBe(1);
   });
 
-  // mutateRecord's non-bumping path (opts.bumpsVersion: false — what a
-  // caller passes for an associations-only change set) re-checks
-  // ifVersion against a fresh read inside its own transaction,
-  // since there is no version-bumping UPDATE for the guard to ride in.
-  // That read can come back null if a concurrent purge lands
-  // between mutateRecord's own read and this re-check; the adapter must
-  // report that as StackNotFoundError like every other write path here,
-  // not crash on it.
-  test('mutateRecord with bumpsVersion: false reports StackNotFoundError, not a crash, for a concurrently deleted record', async () => {
+  test('a non-bumping mutateRecord racing a purge reports StackNotFoundError', async () => {
     const adapter = await initAdapter();
     const record = await adapter.createRecord(makeRecord());
 
-    const logic = (
-      adapter as unknown as {
-        record: { getRecord: (id: string) => Promise<StackRecord | null> };
-      }
-    ).record;
-    const originalGetRecord = logic.getRecord.bind(logic);
-    vi.spyOn(logic, 'getRecord').mockImplementationOnce(async (id: string) => {
-      const found = await originalGetRecord(id);
-      await adapter.deleteRecord(id, { purge: true }); // races mutateRecord's own no-bump re-read
-      return found;
-    });
-
-    await expect(
+    const [, mutated] = await Promise.allSettled([
+      adapter.deleteRecord(record.id, { purge: true }),
       adapter.mutateRecord(
         record.id,
         { associations: [{ kind: 'tag', label: 'x' }] },
         { bumpsVersion: false, ifVersion: 1 },
       ),
-    ).rejects.toBeInstanceOf(StackNotFoundError);
+    ]);
+    expect(mutated.status === 'rejected' && mutated.reason).toBeInstanceOf(StackNotFoundError);
+  });
+
+  test('concurrent unguarded patches both land', async () => {
+    const adapter = await initAdapter();
+    const record = await adapter.createRecord(makeRecord({ content: { a: 0, b: 0 } }));
+
+    await Promise.all([
+      adapter.mutateRecord(record.id, { contentPatch: { a: 1 } }),
+      adapter.mutateRecord(record.id, { contentPatch: { b: 1 } }),
+    ]);
+
+    const after = await adapter.getRecord(record.id);
+    expect(after?.content).toEqual({ a: 1, b: 1 });
+    expect(after?.version).toBe(3);
   });
 
   test('a permissions change set enforces ifVersion', async () => {
@@ -682,37 +678,15 @@ describe('ifVersion', () => {
 });
 
 // -------------------------------------------------------
-// ifVersion — enforced against the row actually written
+// ifVersion — checked inside the transaction that writes
 // -------------------------------------------------------
 
 /**
- * restoreVersion() and commitMigration() settle their precondition against
- * a record read before the transaction opens, because fts5Strategy.remove()
- * needs the old content still on the row. That read is not the enforcement:
- * the UPDATE carries the guard too, so a writer landing in the window loses
- * rather than being silently overwritten.
- *
- * The window is reachable from a test because both methods `await` that
- * read: calling one runs its body up to the await and hands control back
- * here with the precondition already satisfied, so the next synchronous
- * statement below lands squarely between the check and the write.
+ * Two calls guarded on the same version: whichever commits first wins, and
+ * the other sees the version it moved to.
  */
-describe('ifVersion is re-checked by the statement that writes', () => {
-  /**
-   * A second writer, on its own connection — the adapter holds a lock
-   * *file*, which only initialize()/open() consult, so this is the real
-   * race rather than a stand-in for one.
-   */
-  const bumpVersionBehindTheAdapter = (id: string): void => {
-    const other = new DatabaseSync(dbPath);
-    try {
-      other.prepare('UPDATE records SET version = version + 1 WHERE id = ?').run(id);
-    } finally {
-      other.close();
-    }
-  };
-
-  test('restoreVersion loses to a writer that lands after the precondition check', async () => {
+describe('ifVersion holds between concurrent writes', () => {
+  test('restoreVersion: one of two racing restores wins', async () => {
     const adapter = await initAdapter();
     const record = await adapter.createRecord(makeRecord({ content: { text: 'original' } }));
     await adapter.saveVersion(record.id, {
@@ -723,39 +697,31 @@ describe('ifVersion is re-checked by the statement that writes', () => {
     });
     await adapter.mutateRecord(record.id, { contentPatch: { text: 'v2' } }); // -> v2
 
-    const restoring = adapter.restoreVersion(record.id, 1, { ifVersion: 2 });
-    bumpVersionBehindTheAdapter(record.id); // -> v3, after the check, before the write
-
-    const err = await restoring.catch((e: unknown) => e);
+    const results = await Promise.allSettled([
+      adapter.restoreVersion(record.id, 1, { ifVersion: 2 }),
+      adapter.restoreVersion(record.id, 1, { ifVersion: 2 }),
+    ]);
+    expect(results.map((r) => r.status)).toEqual(['fulfilled', 'rejected']);
+    const err = (results[1] as PromiseRejectedResult).reason;
     expect(err).toBeInstanceOf(StackVersionConflictError);
     expect((err as StackVersionConflictError).actualVersion).toBe(3);
-
-    // And the restore left nothing behind: the content the other writer
-    // found is the content still there.
-    const after = await adapter.getRecord(record.id);
-    expect(after?.content).toEqual({ text: 'v2' });
-    expect(after?.version).toBe(3);
   });
 
-  test('commitMigration loses to a writer that lands after the precondition check', async () => {
+  test('commitMigration: one of two racing migrations wins', async () => {
     const adapter = await initAdapter();
     const record = await adapter.createRecord(makeRecord({ content: { text: 'original' } }));
 
-    const migrating = adapter.commitMigration(
-      record.id,
-      'com.example/note@2',
-      { text: 'migrated' },
-      { ifVersion: 1 },
-    );
-    bumpVersionBehindTheAdapter(record.id); // -> v2, after the check, before the write
-
-    const err = await migrating.catch((e: unknown) => e);
+    const results = await Promise.allSettled([
+      adapter.commitMigration(record.id, 'com.example/note@2', { text: 'a' }, { ifVersion: 1 }),
+      adapter.commitMigration(record.id, 'com.example/note@2', { text: 'b' }, { ifVersion: 1 }),
+    ]);
+    expect(results.map((r) => r.status)).toEqual(['fulfilled', 'rejected']);
+    const err = (results[1] as PromiseRejectedResult).reason;
     expect(err).toBeInstanceOf(StackVersionConflictError);
     expect((err as StackVersionConflictError).actualVersion).toBe(2);
 
     const after = await adapter.getRecord(record.id);
-    expect(after?.typeId).toBe(record.typeId);
-    expect(after?.content).toEqual({ text: 'original' });
+    expect(after?.content).toEqual({ text: 'a' });
   });
 
   test('a soft delete stamps deleted_at and updated_at from one timestamp', async () => {
