@@ -6,6 +6,6 @@
  * pieces; see the note there for why that subset has to exist at all.
  */
 export * from './record.js';
-export { TOKENS_SCHEMA_SQL } from './schema.js';
+export { TOKENS_SCHEMA_SQL, PRAGMA_JOURNAL_MODE_WAL } from './schema.js';
 export { acquireLock, releaseLock } from './lock.js';
 export { SharedTokenLogic } from './token-logic.js';

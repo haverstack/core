@@ -16,30 +16,33 @@ import type { SqlExecutor } from './executor.js';
  * DELETE leaves stale, still-searchable entries. remove() therefore reads
  * the current rowid/content and must run before the caller's change.
  */
-export const fts5Strategy = {
+export class SearchIndex {
+  constructor(private readonly exec: SqlExecutor) {}
+
   /** Index a record that has no FTS entry yet (used right after an INSERT). */
-  insert(exec: SqlExecutor, recordId: string, content: string): void {
-    exec.run(`INSERT INTO records_fts(rowid, content) SELECT rowid, ? FROM records WHERE id = ?`, [
-      content,
-      recordId,
-    ]);
-  },
+  insert(recordId: string, content: string): void {
+    this.exec.run(
+      `INSERT INTO records_fts(rowid, content) SELECT rowid, ? FROM records WHERE id = ?`,
+      [content, recordId],
+    );
+  }
+
   /**
    * Remove a record's FTS entry. MUST be called before the records row's
    * content changes or the row is deleted — see the note above.
    */
-  remove(exec: SqlExecutor, recordId: string): void {
-    const row = exec.get<{ rowid: number; content: string }>(
+  remove(recordId: string): void {
+    const row = this.exec.get<{ rowid: number; content: string }>(
       'SELECT rowid, content FROM records WHERE id = ?',
       [recordId],
     );
     if (!row) return;
-    exec.run(`INSERT INTO records_fts(records_fts, rowid, content) VALUES('delete', ?, ?)`, [
+    this.exec.run(`INSERT INTO records_fts(records_fts, rowid, content) VALUES('delete', ?, ?)`, [
       row.rowid,
       row.content,
     ]);
-  },
-};
+  }
+}
 
 /**
  * Top-level scalar fields, by name and declared kind — what content_index

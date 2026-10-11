@@ -23,10 +23,10 @@ export type SharedTokenLogicDeps = {
 };
 
 export class SharedTokenLogic {
-  constructor(private readonly deps: SharedTokenLogicDeps) {}
+  private readonly exec: SqlExecutor;
 
-  private get exec(): SqlExecutor {
-    return this.deps.exec;
+  constructor({ exec }: SharedTokenLogicDeps) {
+    this.exec = exec;
   }
 
   async createToken(

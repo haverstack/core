@@ -13,9 +13,8 @@
  * fact, which costs a full pass over the table for every page.
  */
 
-import { StackBadRequestError, type StackQuery } from '@haverstack/core';
+import { StackBadRequestError, type NativeSortField, type StackQuery } from '@haverstack/core';
 import { contentSortKey, parseContentFilterKey } from '@haverstack/core/adapter';
-import type { NativeSortField } from '@haverstack/core';
 import { decodeCursor, getSortColumn, getSortField, type DecodedCursor } from './cursor.js';
 import { sanitizeFts5Query } from './fts5.js';
 

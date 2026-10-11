@@ -43,7 +43,7 @@ import { AUTHORITY_ASSOCIATION_KINDS } from '@haverstack/core/adapter';
 import type { SqlExecutor } from './executor.js';
 import { isForeignKeyViolation, isUniqueConstraintViolation } from './executor.js';
 import { buildQueryPlan, atBudget } from './query.js';
-import { ContentIndex, fts5Strategy } from './indexes.js';
+import { ContentIndex, SearchIndex } from './indexes.js';
 import {
   rowToRecord,
   rowToAssociation,
@@ -118,14 +118,14 @@ export type SharedSqlRecordLogicDeps = {
 };
 
 export class SharedSqlRecordLogic {
+  private readonly exec: SqlExecutor;
+  private readonly searchIndex: SearchIndex;
   private readonly contentIndex: ContentIndex;
 
-  constructor(private readonly deps: SharedSqlRecordLogicDeps) {
-    this.contentIndex = new ContentIndex(deps.exec);
-  }
-
-  private get exec(): SqlExecutor {
-    return this.deps.exec;
+  constructor({ exec }: SharedSqlRecordLogicDeps) {
+    this.exec = exec;
+    this.searchIndex = new SearchIndex(exec);
+    this.contentIndex = new ContentIndex(exec);
   }
 
   /** Check `ifVersion` against a version read inside the caller's transaction. */
@@ -255,7 +255,7 @@ export class SharedSqlRecordLogic {
       const edges = [...(record.associations ?? []), ...(record.permissions ?? [])];
       if (edges.length) this.insertAssociations(record.id, edges);
 
-      fts5Strategy.insert(this.exec, record.id, JSON.stringify(record.content));
+      this.searchIndex.insert(record.id, JSON.stringify(record.content));
       this.contentIndex.sync(record.id, record.typeId, record.content);
       this.appendJournal(record.id, opts.journal);
     });
@@ -334,14 +334,14 @@ export class SharedSqlRecordLogic {
       }
 
       if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
-      if (merged !== undefined) fts5Strategy.remove(this.exec, id);
+      if (merged !== undefined) this.searchIndex.remove(id);
 
       this.versionedUpdate(id, sets, values, opts, now);
 
       this.replaceAssociationHalves(id, changes);
 
       if (merged !== undefined) {
-        fts5Strategy.insert(this.exec, id, JSON.stringify(merged));
+        this.searchIndex.insert(id, JSON.stringify(merged));
         this.contentIndex.sync(id, current.typeId, merged);
       }
       this.appendJournal(id, opts.journal);
@@ -386,7 +386,7 @@ export class SharedSqlRecordLogic {
       return null;
     }
     this.checkExpectedVersion(id, purged.version, ifVersion);
-    fts5Strategy.remove(this.exec, id);
+    this.searchIndex.remove(id);
     this.exec.run('DELETE FROM associations WHERE record_id = ?', [id]);
     this.exec.run('DELETE FROM versions WHERE record_id = ?', [id]);
     // A purge takes the journal with it, for the reason it takes the
@@ -456,9 +456,9 @@ export class SharedSqlRecordLogic {
     opts: IfVersionOptions & ActorOptions,
   ): void {
     const json = JSON.stringify(content);
-    fts5Strategy.remove(this.exec, id);
+    this.searchIndex.remove(id);
     this.versionedUpdate(id, ['type_id = ?', 'content = ?'], [typeId, json], opts);
-    fts5Strategy.insert(this.exec, id, json);
+    this.searchIndex.insert(id, json);
     this.contentIndex.sync(id, typeId, content);
   }
 
