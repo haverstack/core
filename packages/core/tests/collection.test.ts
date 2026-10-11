@@ -269,6 +269,42 @@ describe.each([
     expect(records.map((r) => r.content.title)).toEqual(['Emma']);
   });
 
+  test("a content filter reaches only the handle's version and flags older records", async () => {
+    const book = await books.create({ title: 'Dune', status: 'finished' });
+    await createV1('Emma', 'done');
+    await stack.create(BookV3.id, { title: 'Ulysses', status: 'finished' });
+    const page = await books.query({ filter: { content: { status: 'finished' } } });
+    expect(page.records.map((r) => r.id)).toEqual([book.id]);
+    expect(page.misfits).toEqual([]);
+    expect(page.skippedOlder).toBe(true);
+  });
+
+  test('a content sort and a presence filter narrow the same way', async () => {
+    const book = await books.create({ title: 'Dune', status: 'want' });
+    await createV1();
+    const sorted = await books.query({ sort: { contentField: 'title' } });
+    expect(sorted.records.map((r) => r.id)).toEqual([book.id]);
+    expect(sorted.skippedOlder).toBe(true);
+    const present = await books.query({ filter: { contentPresent: ['title'] } });
+    expect(present.records.map((r) => r.id)).toEqual([book.id]);
+    expect(present.skippedOlder).toBe(true);
+  });
+
+  test('skippedOlder applies the rest of the filter', async () => {
+    await books.create({ title: 'Dune', status: 'want' });
+    await createV1();
+    const page = await books.query({ filter: { content: { status: 'want' }, tags: ['fantasy'] } });
+    expect(page.skippedOlder).toBe(false);
+  });
+
+  test('a query without content keys reads the whole family and flags nothing', async () => {
+    await books.create({ title: 'Dune', status: 'want' });
+    await createV1();
+    const page = await books.query({ filter: { content: {}, contentPresent: [] } });
+    expect(page.records).toHaveLength(2);
+    expect(page.skippedOlder).toBe(false);
+  });
+
   test('query() drops typeId and presentAt from an untyped caller', async () => {
     const book = await books.create({ title: 'Dune', status: 'want' });
     const newer = await stack.create(BookV3.id, { title: 'Emma', status: 'want' });
