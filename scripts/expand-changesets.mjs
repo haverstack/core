@@ -115,8 +115,9 @@ for (const file of readdirSync(changesetDir)) {
     if (releasable.length === 0) {
       console.error(
         `${file} names only packages that are never published (${dropped.join(', ')}).\n` +
-          'Name the package that ships the change instead — for sqlite-shared that is ' +
-          '@haverstack/record-adapter-sqlite, which bundles it.',
+          'Name the packages that ship the change instead — for sqlite-shared that is ' +
+          '@haverstack/record-adapter-sqlite and @haverstack/record-adapter-do-sqlite, ' +
+          'which both bundle it.',
       );
       process.exit(1);
     }
