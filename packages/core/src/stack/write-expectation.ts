@@ -27,6 +27,7 @@ import type {
   IfVersionOptions,
   RecordChangeSet,
   RecordId,
+  RecordVersion,
   StackRecord,
   TypeId,
 } from '../types/index.js';
@@ -63,6 +64,22 @@ export const checkFamily = (record: StackRecord, opts: ExpectationOptions | unde
   const expected = opts?.[WRITE_EXPECTATION];
   if (expected && baseIdOf(record.typeId) !== expected.baseId) {
     throw new StackNotFoundError(`Record not found: "${record.id}"`);
+  }
+};
+
+/**
+ * A restore puts back the snapshot's `typeId`, so the snapshot is held to
+ * the family too: one from before the record migrated into it is not a
+ * version of a record in that family.
+ */
+export const checkSnapshotFamily = (
+  id: RecordId,
+  snapshot: RecordVersion,
+  opts: ExpectationOptions | undefined,
+): void => {
+  const expected = opts?.[WRITE_EXPECTATION];
+  if (expected && baseIdOf(snapshot.typeId) !== expected.baseId) {
+    throw new StackNotFoundError(`Version ${snapshot.version} not found for record "${id}"`);
   }
 };
 

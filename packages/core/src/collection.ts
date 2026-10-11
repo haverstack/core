@@ -16,7 +16,7 @@
  */
 
 import { StackBadRequestError, StackMigrationError, StackPermissionError } from './errors.js';
-import { parseTypeId } from './schema.js';
+import { baseIdOf, parseTypeId } from './schema.js';
 import { StoredVersionError, WRITE_EXPECTATION } from './stack/write-expectation.js';
 import type { ExpectingClient, WriteExpectation } from './stack/write-expectation.js';
 import type { MigrationRegistry } from './stack/migrations.js';
@@ -304,7 +304,7 @@ export const createCollection = <S extends ReadonlyTypeSchema>(
   return {
     async get(id) {
       const record = await client.get(id);
-      if (!record || parseTypeId(record.typeId)?.baseId !== handle.baseId) return null;
+      if (!record || baseIdOf(record.typeId) !== handle.baseId) return null;
       return narrow(record, false);
     },
 
@@ -314,9 +314,13 @@ export const createCollection = <S extends ReadonlyTypeSchema>(
           'A collection reads live records only; use the untyped query() to include soft-deleted records.',
         );
       }
+      // Stripped as well as untyped: either would change which records a
+      // page holds, or the shape they arrive in.
+      const { presentAt: _presentAt, filter = {}, ...rest } = query as StackQuery;
+      const { typeId: _typeId, ...filterRest } = filter;
       const { records, cursor } = await client.query({
-        ...query,
-        filter: { ...query.filter, baseId: handle.baseId },
+        ...rest,
+        filter: { ...filterRest, baseId: handle.baseId },
       });
       const page: CollectionPage<C> = { records: [], misfits: [], cursor };
       for (const stored of records) {
@@ -332,15 +336,17 @@ export const createCollection = <S extends ReadonlyTypeSchema>(
         (change) => {
           const { record, ...rest } = change;
           // A tombstone's content is `{}` under ScopedStack, so it is never
-          // typed as the handle's content on either surface.
-          if (!record || record.deletedAt) return handler(rest);
+          // typed as the handle's content on either surface. A record that
+          // migrated out of the family matches by its previous typeId.
+          if (!record || record.deletedAt || baseIdOf(record.typeId) !== handle.baseId) {
+            return handler(rest);
+          }
           let result: ReturnType<typeof classify>;
           try {
             result = classify(record);
-          } catch (err) {
-            // No migration bridges the gap: delivered as wherever the
+          } catch {
+            // A missing or failing migration: delivered as wherever the
             // emitter cannot supply the record, and get() says why.
-            if (!(err instanceof StackMigrationError)) throw err;
             return handler(rest);
           }
           handler({ ...rest, ...result });

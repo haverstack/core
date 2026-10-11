@@ -167,7 +167,12 @@ import type {
   StackClient,
   StackOptions,
 } from './client.js';
-import { checkFamily, checkStoredVersion, WRITE_EXPECTATION } from './write-expectation.js';
+import {
+  checkFamily,
+  checkSnapshotFamily,
+  checkStoredVersion,
+  WRITE_EXPECTATION,
+} from './write-expectation.js';
 import type { ExpectationOptions } from './write-expectation.js';
 import type { ContentOf, ReadonlyTypeSchema, TypeHandle } from '../type-handle.js';
 import { createCollection } from '../collection.js';
@@ -1288,7 +1293,8 @@ export class Stack implements StackClient {
     this.assertOpen();
     const existing = await this.requireRecord(id);
     // A snapshot is validated against its own stored Type, never the
-    // record's current one, so only the family is held to the expectation.
+    // record's current one, so only the family is held to the expectation:
+    // the record's here, and the snapshot's once it is read.
     checkFamily(existing, opts);
     this.refuseIfDeleted(existing);
     this.checkIfVersion(existing, opts.ifVersion);
@@ -1297,6 +1303,7 @@ export class Stack implements StackClient {
     if (!target) {
       throw new StackNotFoundError(`Version ${version} not found for record "${id}"`);
     }
+    checkSnapshotFamily(id, target, opts);
 
     const type = await this.getTypeCached(target.typeId);
     if (!type) {

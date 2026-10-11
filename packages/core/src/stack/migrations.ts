@@ -4,8 +4,9 @@
  * The migrations a Stack was opened with, and what this app process
  * understands of each type family. Answers two questions for the Stack:
  * which chain carries a record from one TypeId to another (for
- * migrateAll()), and how a stored record reads at `presentAt: 'latest'`
- * — never written back. See docs/spec/data-model.md § Type migrations.
+ * migrateAll() and a collection's in-memory reads), and how a stored
+ * record reads at `presentAt: 'latest'` — never written back. See
+ * docs/spec/data-model.md § Type migrations.
  */
 
 import { parseTypeId } from '../schema.js';

@@ -255,6 +255,17 @@ describe.each([
     expect(records.map((r) => r.content.title)).toEqual(['Emma']);
   });
 
+  test('query() drops typeId and presentAt from an untyped caller', async () => {
+    const book = await books.create({ title: 'Dune', status: 'want' });
+    const newer = await stack.create(BookV3.id, { title: 'Emma', status: 'want' });
+    const page = await books.query({
+      presentAt: 'latest',
+      filter: { typeId: Shelf.id },
+    } as never);
+    expect(page.records.map((r) => r.id)).toEqual([book.id]);
+    expect(page.misfits.map((m) => m.id)).toEqual([newer.id]);
+  });
+
   test('query() refuses includeDeleted', async () => {
     await expect(
       // @ts-expect-error a collection does not offer includeDeleted
@@ -434,6 +445,78 @@ describe.each([
     await settle();
     stop();
     expect(seen).toEqual(['removed']);
+  });
+});
+
+describe.each([
+  ['Stack', (s: Stack): StackClient => s],
+  ['ScopedStack', (s: Stack): StackClient => s.asEntity(OWNER)],
+] as const)('a collection whose records migrate out of the family, on %s', (_name, view) => {
+  let stack: Stack;
+
+  beforeEach(async () => {
+    const adapter = await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' });
+    stack = await Stack.open(adapter, {
+      migrations: [bookV1ToV2, migration(Shelf, Book, (c) => ({ title: c.name, status: 'want' }))],
+    });
+    await stack.defineType(BookV1);
+    await stack.defineType(Book);
+    await stack.defineType(Shelf);
+  });
+
+  test('subscribe() delivers the change that moves a record out without its record', async () => {
+    const shelves = view(stack).collection(Shelf);
+    const seen: CollectionChange<ContentOf<typeof Shelf.schema>>[] = [];
+    const stop = await shelves.subscribe((change) => seen.push(change), { includeRecords: true });
+    const shelf = await shelves.create({ name: 'Fiction' });
+    await stack.migrateAll(Shelf.baseId);
+    await settle();
+    stop();
+
+    expect(seen.map((c) => [c.recordId, c.ops])).toEqual([
+      [shelf.id, ['create']],
+      [shelf.id, ['migrate']],
+    ]);
+    expect(seen[1].record).toBeUndefined();
+    expect(seen[1].misfit).toBeUndefined();
+  });
+
+  test('restoreVersion() refuses a snapshot from another family and writes nothing', async () => {
+    const shelf = await stack.create(Shelf.id, { name: 'Fiction' });
+    await stack.migrateAll(Shelf.baseId);
+    const before = await stack.get(shelf.id);
+    const books = view(stack).collection(Book);
+
+    await expect(books.restoreVersion(shelf.id, 1)).rejects.toThrow(
+      `Version 1 not found for record "${shelf.id}"`,
+    );
+    expect(await stack.get(shelf.id)).toEqual(before);
+  });
+});
+
+describe('a collection whose migration function throws', () => {
+  test('subscribe() still delivers the change, without its record', async () => {
+    const stack = await Stack.open(
+      await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' }),
+      {
+        migrations: [
+          migration(BookV1, Book, () => {
+            throw new TypeError('broken migration');
+          }),
+        ],
+      },
+    );
+    await stack.defineType(BookV1);
+    await stack.defineType(Book);
+    const books = stack.collection(Book);
+    const seen: CollectionChange<BookContent>[] = [];
+    const stop = await books.subscribe((change) => seen.push(change), { includeRecords: true });
+    const old = await stack.create(BookV1.id, { title: 'Dune', status: 'want' });
+    stop();
+
+    expect(seen.map((c) => c.recordId)).toEqual([old.id]);
+    expect(seen[0].record).toBeUndefined();
+    await expect(books.get(old.id)).rejects.toThrow('broken migration');
   });
 });
 
