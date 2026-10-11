@@ -1396,7 +1396,7 @@ describe('file-ref indexing', () => {
   });
 
   // The fields content_index covers are cached per typeId (keyed off
-  // saveType()) so that syncContentIndex() doesn't re-query and re-parse the
+  // saveType()) so that ContentIndex.sync() doesn't re-query and re-parse the
   // schema on every write — this pins that redefining a type reaches the
   // cache.
   test('redefining a type via saveType updates which fields are treated as file-ref', async () => {

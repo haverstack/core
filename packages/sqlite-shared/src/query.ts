@@ -2,7 +2,7 @@
  * StackQuery -> SQL. Engine-independent — shared verbatim between
  * SQLite-backed record adapters. The one caveat is full-text search:
  * `f.search` here assumes a `records_fts` virtual table with a MATCH-able
- * `content` column (see fts5.ts).
+ * `content` column (see FTS5_SCHEMA_SQL in schema.ts).
  *
  * A query compiles to a plan rather than to a single statement, because a
  * content-field sort is two orderings end to end: the records that hold a

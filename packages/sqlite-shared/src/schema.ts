@@ -192,7 +192,7 @@ export const TOKENS_SCHEMA_SQL = `
 `;
 
 /**
- * The full-text index behind `StackQuery.filter.search` (see fts5.ts).
+ * The full-text index behind `StackQuery.filter.search` (see indexes.ts).
  * What `columnsize=0` costs a reader is in docs/spec/adapters.md
  * § Adapter backends. `detail` stays at its default: sanitizeFts5Query
  * passes phrase queries through, and a phrase needs the token positions

@@ -32,7 +32,6 @@ import type {
   AssociationEdit,
   ActorOptions,
   IfVersionOptions,
-  ScalarFieldKind,
 } from '@haverstack/core';
 import type {
   BumpVersionOptions,
@@ -40,11 +39,10 @@ import type {
   JournalOptions,
   MutateOptions,
 } from '@haverstack/core/adapter';
-import { contentSortEntry } from '@haverstack/core/adapter';
 import type { SqlExecutor } from './executor.js';
 import { isForeignKeyViolation, isUniqueConstraintViolation } from './executor.js';
 import { buildQueryPlan, atBudget } from './query.js';
-import { fts5Strategy } from './fts5.js';
+import { ContentIndex, fts5Strategy } from './indexes.js';
 import {
   rowToRecord,
   rowToAssociation,
@@ -123,33 +121,12 @@ export type SharedSqlRecordLogicDeps = {
   exec: SqlExecutor;
 };
 
-/**
- * Top-level scalar fields, by name and declared kind — what content_index
- * covers. Arrays and objects are left out: a value inside one has no
- * single position to order its record by, and no file reference the
- * attachment filter can see.
- */
-const indexedFieldKinds = (
-  schema: Record<string, { kind?: string }>,
-): Map<string, ScalarFieldKind> => {
-  const kinds = new Map<string, ScalarFieldKind>();
-  for (const [field, def] of Object.entries(schema)) {
-    if (!def.kind || def.kind === 'array' || def.kind === 'object') continue;
-    kinds.set(field, def.kind as ScalarFieldKind);
-  }
-  return kinds;
-};
-
 export class SharedSqlRecordLogic {
-  /**
-   * Per-typeId cache of the fields content_index covers and their declared
-   * kinds, so syncContentIndex() doesn't hit the `types` table and
-   * re-parse schema JSON on every write. Populated eagerly in saveType()
-   * and lazily via getIndexedFields().
-   */
-  private readonly indexedFieldsByType = new Map<string, Map<string, ScalarFieldKind>>();
+  private readonly contentIndex: ContentIndex;
 
-  constructor(private readonly deps: SharedSqlRecordLogicDeps) {}
+  constructor(private readonly deps: SharedSqlRecordLogicDeps) {
+    this.contentIndex = new ContentIndex(deps.exec);
+  }
 
   private get exec(): SqlExecutor {
     return this.deps.exec;
@@ -303,7 +280,7 @@ export class SharedSqlRecordLogic {
       if (edges.length) this.insertAssociations(record.id, edges);
 
       fts5Strategy.insert(this.exec, record.id, JSON.stringify(record.content));
-      this.syncContentIndex(record.id, record.typeId, record.content);
+      this.contentIndex.sync(record.id, record.typeId, record.content);
       this.appendJournal(record.id, opts.journal);
     });
 
@@ -420,7 +397,7 @@ export class SharedSqlRecordLogic {
 
       if (merged !== undefined) {
         fts5Strategy.insert(this.exec, id, JSON.stringify(merged));
-        this.syncContentIndex(id, existing.typeId, merged);
+        this.contentIndex.sync(id, existing.typeId, merged);
       }
       this.appendJournal(id, opts.journal);
     });
@@ -475,7 +452,7 @@ export class SharedSqlRecordLogic {
     // version history: a log naming what a destroyed record once held is
     // exactly the residue this verb exists to leave nothing of.
     this.exec.run('DELETE FROM journal WHERE record_id = ?', [id]);
-    this.exec.run('DELETE FROM content_index WHERE record_id = ?', [id]);
+    this.contentIndex.remove(id);
     this.exec.run('DELETE FROM records WHERE id = ?', [id]);
     return purged;
   }
@@ -555,7 +532,7 @@ export class SharedSqlRecordLogic {
     fts5Strategy.remove(this.exec, id);
     this.versionedUpdate(id, ['type_id = ?', 'content = ?'], [typeId, json], opts);
     fts5Strategy.insert(this.exec, id, json);
-    this.syncContentIndex(id, typeId, content);
+    this.contentIndex.sync(id, typeId, content);
   }
 
   async queryRecords(query: StackQuery): Promise<QueryResult> {
@@ -588,7 +565,9 @@ export class SharedSqlRecordLogic {
     const lastRecord = records[records.length - 1];
     const cursor =
       hasMore && lastRecord
-        ? makeCursor(lastRecord, query.sort, (record, field) => this.sortFieldKind(record, field))
+        ? makeCursor(lastRecord, query.sort, (record, field) =>
+            this.contentIndex.kindOf(record.typeId, field),
+          )
         : null;
 
     return { records, cursor };
@@ -829,8 +808,7 @@ export class SharedSqlRecordLogic {
         toMs(type.createdAt),
       ],
     );
-    const schema = type.schema as Record<string, { kind?: string }>;
-    this.indexedFieldsByType.set(type.id, indexedFieldKinds(schema));
+    this.contentIndex.rememberType(type);
   }
 
   async getType(id: TypeId): Promise<StackType | null> {
@@ -967,62 +945,5 @@ export class SharedSqlRecordLogic {
       [recordId],
     );
     return rows.map(rowToAssociation);
-  }
-
-  /**
-   * The fields content_index covers for typeId, from the in-memory cache
-   * — falling back to a `types` lookup (and populating the cache) only for
-   * a typeId this process hasn't seen via saveType() yet, e.g. right after
-   * open().
-   */
-  private getIndexedFields(typeId: string): Map<string, ScalarFieldKind> {
-    const cached = this.indexedFieldsByType.get(typeId);
-    if (cached) return cached;
-
-    const typeRow = this.exec.get<{ schema: string }>('SELECT schema FROM types WHERE id = ?', [
-      typeId,
-    ]);
-    const fields = typeRow
-      ? indexedFieldKinds(JSON.parse(typeRow.schema) as Record<string, { kind?: string }>)
-      : new Map<string, ScalarFieldKind>();
-    this.indexedFieldsByType.set(typeId, fields);
-    return fields;
-  }
-
-  /**
-   * Replace a record's content_index rows with what its content currently
-   * holds, on every write that can change content or typeId, so neither
-   * the ordering nor the file-reference lookup can drift from the record.
-   * A field holding no orderable value gets no row at all, which is what
-   * puts the record at the end of a sort on that field.
-   */
-  private syncContentIndex(
-    recordId: string,
-    typeId: string,
-    content: Record<string, unknown>,
-  ): void {
-    this.exec.run('DELETE FROM content_index WHERE record_id = ?', [recordId]);
-
-    for (const [field, kind] of this.getIndexedFields(typeId)) {
-      const entry = contentSortEntry(kind, content[field]);
-      if (!entry) continue;
-      const sql = `INSERT OR IGNORE INTO content_index
-          (record_id, field, value_rank, num_value, text_key, text_value, file_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`;
-      if (entry.kind === 'num') {
-        this.exec.run(sql, [recordId, field, 0, entry.num, null, null, null]);
-      } else {
-        // A file-ref field's value is its file id, so the row it already
-        // needs for ordering also answers the attachment filter — one
-        // field is one row, whatever a query reads it for.
-        const fileId = kind === 'file-ref' ? entry.text : null;
-        this.exec.run(sql, [recordId, field, 1, null, entry.key, entry.text, fileId]);
-      }
-    }
-  }
-
-  /** The declared kind of a record's top-level `field`, if it has one. */
-  private sortFieldKind(record: StackRecord, field: string): ScalarFieldKind | undefined {
-    return this.getIndexedFields(record.typeId).get(field);
   }
 }

@@ -1,6 +1,6 @@
 /**
- * FTS5 query sanitization and indexing — the full-text search half of the
- * shared record logic.
+ * FTS5 query sanitization: turning what a person typed into a search box
+ * into a query FTS5 will parse. Indexing lives in indexes.ts.
  *
  * FTS5's query language supports operators (AND/OR/NOT, phrases, NEAR,
  * wildcards) that can be expensive or cause parse errors with untrusted
@@ -41,8 +41,6 @@
  * — see docs/spec/wire-format.md § Bounding query cost for the server-side
  * expectation and the `timeout` wire error that goes with it.
  */
-
-import type { SqlExecutor } from './executor.js';
 
 /**
  * Outside a phrase, everything but a letter, digit, mark, underscore,
@@ -287,38 +285,3 @@ const restoreImplicitAnd = (query: string): string =>
         (match, word: string) => (isOperator(word) ? match : `${word} AND `),
       ),
   );
-
-// -------------------------------------------------------
-// Indexing strategy
-// -------------------------------------------------------
-
-/**
- * FTS5's external-content table needs its special `('delete', rowid,
- * content)` command — with the *old* content — to unindex a row; a plain
- * DELETE leaves stale, still-searchable entries. remove() therefore reads
- * the current rowid/content and must run before the caller's change.
- */
-export const fts5Strategy = {
-  /** Index a record that has no FTS entry yet (used right after an INSERT). */
-  insert(exec: SqlExecutor, recordId: string, content: string): void {
-    exec.run(`INSERT INTO records_fts(rowid, content) SELECT rowid, ? FROM records WHERE id = ?`, [
-      content,
-      recordId,
-    ]);
-  },
-  /**
-   * Remove a record's FTS entry. MUST be called before the records row's
-   * content changes or the row is deleted — see the note above.
-   */
-  remove(exec: SqlExecutor, recordId: string): void {
-    const row = exec.get<{ rowid: number; content: string }>(
-      'SELECT rowid, content FROM records WHERE id = ?',
-      [recordId],
-    );
-    if (!row) return;
-    exec.run(`INSERT INTO records_fts(records_fts, rowid, content) VALUES('delete', ?, ?)`, [
-      row.rowid,
-      row.content,
-    ]);
-  },
-};
