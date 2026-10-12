@@ -2,14 +2,17 @@ import { describe, test, expect, expectTypeOf, beforeEach, vi } from 'vitest';
 import { Stack } from '../src/stack/stack.js';
 import { MemoryAdapter } from '../src/testing.js';
 import { migration, typeHandle } from '../src/type-handle.js';
-import type { ContentOf, UnlistedValue } from '../src/type-handle.js';
+import type { ContentOf, ReadonlyTypeSchema, UnlistedValue } from '../src/type-handle.js';
 import { MisfitError } from '../src/collection.js';
 import type {
   Collection,
   CollectionChange,
   CollectionPage,
+  CollectionQuery,
   CollectionRecord,
   ContentPatch,
+  ContentPathOf,
+  SortableFieldOf,
   StoredContent,
 } from '../src/collection.js';
 import {
@@ -264,6 +267,66 @@ describe.each([
     await books.create({ title: 'Emma', status: 'reading' });
     const { records } = await books.query({ filter: { content: { status: 'reading' } } });
     expect(records.map((r) => r.content.title)).toEqual(['Emma']);
+  });
+
+  test("a content filter reaches only the handle's version and flags both sides", async () => {
+    const book = await books.create({ title: 'Dune', status: 'finished' });
+    await createV1('Emma', 'done');
+    await stack.create(BookV3.id, { title: 'Ulysses', status: 'finished' });
+    const page = await books.query({ filter: { content: { status: 'finished' } } });
+    expect(page.records.map((r) => r.id)).toEqual([book.id]);
+    expect(page.misfits).toEqual([]);
+    expect(page.skipped).toEqual({ older: true, newer: true });
+  });
+
+  test('a content sort and a presence filter narrow the same way', async () => {
+    const book = await books.create({ title: 'Dune', status: 'want' });
+    await createV1();
+    const sorted = await books.query({ sort: { contentField: 'title' } });
+    expect(sorted.records.map((r) => r.id)).toEqual([book.id]);
+    expect(sorted.skipped).toEqual({ older: true, newer: false });
+    const present = await books.query({ filter: { contentPresent: ['title'] } });
+    expect(present.records.map((r) => r.id)).toEqual([book.id]);
+    expect(present.skipped).toEqual({ older: true, newer: false });
+  });
+
+  test('skipped is reported on the first page only', async () => {
+    await books.create({ title: 'Dune', status: 'want' });
+    await books.create({ title: 'Emma', status: 'want' });
+    await createV1();
+    const first = await books.query({ filter: { content: { status: 'want' } }, limit: 1 });
+    expect(first.skipped).toEqual({ older: true, newer: false });
+    const second = await books.query({
+      filter: { content: { status: 'want' } },
+      limit: 1,
+      cursor: first.cursor!,
+    });
+    expect(second.records).toHaveLength(1);
+    expect(second).not.toHaveProperty('skipped');
+  });
+
+  test('skipped applies the rest of the filter', async () => {
+    await books.create({ title: 'Dune', status: 'want' });
+    await createV1();
+    await stack.create(BookV3.id, { title: 'Ulysses', status: 'want' });
+    const page = await books.query({ filter: { content: { status: 'want' }, tags: ['fantasy'] } });
+    expect(page.skipped).toEqual({ older: false, newer: false });
+  });
+
+  test('a query without content keys reads the whole family and flags nothing', async () => {
+    await books.create({ title: 'Dune', status: 'want' });
+    await createV1();
+    const page = await books.query({ filter: { content: {}, contentPresent: [] } });
+    expect(page.records).toHaveLength(2);
+    expect(page.skipped).toEqual({ older: false, newer: false });
+  });
+
+  test('an undefined content value is a filter, as an adapter reads it', async () => {
+    await books.create({ title: 'Dune', status: 'want' });
+    await createV1();
+    const page = await books.query({ filter: { content: { pages: undefined } } });
+    expect(page.records).toHaveLength(1);
+    expect(page.skipped).toEqual({ older: true, newer: false });
   });
 
   test('query() drops typeId and presentAt from an untyped caller', async () => {
@@ -578,5 +641,154 @@ describe('a collection under delegation', () => {
 
     await stack.migrateAll(Book.baseId);
     expect((await books.patchContent(old.id, { pages: 412 })).content.pages).toBe(412);
+  });
+});
+
+describe('content filter and sort typing', () => {
+  const Contact = typeHandle({
+    id: 'com.example.people/contact@1',
+    name: 'Contact',
+    schema: {
+      name: { kind: 'string', required: true },
+      status: { kind: 'enum', values: ['active', 'archived'], required: true },
+      age: { kind: 'number' },
+      address: {
+        kind: 'object',
+        properties: {
+          city: { kind: 'string' },
+          geo: { kind: 'object', properties: { lat: { kind: 'number' } } },
+        },
+      },
+      emails: {
+        kind: 'array',
+        items: { kind: 'object', properties: { value: { kind: 'string', required: true } } },
+      },
+      tags: { kind: 'array', items: { kind: 'string' } },
+      extra: { kind: 'object', open: true },
+      bag: { kind: 'array', open: true },
+    },
+  });
+  type Q = CollectionQuery<ContentOf<typeof Contact.schema>>;
+
+  test('derives paths and sortable fields from the content type', () => {
+    type C = ContentOf<typeof Contact.schema>;
+    expectTypeOf<SortableFieldOf<C>>().toEqualTypeOf<'name' | 'status' | 'age'>();
+    expectTypeOf<ContentPathOf<C>>().toEqualTypeOf<
+      | 'name'
+      | 'status'
+      | 'age'
+      | 'address'
+      | 'address.city'
+      | 'address.geo'
+      | 'address.geo.lat'
+      | 'emails'
+      | 'emails.value'
+      | 'tags'
+      | 'extra'
+      | `extra.${string}`
+      | 'bag'
+      | `bag.${string}`
+    >();
+  });
+
+  test('accepts declared paths, element values, any suffix below an open node, and null', async () => {
+    const stack = await Stack.open(
+      await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' }),
+    );
+    await stack.defineType(Contact);
+    const contacts = stack.collection(Contact);
+    const ada = await contacts.create({
+      name: 'Ada',
+      status: 'active',
+      address: { city: 'London', geo: { lat: 51.5 } },
+      emails: [{ value: 'ada@example.com' }],
+      tags: ['starred'],
+      extra: { source: { kind: 'import' } },
+      bag: [1],
+    });
+    await contacts.create({ name: 'Bea', status: 'archived', age: 40 });
+    const { records } = await contacts.query({
+      filter: {
+        content: {
+          status: 'active',
+          'address.city': 'London',
+          'address.geo.lat': 51.5,
+          'emails.value': 'ada@example.com',
+          tags: 'starred',
+          'extra.source.kind': 'import',
+          bag: 1,
+          age: null,
+        },
+        contentPresent: ['address.city', 'extra.source'],
+      },
+      sort: { contentField: 'name', direction: 'desc' },
+    });
+    expect(records.map((r) => r.id)).toEqual([ada.id]);
+  });
+
+  test('refuses a typo, a value outside an enum, a wrong nested type and a path through a scalar', () => {
+    // @ts-expect-error a typo'd field
+    const typo: Q = { filter: { content: { stauts: 'active' } } };
+    // @ts-expect-error a value outside the enum
+    const badEnum: Q = { filter: { content: { status: 'actvie' } } };
+    // @ts-expect-error a wrong value type at a nested path
+    const badNested: Q = { filter: { content: { 'address.geo.lat': 'north' } } };
+    // @ts-expect-error a path through a scalar
+    const throughScalar: Q = { filter: { content: { 'name.first': 'Ada' } } };
+    // @ts-expect-error an object never equals a filter value
+    const object: Q = { filter: { content: { address: { city: 'Lisbon' } } } };
+    // @ts-expect-error nor does an element of an array of objects
+    const element: Q = { filter: { content: { emails: { value: 'ada@example.com' } } } };
+    // @ts-expect-error nor an open object itself
+    const open: Q = { filter: { content: { extra: {} } } };
+    // @ts-expect-error a typo'd presence path
+    const badPresent: Q = { filter: { contentPresent: ['adress.city'] } };
+    expect([
+      typo,
+      badEnum,
+      badNested,
+      throughScalar,
+      object,
+      element,
+      open,
+      badPresent,
+    ]).toHaveLength(8);
+  });
+
+  test('sorts by top-level scalars only', () => {
+    // @ts-expect-error a nested field
+    const nested: Q = { sort: { contentField: 'address.city' } };
+    // @ts-expect-error an object field
+    const object: Q = { sort: { contentField: 'address' } };
+    // @ts-expect-error a typo'd field
+    const typo: Q = { sort: { contentField: 'nmae' } };
+    expect([nested, object, typo]).toHaveLength(3);
+  });
+
+  test('types paths deeper than the typing limit without exceeding the compiler', () => {
+    type Obj<P> = { kind: 'object'; properties: P };
+    type DeepQ = CollectionQuery<
+      ContentOf<{
+        a: Obj<{
+          b: Obj<{
+            c: Obj<{ d: Obj<{ e: Obj<{ f: Obj<{ g: Obj<{ h: { kind: 'number' } }> }> }> }> }>;
+          }>;
+        }>;
+      }>
+    >;
+    const ok: DeepQ = { filter: { content: { 'a.b.c.d.e': null, 'a.b.c.d.e.f.anything': 1 } } };
+    // @ts-expect-error the sixth segment is still typed
+    const sixth: DeepQ = { filter: { content: { 'a.b.c.d.e.x': 1 } } };
+    // @ts-expect-error a typo above the limit is still caught
+    const typo: DeepQ = { filter: { content: { 'a.x': 1 } } };
+    expect([ok, sixth, typo]).toHaveLength(3);
+  });
+
+  test('an untyped handle takes any path and sort field', () => {
+    const ok: CollectionQuery<ContentOf<ReadonlyTypeSchema>> = {
+      filter: { content: { anything: 1, 'a.b': 'x' }, contentPresent: ['q.r'] },
+      sort: { contentField: 'x' },
+    };
+    expect(ok).toBeDefined();
   });
 });

@@ -395,7 +395,7 @@ export class Stack implements StackClient {
 
   collection<S extends ReadonlyTypeSchema>(handle: TypeHandle<S>): Collection<ContentOf<S>> {
     this.assertOpen();
-    return createCollection(this, this.migrations, handle);
+    return createCollection(this, this.migrations, handle, () => this.listTypes());
   }
 
   // -------------------------------------------------------

@@ -33,11 +33,14 @@ import type {
   ChangeFilter,
   DataAssociation,
   IfVersionOptions,
+  NativeSortField,
   RecordChange,
   RecordChangeSet,
   RecordFilter,
   RecordId,
   StackQuery,
+  StackType,
+  TypeId,
   StackRecord,
   SubscribeOptions,
   Unsubscribe,
@@ -95,16 +98,88 @@ export type CollectionPage<C> = {
   records: CollectionRecord<C>[];
   misfits: Misfit[];
   cursor: string | null;
+  /**
+   * A content filter or sort reaches only records at the handle's version.
+   * Each flag is set when records at an older or newer version match, or
+   * may match, the rest of the query: the results may be missing records
+   * the filter was meant to find. On the first page only, since it depends
+   * on the query rather than the page. See docs/spec/data-model.md § Type
+   * handles.
+   */
+  skipped?: { older: boolean; newer: boolean };
 };
+
+/**
+ * Path typing stops at this depth and accepts any suffix below it, since a
+ * recursive path type otherwise exceeds the compiler's instantiation limit.
+ * A typing limit, not a query limit: see docs/spec/data-model.md § Nested
+ * content paths.
+ */
+type PathDepth = [never, 0, 1, 2, 3, 4];
+
+/** What a filter value can equal: an adapter compares the value a path reaches. */
+type Leaf = string | number | boolean;
+
+/**
+ * Each content path of `V` reached at `P`, paired with the value a filter
+ * compares there. An array is matched element-wise, so it is its element.
+ * An object never equals a filter value, so its path takes only `null`.
+ */
+type PathEntry<P extends string, V, D extends number> = [D] extends [never]
+  ? [P | `${P}.${string}`, Leaf]
+  : V extends readonly (infer E)[]
+    ? unknown extends E
+      ? [P | `${P}.${string}`, Leaf]
+      : PathEntry<P, E, PathDepth[D]>
+    : V extends object
+      ? string extends keyof V
+        ? [P, null] | [`${P}.${string}`, Leaf]
+        : [P, null] | FieldEntry<V, `${P}.`, PathDepth[D]>
+      : [P, V];
+
+/** `Required<C>[K]` rather than `NonNullable`, which would leak into errors. */
+type FieldEntry<C, Prefix extends string, D extends number> = [D] extends [never]
+  ? [`${Prefix}${string}`, Leaf]
+  : {
+      [K in keyof C & string]-?: PathEntry<`${Prefix}${K}`, Required<C>[K], D>;
+    }[keyof C & string];
+
+/**
+ * Every content path of `C`: its fields, and dotted paths through declared
+ * objects and arrays. Below an `open` object or array, or six segments
+ * deep, any suffix is a path.
+ */
+export type ContentPathOf<C> = FieldEntry<C, '', 5>[0];
+
+/** The top-level scalar fields of `C`, the ones a content sort reaches. */
+export type SortableFieldOf<C> = string extends keyof C
+  ? string
+  : {
+      [K in keyof C & string]-?: Required<C>[K] extends string | number | boolean ? K : never;
+    }[keyof C & string];
 
 /**
  * A collection reads live records of its own family only, as stored, so
  * none of `typeId`, `baseId`, `includeDeleted` or `presentAt` is offered.
- * `C` is reserved for typing content filters and sorts.
+ * Content filter keys and the sort field are checked against `C`, and
+ * reach only records stored at the handle's version. See
+ * docs/spec/data-model.md § Type handles.
  */
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-export type CollectionQuery<C> = Omit<StackQuery, 'filter' | 'presentAt'> & {
-  filter?: Omit<RecordFilter, 'typeId' | 'baseId' | 'includeDeleted'>;
+export type CollectionQuery<C> = Omit<StackQuery, 'filter' | 'presentAt' | 'sort'> & {
+  filter?: Omit<
+    RecordFilter,
+    'typeId' | 'baseId' | 'includeDeleted' | 'content' | 'contentPresent'
+  > & {
+    content?: { [E in FieldEntry<C, '', 5> as E[0]]?: E[1] | null };
+    contentPresent?: ContentPathOf<C>[];
+  };
+  sort?:
+    | { field: NativeSortField; contentField?: never; direction?: 'asc' | 'desc' }
+    | {
+        field?: never;
+        contentField: SortableFieldOf<C>;
+        direction?: 'asc' | 'desc';
+      };
 };
 
 /** The family is the collection's, so neither `typeId` nor `baseId` is a filter key. */
@@ -203,14 +278,25 @@ const withoutTypeId = <F extends object>(filter: F | undefined): Omit<F, 'typeId
 };
 
 /**
+ * Whether a query reads content, which only records stored at the handle's
+ * version are guaranteed to hold in the handle's shape.
+ */
+const readsContent = (filter: RecordFilter | undefined, sort: StackQuery['sort']): boolean =>
+  Object.keys(filter?.content ?? {}).length > 0 ||
+  (filter?.contentPresent?.length ?? 0) > 0 ||
+  sort?.contentField !== undefined;
+
+/**
  * The collection over `handle`, shared by `Stack.collection()` and
  * `ScopedStack.collection()`. `registry` is the opening `Stack`'s, which
- * the app's own process filled.
+ * the app's own process filled. `listTypes` names the family's versions,
+ * which `StackClient` does not offer.
  */
 export const createCollection = <S extends ReadonlyTypeSchema>(
   client: StackClient,
   registry: MigrationRegistry,
   handle: TypeHandle<S>,
+  listTypes: () => Promise<StackType[]>,
 ): Collection<ContentOf<S>> => {
   type C = ContentOf<S>;
   if (handle.migratesFrom !== undefined && !registry.path(handle.migratesFrom, handle.id)) {
@@ -293,6 +379,34 @@ export const createCollection = <S extends ReadonlyTypeSchema>(
     return narrow(written, true);
   };
 
+  /**
+   * Whether a record stored at one of `typeIds` matches, or may match,
+   * `filter` without its content keys. A scoped page can be empty with a
+   * cursor set, and reading on is unbounded, so that page counts as a match.
+   */
+  const anyAt = async (typeIds: TypeId[], filter: RecordFilter): Promise<boolean> => {
+    if (typeIds.length === 0) return false;
+    const { content: _content, contentPresent: _present, ...rest } = filter;
+    const page = await client.query({ filter: { ...rest, typeId: typeIds }, limit: 1 });
+    return page.records.length > 0 || page.cursor !== null;
+  };
+
+  const skippedVersions = async (
+    filter: RecordFilter,
+  ): Promise<NonNullable<CollectionPage<C>['skipped']>> => {
+    const older: TypeId[] = [];
+    const newer: TypeId[] = [];
+    for (const type of await listTypes()) {
+      if (type.baseId !== handle.baseId || type.version === handleVersion) continue;
+      (type.version < handleVersion ? older : newer).push(type.id);
+    }
+    const [skippedOlder, skippedNewer] = await Promise.all([
+      anyAt(older, filter),
+      anyAt(newer, filter),
+    ]);
+    return { older: skippedOlder, newer: skippedNewer };
+  };
+
   const mutate = async (
     id: RecordId,
     changes: RecordChangeSet,
@@ -326,11 +440,28 @@ export const createCollection = <S extends ReadonlyTypeSchema>(
       // Stripped as well as untyped: either would change which records a
       // page holds, or the shape they arrive in.
       const { presentAt: _presentAt, filter, ...rest } = query as StackQuery;
-      const { records, cursor } = await client.query({
-        ...rest,
-        filter: { ...withoutTypeId(filter), baseId: handle.baseId },
-      });
-      const page: CollectionPage<C> = { records: [], misfits: [], cursor };
+      const narrowed = readsContent(filter, rest.sort);
+      // A concrete typeId needs no family lookup; baseId does.
+      const { baseId: _baseId, ...unversioned } = withoutTypeId(filter);
+      const [{ records, cursor }, skipped] = await Promise.all([
+        client.query({
+          ...rest,
+          filter: narrowed
+            ? { ...unversioned, typeId: handle.id }
+            : { ...unversioned, baseId: handle.baseId },
+        }),
+        rest.cursor !== undefined
+          ? undefined
+          : narrowed
+            ? skippedVersions(unversioned)
+            : { older: false, newer: false },
+      ]);
+      const page: CollectionPage<C> = {
+        records: [],
+        misfits: [],
+        cursor,
+        ...(skipped && { skipped }),
+      };
       for (const stored of records) {
         const result = classify(stored);
         if ('misfit' in result) page.misfits.push(result.misfit);
