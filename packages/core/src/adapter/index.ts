@@ -31,6 +31,12 @@ export {
   filtersContent,
   parseContentFilterKey,
 } from '../query-validation.js';
-export { contentSortEntry, contentSortKey, compareSortEntries } from './sort.js';
+export {
+  contentSortEntry,
+  contentSortKey,
+  compareSortEntries,
+  constantSortEntry,
+  sortConstant,
+} from './sort.js';
 export type { SortEntry } from './sort.js';
 export { AUTHORITY_ASSOCIATION_KINDS, partitionAssociations } from '../associations/identity.js';

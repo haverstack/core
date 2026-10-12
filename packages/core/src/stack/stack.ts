@@ -97,6 +97,7 @@ import {
 } from '../errors.js';
 import {
   assertQueryCapabilities,
+  assertValidContentByType,
   assertSortCapability,
   assertValidAssociationFilters,
   assertValidBaseIdFilter,
@@ -1195,6 +1196,7 @@ export class Stack implements StackClient {
   async query(query: StackQuery = {}): Promise<QueryResult> {
     this.assertOpen();
     const { presentAt, filter, limit: rawLimit, ...rest } = query;
+    assertValidContentByType(filter);
     assertQueryCapabilities(filter, this.adapter.capabilities);
     assertValidSort(query.sort);
     assertSortCapability(query.sort, this.adapter.capabilities);

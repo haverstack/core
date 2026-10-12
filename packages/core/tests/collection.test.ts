@@ -2,6 +2,7 @@ import { describe, test, expect, expectTypeOf, beforeEach, vi } from 'vitest';
 import { Stack } from '../src/stack/stack.js';
 import { MemoryAdapter } from '../src/testing.js';
 import { migration, typeHandle } from '../src/type-handle.js';
+import { add, derive, drop, map, rename } from '../src/migration-steps.js';
 import type { ContentOf, ReadonlyTypeSchema, UnlistedValue } from '../src/type-handle.js';
 import { MisfitError } from '../src/collection.js';
 import type {
@@ -64,10 +65,7 @@ const Shelf = typeHandle({
   schema: { name: { kind: 'string', required: true } },
 });
 
-const bookV1ToV2 = migration(BookV1, Book, (c) => ({
-  ...c,
-  status: c.status === 'done' ? 'finished' : c.status,
-}));
+const bookV1ToV2 = migration(BookV1, Book, [map('status', { done: 'finished' })]);
 
 // The naming an app does: an interface keeps its name where a type alias would not.
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
@@ -269,35 +267,92 @@ describe.each([
     expect(records.map((r) => r.content.title)).toEqual(['Emma']);
   });
 
-  test("a content filter reaches only the handle's version and flags both sides", async () => {
+  test('a content filter reaches older versions through a map, and flags the newer side', async () => {
     const book = await books.create({ title: 'Dune', status: 'finished' });
-    await createV1('Emma', 'done');
+    const old = await createV1('Emma', 'done');
+    await createV1('Hamlet', 'want');
     await stack.create(BookV3.id, { title: 'Ulysses', status: 'finished' });
     const page = await books.query({ filter: { content: { status: 'finished' } } });
-    expect(page.records.map((r) => r.id)).toEqual([book.id]);
+    expect(page.records.map((r) => r.id).sort()).toEqual([book.id, old.id].sort());
+    expect(page.records.find((r) => r.id === old.id)?.content.status).toBe('finished');
     expect(page.misfits).toEqual([]);
-    expect(page.skipped).toEqual({ older: true, newer: true });
+    expect(page.skipped).toEqual({ older: false, newer: true });
   });
 
-  test('a content sort and a presence filter narrow the same way', async () => {
+  test('an older record holding the value a map also produces is flagged, not matched', async () => {
+    // An enum widens in place, so @1 can come to hold a value its handle
+    // does not list.
+    await stack.defineType({
+      ...BookV1,
+      schema: {
+        ...BookV1.schema,
+        status: { kind: 'enum', values: ['want', 'reading', 'done', 'finished'], required: true },
+      },
+    });
+    await createV1('Emma', 'finished');
+    const page = await books.query({ filter: { content: { status: 'finished' } } });
+    expect(page.records).toEqual([]);
+    expect(page.skipped).toEqual({ older: true, newer: false });
+  });
+
+  test('a value no older value maps to drops the older arm without a skip', async () => {
+    await createV1('Emma', 'done');
+    // A value the handle does not list is filtered for with a cast.
+    const page = await books.query({ filter: { content: { status: 'done' as never } } });
+    expect(page.records).toEqual([]);
+    expect(page.skipped).toEqual({ older: false, newer: false });
+  });
+
+  test('a field no step produces is no value at an older version', async () => {
+    const book = await books.create({ title: 'Dune', status: 'want', pages: 412 });
+    const old = await createV1();
+    const absent = await books.query({ filter: { content: { pages: null } } });
+    expect(absent.records.map((r) => r.id)).toEqual([old.id]);
+    expect(absent.skipped).toEqual({ older: false, newer: false });
+    const present = await books.query({ filter: { contentPresent: ['pages'] } });
+    expect(present.records.map((r) => r.id)).toEqual([book.id]);
+    expect(present.skipped).toEqual({ older: false, newer: false });
+  });
+
+  test('an undefined content value is a filter, as an adapter reads it', async () => {
+    await books.create({ title: 'Dune', status: 'want' });
+    await createV1();
+    const page = await books.query({ filter: { content: { pages: undefined } } });
+    expect(page.records).toHaveLength(2);
+    expect(page.skipped).toEqual({ older: false, newer: false });
+  });
+
+  test('a content sort orders records at every version it reaches as one listing', async () => {
+    await books.create({ title: 'Dune', status: 'want' });
+    await createV1('Anathem');
+    await books.create({ title: 'Middlemarch', status: 'want' });
+    await createV1('Emma');
+    const page = await books.query({ sort: { contentField: 'title' } });
+    expect(page.records.map((r) => r.content.title)).toEqual([
+      'Anathem',
+      'Dune',
+      'Emma',
+      'Middlemarch',
+    ]);
+    expect(page.skipped).toEqual({ older: false, newer: false });
+  });
+
+  test('a sort on a mapped field narrows to the versions that keep its order', async () => {
     const book = await books.create({ title: 'Dune', status: 'want' });
     await createV1();
-    const sorted = await books.query({ sort: { contentField: 'title' } });
-    expect(sorted.records.map((r) => r.id)).toEqual([book.id]);
-    expect(sorted.skipped).toEqual({ older: true, newer: false });
-    const present = await books.query({ filter: { contentPresent: ['title'] } });
-    expect(present.records.map((r) => r.id)).toEqual([book.id]);
-    expect(present.skipped).toEqual({ older: true, newer: false });
+    const page = await books.query({ sort: { contentField: 'status' } });
+    expect(page.records.map((r) => r.id)).toEqual([book.id]);
+    expect(page.skipped).toEqual({ older: true, newer: false });
   });
 
   test('skipped is reported on the first page only', async () => {
     await books.create({ title: 'Dune', status: 'want' });
     await books.create({ title: 'Emma', status: 'want' });
     await createV1();
-    const first = await books.query({ filter: { content: { status: 'want' } }, limit: 1 });
+    const first = await books.query({ sort: { contentField: 'status' }, limit: 1 });
     expect(first.skipped).toEqual({ older: true, newer: false });
     const second = await books.query({
-      filter: { content: { status: 'want' } },
+      sort: { contentField: 'status' },
       limit: 1,
       cursor: first.cursor!,
     });
@@ -309,7 +364,10 @@ describe.each([
     await books.create({ title: 'Dune', status: 'want' });
     await createV1();
     await stack.create(BookV3.id, { title: 'Ulysses', status: 'want' });
-    const page = await books.query({ filter: { content: { status: 'want' }, tags: ['fantasy'] } });
+    const page = await books.query({
+      filter: { tags: ['fantasy'] },
+      sort: { contentField: 'status' },
+    });
     expect(page.skipped).toEqual({ older: false, newer: false });
   });
 
@@ -319,14 +377,6 @@ describe.each([
     const page = await books.query({ filter: { content: {}, contentPresent: [] } });
     expect(page.records).toHaveLength(2);
     expect(page.skipped).toEqual({ older: false, newer: false });
-  });
-
-  test('an undefined content value is a filter, as an adapter reads it', async () => {
-    await books.create({ title: 'Dune', status: 'want' });
-    await createV1();
-    const page = await books.query({ filter: { content: { pages: undefined } } });
-    expect(page.records).toHaveLength(1);
-    expect(page.skipped).toEqual({ older: true, newer: false });
   });
 
   test('query() drops typeId and presentAt from an untyped caller', async () => {
@@ -349,7 +399,7 @@ describe.each([
 
   test('a read of an older record with no migration to bridge the gap throws', async () => {
     const reopened = await Stack.open(adapter, {
-      migrations: [migration(Book, BookV3, (c) => c)],
+      migrations: [migration(Book, BookV3, [])],
     });
     const old = await createV1();
     const v3 = view(reopened).collection(BookV3);
@@ -542,7 +592,10 @@ describe.each([
   beforeEach(async () => {
     const adapter = await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' });
     stack = await Stack.open(adapter, {
-      migrations: [bookV1ToV2, migration(Shelf, Book, (c) => ({ title: c.name, status: 'want' }))],
+      migrations: [
+        bookV1ToV2,
+        migration(Shelf, Book, [rename('name', 'title'), add('status', 'want')]),
+      ],
     });
     await stack.defineType(BookV1);
     await stack.defineType(Book);
@@ -579,15 +632,192 @@ describe.each([
   });
 });
 
-describe('a collection whose migration function throws', () => {
+const TaskV1 = typeHandle({
+  id: 'com.example.tasks/task@1',
+  name: 'Task',
+  schema: {
+    author: { kind: 'string', required: true },
+    status: { kind: 'enum', values: ['open', 'done'], required: true },
+    legacy: { kind: 'boolean' },
+  },
+});
+
+const TaskV2 = typeHandle({
+  id: 'com.example.tasks/task@2',
+  name: 'Task',
+  migratesFrom: TaskV1,
+  schema: {
+    by: { kind: 'string', required: true },
+    status: { kind: 'enum', values: ['open', 'finished'], required: true },
+    priority: { kind: 'enum', values: ['high', 'low', 'normal'], required: true },
+    slug: { kind: 'string' },
+  },
+});
+
+const Task = typeHandle({
+  id: 'com.example.tasks/task@3',
+  name: 'Task',
+  migratesFrom: TaskV2,
+  schema: {
+    owner: { kind: 'string', required: true },
+    status: TaskV2.schema.status,
+    priority: TaskV2.schema.priority,
+    slug: TaskV2.schema.slug,
+  },
+});
+
+const TASK_MIGRATIONS = [
+  migration(TaskV1, TaskV2, [
+    rename('author', 'by'),
+    map('status', { done: 'finished' }),
+    add('priority', 'normal'),
+    drop('legacy'),
+    derive('slug', (c) => c.author.toLowerCase()),
+  ]),
+  migration(TaskV2, Task, [rename('by', 'owner')]),
+];
+
+describe.each([
+  ['Stack', (s: Stack): StackClient => s],
+  ['ScopedStack', (s: Stack): StackClient => s.asEntity(OWNER)],
+] as const)('content queries across a migration chain, on %s', (_name, view) => {
+  let adapter: MemoryAdapter;
+  let stack: Stack;
+
+  const open = async (filterArms = 64, sortKeys = 64) => {
+    adapter = await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' });
+    (adapter as { capabilities: StackClient['capabilities'] }).capabilities = {
+      ...adapter.capabilities,
+      filter: { ...adapter.capabilities.filter, contentByType: filterArms },
+      sort: { ...adapter.capabilities.sort, contentFieldByType: sortKeys },
+    };
+    stack = await Stack.open(adapter, { migrations: TASK_MIGRATIONS });
+    for (const type of [TaskV1, TaskV2, Task]) await stack.defineType(type);
+  };
+
+  /** One task at each version, all owned by `owner`. */
+  const seed = async (owner: string) => [
+    await stack.create(TaskV1.id, { author: owner, status: 'open' }),
+    await stack.create(TaskV2.id, { by: owner, status: 'open', priority: 'high', slug: 'x' }),
+    await stack.create(Task.id, { owner, status: 'open', priority: 'low' }),
+  ];
+
+  const tasks = () => view(stack).collection(Task);
+
+  beforeEach(() => open());
+
+  test('a filter on a field renamed across two steps reaches every version', async () => {
+    const ada = await seed('Ada');
+    await seed('Grace');
+    const page = await tasks().query({ filter: { content: { owner: 'Ada' } } });
+    expect(page.records.map((r) => r.id).sort()).toEqual(ada.map((r) => r.id).sort());
+    expect(page.records.map((r) => r.typeId)).toEqual([Task.id, Task.id, Task.id]);
+    expect(page.skipped).toEqual({ older: false, newer: false });
+  });
+
+  test('a sort on a renamed field orders every version as one listing', async () => {
+    await stack.create(TaskV1.id, { author: 'Cleo', status: 'open' });
+    await stack.create(Task.id, { owner: 'Ada', status: 'open', priority: 'low' });
+    await stack.create(TaskV2.id, { by: 'Bea', status: 'open', priority: 'low' });
+    const page = await tasks().query({ sort: { contentField: 'owner', direction: 'desc' } });
+    expect(page.records.map((r) => r.content.owner)).toEqual(['Cleo', 'Bea', 'Ada']);
+  });
+
+  test('a filter on an added field is decided in core, keeping or dropping the older arm', async () => {
+    const [v1] = await seed('Ada');
+    const normal = await tasks().query({ filter: { content: { priority: 'normal' } } });
+    expect(normal.records.map((r) => r.id)).toEqual([v1.id]);
+    const high = await tasks().query({ filter: { content: { priority: 'high' } } });
+    expect(high.records.map((r) => r.content.priority)).toEqual(['high']);
+    expect(high.skipped).toEqual({ older: false, newer: false });
+  });
+
+  test('a sort on an added field orders the older records as the constant', async () => {
+    await seed('Ada');
+    const page = await tasks().query({ sort: { contentField: 'priority' } });
+    expect(page.records.map((r) => [r.content.priority, r.content.owner])).toEqual([
+      ['high', 'Ada'],
+      ['low', 'Ada'],
+      ['normal', 'Ada'],
+    ]);
+  });
+
+  test('a filter on a derived field narrows the versions before the derivation', async () => {
+    const [, v2] = await seed('Ada');
+    const page = await tasks().query({ filter: { content: { slug: 'x' } } });
+    expect(page.records.map((r) => r.id)).toEqual([v2.id]);
+    expect(page.skipped).toEqual({ older: true, newer: false });
+  });
+
+  test('pages through every version under a translated sort', async () => {
+    for (const owner of ['Fay', 'Ada', 'Eve', 'Bea', 'Dot', 'Cleo']) await seed(owner);
+    const owners: string[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = await tasks().query({
+        filter: { content: { status: 'open' } },
+        sort: { contentField: 'owner' },
+        limit: 4,
+        ...(cursor && { cursor }),
+      });
+      owners.push(...page.records.map((r) => r.content.owner));
+      cursor = page.cursor ?? undefined;
+    } while (cursor);
+    expect(owners).toEqual(
+      ['Ada', 'Bea', 'Cleo', 'Dot', 'Eve', 'Fay'].flatMap((owner) => [owner, owner, owner]),
+    );
+  });
+
+  test('an adapter that declines the shape gets the handle-only query', async () => {
+    await open(0, 0);
+    const [, , v3] = await seed('Ada');
+    const filtered = await tasks().query({ filter: { content: { owner: 'Ada' } } });
+    expect(filtered.records.map((r) => r.id)).toEqual([v3.id]);
+    expect(filtered.skipped).toEqual({ older: true, newer: false });
+    const sorted = await tasks().query({ sort: { contentField: 'owner' } });
+    expect(sorted.records.map((r) => r.id)).toEqual([v3.id]);
+    expect(sorted.skipped).toEqual({ older: true, newer: false });
+  });
+
+  test('an adapter with a lower cap gets the newest versions that fit', async () => {
+    await open(2);
+    const [, v2, v3] = await seed('Ada');
+    const page = await tasks().query({ filter: { content: { owner: 'Ada' } } });
+    expect(page.records.map((r) => r.id).sort()).toEqual([v2.id, v3.id].sort());
+    expect(page.skipped).toEqual({ older: true, newer: false });
+  });
+
+  test('a migration not built by migration() is narrowed', async () => {
+    stack = await Stack.open(adapter, {
+      migrations: [
+        TASK_MIGRATIONS[0],
+        {
+          from: TaskV2.id,
+          to: Task.id,
+          steps: [],
+          migrate: (c: Record<string, unknown>) => TASK_MIGRATIONS[1].migrate(c as never),
+        },
+      ],
+    });
+    const [, , v3] = await seed('Ada');
+    const page = await tasks().query({ filter: { content: { owner: 'Ada' } } });
+    expect(page.records.map((r) => r.id)).toEqual([v3.id]);
+    expect(page.skipped).toEqual({ older: true, newer: false });
+  });
+});
+
+describe('a collection whose migration throws', () => {
   test('subscribe() still delivers the change, without its record', async () => {
     const stack = await Stack.open(
       await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' }),
       {
         migrations: [
-          migration(BookV1, Book, () => {
-            throw new TypeError('broken migration');
-          }),
+          migration(BookV1, Book, [
+            map('status', { done: 'finished' }),
+            derive('title', () => {
+              throw new TypeError('broken migration');
+            }),
+          ]),
         ],
       },
     );

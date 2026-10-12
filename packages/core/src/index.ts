@@ -40,6 +40,15 @@ export { isPlanEmpty } from './install.js';
 
 // Type handles
 export { typeHandle, migration } from './type-handle.js';
+export { rename, map, add, drop, derive } from './migration-steps.js';
+export type {
+  MigrationStep,
+  RenameStep,
+  MapStep,
+  AddStep,
+  DropStep,
+  DeriveStep,
+} from './migration-steps.js';
 export type {
   TypeHandle,
   Migration,
@@ -140,6 +149,8 @@ export type {
   AttachmentFilter,
   RelationshipTargetPattern,
   QuerySort,
+  ContentArm,
+  ContentSortKey,
   NativeSortField,
   QueryResult,
   DateRange,

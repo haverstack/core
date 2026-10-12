@@ -285,6 +285,44 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
     },
   },
   {
+    name: 'error-bad-request-empty-content-by-type',
+    description:
+      'filter.contentByType names at least one typeId. An empty map is refused with 400 / ' +
+      'code "bad_request" rather than read as no filter, so the key cannot encode to a query ' +
+      'that matches everything. See docs/spec/data-model.md § Content by type.',
+    method: 'POST',
+    path: '/records/query',
+    requestBody: { filter: { contentByType: {} } },
+    responseStatus: 400,
+    responseBody: {
+      error: {
+        code: 'bad_request',
+        message: 'filter.contentByType must name at least one typeId.',
+      },
+    },
+  },
+  {
+    name: 'error-bad-request-content-by-type-beside-content',
+    description:
+      'filter.contentByType never sits beside a top-level filter.content or ' +
+      'filter.contentPresent: which one applies to a Record would be ambiguous, so the request ' +
+      'is refused with 400 / code "bad_request" rather than resolved either way. See ' +
+      'docs/spec/data-model.md § Content by type.',
+    method: 'POST',
+    path: '/records/query',
+    requestBody: {
+      filter: { content: { owner: 'Ada' }, contentByType: { 'com.example/task@1': {} } },
+    },
+    responseStatus: 400,
+    responseBody: {
+      error: {
+        code: 'bad_request',
+        message:
+          'filter.contentByType cannot be combined with filter.content or filter.contentPresent.',
+      },
+    },
+  },
+  {
     name: 'error-bad-request-unknown-record-key',
     description:
       'POST /records accepts every key a wire record carries — dropping the server-assigned ' +

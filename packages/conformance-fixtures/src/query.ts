@@ -171,6 +171,102 @@ export const queryRecordsFixtures: ConformanceFixture<
     },
   },
   {
+    name: 'query-filters-content-by-type',
+    description:
+      'filter.contentByType is a content predicate keyed by typeId: a Record matches when its ' +
+      'typeId is a key and its content satisfies that arm. It is how a collection carries a ' +
+      'filter across the versions of a family whose migrations renamed a field — here `by` at ' +
+      '@1 and `owner` at @2. Types partition Records, so the arms split the query rather than ' +
+      'widening it, and every other filter key applies to each arm. A server declaring ' +
+      'filter.contentByType: 0 MUST refuse it with 400. See docs/spec/data-model.md § Content ' +
+      'by type.',
+    method: 'POST',
+    path: '/records/query',
+    requestBody: {
+      filter: {
+        contentByType: {
+          'com.example/task@1': { content: { by: 'Ada' } },
+          'com.example/task@2': { content: { owner: 'Ada' } },
+        },
+      },
+      limit: 10,
+    },
+    responseStatus: 200,
+    responseBody: {
+      records: [
+        {
+          id: '1hk153x00061',
+          typeId: 'com.example/task@2',
+          createdAt: '2024-01-02T00:00:00.000Z',
+          updatedAt: '2024-01-02T00:00:00.000Z',
+          content: { owner: 'Ada' },
+          version: 1,
+        },
+        {
+          id: '1hk153x00062',
+          typeId: 'com.example/task@1',
+          createdAt: '2024-01-01T00:00:00.000Z',
+          updatedAt: '2024-01-01T00:00:00.000Z',
+          content: { by: 'Ada' },
+          version: 1,
+        },
+      ],
+      cursor: null,
+    },
+  },
+  {
+    name: 'query-sorts-by-a-content-field-per-type',
+    description:
+      'sort.contentFieldByType names what each Type orders by: a field of its own, read as ' +
+      'that Type declares it, or a constant already reduced to a number or text — here 5 for ' +
+      'every @1 Record, which predates the field. A Record whose typeId is not a key, or whose ' +
+      'value is null, holds no value and sorts last in either direction. A server declaring ' +
+      'sort.contentFieldByType: 0 MUST refuse it with 400. See docs/spec/data-model.md ' +
+      '§ Sorting by a content field.',
+    method: 'POST',
+    path: '/records/query',
+    requestBody: {
+      sort: {
+        contentFieldByType: {
+          'com.example/task@1': { value: 5 },
+          'com.example/task@2': { field: 'rank' },
+        },
+        direction: 'asc',
+      },
+      limit: 3,
+    },
+    responseStatus: 200,
+    responseBody: {
+      records: [
+        {
+          id: '1hk153x00071',
+          typeId: 'com.example/task@2',
+          createdAt: '2024-01-02T00:00:00.000Z',
+          updatedAt: '2024-01-02T00:00:00.000Z',
+          content: { owner: 'Ada', rank: 1 },
+          version: 1,
+        },
+        {
+          id: '1hk153x00072',
+          typeId: 'com.example/task@1',
+          createdAt: '2024-01-01T00:00:00.000Z',
+          updatedAt: '2024-01-01T00:00:00.000Z',
+          content: { by: 'Bea' },
+          version: 1,
+        },
+        {
+          id: '1hk153x00073',
+          typeId: 'com.example/task@2',
+          createdAt: '2024-01-02T00:00:00.000Z',
+          updatedAt: '2024-01-02T00:00:00.000Z',
+          content: { owner: 'Cleo', rank: 9 },
+          version: 1,
+        },
+      ],
+      cursor: null,
+    },
+  },
+  {
     name: 'query-content-sort-defaults-to-ascending',
     description:
       'A sort that names a field with no direction runs ascending, as ORDER BY does — native ' +

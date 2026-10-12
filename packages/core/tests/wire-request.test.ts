@@ -251,6 +251,41 @@ describe('parseQueryBody', () => {
     expect(() => parseQueryBody({ sort: { contentField: 7 } })).toThrow(StackBadRequestError);
   });
 
+  test('filter.contentByType travels as one flat arm per typeId', () => {
+    const arms = {
+      'com.example/note@1': { content: { 'a.b': 1 }, contentPresent: ['c'] },
+      'com.example/note@2': {},
+    };
+    expect(parseQueryBody({ filter: { contentByType: arms } })).toEqual({
+      filter: { contentByType: arms },
+    });
+    for (const contentByType of [
+      [],
+      { 'com.example/note@1': { typeId: 'x' } },
+      { 'com.example/note@1': { content: [] } },
+      { 'com.example/note@1': { contentPresent: 'c' } },
+    ]) {
+      expect(() => parseQueryBody({ filter: { contentByType } })).toThrow(StackBadRequestError);
+    }
+  });
+
+  test('sort.contentFieldByType travels as one key per typeId, never beside another member', () => {
+    const contentFieldByType = {
+      'com.example/note@1': { field: 'a' },
+      'com.example/note@2': { value: 3 },
+    };
+    expect(parseQueryBody({ sort: { contentFieldByType, direction: 'desc' } }).sort).toEqual({
+      contentFieldByType,
+      direction: 'desc',
+    });
+    expect(() => parseQueryBody({ sort: { contentField: 'a', contentFieldByType } })).toThrow(
+      StackBadRequestError,
+    );
+    expect(() =>
+      parseQueryBody({ sort: { contentFieldByType: { 'com.example/note@1': { rank: 1 } } } }),
+    ).toThrow(/Unknown key/);
+  });
+
   test('filter.content carries multi-segment keys through untouched', () => {
     expect(parseQueryBody({ filter: { content: { 'emails.value': 'a@example.com' } } })).toEqual({
       filter: { content: { 'emails.value': 'a@example.com' } },

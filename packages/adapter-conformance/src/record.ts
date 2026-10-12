@@ -76,6 +76,20 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         expect(typeof capabilities.filter.search).toBe('boolean');
         expect(Array.isArray(capabilities.sort.fields)).toBe(true);
         expect(typeof capabilities.sort.contentField).toBe('boolean');
+        for (const cap of [
+          capabilities.filter.contentByType,
+          capabilities.sort.contentFieldByType,
+        ]) {
+          expect(Number.isInteger(cap) && cap >= 0).toBe(true);
+        }
+      });
+
+      test('the per-Type caps are 0 whenever filter.content is "none"', () => {
+        // Both travel in the body of the endpoint a reach of "none" omits.
+        if (capabilities.filter.content === 'none') {
+          expect(capabilities.filter.contentByType).toBe(0);
+          expect(capabilities.sort.contentFieldByType).toBe(0);
+        }
       });
 
       test('filter.contentPresent is false whenever filter.content is "none"', () => {
@@ -971,6 +985,176 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
               filter: { content: { 'priority.nested': 'anything' } },
             });
             expect(result.records).toEqual([]);
+          });
+        }
+      });
+    }
+
+    // -----------------------------------------------------------------
+    // Content by type — capability-gated on filter.contentByType
+    // -----------------------------------------------------------------
+    if (capabilities.filter.contentByType >= 2) {
+      describe('content by type', () => {
+        const OTHER = 'org.haverstack.conformance/other@1';
+        const THIRD = 'org.haverstack.conformance/third@1';
+
+        test('matches each record against the arm for its own type only', async () => {
+          const note = makeRecord({ content: { title: 'a' } });
+          const other = makeRecord({ typeId: OTHER, content: { heading: 'a' } });
+          const decoys = [
+            makeRecord({ content: { title: 'b', heading: 'a' } }),
+            makeRecord({ typeId: OTHER, content: { title: 'a', heading: 'b' } }),
+            makeRecord({ typeId: THIRD, content: { title: 'a', heading: 'a' } }),
+          ];
+          for (const record of [note, other, ...decoys]) await adapter.createRecord(record);
+
+          const result = await adapter.queryRecords({
+            filter: {
+              contentByType: {
+                [CONFORMANCE_TYPE_ID]: { content: { title: 'a' } },
+                [OTHER]: { content: { heading: 'a' } },
+              },
+            },
+          });
+          expect(result.records.map((r) => r.id).sort()).toEqual([note.id, other.id].sort());
+        });
+
+        test('an arm naming nothing matches every record of its type', async () => {
+          const notes = [makeRecord(), makeRecord({ content: { title: 'x' } })];
+          const decoy = makeRecord({ typeId: THIRD });
+          for (const record of [...notes, decoy]) await adapter.createRecord(record);
+
+          const result = await adapter.queryRecords({
+            filter: {
+              contentByType: { [CONFORMANCE_TYPE_ID]: {}, [OTHER]: { content: { a: 1 } } },
+            },
+          });
+          expect(result.records.map((r) => r.id).sort()).toEqual(notes.map((r) => r.id).sort());
+        });
+
+        test('intersects with every other key of the filter', async () => {
+          const kept = makeRecord({ content: { title: 'a' }, parentId: undefined });
+          const parent = await adapter.createRecord(makeRecord());
+          const child = makeRecord({ content: { title: 'a' }, parentId: parent.id });
+          await adapter.createRecord(kept);
+          await adapter.createRecord(child);
+
+          const result = await adapter.queryRecords({
+            filter: {
+              parentId: parent.id,
+              contentByType: { [CONFORMANCE_TYPE_ID]: { content: { title: 'a' } }, [OTHER]: {} },
+            },
+          });
+          expect(result.records.map((r) => r.id)).toEqual([child.id]);
+        });
+
+        if (capabilities.filter.contentPresent) {
+          test("an arm's contentPresent is applied to its own type", async () => {
+            const present = makeRecord({ content: { title: 'x', priority: 1 } });
+            const absent = makeRecord({ content: { title: 'y' } });
+            const other = makeRecord({ typeId: OTHER, content: { priority: 1 } });
+            for (const record of [present, absent, other]) await adapter.createRecord(record);
+
+            const result = await adapter.queryRecords({
+              filter: {
+                contentByType: {
+                  [CONFORMANCE_TYPE_ID]: { contentPresent: ['priority'] },
+                  [OTHER]: { contentPresent: ['missing'] },
+                },
+              },
+            });
+            expect(result.records.map((r) => r.id)).toEqual([present.id]);
+          });
+        }
+      });
+    }
+
+    // -----------------------------------------------------------------
+    // Sort by content field per type — gated on sort.contentFieldByType
+    // -----------------------------------------------------------------
+    if (capabilities.sort.contentFieldByType >= 3) {
+      describe('sort by content field per type', () => {
+        const OTHER = 'org.haverstack.conformance/other@1';
+        const THIRD = 'org.haverstack.conformance/third@1';
+        const UNNAMED = 'org.haverstack.conformance/unnamed@1';
+        const BY_TYPE = {
+          [CONFORMANCE_TYPE_ID]: { field: 'priority' },
+          [OTHER]: { field: 'rank' },
+          [THIRD]: { value: 2.5 },
+        };
+
+        /** Each title names the position the record sorts to, ascending. */
+        const seed = async () => {
+          await adapter.saveType(conformanceType());
+          await adapter.saveType(
+            conformanceType({
+              id: OTHER,
+              baseId: 'org.haverstack.conformance/other',
+              schema: { title: { kind: 'string' }, rank: { kind: 'number' } },
+            }),
+          );
+          for (const record of [
+            makeRecord({ content: { title: 'd', priority: 3 } }),
+            makeRecord({ typeId: OTHER, content: { title: 'a', rank: 1, priority: 9 } }),
+            makeRecord({ typeId: THIRD, content: { title: 'c', priority: 0 } }),
+            makeRecord({ content: { title: 'b', priority: 2 } }),
+            makeRecord({ typeId: OTHER, content: { title: 'e', rank: 4 } }),
+            makeRecord({ content: { title: 'z' } }),
+            makeRecord({ typeId: UNNAMED, content: { title: 'z', priority: 1 } }),
+          ]) {
+            await adapter.createRecord(record);
+          }
+        };
+        const titles = (records: { content: Record<string, unknown> }[]) =>
+          records.map((r) => r.content.title);
+
+        test.each(['asc', 'desc'] as const)(
+          'orders each type by its own field or constant, %s, holding no value last',
+          async (direction) => {
+            await seed();
+            const result = await adapter.queryRecords({
+              sort: { contentFieldByType: BY_TYPE, direction },
+            });
+            const ordered = ['a', 'b', 'c', 'd', 'e'];
+            expect(titles(result.records)).toEqual([
+              ...(direction === 'asc' ? ordered : ordered.reverse()),
+              'z',
+              'z',
+            ]);
+          },
+        );
+
+        test('pages through the ordering one record at a time', async () => {
+          await seed();
+          const seen: unknown[] = [];
+          let cursor: string | null | undefined;
+          do {
+            const page = await adapter.queryRecords({
+              limit: 1,
+              cursor: cursor ?? undefined,
+              sort: { contentFieldByType: BY_TYPE, direction: 'asc' },
+            });
+            seen.push(...titles(page.records));
+            cursor = page.cursor;
+          } while (cursor);
+          expect(seen).toEqual(['a', 'b', 'c', 'd', 'e', 'z', 'z']);
+        });
+
+        if (capabilities.sort.contentField) {
+          test('a cursor minted under one field is refused under a map', async () => {
+            await seed();
+            const minted = await adapter.queryRecords({
+              limit: 1,
+              sort: { contentField: 'priority', direction: 'asc' },
+            });
+            await expectStackErrorCode(
+              adapter.queryRecords({
+                limit: 1,
+                cursor: minted.cursor!,
+                sort: { contentFieldByType: BY_TYPE, direction: 'asc' },
+              }),
+              'bad_request',
+            );
           });
         }
       });

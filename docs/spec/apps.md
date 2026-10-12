@@ -20,7 +20,7 @@ const plan = await stack.planInstall(manifest, { did: appDid });
 await stack.installApp(plan);
 ```
 
-Migration functions are not part of a manifest. They are app code, passed to `Stack.open()` on every startup (see [Data model § Type migrations](./data-model.md#type-migrations)), and the app runs them itself — see [Migrating an installed app's types](#migrating-an-installed-apps-types).
+Migrations are not part of a manifest. They are app code, passed to `Stack.open()` on every startup (see [Data model § Type migrations](./data-model.md#type-migrations)), and the app runs them itself — see [Migrating an installed app's types](#migrating-an-installed-apps-types).
 
 `planInstall()`, `installApp()` and `uninstallApp()` live on `Stack` and are absent from `StackClient`, like `grantType()` and `defineType()`: everything they write is the owner's to write. An app reaches them only through the request it can make over the wire — see [Over the wire](#over-the-wire).
 
@@ -102,7 +102,7 @@ It refuses what no approval could make valid: a type outside the app's own names
 
 ## Migrating an installed app's types
 
-[Migration is owner-acting-alone](./access-control.md#what-a-grant-covers), and an installed app's migration functions are its own code, which the owner should not have to run with owner authority. An install closes the gap: a contained app may commit migrations within its own families. `ScopedStack.commitMigration()` — and so `migrateAll()` run by the app over `APIAdapter`, which commits through `POST /records/:id/migrate` — admits a request that is not the owner acting alone when **all** of these hold:
+[Migration is owner-acting-alone](./access-control.md#what-a-grant-covers), and an installed app's migrations are its own code, which the owner should not have to run with owner authority. An install closes the gap: a contained app may commit migrations within its own families. `ScopedStack.commitMigration()` — and so `migrateAll()` run by the app over `APIAdapter`, which commits through `POST /records/:id/migrate` — admits a request that is not the owner acting alone when **all** of these hold:
 
 1. The source and target families are both in the namespace of one live install, and both in its `defines`.
 2. The target TypeId is in that install's `defines` — a version the owner approved.

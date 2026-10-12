@@ -104,7 +104,7 @@ An app has two layers, because the stack draws a line between them:
 Migrations belong to neither. They are passed to `Stack.open()` on **every startup**, so the chain is complete before the first read.
 
 ```ts
-import { Stack, migration, typeHandle } from '@haverstack/core';
+import { Stack, add, migration, typeHandle } from '@haverstack/core';
 import type { Collection, ContentOf, StackClient } from '@haverstack/core';
 
 const NoteV1 = typeHandle({
@@ -122,11 +122,9 @@ export const Note = typeHandle({
   },
 });
 
-// Startup: pass to every Stack.open(). `content` is NoteV1's, and the
-// result must be Note's.
-export const noteMigrations = [
-  migration(NoteV1, Note, (content) => ({ ...content, pinned: false })),
-];
+// Startup: pass to every Stack.open(). Steps are checked against both
+// handles' schemas when migration() runs.
+export const noteMigrations = [migration(NoteV1, Note, [add('pinned', false)])];
 
 // Data layer: whoever the stack lets in.
 export class Notes {
@@ -201,7 +199,7 @@ Tags, attachments, and relationships are unified under a single model:
 
 ### Migrations
 
-Types can evolve over time. A new version names the one it migrates from, and `migration()` builds the step between two handles, typed on both. Pass every step to `Stack.open()`; the library composes adjacent steps into chains:
+Types can evolve over time. A new version names the one it migrates from, and `migration()` builds the step between two handles from declared steps — `rename`, `map`, `add`, `drop` and `derive` — checked against both schemas when it runs. Pass every step to `Stack.open()`; the library composes adjacent steps into chains:
 
 ```ts
 const NoteV2 = typeHandle({
@@ -212,12 +210,12 @@ const NoteV2 = typeHandle({
 });
 
 const stack = await Stack.open(adapter, {
-  migrations: [migration(NoteV1, NoteV2, (content) => ({ ...content, title: '' }))],
+  migrations: [migration(NoteV1, NoteV2, [add('title', '')])],
 });
 await stack.defineType(NoteV2);
 ```
 
-Records stay at the version they were written at: `get()` and `query()` return them as stored, `presentAt: 'latest'` migrates them in memory for one read, and `stack.migrateAll()` commits a family to disk. Pass migrations at every startup — see [Writing an app](#writing-an-app).
+Records stay at the version they were written at: `get()` and `query()` return them as stored, `presentAt: 'latest'` migrates them in memory for one read, and `stack.migrateAll()` commits a family to disk. Because the steps are declared rather than a function, a collection carries a content filter or sort across the versions they translate to — a filter on `title` reaches records still at `@1`. Pass migrations at every startup — see [Writing an app](#writing-an-app).
 
 ## License
 
