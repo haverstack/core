@@ -101,10 +101,12 @@ export type CollectionPage<C> = {
   /**
    * A content filter or sort reaches only records at the handle's version.
    * Each flag is set when records at an older or newer version match, or
-   * may match, the rest of the query: the page may be missing records the
-   * filter was meant to find. See docs/spec/data-model.md § Type handles.
+   * may match, the rest of the query: the results may be missing records
+   * the filter was meant to find. On the first page only, since it depends
+   * on the query rather than the page. See docs/spec/data-model.md § Type
+   * handles.
    */
-  skipped: { older: boolean; newer: boolean };
+  skipped?: { older: boolean; newer: boolean };
 };
 
 /**
@@ -115,25 +117,29 @@ export type CollectionPage<C> = {
  */
 type PathDepth = [never, 0, 1, 2, 3, 4];
 
+/** What a filter value can equal: an adapter compares the value a path reaches. */
+type Leaf = string | number | boolean;
+
 /**
  * Each content path of `V` reached at `P`, paired with the value a filter
  * compares there. An array is matched element-wise, so it is its element.
+ * An object never equals a filter value, so its path takes only `null`.
  */
 type PathEntry<P extends string, V, D extends number> = [D] extends [never]
-  ? [P | `${P}.${string}`, unknown]
+  ? [P | `${P}.${string}`, Leaf]
   : V extends readonly (infer E)[]
     ? unknown extends E
-      ? [P | `${P}.${string}`, unknown]
+      ? [P | `${P}.${string}`, Leaf]
       : PathEntry<P, E, PathDepth[D]>
     : V extends object
       ? string extends keyof V
-        ? [P, V] | [`${P}.${string}`, unknown]
-        : [P, V] | FieldEntry<V, `${P}.`, PathDepth[D]>
+        ? [P, null] | [`${P}.${string}`, Leaf]
+        : [P, null] | FieldEntry<V, `${P}.`, PathDepth[D]>
       : [P, V];
 
 /** `Required<C>[K]` rather than `NonNullable`, which would leak into errors. */
 type FieldEntry<C, Prefix extends string, D extends number> = [D] extends [never]
-  ? [`${Prefix}${string}`, unknown]
+  ? [`${Prefix}${string}`, Leaf]
   : {
       [K in keyof C & string]-?: PathEntry<`${Prefix}${K}`, Required<C>[K], D>;
     }[keyof C & string];
@@ -385,19 +391,20 @@ export const createCollection = <S extends ReadonlyTypeSchema>(
     return page.records.length > 0 || page.cursor !== null;
   };
 
-  const skippedVersions = async (filter: RecordFilter): Promise<CollectionPage<C>['skipped']> => {
-    const family = (await listTypes()).filter((t) => t.baseId === handle.baseId);
-    const [older, newer] = await Promise.all([
-      anyAt(
-        family.filter((t) => versionOf(t.id) < handleVersion).map((t) => t.id),
-        filter,
-      ),
-      anyAt(
-        family.filter((t) => versionOf(t.id) > handleVersion).map((t) => t.id),
-        filter,
-      ),
+  const skippedVersions = async (
+    filter: RecordFilter,
+  ): Promise<NonNullable<CollectionPage<C>['skipped']>> => {
+    const older: TypeId[] = [];
+    const newer: TypeId[] = [];
+    for (const type of await listTypes()) {
+      if (type.baseId !== handle.baseId || type.version === handleVersion) continue;
+      (type.version < handleVersion ? older : newer).push(type.id);
+    }
+    const [skippedOlder, skippedNewer] = await Promise.all([
+      anyAt(older, filter),
+      anyAt(newer, filter),
     ]);
-    return { older, newer };
+    return { older: skippedOlder, newer: skippedNewer };
   };
 
   const mutate = async (
@@ -434,15 +441,27 @@ export const createCollection = <S extends ReadonlyTypeSchema>(
       // page holds, or the shape they arrive in.
       const { presentAt: _presentAt, filter, ...rest } = query as StackQuery;
       const narrowed = readsContent(filter, rest.sort);
-      const familyFilter = { ...withoutTypeId(filter), baseId: handle.baseId };
+      // A concrete typeId needs no family lookup; baseId does.
+      const { baseId: _baseId, ...unversioned } = withoutTypeId(filter);
       const [{ records, cursor }, skipped] = await Promise.all([
         client.query({
           ...rest,
-          filter: narrowed ? { ...familyFilter, typeId: handle.id } : familyFilter,
+          filter: narrowed
+            ? { ...unversioned, typeId: handle.id }
+            : { ...unversioned, baseId: handle.baseId },
         }),
-        narrowed ? skippedVersions(familyFilter) : { older: false, newer: false },
+        rest.cursor !== undefined
+          ? undefined
+          : narrowed
+            ? skippedVersions(unversioned)
+            : { older: false, newer: false },
       ]);
-      const page: CollectionPage<C> = { records: [], misfits: [], cursor, skipped };
+      const page: CollectionPage<C> = {
+        records: [],
+        misfits: [],
+        cursor,
+        ...(skipped && { skipped }),
+      };
       for (const stored of records) {
         const result = classify(stored);
         if ('misfit' in result) page.misfits.push(result.misfit);

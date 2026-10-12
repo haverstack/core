@@ -290,6 +290,21 @@ describe.each([
     expect(present.skipped).toEqual({ older: true, newer: false });
   });
 
+  test('skipped is reported on the first page only', async () => {
+    await books.create({ title: 'Dune', status: 'want' });
+    await books.create({ title: 'Emma', status: 'want' });
+    await createV1();
+    const first = await books.query({ filter: { content: { status: 'want' } }, limit: 1 });
+    expect(first.skipped).toEqual({ older: true, newer: false });
+    const second = await books.query({
+      filter: { content: { status: 'want' } },
+      limit: 1,
+      cursor: first.cursor!,
+    });
+    expect(second.records).toHaveLength(1);
+    expect(second).not.toHaveProperty('skipped');
+  });
+
   test('skipped applies the rest of the filter', async () => {
     await books.create({ title: 'Dune', status: 'want' });
     await createV1();
@@ -720,9 +735,24 @@ describe('content filter and sort typing', () => {
     const badNested: Q = { filter: { content: { 'address.geo.lat': 'north' } } };
     // @ts-expect-error a path through a scalar
     const throughScalar: Q = { filter: { content: { 'name.first': 'Ada' } } };
+    // @ts-expect-error an object never equals a filter value
+    const object: Q = { filter: { content: { address: { city: 'Lisbon' } } } };
+    // @ts-expect-error nor does an element of an array of objects
+    const element: Q = { filter: { content: { emails: { value: 'ada@example.com' } } } };
+    // @ts-expect-error nor an open object itself
+    const open: Q = { filter: { content: { extra: {} } } };
     // @ts-expect-error a typo'd presence path
     const badPresent: Q = { filter: { contentPresent: ['adress.city'] } };
-    expect([typo, badEnum, badNested, throughScalar, badPresent]).toHaveLength(5);
+    expect([
+      typo,
+      badEnum,
+      badNested,
+      throughScalar,
+      object,
+      element,
+      open,
+      badPresent,
+    ]).toHaveLength(8);
   });
 
   test('sorts by top-level scalars only', () => {
@@ -746,7 +776,7 @@ describe('content filter and sort typing', () => {
         }>;
       }>
     >;
-    const ok: DeepQ = { filter: { content: { 'a.b.c.d.e': {}, 'a.b.c.d.e.f.anything': 1 } } };
+    const ok: DeepQ = { filter: { content: { 'a.b.c.d.e': null, 'a.b.c.d.e.f.anything': 1 } } };
     // @ts-expect-error the sixth segment is still typed
     const sixth: DeepQ = { filter: { content: { 'a.b.c.d.e.x': 1 } } };
     // @ts-expect-error a typo above the limit is still caught
