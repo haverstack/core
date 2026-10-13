@@ -195,12 +195,9 @@ export type Migration<From = Record<string, unknown>, To = Record<string, unknow
 
 /**
  * Build the migration from `from` to `to` out of declared steps, checked
- * against both handles' schemas here: a step naming a field that is not
- * there, a field `to` would refuse, or a required one nothing produces
- * throws `StackMigrationError`. `derive` reads `from`'s stored content, in
- * which an enum may hold a value neither handle lists. Within a family,
- * `to` must name `from` as its `migratesFrom`; a step into another family
- * has no lineage to check. See docs/spec/data-model.md § Migration steps.
+ * against both schemas here so a step the target would refuse fails before
+ * any record is written. Within a family, `to` must name `from` as its
+ * `migratesFrom`. See docs/spec/data-model.md § Migration steps.
  */
 export const migration = <F extends ReadonlyTypeSchema, T extends ReadonlyTypeSchema>(
   from: TypeHandle<F>,

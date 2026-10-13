@@ -19,7 +19,11 @@
 import { ARGUMENTS_INVALID, StackBadRequestError, StackValidationError } from './errors.js';
 import { familyIdProblem, parseTypeId } from './schema.js';
 import { targetErrors } from './associations/validation.js';
-import { CONTENT_SEGMENT_METACHARACTERS, SEGMENT_METACHARACTER_RE } from './validate.js';
+import {
+  CONTENT_SEGMENT_METACHARACTERS,
+  SEGMENT_METACHARACTER_RE,
+  isPlainObject,
+} from './validate.js';
 import { NATIVE_SORT_FIELDS } from './types/index.js';
 import type {
   JournalQuery,
@@ -94,9 +98,6 @@ export function assertQueryCapabilities(
     }
   }
 }
-
-const isPlainObject = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 /**
  * Hold `filter.contentByType` to a split along Types: at least one arm,

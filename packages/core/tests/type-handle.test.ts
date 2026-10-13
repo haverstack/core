@@ -237,7 +237,7 @@ describe('migration()', () => {
     const V1 = handle(1, {
       author: { kind: 'string', required: true },
       tags: { kind: 'array', items: { kind: 'enum', values: ['a', 'b'] } },
-      legacy: { kind: 'boolean' },
+      archived: { kind: 'boolean' },
     });
     const V2 = handle(
       2,
@@ -253,10 +253,10 @@ describe('migration()', () => {
       rename('author', 'by'),
       map('tags', { a: 'x' }),
       add('priority', 'normal'),
-      drop('legacy'),
+      drop('archived'),
       derive('initial', (c) => c.author.slice(0, 1) || undefined),
     ]);
-    expect(m.migrate({ author: 'Ada', tags: ['a', 'b'], legacy: true })).toEqual({
+    expect(m.migrate({ author: 'Ada', tags: ['a', 'b'], archived: true })).toEqual({
       by: 'Ada',
       tags: ['x', 'b'],
       priority: 'normal',

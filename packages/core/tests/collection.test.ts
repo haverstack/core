@@ -303,7 +303,21 @@ describe.each([
     expect(page.skipped).toEqual({ older: false, newer: false });
   });
 
-  test('a field no step produces is no value at an older version', async () => {
+  test('a field an older version gained in place is found under its own name', async () => {
+    await stack.defineType({
+      ...BookV1,
+      schema: { ...BookV1.schema, pages: { kind: 'number' } },
+    });
+    const old = await stack.create(BookV1.id, { title: 'Emma', status: 'want', pages: 474 });
+    await createV1('Dune');
+    const page = await books.query({ filter: { content: { pages: 474 } } });
+    expect(page.records.map((r) => r.id)).toEqual([old.id]);
+    expect(page.skipped).toEqual({ older: false, newer: false });
+    const sorted = await books.query({ sort: { contentField: 'pages' } });
+    expect(sorted.records[0].id).toBe(old.id);
+  });
+
+  test('a field no step produces holds what an older record stores there', async () => {
     const book = await books.create({ title: 'Dune', status: 'want', pages: 412 });
     const old = await createV1();
     const absent = await books.query({ filter: { content: { pages: null } } });
@@ -638,7 +652,7 @@ const TaskV1 = typeHandle({
   schema: {
     author: { kind: 'string', required: true },
     status: { kind: 'enum', values: ['open', 'done'], required: true },
-    legacy: { kind: 'boolean' },
+    archived: { kind: 'boolean' },
   },
 });
 
@@ -671,7 +685,7 @@ const TASK_MIGRATIONS = [
     rename('author', 'by'),
     map('status', { done: 'finished' }),
     add('priority', 'normal'),
-    drop('legacy'),
+    drop('archived'),
     derive('slug', (c) => c.author.toLowerCase()),
   ]),
   migration(TaskV2, Task, [rename('by', 'owner')]),
@@ -766,6 +780,32 @@ describe.each([
     expect(owners).toEqual(
       ['Ada', 'Bea', 'Cleo', 'Dot', 'Eve', 'Fay'].flatMap((owner) => [owner, owner, owner]),
     );
+  });
+
+  test('a later page reuses the versions the first page chose, without listing types', async () => {
+    adapter = await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' });
+    stack = await Stack.open(adapter, { migrations: TASK_MIGRATIONS });
+    await stack.defineType(TaskV2);
+    await stack.defineType(Task);
+    for (const owner of ['Ada', 'Bea']) {
+      await stack.create(TaskV2.id, { by: owner, status: 'open', priority: 'low' });
+      await stack.create(Task.id, { owner, status: 'open', priority: 'low' });
+    }
+    const query = { sort: { contentField: 'owner' as const }, limit: 2 };
+    const first = await tasks().query(query);
+
+    await stack.defineType(TaskV1);
+    await stack.create(TaskV1.id, { author: 'Ada', status: 'open' });
+    const listTypes = vi.spyOn(stack, 'listTypes');
+    const second = await tasks().query({ ...query, cursor: first.cursor! });
+
+    expect([...first.records, ...second.records].map((r) => r.content.owner)).toEqual([
+      'Ada',
+      'Ada',
+      'Bea',
+      'Bea',
+    ]);
+    expect(listTypes).not.toHaveBeenCalled();
   });
 
   test('an adapter that declines the shape gets the handle-only query', async () => {

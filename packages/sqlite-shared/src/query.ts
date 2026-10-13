@@ -487,11 +487,9 @@ export const buildQueryPlan = (query: StackQuery): QueryStatement[] => {
 };
 
 /**
- * A sort naming its value per Type: the same two orderings as a content
- * field sort, read through a derived table in place of the index. Its rows
- * are the index rows of each Type's own field, and one row per record of a
- * Type ordered by a constant, carrying the constant in the index's columns
- * so one cursor condition and one ORDER BY serve both. See
+ * A sort naming its value per Type, read through a derived table in place
+ * of the index: each Type's own index rows, and its constant in the index's
+ * columns, so one cursor condition and one ORDER BY serve both. See
  * docs/spec/data-model.md § Sorting by a content field.
  */
 const byTypePlan = (

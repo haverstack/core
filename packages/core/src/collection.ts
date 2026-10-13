@@ -107,11 +107,9 @@ export type CollectionPage<C> = {
   misfits: Misfit[];
   cursor: string | null;
   /**
-   * A content filter or sort reaches the older versions it translates to,
-   * and no newer one. Each flag is set when records at a version it could
-   * not reach match, or may match, the rest of the query: the results may
-   * be missing records the filter was meant to find. On the first page
-   * only, since it depends on the query rather than the page. See
+   * Set when records at a version a content filter or sort could not reach
+   * match, or may match, the rest of the query. On the first page only,
+   * since it depends on the query rather than the page. See
    * docs/spec/data-model.md § Content queries across versions.
    */
   skipped?: { older: boolean; newer: boolean };
@@ -297,6 +295,48 @@ const contentPredicate = (filter: RecordFilter): ContentArm | undefined => {
   return { ...(content && { content }), ...(present && { contentPresent: present }) };
 };
 
+/** `filter` without its content predicate, for a query that asks about the rest. */
+const withoutContent = (filter: RecordFilter): RecordFilter => {
+  const { content: _content, contentPresent: _present, ...rest } = filter;
+  return rest;
+};
+
+/**
+ * A content query's cursor: the adapter's, with the versions the first page
+ * queried, so a version defined mid-pagination cannot change the arms or
+ * the sort a cursor resumes, and a later page lists no types.
+ */
+const encodeContentCursor = (versions: TypeId[], cursor: string): string => {
+  const bytes = new TextEncoder().encode(JSON.stringify({ v: versions, c: cursor }));
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+};
+
+const decodeContentCursor = (
+  raw: string,
+  handle: TypeHandle,
+): { versions: TypeId[]; cursor: string } => {
+  const malformed = () => new StackBadRequestError(`Invalid cursor: malformed "${raw}"`);
+  let parsed: unknown;
+  try {
+    const binary = atob(raw);
+    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+    parsed = JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    throw malformed();
+  }
+  const { v, c } = (parsed ?? {}) as { v?: unknown; c?: unknown };
+  if (
+    typeof c !== 'string' ||
+    !Array.isArray(v) ||
+    !v.every((id) => typeof id === 'string' && parseTypeId(id)?.baseId === handle.baseId)
+  ) {
+    throw malformed();
+  }
+  return { versions: v as TypeId[], cursor: c };
+};
+
 /**
  * The collection over `handle`, shared by `Stack.collection()` and
  * `ScopedStack.collection()`. `registry` is the opening `Stack`'s, which
@@ -403,8 +443,7 @@ export const createCollection = <S extends ReadonlyTypeSchema>(
   /** Whether a record stored at one of `typeIds` matches `filter` without its content keys. */
   const anyAt = async (typeIds: TypeId[], filter: RecordFilter): Promise<boolean> => {
     if (typeIds.length === 0) return false;
-    const { content: _content, contentPresent: _present, ...rest } = filter;
-    return anyMatch({ ...rest, typeId: typeIds });
+    return anyMatch({ ...withoutContent(filter), typeId: typeIds });
   };
 
   /**
@@ -412,7 +451,7 @@ export const createCollection = <S extends ReadonlyTypeSchema>(
    * residual is that arm with another source value in place, at its typeId.
    */
   const anyResidual = async (residuals: RecordFilter[], filter: RecordFilter): Promise<boolean> => {
-    const { content: _content, contentPresent: _present, ...rest } = filter;
+    const rest = withoutContent(filter);
     const found = await Promise.all(
       residuals.map((residual) => anyMatch({ ...rest, ...residual })),
     );
@@ -420,18 +459,18 @@ export const createCollection = <S extends ReadonlyTypeSchema>(
   };
 
   /**
-   * The query a content filter or sort becomes: one arm per version the
-   * migrations carry it to, the older versions left out of it, and the
-   * residual predicates an arm could not ask for alongside its own. The
-   * first page probes the last two for `skipped.older`. Newer versions are
-   * always out of reach. See docs/spec/data-model.md § Content queries
-   * across versions.
+   * A content query as one arm per version it translates to, plus what the
+   * first page probes for `skipped`. `pinned` is the versions a first page
+   * chose, which a later page reuses. See docs/spec/data-model.md § Content
+   * queries across versions.
    */
   const planContentQuery = async (
     filter: RecordFilter,
     sort: StackQuery['sort'],
+    pinned?: TypeId[],
   ): Promise<{
     query: Pick<StackQuery, 'filter' | 'sort'>;
+    versions: TypeId[];
     narrowed: TypeId[];
     newer: TypeId[];
     residuals: RecordFilter[];
@@ -454,7 +493,11 @@ export const createCollection = <S extends ReadonlyTypeSchema>(
       return def && def.kind !== 'array' && def.kind !== 'object' ? def.kind : undefined;
     })();
 
-    const family = (await listTypes())
+    const family = (
+      pinned
+        ? pinned.map((id) => ({ id, baseId: handle.baseId, version: versionOf(id) }))
+        : await listTypes()
+    )
       .filter((type) => type.baseId === handle.baseId && type.version !== handleVersion)
       .sort((a, b) => b.version - a.version);
     const arms: Record<TypeId, ContentArm> = { [handle.id]: predicate ?? {} };
@@ -495,11 +538,12 @@ export const createCollection = <S extends ReadonlyTypeSchema>(
       for (const arm of translated.residuals) residuals.push({ ...arm, typeId: type.id });
     }
 
-    const { content: _content, contentPresent: _present, ...rest } = filter;
+    const rest = withoutContent(filter);
     const typeIds = Object.keys(arms);
     if (typeIds.length === 1) {
       return {
         query: { filter: { ...filter, typeId: handle.id }, sort },
+        versions: typeIds,
         narrowed,
         newer,
         residuals,
@@ -512,6 +556,7 @@ export const createCollection = <S extends ReadonlyTypeSchema>(
           ? { contentFieldByType: keys, ...(sort?.direction && { direction: sort.direction }) }
           : sort,
       },
+      versions: typeIds,
       narrowed,
       newer,
       residuals,
@@ -568,14 +613,16 @@ export const createCollection = <S extends ReadonlyTypeSchema>(
         }));
         if (firstPage) skipped = { older: false, newer: false };
       } else {
-        const plan = await planContentQuery(unversioned, rest.sort);
+        const resumed = firstPage ? undefined : decodeContentCursor(rest.cursor!, handle);
+        const plan = await planContentQuery(unversioned, rest.sort, resumed?.versions);
         const [page, narrowed, residual, newer] = await Promise.all([
-          client.query({ ...rest, ...plan.query }),
+          client.query({ ...rest, cursor: resumed?.cursor, ...plan.query }),
           firstPage && anyAt(plan.narrowed, unversioned),
           firstPage && anyResidual(plan.residuals, unversioned),
           firstPage && anyAt(plan.newer, unversioned),
         ]);
-        ({ records, cursor } = page);
+        records = page.records;
+        cursor = page.cursor && encodeContentCursor(plan.versions, page.cursor);
         if (firstPage) skipped = { older: narrowed || residual, newer };
       }
       const page: CollectionPage<C> = {

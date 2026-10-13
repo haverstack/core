@@ -1,5 +1,13 @@
 import { describe, test, expect } from 'vitest';
-import { add, composeOrigins, derive, fieldOrigins, map, rename } from '../src/migration-steps.js';
+import {
+  add,
+  composeOrigins,
+  derive,
+  drop,
+  fieldOrigins,
+  map,
+  rename,
+} from '../src/migration-steps.js';
 import type { FieldOrigins } from '../src/migration-steps.js';
 import type { ReadonlyTypeSchema } from '../src/type-handle.js';
 
@@ -26,7 +34,8 @@ describe('fieldOrigins()', () => {
       b: { kind: 'field', field: 'a', values: { x: 'y' } },
       c: { kind: 'constant', value: 'k' },
       d: { kind: 'derived' },
-      e: { kind: 'constant', value: undefined },
+      e: { kind: 'field', field: 'e' },
+      a: { kind: 'constant', value: undefined },
     });
   });
 
@@ -50,6 +59,22 @@ describe('fieldOrigins()', () => {
 });
 
 describe('composeOrigins()', () => {
+  test('follows a name no step touches through a step that does not declare it', () => {
+    const lower = origins([], { a: { kind: 'string' } }, { a: { kind: 'string' } });
+    const upper = origins(
+      [],
+      { a: { kind: 'string' } },
+      { a: { kind: 'string' }, n: { kind: 'string' } },
+    );
+    expect(composeOrigins(lower, upper).get('n')).toEqual({ kind: 'field', field: 'n' });
+  });
+
+  test('reads a name a lower step removed as no value, though an upper one declares it', () => {
+    const lower = origins([drop('n')], { n: { kind: 'string' } }, {});
+    const upper = origins([], {}, { n: { kind: 'string' } });
+    expect(composeOrigins(lower, upper).get('n')).toEqual({ kind: 'constant', value: undefined });
+  });
+
   test('follows a field through a rename at each step, composing its maps', () => {
     const lower = origins(
       [rename('a', 'b'), map('b', { x: 'y' })],

@@ -144,7 +144,10 @@ export type FieldOrigin =
   | { readonly kind: 'constant'; readonly value: unknown }
   | { readonly kind: 'derived' };
 
-/** Every top-level field the target declares, by its origin. */
+/**
+ * Every top-level field the target declares, by its origin, and every name
+ * the steps removed, as no value.
+ */
 export type FieldOrigins = ReadonlyMap<string, FieldOrigin>;
 
 /** `outer` after `inner`, as one table over both domains. */
@@ -174,7 +177,8 @@ export const composeOrigins = (lower: FieldOrigins, upper: FieldOrigins): FieldO
       composed.set(field, origin);
       continue;
     }
-    const inner = lower.get(origin.field) ?? { kind: 'derived' };
+    // A name the lower step neither declares nor removed passes through it.
+    const inner = lower.get(origin.field) ?? { kind: 'field', field: origin.field };
     composed.set(
       field,
       inner.kind === 'field'
@@ -275,6 +279,7 @@ export const fieldOrigins = (
   const current = new Map<string, FieldOrigin>(
     Object.keys(from).map((field) => [field, { kind: 'field', field }]),
   );
+  const removed = new Set<string>();
   for (const step of steps) {
     const at = describe(step);
     const named = step.op === 'rename' ? step.from : step.field;
@@ -286,6 +291,7 @@ export const fieldOrigins = (
         if (current.has(step.to)) return `${at}: "${step.to}" is already a field at this point`;
         current.set(step.to, current.get(step.from)!);
         current.delete(step.from);
+        removed.add(step.from);
         break;
       case 'map': {
         const origin = current.get(step.field)!;
@@ -310,6 +316,7 @@ export const fieldOrigins = (
         break;
       case 'drop':
         current.delete(step.field);
+        removed.add(step.field);
         break;
       case 'derive':
         current.set(step.field, { kind: 'derived' });
@@ -326,7 +333,12 @@ export const fieldOrigins = (
     const origin = current.get(field);
     if (!origin) {
       if (def.required) return `"${field}" is required at the target, and no step produces it`;
-      current.set(field, { kind: 'constant', value: undefined });
+      // migrate() carries every field no step names, so one an older
+      // version gained in place arrives under its own name.
+      current.set(
+        field,
+        removed.has(field) ? { kind: 'constant', value: undefined } : { kind: 'field', field },
+      );
       continue;
     }
     if (origin.kind === 'field') {
@@ -343,6 +355,9 @@ export const fieldOrigins = (
       if (errors.length > 0)
         return `"${field}" is set to a value the target refuses: ${errors[0].message}`;
     }
+  }
+  for (const field of removed) {
+    if (!current.has(field)) current.set(field, { kind: 'constant', value: undefined });
   }
   return current;
 };

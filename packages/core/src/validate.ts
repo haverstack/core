@@ -341,7 +341,7 @@ const SCALAR_KINDS: Record<ScalarFieldKind, true> = {
   enum: true,
 };
 
-const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+export const isPlainObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const validateEnumValuesShape = (list: unknown, path: string, errors: ValidationError[]): void => {
