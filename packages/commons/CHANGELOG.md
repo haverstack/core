@@ -1,5 +1,20 @@
 # @haverstack/commons
 
+## 0.37.0
+
+### Minor Changes
+
+- [#415](https://github.com/haverstack/core/pull/415) [`f616aaa`](https://github.com/haverstack/core/commit/f616aaa741c97fe1de1cfb262081e1f378082051) Thanks [@cuibonobo](https://github.com/cuibonobo)! - A type handle carries what `defineType()` takes: `typeHandle({ id, name, schema, migratesFrom })`, with `migratesFrom` given as a handle or a `TypeId`. `defineType(handle)` and a manifest's `types` take it as written. Migrations are typed values built with `migration(from, to, fn)`, where `fn` is checked as the first handle's content to the second's, and are passed to `Stack.open(adapter, { migrations })`. `migratesFrom` must name an earlier version of the same family, and `typeHandle()` and `defineType()` refuse anything else. `migration()` checks that pairing within a family and builds a step into another family without it, so an app's own type can migrate into a commons type. `Stack.open()` refuses a set of migrations it could not walk: a duplicate `from`, a malformed TypeId, a step backwards within a family, or a cycle. `registerMigration()` and `MigrationFn` are removed. `@haverstack/commons` drops `CommonsType`; its exports are plain type handles.
+
+### Patch Changes
+
+- [#446](https://github.com/haverstack/core/pull/446) [`d0b7950`](https://github.com/haverstack/core/commit/d0b795047ec9f8920a717a075f091cfa2462dc66) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Typed access goes through collections. `client.collection(handle)` returns a `Collection` typed by the handle's content, with one signature per verb — `get`, `query`, `subscribe`, `create`, `mutate`, `patchContent`, `associate`, `dissociate`, `amendAssociations`, `grantAccess`, `revokeAccess`, `amendAccess`, `delete`, `undelete` and `restoreVersion` — every one returning a typed record without a re-read. A collection spans the handle's whole family and migrates each record in memory to the handle's version. A record stored at a newer version is a misfit: `query()` reports it in `misfits` and keeps the page and cursor, `get()` throws `MisfitError`, and `subscribe()` carries it as `misfit`. A content write to a record at an older version commits its migration as a write of its own first. `collection()` refuses a handle whose `migratesFrom` has no migration passed to `Stack.open()`.
+
+  The handle-first overloads of `get`, `query`, `create`, `mutate`, `patchContent` and `subscribe` are removed, with `TypedRecord`, `TypedQuery`, `TypedChange`, `TypedChangeSet` and `TypedSubscribeOptions`. `PatchOf` is removed: a collection's patch type is `ContentPatch<C>`, derived from its content type, and `StoredContent<C>` is what its reads return.
+
+- Updated dependencies [[`7d30040`](https://github.com/haverstack/core/commit/7d30040c4b61b8e5881604d0c042fec9c7e45122), [`98401c0`](https://github.com/haverstack/core/commit/98401c0a1a8b86fd2bfec74072ca3c3504320b66), [`a40cee0`](https://github.com/haverstack/core/commit/a40cee01aaaf37baf95be802f266ff1ee6ce320d), [`fdca4ca`](https://github.com/haverstack/core/commit/fdca4ca25760b19a79bc660404ebf95cf9c9048b), [`c427f43`](https://github.com/haverstack/core/commit/c427f435620c5766121723a54516f5a68df63561), [`90d800a`](https://github.com/haverstack/core/commit/90d800a8e86c079855a17627582f015186ffe081), [`7d30040`](https://github.com/haverstack/core/commit/7d30040c4b61b8e5881604d0c042fec9c7e45122), [`da5148b`](https://github.com/haverstack/core/commit/da5148bdb3e25e770e947df0c4c2af5b2a6f0f44), [`44fc3f6`](https://github.com/haverstack/core/commit/44fc3f645839c3a5a5eef3463826dcc0098bf089), [`d0b7950`](https://github.com/haverstack/core/commit/d0b795047ec9f8920a717a075f091cfa2462dc66), [`f616aaa`](https://github.com/haverstack/core/commit/f616aaa741c97fe1de1cfb262081e1f378082051), [`9b4adef`](https://github.com/haverstack/core/commit/9b4adef9bbb205ef27c161724dd2fe863254ffd2), [`89e0a07`](https://github.com/haverstack/core/commit/89e0a07b03ade71449cd20b7ad0333761c39a41f), [`55c33ba`](https://github.com/haverstack/core/commit/55c33ba3c0a55ec01796bce8b633fbad4a79cf76)]:
+  - @haverstack/core@0.42.0
+
 ## 0.36.0
 
 ### Minor Changes

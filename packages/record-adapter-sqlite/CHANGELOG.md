@@ -1,5 +1,27 @@
 # @haverstack/record-adapter-sqlite
 
+## 0.34.0
+
+### Minor Changes
+
+- [#449](https://github.com/haverstack/core/pull/449) [`a40cee0`](https://github.com/haverstack/core/commit/a40cee01aaaf37baf95be802f266ff1ee6ce320d) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Migrations are declared steps. `migration(from, to, steps)` takes a list built from `rename`, `map`, `add`, `drop` and `derive`, replacing the function form, and checks the list against both handles' schemas when it runs: a step naming a field that is not there, a carried field the target would refuse, or a required field nothing produces throws `StackMigrationError`. `Migration` carries its `steps`.
+
+  A collection's content filter or sort now spans the older versions its migrations translate it to, rather than only the handle's version. A key across a `rename` or `add` translates; one across a `derive`, or a sort across a `map`, narrows that version and sets `skipped.older` as before. Two query shapes carry it, each gated by a new capability that is a cap on keys: `filter.contentByType` (a content predicate per `typeId`, never beside `content` or `contentPresent`) and `sort.contentFieldByType` (a sort field or a reduced constant per `typeId`). `StackCapabilities` gains `filter.contentByType` and `sort.contentFieldByType`; local adapters declare 64, and `normalizeCapabilities()` reads an absent or malformed cap as 0. `parseQueryBody()` accepts both shapes. Conformance fixtures pin both shapes and their 400s, and the adapter conformance suite checks them.
+
+### Patch Changes
+
+- [#445](https://github.com/haverstack/core/pull/445) [`d8ef10d`](https://github.com/haverstack/core/commit/d8ef10d10ca670f5a26323c369b1966556091a09) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `filter.search` no longer drops a `NOT` written inside a quoted phrase: `"cats (not dogs"` searches for the phrase as typed.
+
+- [#436](https://github.com/haverstack/core/pull/436) [`90d800a`](https://github.com/haverstack/core/commit/90d800a8e86c079855a17627582f015186ffe081) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `StackRecordAdapter.subscribeChanges()` takes `SubscribeOptions`, the same options a subscriber passes to `subscribe()`. `SubscribeChangesOptions` is gone from `@haverstack/core/adapter`; it had the same fields, and `Stack` already forwarded every one of them, the subscriber's own `onError` included. A new `MutateOptions` type in `@haverstack/core/adapter` names the options every version-bumping adapter mutation takes. `GrantContent` and `InstallRequest` are now derived from `TypeGrant`.
+
+- [#445](https://github.com/haverstack/core/pull/445) [`dd7cba0`](https://github.com/haverstack/core/commit/dd7cba03facde763d23819a92fa0873861775c91) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Concurrent writes to one record no longer lose updates: `mutateRecord`, `restoreVersion` and `commitMigration` read and check the record inside the transaction that writes it, so a content patch applies to the content as it stands rather than to an earlier read.
+
+- [#445](https://github.com/haverstack/core/pull/445) [`af5bc5c`](https://github.com/haverstack/core/commit/af5bc5cc3c49de7ad0ed19cdade4acd646c5af05) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Remove redundant code from the bundled SQLite record logic: unused barrel exports, local aliases of core's native sort fields, and repeated not-found/version-read/row-hydration code.
+
+- [#445](https://github.com/haverstack/core/pull/445) [`2d9da43`](https://github.com/haverstack/core/commit/2d9da432994d7cbf7c9cb09057d8b88a8636b655) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Internal restructure of the bundled SQLite record logic: the full-text and content indexes move into their own module. No behavior change.
+- Updated dependencies [[`7d30040`](https://github.com/haverstack/core/commit/7d30040c4b61b8e5881604d0c042fec9c7e45122), [`98401c0`](https://github.com/haverstack/core/commit/98401c0a1a8b86fd2bfec74072ca3c3504320b66), [`a40cee0`](https://github.com/haverstack/core/commit/a40cee01aaaf37baf95be802f266ff1ee6ce320d), [`fdca4ca`](https://github.com/haverstack/core/commit/fdca4ca25760b19a79bc660404ebf95cf9c9048b), [`c427f43`](https://github.com/haverstack/core/commit/c427f435620c5766121723a54516f5a68df63561), [`90d800a`](https://github.com/haverstack/core/commit/90d800a8e86c079855a17627582f015186ffe081), [`7d30040`](https://github.com/haverstack/core/commit/7d30040c4b61b8e5881604d0c042fec9c7e45122), [`da5148b`](https://github.com/haverstack/core/commit/da5148bdb3e25e770e947df0c4c2af5b2a6f0f44), [`44fc3f6`](https://github.com/haverstack/core/commit/44fc3f645839c3a5a5eef3463826dcc0098bf089), [`d0b7950`](https://github.com/haverstack/core/commit/d0b795047ec9f8920a717a075f091cfa2462dc66), [`f616aaa`](https://github.com/haverstack/core/commit/f616aaa741c97fe1de1cfb262081e1f378082051), [`9b4adef`](https://github.com/haverstack/core/commit/9b4adef9bbb205ef27c161724dd2fe863254ffd2), [`89e0a07`](https://github.com/haverstack/core/commit/89e0a07b03ade71449cd20b7ad0333761c39a41f), [`55c33ba`](https://github.com/haverstack/core/commit/55c33ba3c0a55ec01796bce8b633fbad4a79cf76)]:
+  - @haverstack/core@0.42.0
+
 ## 0.33.0
 
 ### Minor Changes
