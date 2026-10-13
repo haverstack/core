@@ -8,8 +8,15 @@
  */
 
 import { NATIVE_SORT_FIELDS, StackBadRequestError } from '@haverstack/core';
-import { contentSortEntry } from '@haverstack/core/adapter';
-import type { StackRecord, NativeSortField, QuerySort, ScalarFieldKind } from '@haverstack/core';
+import { constantSortEntry, contentSortEntry } from '@haverstack/core/adapter';
+import type { SortEntry } from '@haverstack/core/adapter';
+import type {
+  ContentSortKey,
+  StackRecord,
+  NativeSortField,
+  QuerySort,
+  ScalarFieldKind,
+} from '@haverstack/core';
 
 /**
  * Which partition of the ordering a cursor sits in: a native column or a
@@ -82,6 +89,14 @@ export const decodeCursor = (cursor: string): DecodedCursor => {
   throw malformed();
 };
 
+/**
+ * The name a cursor carries for a `contentFieldByType` sort: the map
+ * itself, keys in order, so a cursor resumes only the map it was minted
+ * under.
+ */
+export const byTypeDescriptor = (byType: Record<string, ContentSortKey>): string =>
+  JSON.stringify(Object.entries(byType).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
+
 export const getSortField = (query: { sort?: QuerySort }): NativeSortField =>
   query.sort?.field ?? 'createdAt';
 
@@ -100,6 +115,17 @@ export const makeCursor = (
   sort: QuerySort | undefined,
   kindOf?: (record: StackRecord, field: string) => ScalarFieldKind | undefined,
 ): string => {
+  const byType = sort?.contentFieldByType;
+  if (byType) {
+    const field = byTypeDescriptor(byType);
+    const key = Object.hasOwn(byType, record.typeId) ? byType[record.typeId] : undefined;
+    const kind = key?.field === undefined ? undefined : kindOf?.(record, key.field);
+    const entry =
+      key?.field !== undefined
+        ? kind && contentSortEntry(kind, record.content[key.field])
+        : key && constantSortEntry(key.value ?? null);
+    return encodeEntry(field, entry || null, record.id);
+  }
   const contentField = sort?.contentField;
   if (contentField === undefined) {
     const field = getSortField({ sort });
@@ -114,8 +140,12 @@ export const makeCursor = (
 
   const kind = kindOf?.(record, contentField);
   const entry = kind ? contentSortEntry(kind, record.content[contentField]) : null;
-  if (!entry) return encodeCursor({ kind: 'absent', field: contentField, id: record.id });
+  return encodeEntry(contentField, entry, record.id);
+};
+
+const encodeEntry = (field: string, entry: SortEntry | null, id: string): string => {
+  if (!entry) return encodeCursor({ kind: 'absent', field, id });
   return entry.kind === 'num'
-    ? encodeCursor({ kind: 'num', field: contentField, value: entry.num, id: record.id })
-    : encodeCursor({ kind: 'text', field: contentField, value: entry.text, id: record.id });
+    ? encodeCursor({ kind: 'num', field, value: entry.num, id })
+    : encodeCursor({ kind: 'text', field, value: entry.text, id });
 };

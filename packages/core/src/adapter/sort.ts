@@ -68,6 +68,25 @@ export function contentSortEntry(kind: ScalarFieldKind, value: unknown): SortEnt
 }
 
 /**
+ * A constant a `contentFieldByType` key orders by, reduced from a value of
+ * `kind` to what it orders as: a number, text, or null for no value. The
+ * reduction happens before the query is sent, so an adapter orders it
+ * without knowing the kind. See docs/spec/data-model.md § Sorting by a
+ * content field.
+ */
+export function sortConstant(kind: ScalarFieldKind, value: unknown): string | number | null {
+  const entry = contentSortEntry(kind, value);
+  return entry === null ? null : entry.kind === 'num' ? entry.num : entry.text;
+}
+
+/** The entry a reduced constant orders as; see sortConstant(). */
+export function constantSortEntry(value: string | number | null): SortEntry | null {
+  if (typeof value === 'number') return Number.isFinite(value) ? { kind: 'num', num: value } : null;
+  if (typeof value === 'string') return { kind: 'text', text: value, key: contentSortKey(value) };
+  return null;
+}
+
+/**
  * Order two strings by code point. JS `<` compares UTF-16 code units,
  * which files every supplementary character (U+10000 and above, stored as
  * a surrogate pair) below U+E000–U+FFFF; SQLite compares the same text as

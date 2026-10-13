@@ -13,6 +13,8 @@ import { parseTypeId } from '../schema.js';
 import { StackMigrationError } from '../errors.js';
 import type { StackRecord, TypeId } from '../types/index.js';
 import type { Migration } from '../type-handle.js';
+import { composeOrigins, originsOf } from '../migration-steps.js';
+import type { FieldOrigins } from '../migration-steps.js';
 
 export class MigrationRegistry {
   private readonly steps = new Map<TypeId, Migration>();
@@ -89,6 +91,24 @@ export class MigrationRegistry {
     }
 
     return (content) => steps.reduce((c, step) => step.migrate(c), content);
+  }
+
+  /**
+   * What each of `toId`'s top-level fields is in terms of `fromId`'s,
+   * composed along the path between them. Null when there is no path, or
+   * when a step on it was not built by `migration()` and so declares
+   * nothing. See docs/spec/data-model.md § Content queries across versions.
+   */
+  origins(fromId: TypeId, toId: TypeId): FieldOrigins | null {
+    let composed: FieldOrigins | null = null;
+    for (let current = fromId; current !== toId; ) {
+      const step = this.steps.get(current);
+      const origins = step && originsOf(step);
+      if (!origins) return null;
+      composed = composed ? composeOrigins(composed, origins) : origins;
+      current = step.to;
+    }
+    return composed;
   }
 
   /**

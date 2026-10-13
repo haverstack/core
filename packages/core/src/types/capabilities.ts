@@ -40,6 +40,13 @@ export type StackCapabilities = {
      */
     contentPresent: boolean;
     /**
+     * The most arms `filter.contentByType` may hold; `0` declines it. A
+     * collection narrows the versions it cannot reach rather than failing.
+     * Local adapters must honor it. See docs/spec/adapters.md § Adapter
+     * capabilities.
+     */
+    contentByType: number;
+    /**
      * Whether `filter.search` is honored. Not a rung on the ladder: a
      * full-text index is a different mechanism from field matching, and
      * neither implies the other. Local adapters may decline it.
@@ -55,6 +62,8 @@ export type StackCapabilities = {
      * scalar. Independent of `filter.content`.
      */
     contentField: boolean;
+    /** The most keys `sort.contentFieldByType` may hold; `0` declines it. */
+    contentFieldByType: number;
   };
   /**
    * Ceilings a client can check before spending a request; the server's
@@ -83,6 +92,8 @@ export type StackCapabilities = {
 export type MissingCapability =
   | 'filter.content'
   | 'filter.contentPresent'
+  | 'filter.contentByType'
   | 'filter.search'
   | 'sort.fields'
-  | 'sort.contentField';
+  | 'sort.contentField'
+  | 'sort.contentFieldByType';

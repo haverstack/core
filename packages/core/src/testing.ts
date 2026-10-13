@@ -38,7 +38,7 @@ import type {
 import { SYSTEM_TYPES } from './types/index.js';
 import { applyMergePatch } from './merge.js';
 import { fileRefFields } from './schema.js';
-import { compareSortEntries, contentSortEntry } from './adapter/sort.js';
+import { compareSortEntries, constantSortEntry, contentSortEntry } from './adapter/sort.js';
 import type { SortEntry } from './adapter/sort.js';
 
 import {
@@ -47,7 +47,7 @@ import {
   StackNotFoundError,
   StackBadRequestError,
 } from './errors.js';
-import { parseContentFilterKey } from './query-validation.js';
+import { matchesContent } from './content-match.js';
 import {
   applyAssociationEdits,
   assertOneSurface,
@@ -62,34 +62,8 @@ const requireDirection = (sort: QuerySort): 'asc' | 'desc' => {
   }
   return sort.direction;
 };
-/** An array stands for its elements; anything else stands for itself. */
-const spreadValue = (value: unknown): unknown[] => (Array.isArray(value) ? value : [value]);
-
 /** A FileId is the SHA-256 hex digest of its bytes — see docs/spec/attachments.md. */
 const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
-
-/**
- * Every value reachable by walking `segments`, spreading arrays at each
- * step — sqlite-shared's contentPathExists() walk, so a filter answers the
- * same against either. Empty means the path reaches nothing, which a `null`
- * filter value matches. See docs/spec/data-model.md § Nested content paths.
- */
-const valuesAtContentPath = (content: Record<string, unknown>, segments: string[]): unknown[] => {
-  let current: unknown[] = [content];
-  for (const segment of segments) {
-    const next: unknown[] = [];
-    for (const value of current) {
-      for (const item of spreadValue(value)) {
-        if (typeof item !== 'object' || item === null || Array.isArray(item)) continue;
-        if (Object.hasOwn(item, segment)) next.push((item as Record<string, unknown>)[segment]);
-      }
-    }
-    current = next;
-  }
-  // The leaf spreads too, so a filter on `tags` matches a record whose
-  // `tags` array contains the value.
-  return current.flatMap(spreadValue);
-};
 
 // An `undefined` field is a field the record does not have; storing the key
 // would make `'u' in content` differ from adapters that serialize to JSON.
@@ -110,11 +84,13 @@ export class MemoryAdapter implements StackAdapter {
     filter: {
       content: 'path',
       contentPresent: true,
+      contentByType: 64,
       search: false,
     },
     sort: {
       fields: ['createdAt', 'updatedAt', 'version'],
       contentField: true,
+      contentFieldByType: 64,
     },
     limits: {
       attachmentBytes: null,
@@ -347,38 +323,19 @@ export class MemoryAdapter implements StackAdapter {
       const relatedTo = f.relatedTo;
       results = results.filter((r) => matchesRelatedTo(r.associations, relatedTo));
     }
-    // A `null` filter value means "field absent or null" — not "match
-    // nothing". Plain `===` would miss an absent field; treat both as
-    // satisfying a null filter (docs/spec/data-model.md § Filter).
-    if (f.content) {
-      const entries = Object.entries(f.content).map(
-        ([key, value]) => [parseContentFilterKey(key), value] as const,
-      );
-      results = results.filter((r) =>
-        entries.every(([segments, value]) => {
-          const found = valuesAtContentPath(r.content as Record<string, unknown>, segments);
-          if (value === null || value === undefined) {
-            return found.length === 0 || found.some((v) => v === null || v === undefined);
-          }
-          return found.some((v) => v === value);
-        }),
+    if (f.content || f.contentPresent?.length) {
+      results = results.filter((r) => matchesContent(r.content as Record<string, unknown>, f));
+    }
+    if (f.contentByType) {
+      const arms = f.contentByType;
+      results = results.filter(
+        (r) =>
+          Object.hasOwn(arms, r.typeId) &&
+          matchesContent(r.content as Record<string, unknown>, arms[r.typeId]),
       );
     }
 
     results = this.sortRecords(results, query.sort);
-
-    // Element-wise like the content filter above: a path holds a value
-    // when at least one non-null value is reachable at it.
-    if (f.contentPresent?.length) {
-      const paths = f.contentPresent.map((key) => parseContentFilterKey(key));
-      results = results.filter((r) =>
-        paths.every((segments) =>
-          valuesAtContentPath(r.content as Record<string, unknown>, segments).some(
-            (v) => v !== null && v !== undefined,
-          ),
-        ),
-      );
-    }
 
     const limit = query.limit ?? 50;
     const start = query.cursor ? this.decodeCursor(query.cursor, query.sort) : 0;
@@ -391,9 +348,10 @@ export class MemoryAdapter implements StackAdapter {
 
   /** The sort a cursor was minted under, as an opaque comparable descriptor. */
   private sortDescriptor(sort: QuerySort | undefined): string {
+    const content = sort?.contentField ?? sort?.contentFieldByType;
     return JSON.stringify([
-      sort?.contentField ?? null,
-      sort?.contentField === undefined ? (sort?.field ?? 'createdAt') : null,
+      content ?? null,
+      content === undefined ? (sort?.field ?? 'createdAt') : null,
       sort ? requireDirection(sort) : 'desc',
     ]);
   }
@@ -460,7 +418,7 @@ export class MemoryAdapter implements StackAdapter {
     const sign = direction === 'asc' ? 1 : -1;
     const byId = (a: StackRecord, b: StackRecord) => (a.id < b.id ? -sign : a.id > b.id ? sign : 0);
 
-    if (sort?.contentField === undefined) {
+    if (sort?.contentField === undefined && sort?.contentFieldByType === undefined) {
       const field = sort?.field ?? 'createdAt';
       const value = (r: StackRecord) =>
         field === 'version'
@@ -469,8 +427,7 @@ export class MemoryAdapter implements StackAdapter {
       return [...records].sort((a, b) => sign * (value(a) - value(b)) || byId(a, b));
     }
 
-    const field = sort.contentField;
-    const entries = new Map(records.map((r) => [r.id, this.sortEntry(r, field)]));
+    const entries = new Map(records.map((r) => [r.id, this.sortEntry(r, sort)]));
     return [...records].sort(
       (a, b) => compareSortEntries(entries.get(a.id)!, entries.get(b.id)!, direction) || byId(a, b),
     );
@@ -482,7 +439,16 @@ export class MemoryAdapter implements StackAdapter {
    * its type says it is, and an undeclared or non-scalar field orders as
    * nothing at all.
    */
-  private sortEntry(record: StackRecord, field: string): SortEntry | null {
+  private sortEntry(record: StackRecord, sort: QuerySort): SortEntry | null {
+    let field = sort.contentField;
+    if (sort.contentFieldByType) {
+      const key = Object.hasOwn(sort.contentFieldByType, record.typeId)
+        ? sort.contentFieldByType[record.typeId]
+        : { value: null };
+      if (key.field === undefined) return constantSortEntry(key.value ?? null);
+      field = key.field;
+    }
+    if (field === undefined) return null;
     const def = this.types.get(record.typeId)?.schema[field];
     if (!def || def.kind === 'array' || def.kind === 'object') return null;
     return contentSortEntry(def.kind, (record.content as Record<string, unknown>)[field]);
@@ -696,11 +662,13 @@ export class IncapableMemoryAdapter extends MemoryAdapter {
     filter: {
       content: 'none',
       contentPresent: false,
+      contentByType: 0,
       search: false,
     },
     sort: {
       fields: ['createdAt', 'updatedAt', 'version'],
       contentField: false,
+      contentFieldByType: 0,
     },
     limits: {
       attachmentBytes: null,

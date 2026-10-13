@@ -13,9 +13,22 @@
  * fact, which costs a full pass over the table for every page.
  */
 
-import { StackBadRequestError, type NativeSortField, type StackQuery } from '@haverstack/core';
-import { contentSortKey, parseContentFilterKey } from '@haverstack/core/adapter';
-import { decodeCursor, getSortColumn, getSortField, type DecodedCursor } from './cursor.js';
+import {
+  StackBadRequestError,
+  type ContentArm,
+  type ContentSortKey,
+  type NativeSortField,
+  type StackQuery,
+} from '@haverstack/core';
+import { constantSortEntry, contentSortKey, parseContentFilterKey } from '@haverstack/core/adapter';
+import type { SortEntry } from '@haverstack/core/adapter';
+import {
+  byTypeDescriptor,
+  decodeCursor,
+  getSortColumn,
+  getSortField,
+  type DecodedCursor,
+} from './cursor.js';
 import { sanitizeFts5Query } from './fts5.js';
 
 /** One statement plus the parameters it binds, in textual order. */
@@ -137,6 +150,54 @@ const contentCursor = (cursor: DecodedCursor, field: string) => {
 };
 
 /**
+ * A `content` and `contentPresent` predicate as conditions on `r`, binding
+ * in textual order. A dot-separated path is matched element-wise through
+ * arrays, and a `null` value means "no value at the path, or a value that
+ * is null" (docs/spec/data-model.md § Filter): the second arm below, "some
+ * value there is null" OR "nothing is there at all".
+ */
+const contentConditions = (
+  predicate: ContentArm,
+  params: unknown[],
+  nextAlias: () => string,
+): string[] => {
+  const conditions: string[] = [];
+  for (const [key, value] of Object.entries(predicate.content ?? {})) {
+    const segments = parseContentFilterKey(key);
+    // undefined is the same absence null names — JSON drops it on the
+    // way over the wire, so treating it as a value would make an
+    // in-process query and its wire equivalent disagree.
+    if (value === null || value === undefined) {
+      const isNull = contentPathExists(segments, (a) => `${a}.value IS NULL`, params, nextAlias);
+      const anyValue = contentPathExists(
+        segments,
+        (a) => `${a}.value IS NOT NULL`,
+        params,
+        nextAlias,
+      );
+      conditions.push(`(${isNull} OR NOT ${anyValue})`);
+    } else {
+      const match = contentPathExists(segments, equalsLeaf, params, nextAlias);
+      params.push(value);
+      conditions.push(match);
+    }
+  }
+  // Presence — the question an exact-match value cannot ask: a path holds
+  // a value when at least one non-null value is reachable at it.
+  for (const key of predicate.contentPresent ?? []) {
+    conditions.push(
+      contentPathExists(
+        parseContentFilterKey(key),
+        (a) => `${a}.value IS NOT NULL`,
+        params,
+        nextAlias,
+      ),
+    );
+  }
+  return conditions;
+};
+
+/**
  * Every condition on the records row itself — everything a query asks
  * except where in the ordering to resume, which is per-partition and gets
  * appended by the caller.
@@ -145,6 +206,8 @@ const recordConditions = (query: StackQuery): { conditions: string[]; params: un
   const conditions: string[] = ["r.id != '_config'"];
   const params: unknown[] = [];
   const f = query.filter ?? {};
+  let aliasSeq = 0;
+  const nextContentAlias = () => `cp${aliasSeq++}`;
 
   /**
    * A filter that accepts one value or a list of them, as the `IN` that
@@ -279,52 +342,18 @@ const recordConditions = (query: StackQuery): { conditions: string[]; params: un
     conditions.push(hasAssociation('relationship', clauses));
   }
 
-  // Content field filters — a dot-separated path, matched element-wise
-  // through arrays. A `null` value means "no value at the path, or a value
-  // that is null" (docs/spec/data-model.md § Filter), which is the second
-  // arm below: "some value there is null" OR "nothing is there at all".
-  if (f.content) {
-    let aliasSeq = 0;
-    const nextAlias = () => `cp${aliasSeq++}`;
-    for (const [key, value] of Object.entries(f.content)) {
-      const segments = parseContentFilterKey(key);
-      // undefined is the same absence null names — JSON drops it on the
-      // way over the wire, so treating it as a value would make an
-      // in-process query and its wire equivalent disagree.
-      if (value === null || value === undefined) {
-        const isNull = contentPathExists(segments, (a) => `${a}.value IS NULL`, params, nextAlias);
-        const anyValue = contentPathExists(
-          segments,
-          (a) => `${a}.value IS NOT NULL`,
-          params,
-          nextAlias,
-        );
-        conditions.push(`(${isNull} OR NOT ${anyValue})`);
-      } else {
-        const match = contentPathExists(segments, equalsLeaf, params, nextAlias);
-        params.push(value);
-        conditions.push(match);
-      }
-    }
+  if (f.content || f.contentPresent?.length) {
+    conditions.push(...contentConditions(f, params, nextContentAlias));
   }
 
-  // Presence — the question an exact-match value cannot ask. Element-wise
-  // like the content filter above: a path holds a value when at least one
-  // non-null value is reachable at it. See docs/spec/data-model.md
-  // § Filter.
-  if (f.contentPresent?.length) {
-    let aliasSeq = 0;
-    const nextAlias = () => `pp${aliasSeq++}`;
-    for (const key of f.contentPresent) {
-      conditions.push(
-        contentPathExists(
-          parseContentFilterKey(key),
-          (a) => `${a}.value IS NOT NULL`,
-          params,
-          nextAlias,
-        ),
-      );
-    }
+  // One arm per Type, each pinned to its type_id; types partition records,
+  // so no record meets two arms (docs/spec/data-model.md § Content by type).
+  if (f.contentByType) {
+    const arms = Object.entries(f.contentByType).map(([typeId, arm]) => {
+      params.push(typeId);
+      return ['r.type_id = ?', ...contentConditions(arm, params, nextContentAlias)].join(' AND ');
+    });
+    conditions.push(`(${arms.map((arm) => `(${arm})`).join(' OR ')})`);
   }
 
   if (f.search) {
@@ -393,6 +422,9 @@ export const buildQueryPlan = (query: StackQuery): QueryStatement[] => {
   const dir = sqlDirection(query);
   const op = dir === 'ASC' ? '>' : '<';
   const decoded = query.cursor ? decodeCursor(query.cursor) : null;
+  if (query.sort?.contentFieldByType) {
+    return byTypePlan(query, query.sort.contentFieldByType, dir, op, decoded);
+  }
   const contentField = query.sort?.contentField;
 
   if (contentField === undefined) {
@@ -451,5 +483,98 @@ export const buildQueryPlan = (query: StackQuery): QueryStatement[] => {
     pages.push(statement('r.*', 'records r', conditions, params, ` ORDER BY r.id ${dir} LIMIT ?`));
   }
 
+  return pages;
+};
+
+/**
+ * A sort naming its value per Type, read through a derived table in place
+ * of the index: each Type's own index rows, and its constant in the index's
+ * columns, so one cursor condition and one ORDER BY serve both. See
+ * docs/spec/data-model.md § Sorting by a content field.
+ */
+const byTypePlan = (
+  query: StackQuery,
+  byType: Record<string, ContentSortKey>,
+  dir: 'ASC' | 'DESC',
+  op: '>' | '<',
+  decoded: DecodedCursor | null,
+): QueryStatement[] => {
+  const cursor = decoded ? contentCursor(decoded, byTypeDescriptor(byType)) : null;
+  const fields: [string, string][] = [];
+  const constants: [string, SortEntry][] = [];
+  for (const [typeId, key] of Object.entries(byType)) {
+    if (key.field !== undefined) {
+      fields.push([typeId, key.field]);
+      continue;
+    }
+    const entry = constantSortEntry(key.value ?? null);
+    if (entry) constants.push([typeId, entry]);
+  }
+  const pages: QueryStatement[] = [];
+  const fieldOf = (alias: string, record: string) =>
+    fields.map(() => `(${record}.type_id = ? AND ${alias}.field = ?)`).join(' OR ');
+
+  if (cursor?.kind !== 'absent' && fields.length + constants.length > 0) {
+    const sources: string[] = [];
+    const sourceParams: unknown[] = [];
+    if (fields.length > 0) {
+      sources.push(
+        'SELECT c.record_id AS record_id, c.value_rank AS value_rank, c.num_value AS num_value, ' +
+          'c.text_key AS text_key, c.text_value AS text_value ' +
+          `FROM content_index c JOIN records t ON t.id = c.record_id WHERE ${fieldOf('c', 't')}`,
+      );
+      for (const [typeId, field] of fields) sourceParams.push(typeId, field);
+    }
+    for (const [typeId, entry] of constants) {
+      sources.push(
+        'SELECT t.id AS record_id, ? AS value_rank, ? AS num_value, ? AS text_key, ' +
+          '? AS text_value FROM records t WHERE t.type_id = ?',
+      );
+      sourceParams.push(
+        ...(entry.kind === 'num' ? [0, entry.num, null, null] : [1, null, entry.key, entry.text]),
+        typeId,
+      );
+    }
+    const { conditions, params } = recordConditions(query);
+    if (cursor) conditions.push(presentCursorCondition(cursor, op, params));
+    const from =
+      `(${sources.join(' UNION ALL ')}) ${SORT_ALIAS} ` +
+      `JOIN records r ON r.id = ${SORT_ALIAS}.record_id`;
+    const order =
+      `${SORT_ALIAS}.value_rank ${dir}, ${SORT_ALIAS}.num_value ${dir}, ` +
+      `${SORT_ALIAS}.text_key ${dir}, ${SORT_ALIAS}.text_value ${dir}, ` +
+      `${SORT_ALIAS}.record_id ${dir}`;
+    pages.push(
+      statement(
+        'r.*',
+        from,
+        conditions,
+        [...sourceParams, ...params],
+        ` ORDER BY ${order} LIMIT ?`,
+      ),
+    );
+  }
+
+  // Records holding nothing to order by: a Type's field with no value, a
+  // `null` constant, or a Type the map does not name.
+  {
+    const { conditions, params } = recordConditions(query);
+    if (fields.length > 0) {
+      conditions.push(
+        `NOT EXISTS (SELECT 1 FROM content_index ${SORT_ALIAS} ` +
+          `WHERE ${SORT_ALIAS}.record_id = r.id AND (${fieldOf(SORT_ALIAS, 'r')}))`,
+      );
+      for (const [typeId, field] of fields) params.push(typeId, field);
+    }
+    if (constants.length > 0) {
+      conditions.push(`r.type_id NOT IN (${constants.map(() => '?').join(',')})`);
+      params.push(...constants.map(([typeId]) => typeId));
+    }
+    if (cursor?.kind === 'absent') {
+      conditions.push(`r.id ${op} ?`);
+      params.push(cursor.id);
+    }
+    pages.push(statement('r.*', 'records r', conditions, params, ` ORDER BY r.id ${dir} LIMIT ?`));
+  }
   return pages;
 };

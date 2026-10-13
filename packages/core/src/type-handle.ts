@@ -14,6 +14,8 @@
 import { StackBadRequestError, StackMigrationError } from './errors.js';
 import { lineageProblem, parseTypeId } from './schema.js';
 import type { BaseId, ScalarFieldKind, TypeId } from './types/index.js';
+import { applySteps, fieldOrigins, recordOrigins } from './migration-steps.js';
+import type { MigrationStep } from './migration-steps.js';
 
 // -------------------------------------------------------
 // Schema literal types
@@ -179,33 +181,45 @@ export const typeHandle = <const S extends ReadonlyTypeSchema>({
 
 /**
  * A step from one version of a type to another, passed to `Stack.open()`
- * and typed on both versions' content. `migrate` is a method so a typed
- * migration fits a list of untyped ones. See docs/spec/data-model.md § Type
- * migrations.
+ * and typed on both versions' content. `steps` is what a collection reads
+ * to carry a content query across versions; `migrate` applies them, and is
+ * a method so a typed migration fits a list of untyped ones. See
+ * docs/spec/data-model.md § Type migrations.
  */
 export type Migration<From = Record<string, unknown>, To = Record<string, unknown>> = {
   readonly from: TypeId;
   readonly to: TypeId;
+  readonly steps: readonly MigrationStep<From>[];
   migrate(content: From): To;
 };
 
 /**
- * Build the migration from `from` to `to`, checking `fn` against both
- * handles' stored content: a stored enum may hold a value either handle
- * does not list, and a step carries it through. Within a family, `to` must name `from` as its
- * `migratesFrom`; a step into another family has no lineage to check. See
- * docs/spec/data-model.md § Type migrations.
+ * Build the migration from `from` to `to` out of declared steps, checked
+ * against both schemas here so a step the target would refuse fails before
+ * any record is written. Within a family, `to` must name `from` as its
+ * `migratesFrom`. See docs/spec/data-model.md § Migration steps.
  */
 export const migration = <F extends ReadonlyTypeSchema, T extends ReadonlyTypeSchema>(
   from: TypeHandle<F>,
   to: TypeHandle<T>,
-  fn: (content: StoredContentOf<F>) => NoInfer<StoredContentOf<T>>,
+  steps: readonly MigrationStep<NoInfer<StoredContentOf<F>>>[],
 ): Migration<StoredContentOf<F>, StoredContentOf<T>> => {
+  const refuse = (problem: string) =>
+    new StackMigrationError(`Cannot migrate "${from.id}" to "${to.id}": ${problem}.`);
   if (to.baseId === from.baseId && to.migratesFrom !== from.id) {
-    throw new StackMigrationError(
-      `Cannot migrate "${from.id}" to "${to.id}": "${to.id}" migrates from ` +
-        `${to.migratesFrom ? `"${to.migratesFrom}"` : 'nothing'}.`,
+    throw refuse(
+      `"${to.id}" migrates from ${to.migratesFrom ? `"${to.migratesFrom}"` : 'nothing'}`,
     );
   }
-  return Object.freeze({ from: from.id, to: to.id, migrate: fn });
+  const frozen = Object.freeze([...steps]) as readonly MigrationStep[];
+  const origins = fieldOrigins(frozen, from.schema, to.schema);
+  if (typeof origins === 'string') throw refuse(origins);
+  const built = Object.freeze({
+    from: from.id,
+    to: to.id,
+    steps: frozen,
+    migrate: (content: Record<string, unknown>) => applySteps(frozen, content),
+  }) as unknown as Migration<StoredContentOf<F>, StoredContentOf<T>>;
+  recordOrigins(built, origins);
+  return built;
 };

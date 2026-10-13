@@ -27,10 +27,18 @@ import type {
   StackClient,
 } from './stack/client.js';
 import type { ContentOf, ReadonlyTypeSchema, TypeHandle, UnlistedValue } from './type-handle.js';
+import {
+  translateArm,
+  translateSortKey,
+  UNMATCHABLE,
+  UNTRANSLATABLE,
+} from './content-translation.js';
 import type {
   AssociationEdit,
   AuthorityAssociation,
   ChangeFilter,
+  ContentArm,
+  ContentSortKey,
   DataAssociation,
   IfVersionOptions,
   NativeSortField,
@@ -99,12 +107,10 @@ export type CollectionPage<C> = {
   misfits: Misfit[];
   cursor: string | null;
   /**
-   * A content filter or sort reaches only records at the handle's version.
-   * Each flag is set when records at an older or newer version match, or
-   * may match, the rest of the query: the results may be missing records
-   * the filter was meant to find. On the first page only, since it depends
-   * on the query rather than the page. See docs/spec/data-model.md § Type
-   * handles.
+   * Set when records at a version a content filter or sort could not reach
+   * match, or may match, the rest of the query. On the first page only,
+   * since it depends on the query rather than the page. See
+   * docs/spec/data-model.md § Content queries across versions.
    */
   skipped?: { older: boolean; newer: boolean };
 };
@@ -160,15 +166,15 @@ export type SortableFieldOf<C> = string extends keyof C
 
 /**
  * A collection reads live records of its own family only, as stored, so
- * none of `typeId`, `baseId`, `includeDeleted` or `presentAt` is offered.
- * Content filter keys and the sort field are checked against `C`, and
- * reach only records stored at the handle's version. See
- * docs/spec/data-model.md § Type handles.
+ * none of `typeId`, `baseId`, `includeDeleted`, `presentAt` or the per-Type
+ * shapes it generates itself is offered. Content filter keys and the sort
+ * field are checked against `C`, and carried to older versions through the
+ * migrations. See docs/spec/data-model.md § Type handles.
  */
 export type CollectionQuery<C> = Omit<StackQuery, 'filter' | 'presentAt' | 'sort'> & {
   filter?: Omit<
     RecordFilter,
-    'typeId' | 'baseId' | 'includeDeleted' | 'content' | 'contentPresent'
+    'typeId' | 'baseId' | 'includeDeleted' | 'content' | 'contentPresent' | 'contentByType'
   > & {
     content?: { [E in FieldEntry<C, '', 5> as E[0]]?: E[1] | null };
     contentPresent?: ContentPathOf<C>[];
@@ -278,13 +284,58 @@ const withoutTypeId = <F extends object>(filter: F | undefined): Omit<F, 'typeId
 };
 
 /**
- * Whether a query reads content, which only records stored at the handle's
- * version are guaranteed to hold in the handle's shape.
+ * A filter's content predicate, or undefined when it names no key. Only
+ * records stored at the handle's version are guaranteed to hold content in
+ * the handle's shape, so a predicate is what has to be translated.
  */
-const readsContent = (filter: RecordFilter | undefined, sort: StackQuery['sort']): boolean =>
-  Object.keys(filter?.content ?? {}).length > 0 ||
-  (filter?.contentPresent?.length ?? 0) > 0 ||
-  sort?.contentField !== undefined;
+const contentPredicate = (filter: RecordFilter): ContentArm | undefined => {
+  const content = Object.keys(filter.content ?? {}).length > 0 ? filter.content : undefined;
+  const present = filter.contentPresent?.length ? filter.contentPresent : undefined;
+  if (!content && !present) return undefined;
+  return { ...(content && { content }), ...(present && { contentPresent: present }) };
+};
+
+/** `filter` without its content predicate, for a query that asks about the rest. */
+const withoutContent = (filter: RecordFilter): RecordFilter => {
+  const { content: _content, contentPresent: _present, ...rest } = filter;
+  return rest;
+};
+
+/**
+ * A content query's cursor: the adapter's, with the versions the first page
+ * queried, so a version defined mid-pagination cannot change the arms or
+ * the sort a cursor resumes, and a later page lists no types.
+ */
+const encodeContentCursor = (versions: TypeId[], cursor: string): string => {
+  const bytes = new TextEncoder().encode(JSON.stringify({ v: versions, c: cursor }));
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+};
+
+const decodeContentCursor = (
+  raw: string,
+  handle: TypeHandle,
+): { versions: TypeId[]; cursor: string } => {
+  const malformed = () => new StackBadRequestError(`Invalid cursor: malformed "${raw}"`);
+  let parsed: unknown;
+  try {
+    const binary = atob(raw);
+    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+    parsed = JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    throw malformed();
+  }
+  const { v, c } = (parsed ?? {}) as { v?: unknown; c?: unknown };
+  if (
+    typeof c !== 'string' ||
+    !Array.isArray(v) ||
+    !v.every((id) => typeof id === 'string' && parseTypeId(id)?.baseId === handle.baseId)
+  ) {
+    throw malformed();
+  }
+  return { versions: v as TypeId[], cursor: c };
+};
 
 /**
  * The collection over `handle`, shared by `Stack.collection()` and
@@ -380,31 +431,136 @@ export const createCollection = <S extends ReadonlyTypeSchema>(
   };
 
   /**
-   * Whether a record stored at one of `typeIds` matches, or may match,
-   * `filter` without its content keys. A scoped page can be empty with a
-   * cursor set, and reading on is unbounded, so that page counts as a match.
+   * Whether any record matches, or may match, `filter`. A scoped page can
+   * be empty with a cursor set, and reading on is unbounded, so that page
+   * counts as a match.
    */
-  const anyAt = async (typeIds: TypeId[], filter: RecordFilter): Promise<boolean> => {
-    if (typeIds.length === 0) return false;
-    const { content: _content, contentPresent: _present, ...rest } = filter;
-    const page = await client.query({ filter: { ...rest, typeId: typeIds }, limit: 1 });
+  const anyMatch = async (filter: RecordFilter): Promise<boolean> => {
+    const page = await client.query({ filter, limit: 1 });
     return page.records.length > 0 || page.cursor !== null;
   };
 
-  const skippedVersions = async (
+  /** Whether a record stored at one of `typeIds` matches `filter` without its content keys. */
+  const anyAt = async (typeIds: TypeId[], filter: RecordFilter): Promise<boolean> => {
+    if (typeIds.length === 0) return false;
+    return anyMatch({ ...withoutContent(filter), typeId: typeIds });
+  };
+
+  /**
+   * Whether records at an older version hold what its arm left out: each
+   * residual is that arm with another source value in place, at its typeId.
+   */
+  const anyResidual = async (residuals: RecordFilter[], filter: RecordFilter): Promise<boolean> => {
+    const rest = withoutContent(filter);
+    const found = await Promise.all(
+      residuals.map((residual) => anyMatch({ ...rest, ...residual })),
+    );
+    return found.some(Boolean);
+  };
+
+  /**
+   * A content query as one arm per version it translates to, plus what the
+   * first page probes for `skipped`. `pinned` is the versions a first page
+   * chose, which a later page reuses. See docs/spec/data-model.md § Content
+   * queries across versions.
+   */
+  const planContentQuery = async (
     filter: RecordFilter,
-  ): Promise<NonNullable<CollectionPage<C>['skipped']>> => {
-    const older: TypeId[] = [];
+    sort: StackQuery['sort'],
+    pinned?: TypeId[],
+  ): Promise<{
+    query: Pick<StackQuery, 'filter' | 'sort'>;
+    versions: TypeId[];
+    narrowed: TypeId[];
+    newer: TypeId[];
+    residuals: RecordFilter[];
+  }> => {
+    const predicate = contentPredicate(filter);
+    const sortField = sort?.contentField;
+    const { capabilities } = client;
+    // A version past the adapter's cap is narrowed, newest kept first:
+    // the older a version, the fewer apps still write it.
+    const filterCap =
+      predicate === undefined
+        ? Infinity
+        : capabilities.filter.content === 'none'
+          ? 0
+          : capabilities.filter.contentByType;
+    const sortCap = sortField === undefined ? Infinity : capabilities.sort.contentFieldByType;
+    const cap = Math.min(filterCap, sortCap);
+    const sortKind = (() => {
+      const def = sortField === undefined ? undefined : handle.schema[sortField];
+      return def && def.kind !== 'array' && def.kind !== 'object' ? def.kind : undefined;
+    })();
+
+    const family = (
+      pinned
+        ? pinned.map((id) => ({ id, baseId: handle.baseId, version: versionOf(id) }))
+        : await listTypes()
+    )
+      .filter((type) => type.baseId === handle.baseId && type.version !== handleVersion)
+      .sort((a, b) => b.version - a.version);
+    const arms: Record<TypeId, ContentArm> = { [handle.id]: predicate ?? {} };
+    const keys: Record<TypeId, ContentSortKey> = sortField
+      ? { [handle.id]: { field: sortField } }
+      : {};
+    const narrowed: TypeId[] = [];
     const newer: TypeId[] = [];
-    for (const type of await listTypes()) {
-      if (type.baseId !== handle.baseId || type.version === handleVersion) continue;
-      (type.version < handleVersion ? older : newer).push(type.id);
+    const residuals: RecordFilter[] = [];
+    for (const type of family) {
+      if (type.version > handleVersion) {
+        newer.push(type.id);
+        continue;
+      }
+      const origins = registry.origins(type.id, handle.id);
+      const translated = !predicate
+        ? { arm: {}, residuals: [] }
+        : origins
+          ? translateArm(origins, predicate)
+          : UNTRANSLATABLE;
+      if (translated === UNMATCHABLE) continue;
+      const key =
+        sortField === undefined
+          ? undefined
+          : origins
+            ? translateSortKey(origins, sortField, sortKind)
+            : UNTRANSLATABLE;
+      if (
+        translated === UNTRANSLATABLE ||
+        key === UNTRANSLATABLE ||
+        Object.keys(arms).length >= cap
+      ) {
+        narrowed.push(type.id);
+        continue;
+      }
+      arms[type.id] = translated.arm;
+      if (key) keys[type.id] = key;
+      for (const arm of translated.residuals) residuals.push({ ...arm, typeId: type.id });
     }
-    const [skippedOlder, skippedNewer] = await Promise.all([
-      anyAt(older, filter),
-      anyAt(newer, filter),
-    ]);
-    return { older: skippedOlder, newer: skippedNewer };
+
+    const rest = withoutContent(filter);
+    const typeIds = Object.keys(arms);
+    if (typeIds.length === 1) {
+      return {
+        query: { filter: { ...filter, typeId: handle.id }, sort },
+        versions: typeIds,
+        narrowed,
+        newer,
+        residuals,
+      };
+    }
+    return {
+      query: {
+        filter: predicate ? { ...rest, contentByType: arms } : { ...rest, typeId: typeIds },
+        sort: sortField
+          ? { contentFieldByType: keys, ...(sort?.direction && { direction: sort.direction }) }
+          : sort,
+      },
+      versions: typeIds,
+      narrowed,
+      newer,
+      residuals,
+    };
   };
 
   const mutate = async (
@@ -440,22 +596,35 @@ export const createCollection = <S extends ReadonlyTypeSchema>(
       // Stripped as well as untyped: either would change which records a
       // page holds, or the shape they arrive in.
       const { presentAt: _presentAt, filter, ...rest } = query as StackQuery;
-      const narrowed = readsContent(filter, rest.sort);
       // A concrete typeId needs no family lookup; baseId does.
-      const { baseId: _baseId, ...unversioned } = withoutTypeId(filter);
-      const [{ records, cursor }, skipped] = await Promise.all([
-        client.query({
+      const {
+        baseId: _baseId,
+        contentByType: _byType,
+        ...unversioned
+      } = withoutTypeId(filter) as RecordFilter;
+      const firstPage = rest.cursor === undefined;
+      let records: StackRecord[];
+      let cursor: string | null;
+      let skipped: CollectionPage<C>['skipped'];
+      if (!contentPredicate(unversioned) && rest.sort?.contentField === undefined) {
+        ({ records, cursor } = await client.query({
           ...rest,
-          filter: narrowed
-            ? { ...unversioned, typeId: handle.id }
-            : { ...unversioned, baseId: handle.baseId },
-        }),
-        rest.cursor !== undefined
-          ? undefined
-          : narrowed
-            ? skippedVersions(unversioned)
-            : { older: false, newer: false },
-      ]);
+          filter: { ...unversioned, baseId: handle.baseId },
+        }));
+        if (firstPage) skipped = { older: false, newer: false };
+      } else {
+        const resumed = firstPage ? undefined : decodeContentCursor(rest.cursor!, handle);
+        const plan = await planContentQuery(unversioned, rest.sort, resumed?.versions);
+        const [page, narrowed, residual, newer] = await Promise.all([
+          client.query({ ...rest, cursor: resumed?.cursor, ...plan.query }),
+          firstPage && anyAt(plan.narrowed, unversioned),
+          firstPage && anyResidual(plan.residuals, unversioned),
+          firstPage && anyAt(plan.newer, unversioned),
+        ]);
+        records = page.records;
+        cursor = page.cursor && encodeContentCursor(plan.versions, page.cursor);
+        if (firstPage) skipped = { older: narrowed || residual, newer };
+      }
       const page: CollectionPage<C> = {
         records: [],
         misfits: [],

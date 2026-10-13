@@ -17,9 +17,13 @@
  */
 
 import { ARGUMENTS_INVALID, StackBadRequestError, StackValidationError } from './errors.js';
-import { familyIdProblem } from './schema.js';
+import { familyIdProblem, parseTypeId } from './schema.js';
 import { targetErrors } from './associations/validation.js';
-import { CONTENT_SEGMENT_METACHARACTERS, SEGMENT_METACHARACTER_RE } from './validate.js';
+import {
+  CONTENT_SEGMENT_METACHARACTERS,
+  SEGMENT_METACHARACTER_RE,
+  isPlainObject,
+} from './validate.js';
 import { NATIVE_SORT_FIELDS } from './types/index.js';
 import type {
   JournalQuery,
@@ -40,38 +44,114 @@ export function assertQueryCapabilities(
   filter: RecordFilter | undefined,
   capabilities: Pick<StackCapabilities, 'filter'>,
 ): void {
-  const { content: reach, contentPresent, search } = capabilities.filter;
+  const { content: reach, contentPresent, contentByType, search } = capabilities.filter;
   if (filter?.search && !search) {
     throw new StackBadRequestError(
       'Query uses filter.search, but this adapter does not declare the filter.search capability.',
       'filter.search',
     );
   }
-  const present = filter?.contentPresent?.length ? filter.contentPresent : undefined;
-  if (!filter?.content && !present) return;
+  // An arm's keys are gated as the same keys at the top of the filter are.
+  const arms = Object.values(filter?.contentByType ?? {});
+  const parts = [filter ?? {}, ...arms];
+  const keys = parts.flatMap((part) => Object.keys(part.content ?? {}));
+  const present = parts.flatMap((part) => part.contentPresent ?? []);
+  if (!filter?.content && present.length === 0 && arms.length === 0) return;
   if (reach === 'none') {
     // Named as `filter.content` whichever key the query used: the reach
     // is what is absent, and it is the entry to look at in discovery.
+    const used =
+      arms.length > 0
+        ? 'filter.contentByType'
+        : present.length > 0 && !filter?.content
+          ? 'filter.contentPresent'
+          : 'filter.content';
     throw new StackBadRequestError(
-      `Query uses ${present && !filter?.content ? 'filter.contentPresent' : 'filter.content'}, ` +
-        'but this adapter declares filter.content: "none".',
+      `Query uses ${used}, but this adapter declares filter.content: "none".`,
       'filter.content',
     );
   }
-  if (present && !contentPresent) {
+  if (arms.length > contentByType) {
+    throw new StackBadRequestError(
+      contentByType === 0
+        ? 'Query uses filter.contentByType, but this adapter does not declare the ' +
+            'filter.contentByType capability.'
+        : `Query uses ${arms.length} filter.contentByType arms, but this adapter takes at ` +
+            `most ${contentByType}.`,
+      'filter.contentByType',
+    );
+  }
+  if (present.length > 0 && !contentPresent) {
     throw new StackBadRequestError(
       'Query uses filter.contentPresent, but this adapter does not declare the ' +
         'filter.contentPresent capability.',
       'filter.contentPresent',
     );
   }
-  for (const key of [...Object.keys(filter?.content ?? {}), ...(present ?? [])]) {
+  for (const key of [...keys, ...present]) {
     if (parseContentFilterKey(key).length > 1 && reach !== 'path') {
       throw new StackBadRequestError(
         `Query uses the nested content path "${key}", but this adapter declares ` +
           `filter.content: "${reach}".`,
         'filter.content',
       );
+    }
+  }
+}
+
+/**
+ * Hold `filter.contentByType` to a split along Types: at least one arm,
+ * each pinned to a TypeId and flat, and never beside a top-level content
+ * predicate, whose relation to the arms would be ambiguous. A map that
+ * could arrive empty would match everything once it crossed the wire. See
+ * docs/spec/data-model.md § Content by type.
+ */
+export function assertValidContentByType(filter: RecordFilter | undefined): void {
+  const arms: unknown = filter?.contentByType;
+  if (arms === undefined) return;
+  if (!isPlainObject(arms) || Object.keys(arms).length === 0) {
+    throw new StackBadRequestError('filter.contentByType must name at least one typeId.');
+  }
+  if (filter!.content !== undefined || filter!.contentPresent !== undefined) {
+    throw new StackBadRequestError(
+      'filter.contentByType cannot be combined with filter.content or filter.contentPresent.',
+    );
+  }
+  for (const [typeId, arm] of Object.entries(arms)) {
+    if (!parseTypeId(typeId)) {
+      throw new StackBadRequestError(
+        `filter.contentByType key "${typeId}" is not a versioned TypeId.`,
+      );
+    }
+    if (!isPlainObject(arm)) {
+      throw new StackBadRequestError(`filter.contentByType["${typeId}"] must be an object.`);
+    }
+    for (const key of Object.keys(arm)) {
+      if (key !== 'content' && key !== 'contentPresent') {
+        throw new StackBadRequestError(
+          `filter.contentByType["${typeId}"] takes content and contentPresent only, not "${key}".`,
+        );
+      }
+    }
+    if (arm.content !== undefined && !isPlainObject(arm.content)) {
+      throw new StackBadRequestError(
+        `filter.contentByType["${typeId}"].content must be an object.`,
+      );
+    }
+    if (
+      arm.contentPresent !== undefined &&
+      (!Array.isArray(arm.contentPresent) ||
+        !arm.contentPresent.every((path) => typeof path === 'string'))
+    ) {
+      throw new StackBadRequestError(
+        `filter.contentByType["${typeId}"].contentPresent must be an array of strings.`,
+      );
+    }
+    for (const key of [
+      ...Object.keys((arm.content as Record<string, unknown> | undefined) ?? {}),
+      ...((arm.contentPresent as string[] | undefined) ?? []),
+    ]) {
+      parseContentFilterKey(key);
     }
   }
 }
@@ -141,9 +221,12 @@ const VALID_SORT_DIRECTIONS = new Set(['asc', 'desc']);
  */
 export function assertValidSort(sort: QuerySort | undefined): void {
   if (!sort) return;
-  if (sort.field !== undefined && sort.contentField !== undefined) {
+  const named = [sort.field, sort.contentField, sort.contentFieldByType].filter(
+    (member) => member !== undefined,
+  );
+  if (named.length > 1) {
     throw new StackBadRequestError(
-      'A sort names either a native field or a content field, never both.',
+      'A sort names one of a native field, a content field or a content field per type.',
     );
   }
   if (sort.field !== undefined && !VALID_SORT_FIELDS.has(sort.field)) {
@@ -151,24 +234,66 @@ export function assertValidSort(sort: QuerySort | undefined): void {
       `Invalid sort field "${sort.field}": expected one of ${NATIVE_SORT_FIELDS.join(', ')}.`,
     );
   }
-  if (sort.contentField !== undefined) {
-    // Parsed by the same rule a filter key is, so a name a filter could
-    // never address is not one a sort can either — then held to one
-    // segment, because a value inside an array or object has no single
-    // position to order its record by (docs/spec/data-model.md
-    // § Sorting by a content field).
-    if (parseContentFilterKey(sort.contentField).length > 1) {
-      throw new StackBadRequestError(
-        `Invalid sort content field "${sort.contentField}": sorting reaches top-level fields only.`,
-      );
-    }
-  }
+  if (sort.contentField !== undefined) assertSortableField(sort.contentField);
+  if (sort.contentFieldByType !== undefined) assertValidSortByType(sort.contentFieldByType);
   if (sort.direction !== undefined && !VALID_SORT_DIRECTIONS.has(sort.direction)) {
     throw new StackBadRequestError(
       `Invalid sort direction "${sort.direction}": expected "asc" or "desc".`,
     );
   }
 }
+
+/**
+ * Parsed by the same rule a filter key is, so a name a filter could never
+ * address is not one a sort can either — then held to one segment, because
+ * a value inside an array or object has no single position to order its
+ * record by (docs/spec/data-model.md § Sorting by a content field).
+ */
+const assertSortableField = (field: unknown): void => {
+  if (typeof field !== 'string') {
+    throw new StackBadRequestError('Invalid sort content field: expected a string.');
+  }
+  if (parseContentFilterKey(field).length > 1) {
+    throw new StackBadRequestError(
+      `Invalid sort content field "${field}": sorting reaches top-level fields only.`,
+    );
+  }
+};
+
+/**
+ * Each key names a TypeId and orders by one field of it or one reduced
+ * constant. See docs/spec/data-model.md § Sorting by a content field.
+ */
+const assertValidSortByType = (byType: unknown): void => {
+  if (!isPlainObject(byType) || Object.keys(byType).length === 0) {
+    throw new StackBadRequestError('sort.contentFieldByType must name at least one typeId.');
+  }
+  for (const [typeId, key] of Object.entries(byType)) {
+    if (!parseTypeId(typeId)) {
+      throw new StackBadRequestError(
+        `sort.contentFieldByType key "${typeId}" is not a versioned TypeId.`,
+      );
+    }
+    const shape = isPlainObject(key) ? Object.keys(key) : [];
+    if (shape.length !== 1 || (shape[0] !== 'field' && shape[0] !== 'value')) {
+      throw new StackBadRequestError(
+        `sort.contentFieldByType["${typeId}"] must be { field } or { value }.`,
+      );
+    }
+    const { field, value } = key as { field?: unknown; value?: unknown };
+    if (shape[0] === 'field') {
+      assertSortableField(field);
+    } else if (
+      value !== null &&
+      typeof value !== 'string' &&
+      !(typeof value === 'number' && Number.isFinite(value))
+    ) {
+      throw new StackBadRequestError(
+        `sort.contentFieldByType["${typeId}"].value must be a string, a finite number or null.`,
+      );
+    }
+  }
+};
 
 /**
  * The sort every adapter receives: a named sort with no `direction` is
@@ -198,6 +323,20 @@ export function assertSortCapability(
   capabilities: Pick<StackCapabilities, 'sort'>,
 ): void {
   if (!sort) return;
+  if (sort.contentFieldByType !== undefined) {
+    const keys = Object.keys(sort.contentFieldByType).length;
+    const cap = capabilities.sort.contentFieldByType;
+    if (keys > cap) {
+      throw new StackBadRequestError(
+        cap === 0
+          ? 'Query uses sort.contentFieldByType, but this adapter does not declare the ' +
+              'sort.contentFieldByType capability.'
+          : `Query uses ${keys} sort.contentFieldByType keys, but this adapter takes at most ${cap}.`,
+        'sort.contentFieldByType',
+      );
+    }
+    return;
+  }
   if (sort.contentField !== undefined) {
     if (!capabilities.sort.contentField) {
       throw new StackBadRequestError(

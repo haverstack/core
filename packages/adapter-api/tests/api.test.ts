@@ -1076,6 +1076,30 @@ describe('queryRecords', () => {
     expect(JSON.parse(init.body as string)).toEqual(query);
   });
 
+  test('carries the per-Type filter and sort in the POST body', async () => {
+    const adapter = await openAdapter();
+    mockFetch.mockResolvedValueOnce(jsonResponse(queryEnvelope));
+    const query = {
+      filter: {
+        contentByType: {
+          'com.example/note@1': { content: { by: 'Ada' } },
+          'com.example/note@2': { content: { owner: 'Ada' } },
+        },
+      },
+      sort: {
+        contentFieldByType: {
+          'com.example/note@1': { field: 'by' },
+          'com.example/note@2': { value: 3 },
+        },
+        direction: 'asc' as const,
+      },
+    };
+    await adapter.queryRecords(query);
+    const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
+    expect(url).toBe(`${BASE_URL}/records/query`);
+    expect(JSON.parse(init.body as string)).toEqual(query);
+  });
+
   test('builds correct GET params — parentId null becomes "null"', async () => {
     const adapter = await openAdapter(discoveryWith({ filter: { content: 'none' } }));
     mockFetch.mockResolvedValueOnce(jsonResponse(queryEnvelope));
@@ -1202,8 +1226,8 @@ describe('queryRecords', () => {
     const adapter = await openAdapter(discovery);
 
     expect(adapter.capabilities).toEqual({
-      filter: { content: 'none', contentPresent: false, search: false },
-      sort: { fields: [], contentField: false },
+      filter: { content: 'none', contentPresent: false, contentByType: 0, search: false },
+      sort: { fields: [], contentField: false, contentFieldByType: 0 },
       limits: { attachmentBytes: null, contentBytes: null },
     });
 
@@ -1260,6 +1284,20 @@ describe('queryRecords', () => {
     await expect(adapter.queryRecords({ sort: { contentField: 'publishedAt' } })).rejects.toThrow(
       APIAdapterCapabilityError,
     );
+    expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent
+  });
+
+  test.each([
+    ['filter.contentByType', { filter: { contentByType: { 'com.example/note@1': {} } } }],
+    [
+      'sort.contentFieldByType',
+      { sort: { contentFieldByType: { 'com.example/note@1': { field: 'a' } } } },
+    ],
+  ] as const)('refuses %s locally where the server declines it', async (capability, query) => {
+    const adapter = await openAdapter(
+      discoveryWith({ filter: { contentByType: 0 }, sort: { contentFieldByType: 0 } }),
+    );
+    await expect(adapter.queryRecords(query)).rejects.toMatchObject({ capability });
     expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent
   });
 

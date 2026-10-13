@@ -104,11 +104,13 @@ describe('construction', () => {
       filter: {
         content: 'path',
         contentPresent: true,
+        contentByType: 64,
         search: true,
       },
       sort: {
         fields: ['createdAt', 'updatedAt', 'version'],
         contentField: true,
+        contentFieldByType: 64,
       },
       limits: {
         attachmentBytes: null,

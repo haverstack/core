@@ -36,6 +36,8 @@ import type {
   VersionsQuery,
   NativeSortField,
   QuerySort,
+  ContentArm,
+  ContentSortKey,
   RecordFilter,
   RelatedToFilter,
   AttachmentFilter,
@@ -103,6 +105,7 @@ const QUERY_BODY_FILTER_KEYS = [
   'relatedTo',
   'content',
   'contentPresent',
+  'contentByType',
   'search',
   'includeDeleted',
   'includeUnlisted',
@@ -149,22 +152,32 @@ function requireSortField(raw: unknown): NativeSortField {
 }
 
 /**
- * The two sort forms are mutually exclusive, and a request naming both is
- * refused rather than resolved in one direction: a content field may be
- * called `version`, so guessing which was meant is exactly the conflation
- * the separate member exists to prevent.
+ * The sort forms are mutually exclusive, and a request naming more than
+ * one is refused rather than resolved in one direction: a content field may
+ * be called `version`, so guessing which was meant is exactly the
+ * conflation the separate members exist to prevent.
  */
 function buildSort(
   field: unknown,
   contentField: unknown,
   direction: unknown,
+  contentFieldByType?: unknown,
 ): QuerySort | undefined {
-  if (field !== undefined && field !== null && contentField !== undefined && contentField !== null)
+  const named = [field, contentField, contentFieldByType].filter(
+    (member) => member !== undefined && member !== null,
+  );
+  if (named.length > 1)
     throw new StackBadRequestError(
-      'A sort names either a native field or a content field, never both.',
+      'A sort names one of a native field, a content field or a content field per type.',
     );
   const dir =
     direction === undefined || direction === null ? undefined : requireSortDirection(direction);
+  if (contentFieldByType !== undefined && contentFieldByType !== null) {
+    return {
+      contentFieldByType: parseSortByTypeBody(contentFieldByType),
+      ...(dir && { direction: dir }),
+    };
+  }
   if (contentField !== undefined && contentField !== null) {
     return {
       contentField: requireString(contentField, 'sort content field'),
@@ -281,7 +294,7 @@ const BASE_ID_REFUSAL =
   'concrete typeId set it resolves to. See docs/spec/data-model.md § Filter.';
 
 const PRESENT_AT_REFUSAL =
-  'presentAt applies migration functions, which are app code rather than server code, so no ' +
+  'presentAt applies migrations, which are app code rather than server code, so no ' +
   'server can honor it — read records as stored and migrate them client-side. See ' +
   'docs/spec/data-model.md § Type migrations.';
 
@@ -537,6 +550,44 @@ function parseLimitValue(raw: unknown): number {
 }
 
 /**
+ * `filter.contentByType` as the body carries it: one flat arm per key.
+ * What the keys and arms may hold beyond their shape — a TypeId, at least
+ * one arm, never beside `content` — is assertValidContentByType()'s, which
+ * `Stack.query()` applies to every caller. See docs/spec/data-model.md
+ * § Content by type.
+ */
+function parseContentByTypeBody(raw: unknown): Record<string, ContentArm> {
+  const arms: Record<string, ContentArm> = {};
+  for (const [typeId, value] of Object.entries(requirePlainObject(raw, 'filter.contentByType'))) {
+    const label = `filter.contentByType["${typeId}"]`;
+    const arm = requireKnownKeys(value, ['content', 'contentPresent'], label);
+    arms[typeId] = {
+      ...(arm.content !== undefined && {
+        content: requirePlainObject(arm.content, `${label}.content`),
+      }),
+      ...(arm.contentPresent !== undefined && {
+        contentPresent: requireStringArray(arm.contentPresent, `${label}.contentPresent`),
+      }),
+    };
+  }
+  return arms;
+}
+
+/** `sort.contentFieldByType` as the body carries it; see assertValidSort() for the rest. */
+function parseSortByTypeBody(raw: unknown): Record<string, ContentSortKey> {
+  const keys: Record<string, ContentSortKey> = {};
+  for (const [typeId, value] of Object.entries(
+    requirePlainObject(raw, 'sort.contentFieldByType'),
+  )) {
+    const label = `sort.contentFieldByType["${typeId}"]`;
+    // Copied whole, so a key naming both a field and a value reaches the
+    // check that refuses it rather than losing one half here.
+    keys[typeId] = { ...requireKnownKeys(value, ['field', 'value'], label) } as ContentSortKey;
+  }
+  return keys;
+}
+
+/**
  * Build a `StackQuery` from a `POST /records/query` body — the superset
  * form, which also carries `filter.content`, with ISO date strings decoded.
  * `undefined` is the absent body; any other non-object is refused.
@@ -578,6 +629,8 @@ export function parseQueryBody(raw: unknown): StackQuery {
     if (f.content !== undefined) filter.content = requirePlainObject(f.content, 'filter.content');
     if (f.contentPresent !== undefined)
       filter.contentPresent = requireStringArray(f.contentPresent, 'filter.contentPresent');
+    if (f.contentByType !== undefined)
+      filter.contentByType = parseContentByTypeBody(f.contentByType);
     if (f.search !== undefined) filter.search = requireString(f.search, 'filter.search');
     if (optionalBoolean(f.includeDeleted, 'filter.includeDeleted')) filter.includeDeleted = true;
     if (optionalBoolean(f.includeUnlisted, 'filter.includeUnlisted')) filter.includeUnlisted = true;
@@ -601,8 +654,12 @@ export function parseQueryBody(raw: unknown): StackQuery {
   }
 
   if (body.sort !== undefined) {
-    const s = requireKnownKeys(body.sort, ['field', 'contentField', 'direction'], 'sort');
-    const sort = buildSort(s.field, s.contentField, s.direction);
+    const s = requireKnownKeys(
+      body.sort,
+      ['field', 'contentField', 'contentFieldByType', 'direction'],
+      'sort',
+    );
+    const sort = buildSort(s.field, s.contentField, s.direction, s.contentFieldByType);
     if (!sort) throw new StackBadRequestError('Invalid sort: expected a field or a contentField.');
     query.sort = sort;
   }
