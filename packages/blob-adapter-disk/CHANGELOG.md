@@ -1,5 +1,16 @@
 # @haverstack/blob-adapter-disk
 
+## 0.40.0
+
+### Minor Changes
+
+- Released for a breaking change in `@haverstack/core`.
+
+### Patch Changes
+
+- Updated dependencies [[`7d30040`](https://github.com/haverstack/core/commit/7d30040c4b61b8e5881604d0c042fec9c7e45122), [`98401c0`](https://github.com/haverstack/core/commit/98401c0a1a8b86fd2bfec74072ca3c3504320b66), [`a40cee0`](https://github.com/haverstack/core/commit/a40cee01aaaf37baf95be802f266ff1ee6ce320d), [`fdca4ca`](https://github.com/haverstack/core/commit/fdca4ca25760b19a79bc660404ebf95cf9c9048b), [`c427f43`](https://github.com/haverstack/core/commit/c427f435620c5766121723a54516f5a68df63561), [`90d800a`](https://github.com/haverstack/core/commit/90d800a8e86c079855a17627582f015186ffe081), [`7d30040`](https://github.com/haverstack/core/commit/7d30040c4b61b8e5881604d0c042fec9c7e45122), [`da5148b`](https://github.com/haverstack/core/commit/da5148bdb3e25e770e947df0c4c2af5b2a6f0f44), [`44fc3f6`](https://github.com/haverstack/core/commit/44fc3f645839c3a5a5eef3463826dcc0098bf089), [`d0b7950`](https://github.com/haverstack/core/commit/d0b795047ec9f8920a717a075f091cfa2462dc66), [`f616aaa`](https://github.com/haverstack/core/commit/f616aaa741c97fe1de1cfb262081e1f378082051), [`9b4adef`](https://github.com/haverstack/core/commit/9b4adef9bbb205ef27c161724dd2fe863254ffd2), [`89e0a07`](https://github.com/haverstack/core/commit/89e0a07b03ade71449cd20b7ad0333761c39a41f), [`55c33ba`](https://github.com/haverstack/core/commit/55c33ba3c0a55ec01796bce8b633fbad4a79cf76)]:
+  - @haverstack/core@0.42.0
+
 ## 0.39.0
 
 ### Minor Changes
