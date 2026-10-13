@@ -305,7 +305,7 @@ export const restoreVersionFixtures: ConformanceFixture<undefined, WireRecord>[]
     description:
       'A restore settles content and nothing else: the record comes back in whatever ' +
       'container it is in now, whichever one the snapshot was taken in. Undoing a move is a ' +
-      "change set's `parentId` — the journal entry for the move names where it came from. " +
+      'PUT /records/:id/parent — the journal entry for the move names where it came from. ' +
       'Assumes the record is in 1hk153x0000f and the snapshot at version 2 was taken at the ' +
       'root. See docs/spec/versioning.md § Restore semantics.',
     method: 'POST',

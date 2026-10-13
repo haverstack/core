@@ -38,12 +38,17 @@ export function combineAdapters(parts: {
 
     createRecord: (r, opts) => parts.record.createRecord(r, opts),
     getRecord: (id) => parts.record.getRecord(id),
-    mutateRecord: (id, changes, opts) => parts.record.mutateRecord(id, changes, opts),
+    patchContent: (id, patch, opts) => parts.record.patchContent(id, patch, opts),
     deleteRecord: (id, opts) => parts.record.deleteRecord(id, opts),
     undeleteRecord: (id, opts) => parts.record.undeleteRecord(id, opts),
     queryRecords: (q) => parts.record.queryRecords(q),
 
-    amendAssociations: (id, changes, opts) => parts.record.amendAssociations(id, changes, opts),
+    setParent: (id, parentId, opts) => parts.record.setParent(id, parentId, opts),
+    setUnlisted: (id, unlisted, opts) => parts.record.setUnlisted(id, unlisted, opts),
+    editAssociations: (id, edits, opts) => parts.record.editAssociations(id, edits, opts),
+    setAssociations: (id, list, opts) => parts.record.setAssociations(id, list, opts),
+    editAccess: (id, edits, opts) => parts.record.editAccess(id, edits, opts),
+    setAccess: (id, list, opts) => parts.record.setAccess(id, list, opts),
 
     getVersions: (id, query) => parts.record.getVersions(id, query),
     getVersion: (id, v) => parts.record.getVersion(id, v),

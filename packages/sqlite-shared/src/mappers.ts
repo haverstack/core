@@ -6,16 +6,15 @@
 
 import type {
   Actor,
+  AuthorityAssociation,
+  DataAssociation,
   GroupRole,
-  Grantee,
   RecordJournalEntry,
   StackRecord,
   StackType,
   RecordVersion,
-  Association,
   RelationshipTarget,
 } from '@haverstack/core';
-import { partitionAssociations } from '@haverstack/core/adapter';
 
 export const toMs = (d: Date): number => d.getTime();
 
@@ -34,7 +33,8 @@ export const fromMs = (ms: number): Date => new Date(ms);
 
 export const rowToRecord = (
   row: Record<string, unknown>,
-  associations: Association[],
+  associations: DataAssociation[],
+  permissions: AuthorityAssociation[],
 ): StackRecord => {
   const record: StackRecord = {
     id: row.id as string,
@@ -57,27 +57,14 @@ export const rowToRecord = (
   if (updatedBy) record.updatedBy = updatedBy;
   if (row.deleted_at != null) record.deletedAt = fromMs(row.deleted_at as number);
   if (row.unlisted_at != null) record.unlistedAt = fromMs(row.unlisted_at as number);
-  // One table, partitioned on read. See docs/spec/access-control.md
-  // § Record-level permissions.
-  const partitioned = partitionAssociations(associations);
-  if (partitioned.associations.length) record.associations = partitioned.associations;
-  if (partitioned.permissions.length) record.permissions = partitioned.permissions;
+  if (associations.length) record.associations = associations;
+  if (permissions.length) record.permissions = permissions;
   return record;
 };
 
-export const rowToAssociation = (row: Record<string, unknown>): Association => {
+export const rowToAssociation = (row: Record<string, unknown>): DataAssociation => {
   if (row.kind === 'tag') {
     return { kind: 'tag', label: row.label as string };
-  }
-  if (row.kind === 'anyone') {
-    return { kind: 'anyone', label: 'read' };
-  }
-  if (row.kind === 'permission') {
-    return {
-      kind: 'permission',
-      label: row.label as 'read' | 'write',
-      grantee: rowToGrantee(row),
-    };
   }
   if (row.kind === 'attachment') {
     const attachmentRecordId = row.attachment_record_id as string;
@@ -99,42 +86,45 @@ export const rowToAssociation = (row: Record<string, unknown>): Association => {
 };
 
 /**
- * The six columns that identify an association, in the order every
- * INSERT and DELETE below binds them. One helper because the two must
- * agree exactly — a dissociate that bound them differently would delete
- * nothing and report success.
+ * The five columns that identify an association beyond its kind and
+ * label, in the order every INSERT and DELETE below binds them. One helper
+ * because the two must agree exactly — a remove that bound them
+ * differently would delete nothing and report success.
  */
 export const associationKeyColumns = (
-  a: Association,
-): [string, string, string, string, string, string] => {
-  if (a.kind === 'attachment') return [a.fileId, '', '', '', '', ''];
-  if (a.kind === 'permission') {
-    const g = a.grantee;
-    return g.kind === 'entity'
-      ? ['', 'entity', g.entityId, '', '', '']
-      : ['', 'group', g.groupId, '', '', g.role];
-  }
-  if (a.kind !== 'relationship') return ['', '', '', '', '', ''];
+  a: DataAssociation,
+): [string, string, string, string, string] => {
+  if (a.kind === 'attachment') return [a.fileId, '', '', '', ''];
+  if (a.kind !== 'relationship') return ['', '', '', '', ''];
   const t = a.target;
-  if (t.kind === 'entity') return ['', 'entity', t.entityId, '', '', ''];
-  if (t.kind === 'external') return ['', 'external', t.id, t.ns, '', ''];
-  return ['', 'record', t.recordId, '', t.stackUrl ?? '', ''];
+  if (t.kind === 'entity') return ['', 'entity', t.entityId, '', ''];
+  if (t.kind === 'external') return ['', 'external', t.id, t.ns, ''];
+  return ['', 'record', t.recordId, '', t.stackUrl ?? ''];
 };
 
 /**
- * A permission's grantee, read back off the columns a relationship target
- * otherwise uses. `related_role` is what tells the two group sets apart —
- * `member` is the wider one. See docs/spec/access-control.md
- * § Record-level permissions.
+ * The three columns that identify a permission element beyond its kind
+ * and label — grantee kind, id and role, all '' for `anyone` — in the
+ * order every INSERT and DELETE binds them.
  */
-const rowToGrantee = (row: Record<string, unknown>): Grantee =>
-  row.related_scope === 'group'
-    ? {
-        kind: 'group',
-        groupId: row.related_id as string,
-        role: row.related_role as GroupRole,
-      }
-    : { kind: 'entity', entityId: row.related_id as string };
+export const permissionKeyColumns = (p: AuthorityAssociation): [string, string, string] => {
+  if (p.kind === 'anyone') return ['', '', ''];
+  const g = p.grantee;
+  return g.kind === 'entity' ? ['entity', g.entityId, ''] : ['group', g.groupId, g.role];
+};
+
+export const rowToPermission = (row: Record<string, unknown>): AuthorityAssociation => {
+  if (row.kind === 'anyone') return { kind: 'anyone', label: 'read' };
+  const id = row.grantee_id as string;
+  return {
+    kind: 'permission',
+    label: row.label as 'read' | 'write',
+    grantee:
+      row.grantee_kind === 'group'
+        ? { kind: 'group', groupId: id, role: row.role as GroupRole }
+        : { kind: 'entity', entityId: id },
+  };
+};
 
 const rowToTarget = (row: Record<string, unknown>): RelationshipTarget => {
   const id = row.related_id as string;

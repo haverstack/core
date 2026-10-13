@@ -348,8 +348,15 @@ describe('what an installed app sees', () => {
   test('a key no longer linked loses read on the install; other readers keep it', async () => {
     await install(manifest());
     const record = await install(manifest(), OTHER_DID);
-    await stack.grantAccess(record.id, [
-      { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: PERSON } },
+    await stack.editAccess(record.id, [
+      {
+        op: 'add',
+        association: {
+          kind: 'permission',
+          label: 'read',
+          grantee: { kind: 'entity', entityId: PERSON },
+        },
+      },
     ]);
     const otherCard = (await stack.query({ filter: { baseId: '_app' } })).records.find(
       (r) => (r.content as AppContent).did === OTHER_DID,
@@ -457,13 +464,15 @@ describe('the _install record', () => {
     ).rejects.toThrow(StackValidationError);
 
     const record = await install(manifest());
-    await stack.grantAccess(
+    await stack.editAccess(
       record.id,
-      (['read', 'write'] as const).map((label) => ({
-        kind: 'permission' as const,
-        label,
-        grantee: { kind: 'entity' as const, entityId: PERSON },
-      })),
+      (['read', 'write'] as const)
+        .map((label) => ({
+          kind: 'permission' as const,
+          label,
+          grantee: { kind: 'entity' as const, entityId: PERSON },
+        }))
+        .map((association) => ({ op: 'add' as const, association })),
     );
     await expect(
       stack.asEntity(PERSON).patchContent(record.id, { name: 'Renamed' }),

@@ -72,7 +72,8 @@ export type RecordChange = {
   kind: ChangeKind;
   /**
    * Every aspect this version moved, diffed against prior state rather
-   * than read off the request. Never empty; multi-entry only for mutate().
+   * than read off the request. Never empty; multi-entry only for an
+   * association write that both adds and removes.
    * See docs/spec/events.md § The event shape.
    */
   ops: ChangeOp[];

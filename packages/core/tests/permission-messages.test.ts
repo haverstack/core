@@ -72,11 +72,16 @@ describe('StackPermissionError messages — refusing a readable Record', () => {
   test('a reshare names the Record and who can reshare it', async () => {
     const rec = await stack.create(NOTE, { text: 'a' });
     const msg = await messageOf(
-      stack
-        .asEntity(MEMBER)
-        .grantAccess(rec.id, [
-          { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: APP } },
-        ]),
+      stack.asEntity(MEMBER).editAccess(rec.id, [
+        {
+          op: 'add',
+          association: {
+            kind: 'permission',
+            label: 'read',
+            grantee: { kind: 'entity', entityId: APP },
+          },
+        },
+      ]),
     );
     expect(msg).toBe(
       `Cannot change permissions on "${rec.id}": only its author or the stack owner can reshare it`,
@@ -107,8 +112,8 @@ describe('StackPermissionError messages — refusing a reference', () => {
     const hidden = await stack.create(NOTE, { text: 'hidden' });
     const mine = await stack.asEntity(MEMBER).create(NOTE, { text: 'mine' });
     const view = stack.asEntity(MEMBER);
-    const missing = await messageOf(view.mutate(mine.id, { parentId: MISSING_ID }));
-    const unreadable = await messageOf(view.mutate(mine.id, { parentId: hidden.id }));
+    const missing = await messageOf(view.setParent(mine.id, MISSING_ID));
+    const unreadable = await messageOf(view.setParent(mine.id, hidden.id));
     expect(unreadable).toBe(missing.replace(MISSING_ID, hidden.id));
   });
 

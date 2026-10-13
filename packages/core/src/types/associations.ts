@@ -111,7 +111,7 @@ export type AuthorityAssociation = PermissionAssociation | AnyoneAssociation;
 
 /**
  * The data half — what the `associations` field projects, and the only
- * kinds `associate()`/`dissociate()` accept.
+ * kinds `editAssociations()`/`setAssociations()` accept.
  * See docs/spec/data-model.md § Associations.
  */
 export type DataAssociation = TagAssociation | AttachmentAssociation | RelationshipAssociation;
@@ -140,27 +140,3 @@ export type AssociationChange =
  * journal records and no caller requests. See docs/spec/journal.md § The entry.
  */
 export type AssociationEdit = Exclude<AssociationChange, { op: 'repoint' }>;
-
-/**
- * The aspects of an existing record one mutate() call may move, in any
- * combination. Keys are read for presence: `unlisted: false` is a change,
- * an omitted key is untouched. Each key replaces its aspect whole except
- * `contentPatch`, which merges at the top level (`null` removes).
- * See docs/spec/data-model.md § Mutations.
- */
-export type RecordChangeSet = {
-  contentPatch?: Record<string, unknown | null>;
-  parentId?: RecordId | null;
-  permissions?: AuthorityAssociation[];
-  associations?: DataAssociation[];
-  unlisted?: boolean;
-};
-
-/** The keys of a change set, for presence checks that must not miss one. */
-export const RECORD_CHANGE_SET_KEYS = [
-  'contentPatch',
-  'parentId',
-  'permissions',
-  'associations',
-  'unlisted',
-] as const satisfies readonly (keyof RecordChangeSet)[];

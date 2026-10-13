@@ -2,7 +2,7 @@
  * The storage adapter interfaces and the per-call options Stack hands them.
  */
 
-import type { AssociationEdit, RecordChangeSet } from './associations.js';
+import type { AssociationEdit, AuthorityAssociation, DataAssociation } from './associations.js';
 import type { StackCapabilities } from './capabilities.js';
 import type { RecordChange, Unsubscribe, SubscribeOptions } from './events.js';
 import type { RecordId, TypeId, FileId, AppId, EntityId, Actor } from './ids.js';
@@ -32,15 +32,6 @@ export type SnapshotOptions = {
 };
 
 /**
- * Whether a mutateRecord() call advances `version`/`updatedAt`. `Stack`
- * computes it from what the change set moves; absent means `true`.
- * See docs/spec/versioning.md § Version history.
- */
-export type BumpVersionOptions = {
-  bumpsVersion?: boolean;
-};
-
-/**
  * Who is performing a mutation, stamped onto the record in the same write.
  * `ScopedStack` supplies it from the request's identities; a caller of
  * plain `Stack` supplies it only when reconstructing an attributed write.
@@ -61,9 +52,17 @@ export type JournalOptions = {
 
 /**
  * What every mutating StackRecordAdapter method that bumps `version` takes.
- * mutateRecord() adds BumpVersionOptions and deleteRecord() adds `purge`.
+ * deleteRecord() adds `purge`.
  */
 export type MutateOptions = IfVersionOptions & SnapshotOptions & ActorOptions & JournalOptions;
+
+/**
+ * What every write that never bumps `version` takes: the precondition,
+ * checked atomically as a bumping write checks it, and the journal entry.
+ * No actor: such a write stamps nothing on the record, so its requester
+ * travels in the entry. See docs/spec/versioning.md § Version history.
+ */
+export type AspectWriteOptions = IfVersionOptions & JournalOptions;
 
 /** The metadata an upload's `_attachment@1` record carries beside its bytes. */
 export type PutAttachmentOptions = {
@@ -99,16 +98,14 @@ export interface StackRecordAdapter {
   createRecord(record: StackRecord, opts?: JournalOptions): Promise<StackRecord>;
   getRecord(id: RecordId): Promise<StackRecord | null>;
   /**
-   * Apply a change set in one write — the only multi-aspect atomic write a
-   * record has, so a publish cannot half-land. Never touches `typeId`; see
-   * commitMigration(). `Stack` validates it and computes `bumpsVersion`,
-   * and never hands an adapter a change set that changes nothing.
-   * See docs/spec/data-model.md § Mutations.
+   * Merge a content patch, one level deep, into the content as it stands
+   * when the write lands. Bumps `version` and snapshots. Never touches
+   * `typeId`; see commitMigration(). See docs/spec/data-model.md § Mutations.
    */
-  mutateRecord(
+  patchContent(
     id: RecordId,
-    changes: RecordChangeSet,
-    opts?: MutateOptions & BumpVersionOptions,
+    patch: Record<string, unknown | null>,
+    opts?: MutateOptions,
   ): Promise<StackRecord>;
   /**
    * Returns the record this call acted on: as it now stands after a soft
@@ -129,18 +126,45 @@ export interface StackRecordAdapter {
    */
   queryRecords(query: StackQuery): Promise<QueryResult>;
 
-  // Associations
-  /**
-   * Apply a list of adds and removes as one write, all or none, removes
-   * before adds. Never bumps `version`/`updatedAt` and never snapshots — a
-   * set-add composes regardless of write order. A list mixing authority
-   * and data elements is refused.
-   * See docs/spec/adapters.md § Amending associations.
-   */
-  amendAssociations(
+  // Aspects that never bump `version`
+  //
+  // Each writes one aspect, never snapshots, and checks `ifVersion` inside
+  // its own write. `Stack` hands an adapter only a write that moves
+  // something. See docs/spec/adapters.md § Interface split.
+  /** `null` moves the record to the root. */
+  setParent(
     id: RecordId,
-    changes: AssociationEdit[],
-    opts?: JournalOptions,
+    parentId: RecordId | null,
+    opts?: AspectWriteOptions,
+  ): Promise<StackRecord>;
+  /** Stamps `unlistedAt` fresh on `true`; clears it on `false`. */
+  setUnlisted(id: RecordId, unlisted: boolean, opts?: AspectWriteOptions): Promise<StackRecord>;
+  /**
+   * Apply adds and removes to the record's data associations as one write,
+   * removes before adds. See docs/spec/adapters.md § Editing associations.
+   */
+  editAssociations(
+    id: RecordId,
+    edits: AssociationEdit[],
+    opts?: AspectWriteOptions,
+  ): Promise<StackRecord>;
+  /** Replace the record's data associations with exactly `associations`. */
+  setAssociations(
+    id: RecordId,
+    associations: DataAssociation[],
+    opts?: AspectWriteOptions,
+  ): Promise<StackRecord>;
+  /** editAssociations() over the record's permissions. */
+  editAccess(
+    id: RecordId,
+    edits: AssociationEdit[],
+    opts?: AspectWriteOptions,
+  ): Promise<StackRecord>;
+  /** Replace the record's permissions with exactly `permissions`; `[]` is private. */
+  setAccess(
+    id: RecordId,
+    permissions: AuthorityAssociation[],
+    opts?: AspectWriteOptions,
   ): Promise<StackRecord>;
 
   // Versions
@@ -177,7 +201,7 @@ export interface StackRecordAdapter {
   /**
    * Commit a migration: write new content under a new typeId in one step.
    * This is the only way a record's typeId changes after creation — used by
-   * Stack.commitMigration() and Stack.migrateAll(); Stack.mutate() never
+   * Stack.commitMigration() and Stack.migrateAll(); patchContent() never
    * changes typeId as a side effect. Bumps version internally.
    */
   commitMigration(

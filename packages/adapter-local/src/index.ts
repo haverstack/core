@@ -28,14 +28,15 @@ import type {
   AssociationEdit,
   RecordId,
   FileId,
-  RecordChangeSet,
+  AuthorityAssociation,
+  DataAssociation,
   StackCapabilities,
 } from '@haverstack/core';
 import type {
   StackAdapter,
   BlobInfo,
   StackBlobAdapter,
-  BumpVersionOptions,
+  AspectWriteOptions,
   JournalOptions,
   MutateOptions,
 } from '@haverstack/core/adapter';
@@ -135,12 +136,28 @@ export class LocalAdapter implements StackAdapter {
     return this.record.getRecord(id);
   }
 
-  async mutateRecord(
+  async patchContent(
     id: RecordId,
-    changes: RecordChangeSet,
-    opts?: MutateOptions & BumpVersionOptions,
+    patch: Record<string, unknown | null>,
+    opts?: MutateOptions,
   ): Promise<StackRecord> {
-    return this.record.mutateRecord(id, changes, opts);
+    return this.record.patchContent(id, patch, opts);
+  }
+
+  async setParent(
+    id: RecordId,
+    parentId: RecordId | null,
+    opts?: AspectWriteOptions,
+  ): Promise<StackRecord> {
+    return this.record.setParent(id, parentId, opts);
+  }
+
+  async setUnlisted(
+    id: RecordId,
+    unlisted: boolean,
+    opts?: AspectWriteOptions,
+  ): Promise<StackRecord> {
+    return this.record.setUnlisted(id, unlisted, opts);
   }
 
   async deleteRecord(
@@ -165,12 +182,36 @@ export class LocalAdapter implements StackAdapter {
     return this.record.deleteUnreferencedAttachmentRecords(fileId, metadataTypeIds);
   }
 
-  async amendAssociations(
+  async editAssociations(
     id: RecordId,
-    changes: AssociationEdit[],
-    opts?: JournalOptions,
+    edits: AssociationEdit[],
+    opts?: AspectWriteOptions,
   ): Promise<StackRecord> {
-    return this.record.amendAssociations(id, changes, opts);
+    return this.record.editAssociations(id, edits, opts);
+  }
+
+  async setAssociations(
+    id: RecordId,
+    associations: DataAssociation[],
+    opts?: AspectWriteOptions,
+  ): Promise<StackRecord> {
+    return this.record.setAssociations(id, associations, opts);
+  }
+
+  async editAccess(
+    id: RecordId,
+    edits: AssociationEdit[],
+    opts?: AspectWriteOptions,
+  ): Promise<StackRecord> {
+    return this.record.editAccess(id, edits, opts);
+  }
+
+  async setAccess(
+    id: RecordId,
+    permissions: AuthorityAssociation[],
+    opts?: AspectWriteOptions,
+  ): Promise<StackRecord> {
+    return this.record.setAccess(id, permissions, opts);
   }
 
   async getJournal(id: RecordId, query?: JournalQuery): Promise<RecordJournalEntry[]> {

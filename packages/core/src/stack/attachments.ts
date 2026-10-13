@@ -55,7 +55,7 @@ async function isFileReferenced(stack: Stack, fileId: FileId): Promise<boolean> 
 
 /**
  * Non-atomic fallback for adapters that don't implement
- * deleteUnreferencedAttachmentRecords(): a concurrent associate() can
+ * deleteUnreferencedAttachmentRecords(): a concurrent editAssociations() can
  * race between the reference check below and the deletes it guards.
  */
 export async function deleteUnreferencedAttachmentRecordsFallback(

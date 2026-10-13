@@ -36,7 +36,7 @@ const permission = (grantee: unknown): AuthorityAssociation =>
 describe('a permission element names the grantee field it is refused for', () => {
   test('a missing entityId is reported at grantee.entityId', async () => {
     const errors = await refusal(
-      stack.mutate(recordId, { permissions: [permission({ kind: 'entity', entityId: '' })] }),
+      stack.setAccess(recordId, [permission({ kind: 'entity', entityId: '' })]),
     );
     expect(errors).toEqual([
       {
@@ -48,7 +48,7 @@ describe('a permission element names the grantee field it is refused for', () =>
 
   test('a group grantee missing groupId and role reports both', async () => {
     const errors = await refusal(
-      stack.mutate(recordId, { permissions: [permission({ kind: 'group', groupId: '' })] }),
+      stack.setAccess(recordId, [permission({ kind: 'group', groupId: '' })]),
     );
     expect(errors.map((e) => e.path)).toEqual([
       'permissions[0].grantee.groupId',
@@ -58,7 +58,7 @@ describe('a permission element names the grantee field it is refused for', () =>
 
   test('the authenticated tier is a _grant tier, not a permission one', async () => {
     const errors = await refusal(
-      stack.mutate(recordId, { permissions: [permission({ kind: 'authenticated' })] }),
+      stack.setAccess(recordId, [permission({ kind: 'authenticated' })]),
     );
     expect(errors).toEqual([
       {
@@ -70,13 +70,11 @@ describe('a permission element names the grantee field it is refused for', () =>
 
   test('every message in one refusal ends the same way', async () => {
     const errors = await refusal(
-      stack.mutate(recordId, {
-        permissions: [
-          { kind: 'permission', label: 'admin', grantee: { kind: 'entity', entityId: 'a' } },
-          permission({ kind: 'group', groupId: '' }),
-          { kind: 'anyone', label: 'write' },
-        ] as AuthorityAssociation[],
-      }),
+      stack.setAccess(recordId, [
+        { kind: 'permission', label: 'admin', grantee: { kind: 'entity', entityId: 'a' } },
+        permission({ kind: 'group', groupId: '' }),
+        { kind: 'anyone', label: 'write' },
+      ] as AuthorityAssociation[]),
     );
     expect(errors).toHaveLength(4);
     for (const { message } of errors) expect(message).toMatch(/\.$/);

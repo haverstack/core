@@ -76,7 +76,7 @@ export type StackCapabilities = {
     attachmentBytes: number | null;
     /**
      * Maximum serialized size in bytes of a Record's content — a create
-     * body or a merge patch. Stack.create()/Stack.mutate() pre-check
+     * body or a merge patch. Stack.create()/Stack.patchContent() pre-check
      * against it and throw StackPayloadTooLargeError before sending.
      */
     contentBytes: number | null;

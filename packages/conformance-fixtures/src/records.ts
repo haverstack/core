@@ -34,7 +34,7 @@ export const createRecordFixtures: ConformanceFixture<WireRecord, WireRecord>[] 
     description:
       'A create body carrying unlistedAt is honoured verbatim — creating a record already ' +
       'unlisted, so there is no window where it exists and is enumerable before a later ' +
-      "change set's `unlisted` key catches up. Excluded from an unfiltered GET/POST /records/query " +
+      'PUT /records/:id/unlisted catches up. Excluded from an unfiltered GET/POST /records/query ' +
       'and the change feed by default, the same as any other unlisted record. See ' +
       'docs/spec/unlisted.md.',
     method: 'POST',
@@ -266,7 +266,7 @@ export const createRecordFixtures: ConformanceFixture<WireRecord, WireRecord>[] 
 ];
 
 // -------------------------------------------------------
-// Records: patchContent — PATCH /records/:id
+// Records: patchContent — PATCH /records/:id/content
 // -------------------------------------------------------
 
 export const patchContentFixtures: ConformanceFixture<Record<string, unknown>, WireRecord>[] = [
@@ -279,8 +279,8 @@ export const patchContentFixtures: ConformanceFixture<Record<string, unknown>, W
       'createdBy.principalId does for the create. Both are assigned from the session and ' +
       'ignored on input. See docs/spec/data-model.md § Authorship and attribution.',
     method: 'PATCH',
-    path: '/records/1hk153x00001',
-    requestBody: { contentPatch: { title: 'edited by a contributor' } },
+    path: '/records/1hk153x00001/content',
+    requestBody: { title: 'edited by a contributor' },
     responseStatus: 200,
     responseBody: {
       id: '1hk153x00001',
@@ -296,11 +296,13 @@ export const patchContentFixtures: ConformanceFixture<Record<string, unknown>, W
   {
     name: 'patch-content-merges-and-adds-fields',
     description:
-      'The PATCH body carries only the content patch — never typeId, version, or updatedAt. ' +
-      'The server merges it against current content and assigns the new version/updatedAt itself.',
+      'The PATCH body is the bare content patch, every key a content key — never typeId, ' +
+      'version, or updatedAt. The server merges it one level deep against current content ' +
+      'and assigns the new version/updatedAt itself. It is sent as application/json, not ' +
+      'application/merge-patch+json, whose merge recurses.',
     method: 'PATCH',
-    path: '/records/1hk153x00001',
-    requestBody: { contentPatch: { title: 'Updated title', pinned: true } },
+    path: '/records/1hk153x00001/content',
+    requestBody: { title: 'Updated title', pinned: true },
     responseStatus: 200,
     responseBody: {
       id: '1hk153x00001',
@@ -317,8 +319,8 @@ export const patchContentFixtures: ConformanceFixture<Record<string, unknown>, W
       'A field set to null is removed from stored content (RFC 7396 merge-patch delete). ' +
       'Fields omitted from the patch are left untouched.',
     method: 'PATCH',
-    path: '/records/1hk153x01002',
-    requestBody: { contentPatch: { title: null } },
+    path: '/records/1hk153x01002/content',
+    requestBody: { title: null },
     responseStatus: 200,
     responseBody: {
       id: '1hk153x01002',
@@ -419,7 +421,7 @@ export const deleteRecordSequenceFixtures: ConformanceSequenceFixture[] = [
         description:
           'The write that must not be lost: a second attachment association added to the ' +
           'record the very next step purges. Ordinary POST /records/:id/associations ' +
-          'semantics apply — no version bump, no If-Match read.',
+          'semantics apply — no version bump, and no If-Match sent to fence it.',
         method: 'POST',
         path: '/records/1hk153x0000c/associations',
         requestBody: {

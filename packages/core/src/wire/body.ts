@@ -2,7 +2,7 @@
  * Stack — Wire Request Bodies
  * -------------------------------------------------------
  * The JSON bodies of the endpoints core specifies but runs no server for:
- * the auth handshake, `PATCH /entity`, `POST /types`,
+ * the auth handshake, the per-aspect record writes, `POST /types`,
  * `POST /records/:id/migrate` and `POST /installs`. Each parser names every key its endpoint
  * defines, so a server refuses the rest without keeping its own copy of
  * the list — a copy that drifts the first time core adds a field.
@@ -23,6 +23,8 @@ import { assertKnownKeys, validateAssociation } from '../associations/validation
 import type { AppManifest } from '../install.js';
 import type {
   AssociationEdit,
+  AuthorityAssociation,
+  DataAssociation,
   GrantAction,
   StackType,
   TypeId,
@@ -112,17 +114,76 @@ export function parseAuthTokenBody(body: unknown): WireAuthTokenRequest {
 }
 
 // -------------------------------------------------------
-// PATCH /entity
+// PATCH /records/:id/content, PATCH /entity/content
 // -------------------------------------------------------
 
-/** A content patch for the owner entity, in the shape `patchContent()` takes. */
-export type WireEntityPatch = { contentPatch: Record<string, unknown | null> };
+/**
+ * Parse a content patch body: the bare patch, every key a content key.
+ * Which keys the record's type declares is `patchContent()`'s to judge, so
+ * an undeclared one is its 422 rather than a 400 here.
+ * See docs/spec/wire-format.md § Content.
+ */
+export function parseContentPatchBody(body: unknown): Record<string, unknown | null> {
+  return requireBody(body, 'content patch');
+}
 
-/** Parse a `PATCH /entity` body. See docs/spec/wire-format.md § Entity. */
-export function parseEntityPatchBody(body: unknown): WireEntityPatch {
-  const label = 'entity body';
-  const b = requireKnownBody(body, ['contentPatch'], label);
-  return { contentPatch: requiredObject(b, 'contentPatch', label) };
+// -------------------------------------------------------
+// PUT /records/:id/parent, PUT /records/:id/unlisted
+// -------------------------------------------------------
+
+/**
+ * Parse a `PUT /records/:id/parent` body. `null` is the root, not a
+ * removal spelling. See docs/spec/wire-format.md § Parent.
+ */
+export function parseParentBody(body: unknown): { parentId: string | null } {
+  const label = 'parent body';
+  const b = requireKnownBody(body, ['parentId'], label);
+  const { parentId } = b;
+  if (parentId === undefined)
+    throw new StackBadRequestError(`Invalid ${label}: parentId is required`);
+  if (parentId !== null && typeof parentId !== 'string')
+    fieldError('parentId', 'parentId must be a string or null');
+  return { parentId };
+}
+
+/** Parse a `PUT /records/:id/unlisted` body. See docs/spec/wire-format.md § Unlisted. */
+export function parseUnlistedBody(body: unknown): { unlisted: boolean } {
+  const label = 'unlisted body';
+  const b = requireKnownBody(body, ['unlisted'], label);
+  const { unlisted } = b;
+  if (unlisted === undefined)
+    throw new StackBadRequestError(`Invalid ${label}: unlisted is required`);
+  if (typeof unlisted !== 'boolean') fieldError('unlisted', 'unlisted must be a boolean');
+  return { unlisted };
+}
+
+// -------------------------------------------------------
+// PUT /records/:id/associations, PUT /records/:id/permissions
+// -------------------------------------------------------
+
+/**
+ * Parse a `PUT /records/:id/associations` body into the set
+ * `setAssociations()` takes. Elements are `setAssociations()`'s to judge.
+ * See docs/spec/wire-format.md § Associations.
+ */
+export function parseAssociationsBody(body: unknown): DataAssociation[] {
+  return requiredList(body, 'associations', 'associations body') as DataAssociation[];
+}
+
+/**
+ * Parse a `PUT /records/:id/permissions` body into the set `setAccess()`
+ * takes; `[]` makes the record private. See docs/spec/wire-format.md § Permissions.
+ */
+export function parsePermissionsBody(body: unknown): AuthorityAssociation[] {
+  return requiredList(body, 'permissions', 'permissions body') as AuthorityAssociation[];
+}
+
+function requiredList(body: unknown, key: string, label: string): unknown[] {
+  const b = requireKnownBody(body, [key], label);
+  const value = b[key];
+  if (value === undefined) throw new StackBadRequestError(`Invalid ${label}: ${key} is required`);
+  if (!Array.isArray(value)) fieldError(key, `${key} must be an array`);
+  return value;
 }
 
 // -------------------------------------------------------
@@ -130,8 +191,8 @@ export function parseEntityPatchBody(body: unknown): WireEntityPatch {
 // -------------------------------------------------------
 
 /**
- * Parse an association or permission amend body into the edits
- * `amendAssociations()` takes. `repoint` is something the journal records,
+ * Parse an association or permission edit body into the edits
+ * `editAssociations()` and `editAccess()` take. `repoint` is something the journal records,
  * never something a caller sends, so it is refused with the other unknown
  * ops. Which surface an element belongs to is the endpoint's to judge.
  * See docs/spec/wire-format.md § Associations.

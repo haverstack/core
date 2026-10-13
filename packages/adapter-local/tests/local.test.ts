@@ -319,7 +319,7 @@ describe('journal', () => {
     await adapter.createRecord(makeRecord({ id: 'rec1' }));
     const association = { kind: 'attachment', label: 'embed', fileId: 'file-1' } as const;
 
-    await adapter.amendAssociations(
+    await adapter.editAssociations(
       'rec1',
       [{ op: 'add', association: { ...association, attachmentRecordId: 'meta1' } }],
       {
@@ -332,7 +332,7 @@ describe('journal', () => {
         },
       },
     );
-    await adapter.amendAssociations(
+    await adapter.editAssociations(
       'rec1',
       [{ op: 'add', association: { ...association, attachmentRecordId: 'meta2' } }],
       {
@@ -367,8 +367,8 @@ describe('journal', () => {
     const adapter = await initAdapter();
     await adapter.createRecord(makeRecord({ id: 'rec1' }));
     const association = { kind: 'tag', label: 'draft' } as const;
-    await adapter.amendAssociations('rec1', [{ op: 'add', association: association }]);
-    await adapter.amendAssociations('rec1', [{ op: 'remove', association: association }], {
+    await adapter.editAssociations('rec1', [{ op: 'add', association: association }]);
+    await adapter.editAssociations('rec1', [{ op: 'remove', association: association }], {
       journal: {
         kind: 'changed',
         ops: ['dissociate'],
