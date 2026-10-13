@@ -164,19 +164,18 @@ await notes.patchContent(note.id, { title: 'Updated title' });
 const same = await notes.get(note.id);
 
 // Tag it
-await stack.associate(note.id, [{ kind: 'tag', label: 'favourite' }]);
+await notes.associate(note.id, [{ kind: 'tag', label: 'favourite' }]);
 
 // Or change several things at once — one version, one atomic write
-await stack.mutate(note.id, {
+await notes.mutate(note.id, {
   contentPatch: { title: 'Final title' },
   permissions: [{ kind: 'anyone', label: 'read' }],
   unlisted: false,
 });
 
-// Query. With no filter, query() returns every record you can read, from every
-// app and system types included, so filter by typeId, baseId or appId to get your own.
-const favourites = await stack.query({
-  filter: { typeId: 'com.example.myapp/note@1', tags: ['favourite'] },
+// Query the family. stack.query() reads across every type you can see instead.
+const { records: favourites } = await notes.query({
+  filter: { tags: ['favourite'] },
   sort: { field: 'createdAt', direction: 'desc' },
 });
 
@@ -189,66 +188,117 @@ await stack.close();
 An app has two layers, because the stack draws a line between them:
 
 - **A data layer that takes a `StackClient`** — the record API `Stack` and `ScopedStack` both implement. The same code then runs embedded as the owner, or behind a server as a requester who reaches only what they were granted.
-- **An install function that takes a `Stack`**, run by the owner. Defining types, `migrateAll()` and `grantType()` change the whole stack rather than one record, so they live on `Stack` alone and are absent from `StackClient`. Over the wire, `POST /types` and `POST /records/:id/migrate` are served to the owner acting alone.
+- **An install that the owner approves.** Defining types, `migrateAll()` and `grantType()` change the whole stack rather than one record, so they live on `Stack` alone and are absent from `StackClient`.
 
 Migrations belong to neither. They are passed to `Stack.open()` on **every startup**, so the chain is complete before the first read.
 
 ```ts
-import { Stack, add, migration, typeHandle } from '@haverstack/core';
-import type { Collection, ContentOf, StackClient } from '@haverstack/core';
+import { Stack, map, migration, typeHandle } from '@haverstack/core';
+import type { AppManifest, Collection, ContentOf, StackClient } from '@haverstack/core';
 
-const NoteV1 = typeHandle({
-  id: 'com.example.myapp/note@1',
-  name: 'Note',
-  schema: { text: { kind: 'text', required: true } },
+export const Shelf = typeHandle({
+  id: 'com.example.reading/shelf@1',
+  name: 'Shelf',
+  schema: { name: { kind: 'string', required: true } },
 });
-export const Note = typeHandle({
-  id: 'com.example.myapp/note@2',
-  name: 'Note',
-  migratesFrom: NoteV1,
+const BookV1 = typeHandle({
+  id: 'com.example.reading/book@1',
+  name: 'Book',
   schema: {
-    text: { kind: 'text', required: true },
-    pinned: { kind: 'boolean', required: true },
+    title: { kind: 'string', required: true },
+    status: { kind: 'enum', values: ['reading', 'done'], required: true },
+  },
+});
+export const Book = typeHandle({
+  id: 'com.example.reading/book@2',
+  name: 'Book',
+  migratesFrom: BookV1,
+  schema: {
+    title: { kind: 'string', required: true },
+    status: { kind: 'enum', values: ['reading', 'finished'], required: true },
+    shelfId: { kind: 'record-ref' },
+  },
+});
+export const Review = typeHandle({
+  id: 'com.example.reading/review@1',
+  name: 'Review',
+  schema: {
+    bookId: { kind: 'record-ref', required: true },
+    rating: { kind: 'number', required: true },
+    text: { kind: 'text' },
   },
 });
 
-// Startup: pass to every Stack.open(). Steps are checked against both
+export interface ShelfContent extends ContentOf<typeof Shelf.schema> {}
+export interface BookContent extends ContentOf<typeof Book.schema> {}
+export interface ReviewContent extends ContentOf<typeof Review.schema> {}
+
+// Startup: pass to every Stack.open(). Each step is checked against both
 // handles' schemas when migration() runs.
-export const noteMigrations = [migration(NoteV1, Note, [add('pinned', false)])];
+export const migrations = [migration(BookV1, Book, [map('status', { done: 'finished' })])];
 
-// Data layer: whoever the stack lets in.
-export class Notes {
-  private readonly notes: Collection<ContentOf<typeof Note.schema>>;
+// Data layer: one collection per type, and typed records from every verb.
+export class Library {
+  readonly shelves: Collection<ShelfContent>;
+  readonly books: Collection<BookContent>;
+  readonly reviews: Collection<ReviewContent>;
+
   constructor(client: StackClient) {
-    this.notes = client.collection(Note);
+    this.shelves = client.collection(Shelf);
+    this.books = client.collection(Book);
+    this.reviews = client.collection(Review);
   }
-  add(text: string) {
-    return this.notes.create({ text, pinned: false });
+
+  addBook(title: string, shelfId: string) {
+    return this.books.create({ title, status: 'reading', shelfId });
   }
-  pin(id: string) {
-    return this.notes.patchContent(id, { pinned: true });
+
+  finish(id: string) {
+    return this.books.patchContent(id, { status: 'finished' });
   }
-  list() {
-    return this.notes.query();
+
+  review(bookId: string, rating: number, text?: string) {
+    return this.reviews.create({ bookId, rating, ...(text && { text }) });
+  }
+
+  // Records at @1 come back migrated to @2. One written by a newer release
+  // of the app can't be migrated down, so it is reported, not thrown.
+  async onShelf(shelfId: string) {
+    const page = await this.books.query({
+      filter: { content: { shelfId } },
+      sort: { contentField: 'title' },
+    });
+    if (page.misfits.length > 0) {
+      console.warn(`${page.misfits.length} books need a newer version of this app`);
+    }
+    return page.records;
   }
 }
 
-// Install: the owner, once per stack and again after a schema change.
-// defineType() is a no-op for a schema already stored, so re-running is safe.
-export async function installNotes(stack: Stack, appDid?: string) {
-  await stack.defineType(NoteV1);
-  await stack.defineType(Note);
-  await stack.migrateAll(Note.baseId);
-  if (appDid) {
-    await stack.grantType(Note.baseId, {
-      actions: ['create', 'read-own', 'update-own', 'delete-own'],
-      grantee: { kind: 'entity', entityId: appDid },
-    });
-  }
+// Install, when the owner runs the app. defineType() is a no-op for a
+// schema already stored, so re-running after an upgrade is safe.
+export async function install(stack: Stack) {
+  for (const handle of [Shelf, BookV1, Book, Review]) await stack.defineType(handle);
+  await stack.migrateAll(Book.baseId);
 }
+
+// Install, when the owner doesn't: the same handles, as a request.
+export const manifest: AppManifest = {
+  appId: 'com.example.reading',
+  name: 'Reading',
+  types: [Shelf, BookV1, Book, Review],
+  requests: [Shelf, Book, Review].map((handle) => ({
+    baseId: handle.baseId,
+    actions: ['create', 'read-own', 'update-own', 'delete-own'],
+  })),
+};
 ```
 
-The owner's own app opens with `Stack.open(adapter, { migrations: noteMigrations })`, calls `installNotes(stack)`, then `new Notes(stack)`. A server hands each requester `new Notes(stack.asActor(session))`. An app that isn't the owner has no way to install its own types yet; the owner runs its install function for it.
+**When the owner runs the app**, it opens with `Stack.open(adapter, { migrations })`, calls `install(stack)`, then `new Library(stack)`. A server hands each requester `new Library(stack.asActor(session))`.
+
+**When the app runs elsewhere** — holding its own key and reaching the stack through `APIAdapter` — it can't define types, so it asks: `adapter.requestInstall(manifest)` resolves to `pending` until the owner approves. The owner reviews `stack.planInstall(manifest, { did })` and applies it with `stack.installApp(plan)`, which defines the types, registers the app's key and grants it the requests. The app still opens with its `migrations`, then builds `new Library(stack)` over its own connection. See [App installs](./docs/spec/apps.md).
+
+**Name content with an interface**, as above. `ContentOf` flattens its result, so a `type` alias shows the expanded object in editor hovers, while an interface keeps its name. typescript-eslint's recommended `no-empty-object-type` rule rejects an empty interface; its `allowInterfaces: 'with-single-extends'` option admits this one.
 
 ---
 
