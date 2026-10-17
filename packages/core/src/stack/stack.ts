@@ -873,11 +873,10 @@ export class Stack implements StackClient {
 
   /**
    * Apply adds and removes to a record's data associations: one adapter
-   * write, one journal entry. The journal records each element in full — a
-   * remove with its annotation, a re-point with what it overwrote — so the
-   * entry is as undoable as a single-element one. An add matching an
-   * existing identity with a different `attachmentRecordId` re-points it.
-   * See docs/spec/attachments.md § Naming the upload a reference came from.
+   * write, one journal entry carrying each element in full, so the entry is
+   * as undoable as a single-element one. An add naming a held identity with
+   * a new `attachmentRecordId` re-points it — see docs/spec/attachments.md
+   * § Naming the upload a reference came from.
    */
   async editAssociations(
     id: RecordId,
@@ -961,7 +960,6 @@ export class Stack implements StackClient {
     assertAssociationEdits(edits, 'editAccess()', 'authority');
     const existing = await this.requireWritable(id, opts);
     const next = applyAssociationEdits(existing.permissions ?? [], edits) as AuthorityAssociation[];
-    this.assertPermissionSet(next);
     return this.writeAccess(existing, next, opts, (journal) =>
       this.adapter.editAccess(id, edits, { ifVersion: opts.ifVersion, journal }),
     );
@@ -995,6 +993,9 @@ export class Stack implements StackClient {
   ): Promise<StackRecord> {
     const delta = associationDelta(existing.permissions ?? [], next);
     if (delta.length === 0) return existing;
+    // After the no-op check: a call that moves nothing is not refused for
+    // a stored set it did not write.
+    this.assertPermissionSet(next);
     const change = new PendingChange('reshare', {
       actor: normalizeActor(opts.actor),
       associations: delta,
@@ -1029,12 +1030,11 @@ export class Stack implements StackClient {
   }
 
   /**
-   * The record a write to its current state addresses, past every refusal
-   * owed before validation: missing, outside the expected family,
-   * soft-deleted, then a stale `ifVersion` — checked before validation, so
-   * a caller that lost the race learns its version is stale rather than
-   * that its input is bad, and before any no-op short-circuit, so a
-   * precondition is never satisfied by a write that moved nothing.
+   * The record a write addresses, past every refusal owed before
+   * validation: missing, another family, soft-deleted, then a stale
+   * `ifVersion` — before validation, so a caller that lost the race hears
+   * that first, and before any no-op, so a write that moved nothing never
+   * satisfies a precondition.
    */
   private async requireWritable(
     id: RecordId,
@@ -1066,11 +1066,10 @@ export class Stack implements StackClient {
 
   /**
    * Soft-delete a record, or purge it with its history, reporting the
-   * record acted on — the tombstone, or what a purge destroyed — captured
-   * inside the same write, so no concurrent write can land unseen between
-   * a read and the delete. A purge reports the files the record referenced,
-   * deleting none of them. See docs/spec/versioning.md § Deletion and
-   * docs/spec/attachments.md § A purge strands the bytes it referenced.
+   * record as the write left it — or as a purge destroyed it — captured in
+   * the same write, so nothing lands unseen between a read and the delete.
+   * See docs/spec/versioning.md § Deletion and docs/spec/attachments.md
+   * § A purge strands the bytes it referenced.
    */
   async delete(
     id: RecordId,

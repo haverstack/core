@@ -6118,6 +6118,26 @@ describe('ScopedStack — each write verb passes exactly one gate', () => {
       stack.asEntity(STRANGER).patchContent(note.id, { text: undefined } as never),
     ).rejects.toThrow(StackValidationError);
   });
+
+  test('a patch that is not an object is a bad request before any gate', async () => {
+    for (const patch of [null, 'x', ['text']]) {
+      await expect(stack.asEntity(STRANGER).patchContent(note.id, patch as never)).rejects.toThrow(
+        StackBadRequestError,
+      );
+    }
+  });
+
+  // The record a soft delete reports is presented as every scoped read
+  // presents a soft-deleted one. See docs/spec/versioning.md § The tombstone is literal.
+  test('a soft delete reports the tombstone, not the stored record', async () => {
+    await stack.editAssociations(note.id, [
+      { op: 'add', association: { kind: 'tag', label: 'secret' } },
+    ]);
+    const { record } = await stack.asEntity(MEMBER).delete(note.id);
+    expect(record).toEqual(await stack.asEntity(MEMBER).get(note.id, { includeDeleted: true }));
+    expect(record!.content).toEqual({});
+    expect(record!.associations).toBeUndefined();
+  });
 });
 
 describe('ScopedStack writes — delegated principals', () => {

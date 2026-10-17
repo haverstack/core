@@ -153,9 +153,10 @@ export type DeleteRecordOptions = IfVersionOptions & {
  */
 export type DeleteResult = {
   /**
-   * The tombstone for a soft delete, the record as it stood immediately
-   * before destruction for a purge, and `null` when there was nothing at
-   * `id` to purge.
+   * The record as a soft delete left it — under ScopedStack, presented as
+   * its tombstone — or as it stood immediately before destruction for a
+   * purge, and `null` when there was nothing at `id` to purge.
+   * See docs/spec/versioning.md § The tombstone is literal.
    */
   record: StackRecord | null;
   /**

@@ -209,3 +209,31 @@ describe('ScopedStack gates', () => {
     );
   });
 });
+
+describe('editAccess() that moves nothing', () => {
+  // The write-implies-read check reads the set a write would produce, so a
+  // call producing the stored set is not refused for a set it did not write.
+  test('returns the record unchanged even where the stored set breaks write-implies-read', async () => {
+    const adapter = await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' });
+    const raw = await Stack.open(adapter);
+    await raw.defineType({ id: NOTE, name: 'Note', schema: { text: { kind: 'text' } } });
+    const stored = await adapter.createRecord({
+      id: 'rec000000001',
+      typeId: NOTE,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      content: { text: 'x' },
+      version: 1,
+      permissions: [write],
+    });
+
+    const same = await raw.editAccess(stored.id, [{ op: 'add', association: write }]);
+    expect(same.permissions).toEqual([write]);
+    await expect(
+      raw.editAccess(stored.id, [{ op: 'add', association: { kind: 'anyone', label: 'read' } }]),
+    ).resolves.toBeDefined();
+    await expect(
+      raw.editAccess(stored.id, [{ op: 'remove', association: { kind: 'anyone', label: 'read' } }]),
+    ).rejects.toThrow(StackValidationError);
+  });
+});

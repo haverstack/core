@@ -61,6 +61,7 @@ import type {
   Unsubscribe,
 } from '../types/index.js';
 import {
+  StackBadRequestError,
   StackConflictError,
   StackNotFoundError,
   StackPermissionError,
@@ -505,12 +506,13 @@ export class ScopedStack implements StackClient {
     patch: Record<string, unknown | null>,
     opts: IfVersionOptions & ExpectationOptions = {},
   ): Promise<StackRecord> {
-    // Ahead of the gate: a malformed patch is a validation error for every
-    // requester, rather than one for the owner and a refusal for the rest.
-    if (typeof patch === 'object' && patch !== null && !Array.isArray(patch)) {
-      const patchErrors = validatePatchValues(patch);
-      if (patchErrors.length > 0) throw new StackValidationError(patchErrors);
+    // Ahead of the gate: a malformed patch is the same refusal for every
+    // requester, rather than one for the owner and a not-found for the rest.
+    if (typeof patch !== 'object' || patch === null || Array.isArray(patch)) {
+      throw new StackBadRequestError('A content patch is an object of content keys.');
     }
+    const patchErrors = validatePatchValues(patch);
+    if (patchErrors.length > 0) throw new StackValidationError(patchErrors);
     const record = await this.requireUpdatable(id, { expect: opts });
 
     // A patch for another version is refused by `Stack`, which owes the
@@ -518,7 +520,7 @@ export class ScopedStack implements StackClient {
     // a stored Type it was not written for. Pinned to this read, `Stack`
     // cannot find a record the patch lands on.
     const mismatched = storedVersionDiffers(record, opts, true);
-    if (!mismatched && typeof patch === 'object' && patch !== null) {
+    if (!mismatched) {
       // Value-wise, not presence-wise: a client that reads a card, edits
       // its `name` and sends the whole content object back is not setting
       // the binding it round-trips, and `name` is writable by record-level
@@ -734,15 +736,20 @@ export class ScopedStack implements StackClient {
     if (opts.purge && !this.#authority.ownerActingAlone) {
       throw new StackPermissionError('Purge is owner-only');
     }
-    if (!opts[WRITE_EXPECTATION]) return this.stack.delete(id, { ...opts, ...this.actor });
     // Checked against the read above, which the delete is pinned to.
     // Forwarded, it would cost a purge the read `Stack` otherwise skips.
-    const { [WRITE_EXPECTATION]: _checked, ...rest } = opts;
-    return this.stack.delete(id, {
+    const { [WRITE_EXPECTATION]: expectation, ...rest } = opts;
+    const result = await this.stack.delete(id, {
       ...rest,
-      ifVersion: opts.ifVersion ?? record.version,
+      ...(expectation && { ifVersion: opts.ifVersion ?? record.version }),
       ...this.actor,
     });
+    // A soft delete's record reaches the caller as every scoped read
+    // presents one; a purge is the owner's, and reports what it destroyed.
+    // See docs/spec/versioning.md § The tombstone is literal.
+    return opts.purge || !result.record
+      ? result
+      : { ...result, record: presentDeleted(result.record) };
   }
 
   /**
