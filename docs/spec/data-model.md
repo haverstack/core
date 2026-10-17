@@ -129,7 +129,7 @@ stack.editAssociations(bookId, [
 **An edit list is held to one set of rules**, before anything is read or written:
 
 - An empty list is refused with `StackValidationError`.
-- A list naming one identity twice is refused, as a `set*` list is ([Associations are keyed by identity](./adapters.md#associations-are-keyed-by-identity)). So is a list that both removes and adds one identity.
+- A list naming one identity twice is refused, as a `set*` list is ([Associations](#associations)). So is a list that both removes and adds one identity.
 - A `remove` matches on [identity](#associations).
 - The [write-implies-read](./access-control.md#write-implies-read) and `_group` at-least-one-admin checks read the post-state of the whole call.
 

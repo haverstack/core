@@ -463,25 +463,6 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         expect(await adapter.getJournal(record.id)).toHaveLength(2);
       });
 
-      test('edits naming one identity collapse, last wins', async () => {
-        const record = makeRecord();
-        await adapter.createRecord(record);
-        const fileId = 'c'.repeat(64);
-        const first = {
-          kind: 'attachment' as const,
-          label: 'cover',
-          fileId,
-          attachmentRecordId: 'one',
-        };
-        const second = { ...first, attachmentRecordId: 'two' };
-
-        const amended = await adapter.editAssociations(record.id, [
-          { op: 'add', association: first },
-          { op: 'add', association: second },
-        ]);
-        expect(amended.associations).toEqual([second]);
-      });
-
       test('each set verb replaces only its own aspect', async () => {
         const record = makeRecord();
         await adapter.createRecord(record);
@@ -710,24 +691,6 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         );
         const [entry] = await adapter.getJournal(record.id);
         expect(entry!.associations).toEqual([{ op: 'remove', association: previous }]);
-      });
-
-      test('an association list is keyed by identity, last wins', async () => {
-        // Association identity is the association table's primary key, so a
-        // list naming one identity twice is a state no store can hold.
-        // An adapter that kept both would let a record reach one a SQL
-        // adapter cannot represent.
-        const record = makeRecord();
-        await adapter.createRecord(record);
-        const fileId = 'c'.repeat(64);
-        const winner = uniqueId('second');
-        const updated = await adapter.setAssociations(record.id, [
-          { kind: 'attachment', label: 'cover', fileId, attachmentRecordId: uniqueId('first') },
-          { kind: 'attachment', label: 'cover', fileId, attachmentRecordId: winner },
-        ]);
-        expect(updated.associations).toEqual([
-          { kind: 'attachment', label: 'cover', fileId, attachmentRecordId: winner },
-        ]);
       });
 
       test('previousParentId tells "did not move" apart from "moved off the root"', async () => {

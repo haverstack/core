@@ -32,7 +32,7 @@ type StackAdapter = StackRecordAdapter &
 
 ### Associations are keyed by identity
 
-Every adapter stores a record's associations under the [identity](./data-model.md#associations) they carry — `(kind, label)` plus `fileId` or the target — so an `editAssociations()` add landing on an identity already stored overwrites it in place rather than adding a second row, and a list handed to `setAssociations()` collapses on that key, last wins. Permission elements are keyed the same way, by kind, label and the whole grantee, `role` included. It is the association table's primary key in a SQL adapter, and an adapter over some other engine owes the same behavior rather than the engine's default. `Stack` refuses a list naming one identity twice before any adapter sees one, so a store is never asked to pick; the rule is here because an adapter that kept both would let a record reach a state a SQL adapter cannot represent, which is the divergence the [conformance suite](#conformance) pins.
+Every adapter stores a record's associations under the [identity](./data-model.md#associations) they carry — `(kind, label)` plus `fileId` or the target — so an `editAssociations()` add landing on an identity already stored overwrites it in place rather than adding a second row. Permission elements are keyed the same way, by kind, label and the whole grantee, `role` included. It is the association table's primary key in a SQL adapter, and an adapter over some other engine owes the same behavior rather than the engine's default. `Stack` hands an adapter only lists naming each identity once, so no adapter is ever asked to choose between two.
 
 ### Editing associations
 

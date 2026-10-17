@@ -47,7 +47,7 @@ import {
   StackBadRequestError,
 } from './errors.js';
 import { matchesContent } from './content-match.js';
-import { applyAssociationEdits, associationEqual } from './associations/identity.js';
+import { applyAssociationEdits } from './associations/identity.js';
 
 /** Core resolves the default direction; an adapter only ever sees an explicit one. */
 const requireDirection = (sort: QuerySort): 'asc' | 'desc' => {
@@ -680,26 +680,14 @@ export class IncapableMemoryAdapter extends MemoryAdapter {
   }
 }
 
-/**
- * One aspect's set replaced, keyed by identity as every adapter's table
- * is: a repeated identity collapses, last wins, and an empty set is
- * omitted, as the SQL adapters' rowToRecord does.
- * See docs/spec/adapters.md § Associations are keyed by identity.
- */
+/** One aspect's set replaced; an empty set is omitted, as the SQL adapters' rowToRecord does. */
 function withHalf(
   record: StackRecord,
   half: 'associations' | 'permissions',
   elements: Association[],
 ): StackRecord {
-  const keyed = elements.reduce<Association[]>(
-    (acc, a) =>
-      acc.some((b) => associationEqual(a, b))
-        ? acc.map((b) => (associationEqual(a, b) ? a : b))
-        : [...acc, a],
-    [],
-  );
   const { [half]: _dropped, ...rest } = record;
-  return { ...(rest as StackRecord), ...(keyed.length && { [half]: keyed }) };
+  return { ...(rest as StackRecord), ...(elements.length && { [half]: elements }) };
 }
 
 /**
