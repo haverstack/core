@@ -154,10 +154,8 @@ export function feedAssociationDelta(changes: AssociationChange[]): {
 }
 
 /**
- * The set a list of edits leaves behind: removes first, then adds, an add
- * landing on an identity already held in place. Adds naming one identity
- * collapse, last wins; an add outlives a remove of the same identity.
- * See docs/spec/adapters.md § Editing associations.
+ * The set a list of edits leaves behind, an add landing on an identity
+ * already held in place. See docs/spec/adapters.md § Editing associations.
  */
 export function applyAssociationEdits(
   current: Association[],

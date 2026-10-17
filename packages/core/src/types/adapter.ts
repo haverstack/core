@@ -140,8 +140,8 @@ export interface StackRecordAdapter {
   /** Stamps `unlistedAt` fresh on `true`; clears it on `false`. */
   setUnlisted(id: RecordId, unlisted: boolean, opts?: AspectWriteOptions): Promise<StackRecord>;
   /**
-   * Apply adds and removes to the record's data associations as one write,
-   * removes before adds. See docs/spec/adapters.md § Editing associations.
+   * Apply adds and removes to the record's data associations as one write.
+   * See docs/spec/adapters.md § Editing associations.
    */
   editAssociations(
     id: RecordId,

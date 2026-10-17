@@ -763,7 +763,6 @@ export class SharedSqlRecordLogic {
     return this.reread(id, verb);
   }
 
-  /** Removes apply before adds, so removing and re-adding one identity leaves it present. */
   async editAssociations(
     id: string,
     edits: AssociationEdit[],
