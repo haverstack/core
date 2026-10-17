@@ -16,8 +16,8 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       'Readability is what earns the 403: a requester who cannot read the record gets 404 ' +
       'instead (error-not-found-record-the-requester-cannot-read).',
     method: 'PATCH',
-    path: '/records/1hk153x00001',
-    requestBody: { contentPatch: { title: 'New title' } },
+    path: '/records/1hk153x00001/content',
+    requestBody: { title: 'New title' },
     responseStatus: 403,
     responseBody: { error: { code: 'permission', message: 'Permission denied' } },
   },
@@ -142,8 +142,8 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       '(GET /records/:id is deliberately excluded here: APIAdapter treats a 404 there as ' +
       '"absent", resolving to null rather than throwing — see nullOn404 in getRecord.)',
     method: 'PATCH',
-    path: '/records/1hk153x0a00b',
-    requestBody: { contentPatch: { title: 'New title' } },
+    path: '/records/1hk153x0a00b/content',
+    requestBody: { title: 'New title' },
     responseStatus: 404,
     responseBody: {
       error: { code: 'not_found', message: 'Record "1hk153x0a00b" not found.' },
@@ -160,8 +160,8 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       '(error-permission-denied). Assumes "1hk153x00001" exists and the requester holds no read ' +
       'access to it. See docs/spec/disclosure.md § Which refusal a Record answers with.',
     method: 'PATCH',
-    path: '/records/1hk153x00001',
-    requestBody: { contentPatch: { title: 'New title' } },
+    path: '/records/1hk153x00001/content',
+    requestBody: { title: 'New title' },
     responseStatus: 404,
     responseBody: {
       error: { code: 'not_found', message: 'Record "1hk153x00001" not found.' },
@@ -205,12 +205,12 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
   {
     name: 'error-conflict-parent-does-not-exist',
     description:
-      'A change set naming a `parentId` that does not exist returns 409 with code ' +
+      'PUT /records/:id/parent naming a `parentId` that does not exist returns 409 with code ' +
       '"conflict". A parentId a caller names has to resolve; POST /records with a parentId is ' +
       'refused the same way. Restore names no parentId, so it has no site for this ' +
       'refusal — see restore-version-leaves-the-record-where-it-sits.',
-    method: 'PATCH',
-    path: '/records/1hk153x00001',
+    method: 'PUT',
+    path: '/records/1hk153x00001/parent',
     requestBody: { parentId: '1hk153xffffz' },
     responseStatus: 409,
     responseBody: {
@@ -229,8 +229,8 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       'checked before existence so the answer names what is wrong rather than reporting a ' +
       'lookup that could never match. The empty string is one of these, not a spelling of the ' +
       'root — the root is `null` on this endpoint.',
-    method: 'PATCH',
-    path: '/records/1hk153x00001',
+    method: 'PUT',
+    path: '/records/1hk153x00001/parent',
     requestBody: { parentId: '' },
     responseStatus: 400,
     responseBody: {
@@ -408,8 +408,8 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       'field-level details — reconstructed as StackValidationError, with `details` populating ' +
       '`.errors`.',
     method: 'PATCH',
-    path: '/records/1hk153x00001',
-    requestBody: { contentPatch: { title: 42 } },
+    path: '/records/1hk153x00001/content',
+    requestBody: { title: 42 },
     responseStatus: 422,
     responseBody: {
       error: {
@@ -427,8 +427,8 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       "string, so the type check passes and only the list refuses it. Assumes the record's " +
       'type declares { status: { kind: "enum", values: ["want", "reading", "finished"] } }.',
     method: 'PATCH',
-    path: '/records/1hk153x00001',
-    requestBody: { contentPatch: { status: 'abandoned' } },
+    path: '/records/1hk153x00001/content',
+    requestBody: { status: 'abandoned' },
     responseStatus: 422,
     responseBody: {
       error: {
@@ -465,16 +465,16 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
   {
     name: 'error-validation-permission-write-without-read',
     description:
-      "A change set's `permissions` key producing a set where some grantee holds `write` with " +
+      'PUT /records/:id/permissions producing a set where some grantee holds `write` with ' +
       'no `read` beside it returns 422 with code "validation". A write-holder reaches the ' +
       'record and its whole history through the mutate surface, so the combination withholds ' +
       'nothing while appearing to. A cross-element invariant, asked of the set the write would ' +
-      'produce: the same 422 answers a `permissions` key that drops the `read` out from under ' +
+      'produce: the same 422 answers a replacement set that drops the `read` out from under ' +
       'a `write` already stored. The server refuses it wherever a request body carries ' +
       'permissions, POST /records included. See docs/spec/access-control.md ' +
       '§ Write implies read.',
-    method: 'PATCH',
-    path: '/records/1hk153x00001',
+    method: 'PUT',
+    path: '/records/1hk153x00001/permissions',
     requestBody: {
       permissions: [
         {
@@ -493,14 +493,14 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
           {
             path: 'permissions[0]',
             message:
-              'write requires read: a write-holder reaches the record and its history through the mutate surface, so a `write` element with no `read` for the same grantee withholds nothing. Grant `read` and `write` together: grantAccess(id, [read, write])',
+              'write requires read: a write-holder reaches the record and its history through the mutate surface, so a `write` element with no `read` for the same grantee withholds nothing. Grant `read` and `write` together in one editAccess() or setAccess() call',
           },
         ],
       },
     },
   },
   {
-    name: 'error-validation-amend-permissions-write-without-read',
+    name: 'error-validation-edit-permissions-write-without-read',
     description:
       'POST /records/:id/permissions adding `write` alone for a grantee holding no `read` ' +
       'returns 422 with code "validation" and changes nothing: `write` never implies `read`, ' +
@@ -529,14 +529,14 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
           {
             path: 'permissions[0]',
             message:
-              'write requires read: a write-holder reaches the record and its history through the mutate surface, so a `write` element with no `read` for the same grantee withholds nothing. Grant `read` and `write` together: grantAccess(id, [read, write])',
+              'write requires read: a write-holder reaches the record and its history through the mutate surface, so a `write` element with no `read` for the same grantee withholds nothing. Grant `read` and `write` together in one editAccess() or setAccess() call',
           },
         ],
       },
     },
   },
   {
-    name: 'error-bad-request-amend-associations-repoint',
+    name: 'error-bad-request-edit-associations-repoint',
     description:
       'A `repoint` is recorded by the journal, never requested: POST /records/:id/associations ' +
       'returns 400 with code "bad_request" for it, since it is not an op the endpoint defines. ' +
@@ -978,21 +978,21 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       'the drop-box, and it discloses nothing. ' +
       'See docs/spec/access-control.md § Write implies read.',
     method: 'PATCH',
-    path: '/records/1hk153x00001',
-    requestBody: { contentPatch: { title: 'Seized' } },
+    path: '/records/1hk153x00001/content',
+    requestBody: { title: 'Seized' },
     responseStatus: 404,
     responseBody: { error: { code: 'not_found', message: 'Record not found' } },
   },
   {
     name: 'error-query-permission-kind-in-associations-key',
     description:
-      'A `permission` named in the `associations` key returns 400 with code "query". ' +
-      'Authority and data share storage and never share a call: the association verbs are ' +
+      'A `permission` named in PUT /records/:id/associations returns 400 with code "bad_request". ' +
+      'Permissions and associations are separate aspects: the association verbs are ' +
       'gated on the write bit alone, so an authority element reaching them would let a ' +
       'write-holder grant themselves access. The refusal is the wrong-surface answer, not a ' +
       'malformed-value one. See docs/spec/access-control.md § Record-level permissions.',
-    method: 'PATCH',
-    path: '/records/1hk153x00001',
+    method: 'PUT',
+    path: '/records/1hk153x00001/associations',
     requestBody: {
       associations: [
         {
@@ -1008,18 +1008,18 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
         code: 'bad_request',
         message:
           'associations does not carry authority: a "permission" association belongs to the ' +
-          '`permissions` surface — use grantAccess()/revokeAccess(), or the `permissions` change-set key.',
+          '`permissions` surface — use editAccess() or setAccess().',
       },
     },
   },
   {
     name: 'error-query-association-kind-in-permissions-key',
     description:
-      'The mirror refusal: a `tag` named in the `permissions` key returns 400 with code ' +
-      '"query", rather than quietly becoming an ACL entry the `associations` projection never ' +
+      'The mirror refusal: a `tag` named in PUT /records/:id/permissions returns 400 with code ' +
+      '"bad_request", rather than quietly becoming an ACL entry the `associations` projection never ' +
       'shows. See docs/spec/access-control.md § Record-level permissions.',
-    method: 'PATCH',
-    path: '/records/1hk153x00001',
+    method: 'PUT',
+    path: '/records/1hk153x00001/permissions',
     requestBody: { permissions: [{ kind: 'tag', label: 'draft' }] },
     responseStatus: 400,
     responseBody: {
@@ -1027,7 +1027,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
         code: 'bad_request',
         message:
           'permissions carries authority alone: a "tag" association belongs to the ' +
-          '`associations` surface — use associate()/dissociate(), or the `associations` change-set key.',
+          '`associations` surface — use editAssociations() or setAssociations().',
       },
     },
   },
@@ -1075,13 +1075,13 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
   {
     name: 'error-validation-attachment-mimetype-immutable-on-update',
     description:
-      'PATCH /records/:id against an _attachment@1 record is rejected with 422 / code ' +
+      'PATCH /records/:id/content against an _attachment@1 record is rejected with 422 / code ' +
       '"validation" if the patch touches mimeType at all — even restating the current value. ' +
       'filename is the only field an _attachment@1 update may change; fileId and size are ' +
       'rejected the same way if the patch would actually change their stored value.',
     method: 'PATCH',
-    path: '/records/1hk153x02003',
-    requestBody: { contentPatch: { mimeType: 'image/jpeg' } },
+    path: '/records/1hk153x02003/content',
+    requestBody: { mimeType: 'image/jpeg' },
     responseStatus: 422,
     responseBody: {
       error: {
@@ -1164,7 +1164,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       '"payload_too_large" — the same code and class as an oversized attachment upload, since a ' +
       'client acts on both identically. limits.attachmentBytes bounds attachment bytes only: a ' +
       "record body and a PATCH body have no ceiling in core, so this one is the server's to " +
-      'set and to state (as limits.contentBytes in discovery, letting Stack.create()/Stack.mutate() ' +
+      'set and to state (as limits.contentBytes in discovery, letting Stack.create()/Stack.patchContent() ' +
       'pre-check rather than burn the round trip). The body below stands in for one that ' +
       'exceeds the limit; the fixture pins the error shape, not a specific size. See ' +
       'docs/spec/wire-format.md § Request size limits.',
@@ -1188,7 +1188,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
     name: 'error-reserved-content-key',
     description:
       'A content key of __proto__, constructor or prototype is refused with 422 and code ' +
-      '"validation" on POST /records and PATCH /records/:id alike. Undeclared content fields are ' +
+      '"validation" on POST /records and PATCH /records/:id/content alike. Undeclared content fields are ' +
       'permitted by design, but these three name JavaScript object machinery rather than fields, ' +
       'and whether one survives a write depends on how an implementation sets keys: assigning ' +
       '__proto__ reaches the prototype setter and drops the write, while JSON.parse stores it as ' +
@@ -1197,10 +1197,8 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       'mapping request bodies onto storage directly applies it itself. See ' +
       'docs/spec/data-model.md § Reserved content keys.',
     method: 'PATCH',
-    path: '/records/1hk153x02011',
-    requestBody: {
-      contentPatch: JSON.parse('{"__proto__": {"polluted": true}}') as Record<string, unknown>,
-    },
+    path: '/records/1hk153x02011/content',
+    requestBody: JSON.parse('{"__proto__": {"polluted": true}}') as Record<string, unknown>,
     responseStatus: 422,
     responseBody: {
       error: {
@@ -1242,7 +1240,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
   {
     name: 'error-version-conflict-if-match-mismatch',
     description:
-      'PATCH /records/:id with an If-Match header whose value does not match the ' +
+      'PATCH /records/:id/content with an If-Match header whose value does not match the ' +
       'record\'s current version returns 412 with code "version_conflict" — reconstructed as ' +
       'StackVersionConflictError. The versionConflict payload (recordId/expectedVersion/' +
       'actualVersion) is exactly what an ifVersion retry loop needs: which record, what it ' +
@@ -1251,9 +1249,31 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       'distinct statuses so status-only reconstruction (no parseable body) still recovers the ' +
       'precise error. Assumes the record is currently at version 7.',
     method: 'PATCH',
-    path: '/records/1hk153x00001',
+    path: '/records/1hk153x00001/content',
     requestHeaders: { 'If-Match': '"5"' },
-    requestBody: { contentPatch: { title: 'New title' } },
+    requestBody: { title: 'New title' },
+    responseStatus: 412,
+    responseBody: {
+      error: {
+        code: 'version_conflict',
+        message: 'Record "1hk153x00001" is at version 7, expected 5',
+        versionConflict: { recordId: '1hk153x00001', expectedVersion: 5, actualVersion: 7 },
+      },
+    },
+  },
+  {
+    name: 'error-version-conflict-if-match-on-a-write-that-does-not-bump',
+    description:
+      'Every write endpoint reads If-Match and checks it, including the ones that never move ' +
+      'version: a precondition is a claim about the record as last read, not about what the ' +
+      'write moves. PUT /records/:id/permissions with a stale If-Match returns 412 and ' +
+      'changes nothing — the guard a publish leans on to widen access only over the content ' +
+      'it reviewed. Assumes the record is currently at version 7. See ' +
+      'docs/spec/versioning.md § Optimistic concurrency.',
+    method: 'PUT',
+    path: '/records/1hk153x00001/permissions',
+    requestHeaders: { 'If-Match': '"5"' },
+    requestBody: { permissions: [{ kind: 'anyone', label: 'read' }] },
     responseStatus: 412,
     responseBody: {
       error: {
@@ -1434,16 +1454,14 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
   {
     name: 'error-conflict-config-entityid-change',
     description:
-      'PATCH /records/_config that would change entityId returns 409 / code ' +
+      'PATCH /records/_config/content that would change entityId returns 409 / code ' +
       '"conflict" — entityId defines stack ownership, read once at open and consulted by every ' +
       'permission check thereafter; a write that silently re-anchored it would desync every ' +
       'already-running owner check. Other _config fields (e.g. timezone) update normally through ' +
       'the same endpoint — only an entityId change is refused.',
     method: 'PATCH',
-    path: '/records/_config',
-    requestBody: {
-      contentPatch: { entityId: 'did:key:z6MkvVv7EXm3g3XZ8k4hqYqK5zqfSj6pS4KvL5s6cQzYzZq3' },
-    },
+    path: '/records/_config/content',
+    requestBody: { entityId: 'did:key:z6MkvVv7EXm3g3XZ8k4hqYqK5zqfSj6pS4KvL5s6cQzYzZq3' },
     responseStatus: 409,
     responseBody: {
       error: {
@@ -1466,8 +1484,8 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       'carries no JSON body: APIAdapter checks response status before ever attempting to parse ' +
       'one, and reconstructs APIAdapterAuthError from status alone.',
     method: 'PATCH',
-    path: '/records/1hk153x00001',
-    requestBody: { contentPatch: { title: 'New title' } },
+    path: '/records/1hk153x00001/content',
+    requestBody: { title: 'New title' },
     responseStatus: 401,
   },
 ];

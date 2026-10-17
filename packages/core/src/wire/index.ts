@@ -85,17 +85,21 @@ export { parseDate } from './request.js';
 // No in-repo caller: the create half of the same contract, so a server
 // inherits which half of a record body it may trust rather than deciding
 // field by field. See docs/spec/wire-format.md § Records.
-export { createOptionsFromWireRecord, changesFromWireBody } from './record.js';
+export { createOptionsFromWireRecord } from './record.js';
 export type { WireCreateRequest } from './record.js';
 
 // No in-repo caller: the bodies of the remaining endpoints core specifies,
 // so a server refuses a key they do not define without keeping its own
 // list of the ones they do. See docs/spec/wire-format.md § Unrecognized input.
 export {
+  parseContentPatchBody,
+  parseParentBody,
+  parseUnlistedBody,
   parseAssociationEditsBody,
+  parseAssociationsBody,
+  parsePermissionsBody,
   parseAuthChallengeBody,
   parseAuthTokenBody,
-  parseEntityPatchBody,
   parseTypeBody,
   parseMigrationBody,
   parseInstallBody,
@@ -103,7 +107,6 @@ export {
 export type {
   WireAuthChallengeRequest,
   WireAuthTokenRequest,
-  WireEntityPatch,
   WireMigrationRequest,
 } from './body.js';
 

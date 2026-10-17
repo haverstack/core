@@ -8,7 +8,6 @@
  * can never disagree. See docs/spec/data-model.md § Associations.
  */
 
-import { StackBadRequestError } from '../errors.js';
 import type {
   Association,
   AssociationChange,
@@ -20,7 +19,7 @@ import type {
 } from '../types/index.js';
 
 /**
- * Association identity — what dissociate() matches and a repeat associate()
+ * Association identity — what a remove edit matches and a repeat add
  * collides with; the SQLite adapter's primary key. An attachment's
  * `attachmentRecordId` annotates a reference rather than naming one, so it
  * is outside; a group grantee's `role` names a different set of people, so
@@ -55,7 +54,7 @@ export function granteeEqual(a: Grantee, b: Grantee): boolean {
   return false;
 }
 
-/** Structural equality per target arm — what dissociate() matches on. */
+/** Structural equality per target arm — what a remove edit matches on. */
 export function targetEqual(a: RelationshipTarget, b: RelationshipTarget): boolean {
   if (a.kind !== b.kind) return false;
   if (a.kind === 'record' && b.kind === 'record') {
@@ -92,12 +91,8 @@ function stripAssociationAnnotation(association: Association): Association {
   return identity as Association;
 }
 
-/**
- * The association kinds that carry authority. Every other kind is data.
- * Storage that partitions by kind in a query reads this list rather than
- * restating it, so a new authority kind can't fall into the data half.
- */
-export const AUTHORITY_ASSOCIATION_KINDS: readonly AuthorityAssociation['kind'][] = [
+/** The association kinds that carry authority. Every other kind is data. */
+const AUTHORITY_ASSOCIATION_KINDS: readonly AuthorityAssociation['kind'][] = [
   'permission',
   'anyone',
 ];
@@ -105,7 +100,7 @@ export const AUTHORITY_ASSOCIATION_KINDS: readonly AuthorityAssociation['kind'][
 /**
  * Whether an association carries authority rather than data — the partition
  * `StackRecord.permissions` and `StackRecord.associations` project, and the
- * line `associate()`/`dissociate()` refuse to cross.
+ * line the association verbs refuse to cross.
  * See docs/spec/access-control.md § Record-level permissions.
  */
 export function isAuthorityAssociation(a: Association): a is AuthorityAssociation {
@@ -113,23 +108,8 @@ export function isAuthorityAssociation(a: Association): a is AuthorityAssociatio
 }
 
 /**
- * One stored association set split into the two the record presents. An app
- * editing tags never sees the authority half, so it cannot drop it.
- */
-export function partitionAssociations(associations: Association[]): {
-  associations: DataAssociation[];
-  permissions: AuthorityAssociation[];
-} {
-  return {
-    associations: associations.filter((a): a is DataAssociation => !isAuthorityAssociation(a)),
-    permissions: associations.filter(isAuthorityAssociation),
-  };
-}
-
-/**
- * What a `changes.associations` list moves against a record's current set,
- * one tagged edit each. An entry matching an existing identity displaced it:
- * a `repoint`, carrying the prior association in full as `previous` — the
+ * What replacing a record's set with `after` moves, one tagged edit each.
+ * An entry matching an existing identity displaced it: a `repoint`, carrying the prior association in full as `previous` — the
  * only place an overwritten `attachmentRecordId` survives.
  * See docs/spec/journal.md § The entry.
  */
@@ -174,25 +154,8 @@ export function feedAssociationDelta(changes: AssociationChange[]): {
 }
 
 /**
- * An association edit list travels one surface: authority and data share
- * storage and a delta, and never share a call. Refused here so every
- * adapter inherits the same rule.
- * See docs/spec/access-control.md § Storage unifies; the API does not.
- */
-export function assertOneSurface(changes: readonly AssociationEdit[]): void {
-  const authority = changes.filter((c) => isAuthorityAssociation(c.association)).length;
-  if (authority === 0 || authority === changes.length) return;
-  throw new StackBadRequestError(
-    'An association edit list carries authority or data, never both: permission and anyone ' +
-      'elements travel on the permissions surface.',
-  );
-}
-
-/**
- * The set a list of edits leaves behind: removes first, then adds, an add
- * landing on an identity already held in place. Adds naming one identity
- * collapse, last wins; an add outlives a remove of the same identity.
- * See docs/spec/adapters.md § Amending associations.
+ * The set a list of edits leaves behind, an add landing on an identity
+ * already held in place. See docs/spec/adapters.md § Editing associations.
  */
 export function applyAssociationEdits(
   current: Association[],
@@ -208,13 +171,4 @@ export function applyAssociationEdits(
       : [...next, c.association];
   }
   return next;
-}
-
-/**
- * The same op over every element of a list — what associate(),
- * dissociate(), grantAccess() and revokeAccess() hand to the amend verb
- * each is one half of.
- */
-export function editsOf(op: 'add' | 'remove', associations: Association[]): AssociationEdit[] {
-  return associations.map((association) => ({ op, association }));
 }

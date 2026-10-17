@@ -55,14 +55,17 @@ type Verb = (client: ExpectingClient, id: RecordId, opts?: ExpectationOptions) =
 // Each verb with arguments that would write had the family matched. A
 // call without options passes `undefined`, as an untyped caller would.
 const VERBS: Record<string, Verb> = {
-  mutate: (c, id, o) => c.mutate(id, { contentPatch: { name: 'Moved' } }, o),
   patchContent: (c, id, o) => c.patchContent(id, { name: 'Moved' }, o),
-  associate: (c, id, o) => c.associate(id, [TAG], o),
-  dissociate: (c, id, o) => c.dissociate(id, [TAG], o),
-  amendAssociations: (c, id, o) => c.amendAssociations(id, [{ op: 'add', association: TAG }], o),
-  grantAccess: (c, id, o) => c.grantAccess(id, [SHARE], o),
-  revokeAccess: (c, id, o) => c.revokeAccess(id, [SHARE], o),
-  amendAccess: (c, id, o) => c.amendAccess(id, [{ op: 'add', association: SHARE }], o),
+  setParent: (c, id, o) => c.setParent(id, null, o),
+  setUnlisted: (c, id, o) => c.setUnlisted(id, true, o),
+  'editAssociations (add)': (c, id, o) =>
+    c.editAssociations(id, [{ op: 'add', association: TAG }], o),
+  'editAssociations (remove)': (c, id, o) =>
+    c.editAssociations(id, [{ op: 'remove', association: TAG }], o),
+  setAssociations: (c, id, o) => c.setAssociations(id, [TAG], o),
+  'editAccess (add)': (c, id, o) => c.editAccess(id, [{ op: 'add', association: SHARE }], o),
+  'editAccess (remove)': (c, id, o) => c.editAccess(id, [{ op: 'remove', association: SHARE }], o),
+  setAccess: (c, id, o) => c.setAccess(id, [SHARE], o),
   delete: (c, id, o) => c.delete(id, o),
   purge: (c, id, o) => c.delete(id, { ...o, purge: true }),
   undelete: (c, id, o) => c.undelete(id, o),
@@ -84,8 +87,8 @@ beforeEach(async () => {
 const seedShelf = async (): Promise<RecordId> => {
   const shelf = await stack.create(Shelf.id, { name: 'Kitchen' });
   await stack.patchContent(shelf.id, { name: 'Hall' });
-  await stack.associate(shelf.id, [TAG]);
-  await stack.grantAccess(shelf.id, [SHARE]);
+  await stack.editAssociations(shelf.id, [{ op: 'add', association: TAG }]);
+  await stack.editAccess(shelf.id, [{ op: 'add', association: SHARE }]);
   return shelf.id;
 };
 
@@ -123,7 +126,8 @@ describe.each(Object.keys(clients))('a write expectation on %s', (clientName) =>
       const count = async (opts?: object): Promise<number> => {
         const { id } = await stack.create(Book.id, { title: 'Dune' });
         await stack.patchContent(id, { title: 'Dune Messiah' });
-        if (verb === 'dissociate') await stack.associate(id, [TAG]);
+        if (verb === 'dissociate')
+          await stack.editAssociations(id, [{ op: 'add', association: TAG }]);
         if (verb === 'undelete') await stack.delete(id);
         const spy = vi.spyOn(adapter, 'getRecord');
         await VERBS[verb]!(client(), id, opts).catch(() => {});
@@ -186,14 +190,18 @@ describe.each(Object.keys(clients))('a write expectation on %s', (clientName) =>
 
   test('a purge under an expectation of a missing record purges nothing', async () => {
     if (clientName === 'ScopedStack') return;
-    const result = await stack.deleteAndReturn('missing', expecting(BOOK_FAMILY, { purge: true }));
+    const result = await stack.delete('missing', expecting(BOOK_FAMILY, { purge: true }));
     expect(result).toEqual({ record: null, referencedFileIds: [] });
   });
 
   test('a write that leaves content alone holds only the family', async () => {
     const old = await stack.create(BookV1.id, { title: 'Dune' });
 
-    const tagged = await client().associate(old.id, [TAG], expecting(BOOK_FAMILY));
+    const tagged = await client().editAssociations(
+      old.id,
+      [{ op: 'add', association: TAG }],
+      expecting(BOOK_FAMILY),
+    );
 
     expect(tagged.associations).toEqual([TAG]);
   });

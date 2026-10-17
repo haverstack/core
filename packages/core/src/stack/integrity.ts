@@ -161,7 +161,7 @@ export function checkBindingImmutable(
 // -------------------------------------------------------
 
 /**
- * How far a change set's `parentId` will walk a proposed ancestor chain before refusing
+ * How far a `parentId` will walk a proposed ancestor chain before refusing
  * the move. Bounds the reads one call can cost; a hierarchy deeper than
  * this is beyond what `parentId` is for. See docs/spec/data-model.md
  * § Reparenting.
@@ -281,7 +281,7 @@ export async function checkAttachmentAssociationPointers(
       ? [{ fileId: association.fileId, attachmentRecordId: association.attachmentRecordId }]
       : [],
   );
-  // One round trip per pointer, taken together: a change set carries a
+  // One round trip per pointer, taken together: a write carries a
   // whole association list, and each pointer is an independent read.
   const named = await Promise.all(
     pointed.map(({ attachmentRecordId }) => read(attachmentRecordId)),

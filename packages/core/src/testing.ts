@@ -19,10 +19,9 @@ import type {
   JournalEntryInput,
   JournalOptions,
   MutateOptions,
-  BumpVersionOptions,
   JournalQuery,
   VersionsQuery,
-  RecordChangeSet,
+  AspectWriteOptions,
   ActorOptions,
   StackQuery,
   QueryResult,
@@ -48,12 +47,7 @@ import {
   StackBadRequestError,
 } from './errors.js';
 import { matchesContent } from './content-match.js';
-import {
-  applyAssociationEdits,
-  assertOneSurface,
-  associationEqual,
-  partitionAssociations,
-} from './associations/identity.js';
+import { applyAssociationEdits } from './associations/identity.js';
 
 /** Core resolves the default direction; an adapter only ever sees an explicit one. */
 const requireDirection = (sort: QuerySort): 'asc' | 'desc' => {
@@ -174,46 +168,65 @@ export class MemoryAdapter implements StackAdapter {
     return fileRefFields(schema).some((field) => content[field] === fileId);
   }
 
-  async mutateRecord(
-    id: string,
-    changes: RecordChangeSet,
-    opts: MutateOptions & BumpVersionOptions = {},
-  ) {
+  async patchContent(id: string, patch: Record<string, unknown | null>, opts: MutateOptions = {}) {
+    const existing = this.requireForWrite(id, opts.ifVersion);
+    if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
+    const content = withoutUndefined(applyMergePatch(existing.content, patch));
+    return this.store(id, this.bump({ ...existing, content }, opts), opts.journal);
+  }
+
+  /** The record a write addresses, past its `ifVersion` check. */
+  private requireForWrite(id: string, ifVersion: number | undefined): StackRecord {
     const existing = this.records.get(id);
     if (!existing) throw new StackNotFoundError(`Record not found: "${id}"`);
-    this.checkExpectedVersion(existing, opts.ifVersion);
-    if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
+    this.checkExpectedVersion(existing, ifVersion);
+    return existing;
+  }
 
-    // Destructured out so each optional native field is re-added only when
-    // the change set leaves it set — assigning `undefined` would leave the
-    // key present, which is how a record grows a `parentId: undefined` that
-    // every `in` check then reads as a container.
-    const { parentId: _p, unlistedAt: _u, ...rest } = existing;
-    let next: StackRecord = rest as StackRecord;
+  private store(id: string, record: StackRecord, journal: JournalEntryInput | undefined) {
+    this.records.set(id, record);
+    this.appendJournal(id, journal, record);
+    return record;
+  }
 
-    if (changes.contentPatch) {
-      next = { ...next, content: applyMergePatch(next.content, changes.contentPatch) };
-    }
-    // Each key replaces only within its own half of the partition, which
-    // is what keeps a tag write from touching an ACL it was never shown.
-    if (changes.permissions) next = withPermissions(next, changes.permissions);
-    if (changes.associations) next = withAssociations(next, changes.associations);
+  // An optional native field is destructured out and re-added only when
+  // set: assigning `undefined` would leave the key present, which is how a
+  // record grows a `parentId: undefined` every `in` check reads as a container.
 
-    const parentId =
-      changes.parentId !== undefined ? changes.parentId : (existing.parentId ?? null);
-    if (parentId !== null) next = { ...next, parentId };
+  async setParent(id: string, parentId: string | null, opts: AspectWriteOptions = {}) {
+    const { parentId: _p, ...rest } = this.requireForWrite(id, opts.ifVersion);
+    return this.store(id, { ...rest, ...(parentId !== null && { parentId }) }, opts.journal);
+  }
 
-    const unlisted =
-      changes.unlisted !== undefined ? changes.unlisted : Boolean(existing.unlistedAt);
-    if (unlisted) next = { ...next, unlistedAt: existing.unlistedAt ?? new Date() };
+  async setUnlisted(id: string, unlisted: boolean, opts: AspectWriteOptions = {}) {
+    const { unlistedAt: _u, ...rest } = this.requireForWrite(id, opts.ifVersion);
+    return this.store(id, { ...rest, ...(unlisted && { unlistedAt: new Date() }) }, opts.journal);
+  }
 
-    // A change set touching only `associations` doesn't bump — see
-    // docs/spec/versioning.md § Version history. `next` already carries
-    // the prior version/updatedAt/updatedBy untouched.
-    const updated = opts.bumpsVersion === false ? next : this.bump(next, opts);
-    this.records.set(id, updated);
-    this.appendJournal(id, opts.journal, updated);
-    return updated;
+  async editAssociations(id: string, edits: AssociationEdit[], opts: AspectWriteOptions = {}) {
+    const existing = this.requireForWrite(id, opts.ifVersion);
+    const next = applyAssociationEdits(existing.associations ?? [], edits);
+    return this.store(id, withHalf(existing, 'associations', next), opts.journal);
+  }
+
+  async setAssociations(
+    id: string,
+    associations: DataAssociation[],
+    opts: AspectWriteOptions = {},
+  ) {
+    const existing = this.requireForWrite(id, opts.ifVersion);
+    return this.store(id, withHalf(existing, 'associations', associations), opts.journal);
+  }
+
+  async editAccess(id: string, edits: AssociationEdit[], opts: AspectWriteOptions = {}) {
+    const existing = this.requireForWrite(id, opts.ifVersion);
+    const next = applyAssociationEdits(existing.permissions ?? [], edits);
+    return this.store(id, withHalf(existing, 'permissions', next), opts.journal);
+  }
+
+  async setAccess(id: string, permissions: AuthorityAssociation[], opts: AspectWriteOptions = {}) {
+    const existing = this.requireForWrite(id, opts.ifVersion);
+    return this.store(id, withHalf(existing, 'permissions', permissions), opts.journal);
   }
 
   async deleteRecord(id: string, opts: { purge?: boolean } & MutateOptions = {}) {
@@ -454,20 +467,6 @@ export class MemoryAdapter implements StackAdapter {
     return contentSortEntry(def.kind, (record.content as Record<string, unknown>)[field]);
   }
 
-  /** Never bumps `version`/`updatedAt` — see StackRecordAdapter.amendAssociations(). */
-  async amendAssociations(id: string, changes: AssociationEdit[], opts: JournalOptions = {}) {
-    assertOneSurface(changes);
-    const record = this.records.get(id);
-    if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
-    const updated = withAssociationSet(
-      record,
-      applyAssociationEdits(allAssociations(record), changes),
-    );
-    this.records.set(id, updated);
-    this.appendJournal(id, opts.journal, updated);
-    return updated;
-  }
-
   async getVersions(id: string, query: VersionsQuery = {}) {
     const newestFirst = [...(this.versions.get(id) ?? [])].sort((a, b) => b.version - a.version);
     const before =
@@ -681,45 +680,14 @@ export class IncapableMemoryAdapter extends MemoryAdapter {
   }
 }
 
-/**
- * A record's whole association table, both projections rejoined — what
- * amendAssociations() acts on, since storage keys all kinds alike.
- */
-function allAssociations(record: StackRecord): Association[] {
-  return [...(record.associations ?? []), ...(record.permissions ?? [])];
-}
-
-/**
- * Sets a record's associations keyed by identity, as every adapter's table
- * is: a repeated identity collapses, last wins. Both projections are
- * written and an empty one omitted, as the SQL adapters' rowToRecord does.
- * See docs/spec/adapters.md § Associations are keyed by identity.
- */
-function withAssociationSet(record: StackRecord, associations: Association[]): StackRecord {
-  const keyed = associations.reduce<Association[]>(
-    (acc, a) =>
-      acc.some((b) => associationEqual(a, b))
-        ? acc.map((b) => (associationEqual(a, b) ? a : b))
-        : [...acc, a],
-    [],
-  );
-  const { associations: _dropA, permissions: _dropP, ...rest } = record;
-  const { associations: data, permissions: authority } = partitionAssociations(keyed);
-  return {
-    ...(rest as StackRecord),
-    ...(data.length && { associations: data }),
-    ...(authority.length && { permissions: authority }),
-  };
-}
-
-/** withAssociationSet() over the data half alone — the `associations` key. */
-function withAssociations(record: StackRecord, associations: DataAssociation[]): StackRecord {
-  return withAssociationSet(record, [...associations, ...(record.permissions ?? [])]);
-}
-
-/** withAssociationSet() over the authority half alone — the `permissions` key. */
-function withPermissions(record: StackRecord, permissions: AuthorityAssociation[]): StackRecord {
-  return withAssociationSet(record, [...(record.associations ?? []), ...permissions]);
+/** One aspect's set replaced; an empty set is omitted, as the SQL adapters' rowToRecord does. */
+function withHalf(
+  record: StackRecord,
+  half: 'associations' | 'permissions',
+  elements: Association[],
+): StackRecord {
+  const { [half]: _dropped, ...rest } = record;
+  return { ...(rest as StackRecord), ...(elements.length && { [half]: elements }) };
 }
 
 /**

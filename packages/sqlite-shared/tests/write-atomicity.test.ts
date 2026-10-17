@@ -45,6 +45,7 @@ const makeRecord = (overrides: Partial<StackRecord> = {}): StackRecord => ({
   content: { text: 'hello', rank: 3 },
   version: 1,
   associations: [{ kind: 'tag', label: 'starred' }],
+  permissions: [{ kind: 'anyone', label: 'read' }],
   ...overrides,
 });
 
@@ -79,17 +80,18 @@ describe('a failed write leaves nothing behind', () => {
   const snapshotCounts = (db: DatabaseSync) => ({
     records: rows(db, 'records'),
     associations: rows(db, 'associations'),
+    permissions: rows(db, 'permissions'),
     versions: rows(db, 'versions'),
     content_index: rows(db, 'content_index'),
     journal: rows(db, 'journal'),
   });
 
-  // createRecord issues seven statements after saveType's own. Failing on
+  // createRecord issues eight statements after saveType's own. Failing on
   // any of them past the first leaves residue without a transaction — and
   // a records row that outlives its own failed create is the worst shape
   // it takes: the call raises, so the caller believes nothing landed,
   // and their retry then fails on the primary key.
-  test.each([2, 3, 4, 5, 6, 7, 8])(
+  test.each([2, 3, 4, 5, 6, 7, 8, 9])(
     'createRecord failing on statement %i writes nothing',
     async (failOn) => {
       const { db, logic } = await setup(failOn);
@@ -99,6 +101,7 @@ describe('a failed write leaves nothing behind', () => {
       expect(snapshotCounts(db)).toEqual({
         records: 0,
         associations: 0,
+        permissions: 0,
         versions: 0,
         content_index: 0,
         journal: 0,
@@ -114,6 +117,7 @@ describe('a failed write leaves nothing behind', () => {
     expect(snapshotCounts(db)).toEqual({
       records: 1,
       associations: 1,
+      permissions: 1,
       versions: 0,
       content_index: 2, // text + rank
       journal: 1,
@@ -121,30 +125,22 @@ describe('a failed write leaves nothing behind', () => {
     db.close();
   });
 
-  test('mutateRecord failing after it has dropped the association set restores it', async () => {
+  test('setAssociations failing after it has dropped the association set restores it', async () => {
     const { db, logic } = await setup(0);
     await logic.createRecord(makeRecord(), journal);
     const before = await logic.getRecord('rec000000001');
     const counts = snapshotCounts(db);
 
-    // Statement 5 of mutateRecord is the association re-insert, by which
-    // point the snapshot is written, the record row updated, and the old
-    // associations deleted.
-    const failing = new SharedSqlRecordLogic({ exec: failingExecutor(db, 5) });
+    // Statement 2 of setAssociations is the re-insert, by which point the
+    // old associations are deleted.
+    const failing = new SharedSqlRecordLogic({ exec: failingExecutor(db, 2) });
     await expect(
-      failing.mutateRecord(
-        'rec000000001',
-        { contentPatch: { text: 'edited' }, associations: [{ kind: 'tag', label: 'moved' }] },
-        {
-          snapshot: { version: 1, typeId: NOTE, content: before!.content, updatedAt: new Date() },
-          journal: { ops: ['patch'], kind: 'changed' },
-        },
-      ),
+      failing.setAssociations('rec000000001', [{ kind: 'tag', label: 'moved' }], {
+        journal: { ops: ['associate', 'dissociate'], kind: 'changed' },
+      }),
     ).rejects.toThrow();
 
     const after = await logic.getRecord('rec000000001');
-    expect(after!.version).toBe(before!.version);
-    expect(after!.content).toEqual(before!.content);
     expect(after!.associations).toEqual(before!.associations);
     expect(snapshotCounts(db)).toEqual(counts);
     db.close();

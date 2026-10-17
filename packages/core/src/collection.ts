@@ -43,7 +43,6 @@ import type {
   IfVersionOptions,
   NativeSortField,
   RecordChange,
-  RecordChangeSet,
   RecordFilter,
   RecordId,
   StackQuery,
@@ -204,10 +203,6 @@ export type CollectionChange<C> = Omit<RecordChange, 'record'> & {
   misfit?: Misfit;
 };
 
-export type CollectionChangeSet<C> = Omit<RecordChangeSet, 'contentPatch'> & {
-  contentPatch?: ContentPatch<C>;
-};
-
 /**
  * Typed access to one type family. History (`getVersions`, `getVersion`,
  * `getJournal`) spans versions by nature and stays on `StackClient`. See
@@ -222,22 +217,41 @@ export interface Collection<C> {
     opts?: CollectionSubscribeOptions,
   ): Promise<Unsubscribe>;
   create(content: C, opts?: CreateRecordOptions): Promise<CollectionRecord<C>>;
-  mutate(
-    id: RecordId,
-    changes: CollectionChangeSet<C>,
-    opts?: IfVersionOptions,
-  ): Promise<CollectionRecord<C>>;
   patchContent(
     id: RecordId,
     patch: ContentPatch<C>,
     opts?: IfVersionOptions,
   ): Promise<CollectionRecord<C>>;
-  associate(id: RecordId, associations: DataAssociation[]): Promise<CollectionRecord<C>>;
-  dissociate(id: RecordId, associations: DataAssociation[]): Promise<CollectionRecord<C>>;
-  amendAssociations(id: RecordId, changes: AssociationEdit[]): Promise<CollectionRecord<C>>;
-  grantAccess(id: RecordId, permissions: AuthorityAssociation[]): Promise<CollectionRecord<C>>;
-  revokeAccess(id: RecordId, permissions: AuthorityAssociation[]): Promise<CollectionRecord<C>>;
-  amendAccess(id: RecordId, changes: AssociationEdit[]): Promise<CollectionRecord<C>>;
+  setParent(
+    id: RecordId,
+    parentId: RecordId | null,
+    opts?: IfVersionOptions,
+  ): Promise<CollectionRecord<C>>;
+  setUnlisted(
+    id: RecordId,
+    unlisted: boolean,
+    opts?: IfVersionOptions,
+  ): Promise<CollectionRecord<C>>;
+  editAssociations(
+    id: RecordId,
+    edits: AssociationEdit[],
+    opts?: IfVersionOptions,
+  ): Promise<CollectionRecord<C>>;
+  setAssociations(
+    id: RecordId,
+    associations: DataAssociation[],
+    opts?: IfVersionOptions,
+  ): Promise<CollectionRecord<C>>;
+  editAccess(
+    id: RecordId,
+    edits: AssociationEdit[],
+    opts?: IfVersionOptions,
+  ): Promise<CollectionRecord<C>>;
+  setAccess(
+    id: RecordId,
+    permissions: AuthorityAssociation[],
+    opts?: IfVersionOptions,
+  ): Promise<CollectionRecord<C>>;
   delete(id: RecordId, opts?: DeleteRecordOptions): Promise<DeleteResult>;
   undelete(id: RecordId, opts?: IfVersionOptions): Promise<CollectionRecord<C>>;
   restoreVersion(
@@ -398,9 +412,9 @@ export const createCollection = <S extends ReadonlyTypeSchema>(
    * patch never folds a migration in. See docs/spec/data-model.md § Type
    * migrations.
    */
-  const migrateThenMutate = async (
+  const migrateThenPatch = async (
     stored: StackRecord,
-    changes: RecordChangeSet,
+    patch: Record<string, unknown | null>,
     opts: IfVersionOptions,
   ): Promise<CollectionRecord<C>> => {
     const migrated = classify(stored);
@@ -422,7 +436,7 @@ export const createCollection = <S extends ReadonlyTypeSchema>(
           `${handle.id} before this write: ${err.message}`,
       );
     }
-    const written = await writer.mutate(stored.id, changes, {
+    const written = await writer.patchContent(stored.id, patch, {
       ...opts,
       ifVersion: committed.version,
       ...expect({ ...family, typeId: handle.id }),
@@ -563,20 +577,20 @@ export const createCollection = <S extends ReadonlyTypeSchema>(
     };
   };
 
-  const mutate = async (
+  const patchContent = async (
     id: RecordId,
-    changes: RecordChangeSet,
+    patch: Record<string, unknown | null>,
     opts: IfVersionOptions = {},
   ): Promise<CollectionRecord<C>> => {
     try {
-      const written = await writer.mutate(id, changes, {
+      const written = await writer.patchContent(id, patch, {
         ...opts,
         ...expect({ ...family, typeId: handle.id }),
       });
       return narrow(written, true);
     } catch (err) {
       if (!(err instanceof StoredVersionError)) throw err;
-      return migrateThenMutate(err.record, changes, opts);
+      return migrateThenPatch(err.record, patch, opts);
     }
   };
 
@@ -667,28 +681,26 @@ export const createCollection = <S extends ReadonlyTypeSchema>(
       return (await client.create(handle.id, content, opts)) as CollectionRecord<C>;
     },
 
-    mutate: (id, changes, opts) => mutate(id, changes as RecordChangeSet, opts),
-
     patchContent: (id, patch, opts) =>
-      mutate(id, { contentPatch: patch as Record<string, unknown> }, opts),
+      patchContent(id, patch as Record<string, unknown | null>, opts),
 
-    async associate(id, associations) {
-      return narrow(await writer.associate(id, associations, expect()), true);
+    async setParent(id, parentId, opts) {
+      return narrow(await writer.setParent(id, parentId, { ...opts, ...expect() }), true);
     },
-    async dissociate(id, associations) {
-      return narrow(await writer.dissociate(id, associations, expect()), true);
+    async setUnlisted(id, unlisted, opts) {
+      return narrow(await writer.setUnlisted(id, unlisted, { ...opts, ...expect() }), true);
     },
-    async amendAssociations(id, changes) {
-      return narrow(await writer.amendAssociations(id, changes, expect()), true);
+    async editAssociations(id, edits, opts) {
+      return narrow(await writer.editAssociations(id, edits, { ...opts, ...expect() }), true);
     },
-    async grantAccess(id, permissions) {
-      return narrow(await writer.grantAccess(id, permissions, expect()), true);
+    async setAssociations(id, associations, opts) {
+      return narrow(await writer.setAssociations(id, associations, { ...opts, ...expect() }), true);
     },
-    async revokeAccess(id, permissions) {
-      return narrow(await writer.revokeAccess(id, permissions, expect()), true);
+    async editAccess(id, edits, opts) {
+      return narrow(await writer.editAccess(id, edits, { ...opts, ...expect() }), true);
     },
-    async amendAccess(id, changes) {
-      return narrow(await writer.amendAccess(id, changes, expect()), true);
+    async setAccess(id, permissions, opts) {
+      return narrow(await writer.setAccess(id, permissions, { ...opts, ...expect() }), true);
     },
     delete: (id, opts) => writer.delete(id, { ...opts, ...expect() }),
     async undelete(id, opts) {

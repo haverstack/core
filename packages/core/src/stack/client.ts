@@ -20,7 +20,6 @@ import type {
   PutAttachmentOptions,
   QueryResult,
   RecordChange,
-  RecordChangeSet,
   RecordId,
   RecordJournalEntry,
   RecordVersion,
@@ -147,12 +146,19 @@ export type DeleteRecordOptions = IfVersionOptions & {
 };
 
 /**
- * What a delete reports back. Information, not action: a purge never
- * touches the blob store, and nothing here is deleted by having been
- * named. See docs/spec/attachments.md § A purge strands the bytes it
- * referenced.
+ * What a delete reports back. The record is captured inside the same
+ * atomic write as the delete, never read beforehand. `referencedFileIds`
+ * is information, not action: a purge never touches the blob store. See
+ * docs/spec/attachments.md § A purge strands the bytes it referenced.
  */
 export type DeleteResult = {
+  /**
+   * The record as a soft delete left it — under ScopedStack, presented as
+   * its tombstone — or as it stood immediately before destruction for a
+   * purge, and `null` when there was nothing at `id` to purge.
+   * See docs/spec/versioning.md § The tombstone is literal.
+   */
+  record: StackRecord | null;
   /**
    * The files the purged record referenced — its attachment associations
    * and its `file-ref` content fields, deduplicated. The purge removes the
@@ -161,22 +167,6 @@ export type DeleteResult = {
    * strands nothing: a tombstone's references stand.
    */
   referencedFileIds: FileId[];
-};
-
-/**
- * What deleteAndReturn() reports back — DeleteResult plus the record itself,
- * captured inside the same atomic operation as the destroy rather than a
- * read beforehand. See Stack.deleteAndReturn().
- */
-export type DeleteAndReturnResult = DeleteResult & {
-  /**
-   * The record as it stood at the moment of deletion: immediately before
-   * destruction for a purge, or the resulting tombstone for a soft
-   * delete. Null only for the purge no-op — there was nothing to
-   * delete, and nothing to report; every other outcome throws instead of
-   * returning null (see Stack.delete()'s own no-op cases).
-   */
-  record: StackRecord | null;
 };
 
 /** Options for Stack.migrateAll(). */
@@ -235,59 +225,55 @@ export interface StackClient {
   /** getEntityByDid() for the one DID every stack reserves: its own owner. */
   getOwnerEntity(): Promise<StackRecord | null>;
   /**
-   * Apply a change set — any of `contentPatch`, `parentId`, `permissions`,
-   * `associations` and `unlisted` — as one atomic write, versioned only when
-   * it names `contentPatch`. Keys are read for presence; under ScopedStack
-   * one refused key refuses the call. See docs/spec/data-model.md § Mutations.
+   * Merge a patch into a record's content, one level deep (`null` removes a
+   * key). The only content edit, and the one write besides the lifecycle
+   * verbs that bumps `version`. See docs/spec/data-model.md § Mutations.
    */
-  mutate(id: RecordId, changes: RecordChangeSet, opts?: IfVersionOptions): Promise<StackRecord>;
-  /** mutate() with `contentPatch` alone — the common case, named for it. */
   patchContent(
     id: RecordId,
     patch: Record<string, unknown | null>,
     opts?: IfVersionOptions,
   ): Promise<StackRecord>;
   /**
-   * Add associations in one atomic write and one journal entry. Never bumps
-   * `version`/`updatedAt` and takes no `ifVersion` — a set-add composes
-   * regardless of write order. See docs/spec/data-model.md § Mutations and
-   * docs/spec/versioning.md § Version history.
+   * Move a record under `parentId`, or to the root with `null`. See
+   * docs/spec/data-model.md § Reparenting.
    */
-  associate(id: RecordId, associations: DataAssociation[]): Promise<StackRecord>;
-  /** Remove associations, matched by identity — see associate(). */
-  dissociate(id: RecordId, associations: DataAssociation[]): Promise<StackRecord>;
+  setParent(id: RecordId, parentId: RecordId | null, opts?: IfVersionOptions): Promise<StackRecord>;
+  /** Withhold a record from enumeration, or restore it. See docs/spec/unlisted.md. */
+  setUnlisted(id: RecordId, unlisted: boolean, opts?: IfVersionOptions): Promise<StackRecord>;
   /**
-   * Apply a list of adds and removes to a record's data associations as one
-   * atomic write — the cover swap. associate() and dissociate() are this with
-   * one half each; `mutate({ associations })` is the only whole-set write.
-   * `repoint` is not a request: an add naming an attachment the record
-   * already holds re-points it. See docs/spec/data-model.md § Mutations.
+   * Apply adds and removes to a record's data associations as one write,
+   * changing only what the list names. An add naming an attachment the
+   * record already holds re-points it. See docs/spec/data-model.md § Mutations.
    */
-  amendAssociations(id: RecordId, changes: AssociationEdit[]): Promise<StackRecord>;
+  editAssociations(
+    id: RecordId,
+    edits: AssociationEdit[],
+    opts?: IfVersionOptions,
+  ): Promise<StackRecord>;
+  /** Make a record's data associations exactly `associations`. */
+  setAssociations(
+    id: RecordId,
+    associations: DataAssociation[],
+    opts?: IfVersionOptions,
+  ): Promise<StackRecord>;
   /**
-   * Extend who reaches a record — the record-level mirror of the type-level
-   * `grantType()`, and the amending spelling of the `permissions` key, which
-   * replaces the whole set. `write` never implies `read`: grant both,
-   * `grantAccess(id, [read, write])`. No-bump, like associate().
-   * See docs/spec/access-control.md § Write implies read.
+   * editAssociations() for who reaches a record, so a downgrade (remove
+   * `write`, keep `read`) is one change. `write` never implies `read`:
+   * grant both. See docs/spec/access-control.md § Record-level permissions.
    */
-  grantAccess(id: RecordId, permissions: AuthorityAssociation[]): Promise<StackRecord>;
-  /** Withdraw elements of who reaches a record — see grantAccess(). */
-  revokeAccess(id: RecordId, permissions: AuthorityAssociation[]): Promise<StackRecord>;
+  editAccess(id: RecordId, edits: AssociationEdit[], opts?: IfVersionOptions): Promise<StackRecord>;
+  /** Make who reaches a record exactly `permissions`; `[]` is private. */
+  setAccess(
+    id: RecordId,
+    permissions: AuthorityAssociation[],
+    opts?: IfVersionOptions,
+  ): Promise<StackRecord>;
   /**
-   * amendAssociations() for permissions: adds and removes in one atomic
-   * write, so a downgrade (remove `write`, keep `read`) is one change.
-   * See docs/spec/access-control.md § Record-level permissions.
+   * Soft-delete a record, or purge it with its history, reporting the
+   * record it acted on. See docs/spec/versioning.md § Deletion.
    */
-  amendAccess(id: RecordId, changes: AssociationEdit[]): Promise<StackRecord>;
   delete(id: RecordId, opts?: DeleteRecordOptions): Promise<DeleteResult>;
-  /**
-   * delete(), plus the record it acted on — read and destroyed as one
-   * atomic operation, so a caller that needs the record for its own
-   * response (e.g. a server building a purge's body) never opens a
-   * gap between reading it and destroying it. See Stack.deleteAndReturn().
-   */
-  deleteAndReturn(id: RecordId, opts?: DeleteRecordOptions): Promise<DeleteAndReturnResult>;
   undelete(id: RecordId, opts?: IfVersionOptions): Promise<StackRecord>;
   getVersions(id: RecordId, query?: VersionsQuery): Promise<RecordVersion[]>;
   getVersion(id: RecordId, version: number): Promise<RecordVersion | null>;

@@ -43,8 +43,8 @@ describe('a content refusal says content was validated', () => {
     });
   });
 
-  test('mutate() with a patch the schema refuses', async () => {
-    expect(await refusal(stack.mutate(recordId, { contentPatch: { text: 1 } }))).toEqual({
+  test('patchContent() with a patch the schema refuses', async () => {
+    expect(await refusal(stack.patchContent(recordId, { text: 1 }))).toEqual({
       header: 'Content validation failed:',
       paths: ['text'],
     });
@@ -69,20 +69,15 @@ describe('an argument refusal says the arguments were invalid, under their own n
     ).toEqual({ header: 'Invalid arguments:', paths: ['createdAt'] });
   });
 
-  test('create() and mutate() report argument and content problems in one refusal', async () => {
+  test('create() reports argument and content problems in one refusal', async () => {
     expect(await refusal(stack.create(NOTE, { text: 1 }, { associations: [TAG, TAG] }))).toEqual({
       header: 'Invalid arguments:',
       paths: ['associations[1]', 'text'],
     });
-    expect(
-      await refusal(
-        stack.mutate(recordId, { associations: [TAG, TAG], contentPatch: { text: undefined } }),
-      ),
-    ).toEqual({ header: 'Invalid arguments:', paths: ['associations[1]', 'text'] });
   });
 
-  test('mutate() with a duplicate association', async () => {
-    expect(await refusal(stack.mutate(recordId, { associations: [TAG, TAG] }))).toEqual({
+  test('setAssociations() with a duplicate association', async () => {
+    expect(await refusal(stack.setAssociations(recordId, [TAG, TAG]))).toEqual({
       header: 'Invalid arguments:',
       paths: ['associations[1]'],
     });
@@ -113,13 +108,13 @@ describe('an argument refusal says the arguments were invalid, under their own n
     });
   });
 
-  test('amendAssociations() reports under changes', async () => {
-    expect(await refusal(stack.amendAssociations(recordId, []))).toEqual({
+  test('editAssociations() reports under changes', async () => {
+    expect(await refusal(stack.editAssociations(recordId, []))).toEqual({
       header: 'Invalid arguments:',
       paths: ['changes'],
     });
     const add = { op: 'add', association: TAG } as const;
-    expect(await refusal(stack.amendAssociations(recordId, [add, add]))).toEqual({
+    expect(await refusal(stack.editAssociations(recordId, [add, add]))).toEqual({
       header: 'Invalid arguments:',
       paths: ['changes[1]'],
     });
@@ -129,46 +124,36 @@ describe('an argument refusal says the arguments were invalid, under their own n
     ['Stack', () => stack],
     ['ScopedStack', () => stack.asEntity(OWNER)],
   ] as [string, () => StackClient][]) {
-    describe(`${name}: the list verbs report under the list they were passed`, () => {
-      test('associate() and dissociate() under associations', async () => {
-        for (const verb of ['associate', 'dissociate'] as const) {
-          expect(await refusal(client()[verb](recordId, []))).toEqual({
-            header: 'Invalid arguments:',
-            paths: ['associations'],
-          });
-          expect(await refusal(client()[verb](recordId, [TAG, TAG]))).toEqual({
-            header: 'Invalid arguments:',
-            paths: ['associations[1]'],
-          });
-        }
+    describe(`${name}: the set verbs report under the list they were passed`, () => {
+      test('setAssociations() under associations', async () => {
+        expect(await refusal(client().setAssociations(recordId, [TAG, TAG]))).toEqual({
+          header: 'Invalid arguments:',
+          paths: ['associations[1]'],
+        });
       });
 
       test('a wrong-surface element is refused as such, even when duplicated', async () => {
         const read = { kind: 'anyone', label: 'read' } as never;
-        for (const verb of ['associate', 'dissociate'] as const) {
-          await expect(client()[verb](recordId, [read, read])).rejects.toBeInstanceOf(
-            StackBadRequestError,
-          );
-        }
-        for (const verb of ['grantAccess', 'revokeAccess'] as const) {
-          await expect(client()[verb](recordId, [TAG, TAG] as never)).rejects.toBeInstanceOf(
-            StackBadRequestError,
-          );
-        }
+        await expect(client().setAssociations(recordId, [read, read])).rejects.toBeInstanceOf(
+          StackBadRequestError,
+        );
+        await expect(
+          client().editAssociations(recordId, [{ op: 'add', association: read }]),
+        ).rejects.toBeInstanceOf(StackBadRequestError);
+        await expect(client().setAccess(recordId, [TAG, TAG] as never)).rejects.toBeInstanceOf(
+          StackBadRequestError,
+        );
+        await expect(
+          client().editAccess(recordId, [{ op: 'add', association: TAG as never }]),
+        ).rejects.toBeInstanceOf(StackBadRequestError);
       });
 
-      test('grantAccess() and revokeAccess() under permissions', async () => {
+      test('setAccess() under permissions', async () => {
         const anyone = { kind: 'anyone', label: 'write' } as never;
-        for (const verb of ['grantAccess', 'revokeAccess'] as const) {
-          expect(await refusal(client()[verb](recordId, []))).toEqual({
-            header: 'Invalid arguments:',
-            paths: ['permissions'],
-          });
-          expect(await refusal(client()[verb](recordId, [anyone]))).toEqual({
-            header: 'Invalid arguments:',
-            paths: ['permissions[0].label'],
-          });
-        }
+        expect(await refusal(client().setAccess(recordId, [anyone]))).toEqual({
+          header: 'Invalid arguments:',
+          paths: ['permissions[0].label'],
+        });
       });
     });
   }

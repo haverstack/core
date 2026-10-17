@@ -74,7 +74,7 @@ import type {
   ActorOptions,
   ChangeActor,
   RecordChange,
-  RecordChangeSet,
+  JournalEntryInput,
   SubscribeOptions,
   Unsubscribe,
   JournalQuery,
@@ -110,12 +110,11 @@ import {
 } from '../query-validation.js';
 import {
   assertAssociationEdits,
-  assertAssociationList,
   assertAuthorityAssociations,
   assertDataAssociations,
   validateAssociations,
 } from '../associations/validation.js';
-import { applyAssociationEdits, associationDelta, editsOf } from '../associations/identity.js';
+import { applyAssociationEdits, associationDelta } from '../associations/identity.js';
 import { validateGrantee, validateGrantBaseId } from '../grants.js';
 import type { GrantQuery } from '../grants.js';
 import { bindingFieldsOf } from './identity-bindings.js';
@@ -129,13 +128,7 @@ import {
   DEFAULT_ID_TIMESTAMP_SKEW_MS,
 } from './record-id.js';
 import { queryAllPages, lookupEntityByDid, MAX_QUERY_LIMIT } from './reads.js';
-import {
-  assertNonEmptyChangeSet,
-  bumpsVersion,
-  changeSetOps,
-  effectiveChanges,
-  takesIfVersion,
-} from '../record-changes.js';
+import { contentEqual } from '../record-changes.js';
 import { ScopedStack, scopeToken } from '../scoped-stack/scoped-stack.js';
 import { MigrationRegistry } from './migrations.js';
 import * as apps from './install-app.js';
@@ -160,7 +153,6 @@ import type {
   CollectAttachmentGarbageOptions,
   CollectAttachmentGarbageResult,
   DefineTypeOptions,
-  DeleteAndReturnResult,
   DeleteRecordOptions,
   DeleteResult,
   GetRecordOptions,
@@ -221,6 +213,18 @@ function throwValidation(
 }
 
 /**
+ * A list argument a set verb replaces an aspect with. The elements are
+ * the aspect's own validators' to judge; this asks only for a list.
+ */
+function assertArgumentList(value: unknown, param: string): void {
+  if (Array.isArray(value)) return;
+  throw new StackValidationError(
+    [{ path: param, message: `${param} must be an array.` }],
+    ARGUMENTS_INVALID,
+  );
+}
+
+/**
  * Every problem `content` has as a record of `typeId`: its schema, plus the
  * rules the `_grant` and `_install` families hold their content to on top
  * of one. Owed by every write that sets content, whatever shape it takes.
@@ -270,7 +274,7 @@ export class Stack implements StackClient {
   /**
    * Announce a mutation that has already been persisted. Called after the
    * adapter write resolves and before the mutating method settles, so
-   * `await stack.mutate(...)` guarantees subscribers have been notified —
+   * `await stack.patchContent(...)` guarantees subscribers have been notified —
    * and nothing about work they deferred. A handler cannot fail the write:
    * there is nothing left to fail. See docs/spec/events.md § Handlers.
    */
@@ -724,67 +728,26 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Apply a change set as one atomic write — see StackClient.mutate(). A
-   * set the record already satisfies writes nothing, and content is checked
-   * against the record's current stored type.
+   * Merge a patch into a record's content, checked against its current
+   * stored type. A patch the content already satisfies writes nothing.
    * See docs/spec/data-model.md § Mutations.
    */
-  async mutate(
+  async patchContent(
     id: RecordId,
-    changes: RecordChangeSet,
+    patch: Record<string, unknown | null>,
     opts: IfVersionOptions & ActorOptions & ExpectationOptions = {},
   ): Promise<StackRecord> {
     this.assertOpen();
-    assertNonEmptyChangeSet(changes);
+    if (typeof patch !== 'object' || patch === null || Array.isArray(patch)) {
+      throw new StackBadRequestError('A content patch is an object of content keys.');
+    }
+    const existing = await this.requireWritable(id, opts, true);
+    const merged = await this.validatePatch(id, existing, patch);
+    if (contentEqual(existing.content, merged)) return existing;
 
-    const existing = await this.requireRecord(id);
-    checkFamily(existing, opts);
-    this.refuseIfDeleted(existing);
-
-    // Checked before validation, so a caller that lost the race learns its
-    // version is stale rather than that its patch is bad, and before the
-    // no-op short-circuit below, so a precondition is never satisfied by a
-    // write that turned out to move nothing.
-    if (takesIfVersion(changes)) this.checkIfVersion(existing, opts.ifVersion);
-    checkStoredVersion(existing, opts, changes.contentPatch !== undefined);
-
-    const merged = await this.validateChangeSet(id, existing, changes);
-
-    const ops = changeSetOps(existing, changes, merged);
-    // Nothing moved, so there is nothing to version. Decided here rather
-    // than in the adapter: "did this change anything" is a question about
-    // the record's meaning, and an adapter is never handed a write that
-    // writes nothing.
-    if (ops.length === 0) return existing;
-
-    // A change set naming only aspects the journal already keeps in full
-    // doesn't bump — the same rule associate()/dissociate() follow
-    // unconditionally. Its actor travels as an explicit opt rather than a
-    // record stamp, since a non-bumping write never touches `updatedBy`.
-    // See docs/spec/versioning.md § Version history.
-    const bumps = bumpsVersion(ops);
-
-    // From the same before/after changeSetOps compared, so `ops` and the
-    // journal cannot disagree; ACL and data edits travel as one list.
-    // See docs/spec/events.md § The event shape.
-    const assocDelta = [
-      ...(changes.associations
-        ? associationDelta(existing.associations ?? [], changes.associations)
-        : []),
-      ...(changes.permissions
-        ? associationDelta(existing.permissions ?? [], changes.permissions)
-        : []),
-    ];
-
-    const previousParentId = existing.parentId ?? null;
-    const change = new PendingChange(ops, {
-      actor: normalizeActor(opts.actor),
-      ...(ops.includes('reparent') && { previousParentId }),
-      ...(assocDelta.length && { associations: assocDelta }),
-    });
-    const updated = await this.adapter.mutateRecord(id, effectiveChanges(changes, ops), {
-      ...(bumps ? this.writeOptions(existing, opts) : { actor: normalizeActor(opts.actor) }),
-      bumpsVersion: bumps,
+    const change = new PendingChange('patch', { actor: normalizeActor(opts.actor) });
+    const updated = await this.adapter.patchContent(id, patch, {
+      ...this.writeOptions(existing, opts),
       journal: change.journal,
     });
     this.announce(change, updated);
@@ -792,172 +755,184 @@ export class Stack implements StackClient {
   }
 
   /**
-   * mutate() with `contentPatch` alone. The common case by a wide margin,
-   * and named for what it does rather than for a symmetry with create()
-   * that a patch does not have.
+   * Every check a content patch owes, all before anything is written.
+   * Returns the merged content, which the caller compares to decide whether
+   * content moved.
    */
-  async patchContent(
-    id: RecordId,
-    patch: Record<string, unknown | null>,
-    opts?: IfVersionOptions & ActorOptions & ExpectationOptions,
-  ): Promise<StackRecord> {
-    return this.mutate(id, { contentPatch: patch }, opts);
-  }
-
-  /**
-   * Every check a change set owes, all before anything is written. Returns
-   * the merged content for a content patch, which the caller compares to
-   * decide whether content moved. A parent is checked only when it changes.
-   */
-  private async validateChangeSet(
+  private async validatePatch(
     id: string,
     existing: StackRecord,
-    changes: RecordChangeSet,
-  ): Promise<Record<string, unknown> | undefined> {
-    const { contentPatch, permissions, associations, parentId } = changes;
-
-    // Each key replaces only within its own domain. Asked before the
-    // shape checks below so a misrouted element is reported as the wrong
-    // surface rather than as a malformed value of the right one, and
-    // asked here rather than in `ScopedStack` so an unscoped `Stack`, an
-    // import and a server mapping a request body are all held to it.
-    if (associations) assertDataAssociations(associations, 'associations');
-    if (permissions) assertAuthorityAssociations(permissions, 'permissions');
-
-    const argumentErrors = [
-      ...(permissions
-        ? [...validateAssociations(permissions, 'permissions'), ...validatePermissions(permissions)]
-        : []),
-      ...(associations ? validateAssociations(associations) : []),
+    patch: Record<string, unknown | null>,
+  ): Promise<Record<string, unknown>> {
+    const patchErrors = [
+      ...validateReservedKeys(patch),
+      ...validatePatchValues(patch),
+      ...validateContentKeys(patch),
     ];
-    const patchErrors = contentPatch
-      ? [
-          ...validateReservedKeys(contentPatch),
-          ...validatePatchValues(contentPatch),
-          ...validateContentKeys(contentPatch),
-        ]
-      : [];
-    throwValidation(patchErrors, argumentErrors);
+    if (patchErrors.length > 0) throw new StackValidationError(patchErrors);
 
-    await checkAttachmentAssociationPointers(this.readRecord, associations, existing.associations);
+    // The patch is what travels, so the patch is what's measured — a
+    // small patch against a large record is not an oversized request.
+    assertContentSize(patch, this.capabilities.limits.contentBytes, 'Patch');
 
-    let merged: Record<string, unknown> | undefined;
-    if (contentPatch) {
-      // The patch is what travels, so the patch is what's measured — a
-      // small patch against a large record is not an oversized request.
-      assertContentSize(contentPatch, this.capabilities.limits.contentBytes, 'Patch');
+    const type = await this.getTypeCached(existing.typeId);
+    if (!type) {
+      throw new StackBadRequestError(`Unknown type: "${existing.typeId}"`);
+    }
+    const merged = applyMergePatch(existing.content, patch);
 
-      const type = await this.getTypeCached(existing.typeId);
-      if (!type) {
-        throw new StackBadRequestError(`Unknown type: "${existing.typeId}"`);
-      }
-      merged = applyMergePatch(existing.content, contentPatch);
+    const contentErrors = typedContentErrors(existing.typeId, merged, type.schema);
+    if (contentErrors.length > 0) throw new StackValidationError(contentErrors);
 
-      const contentErrors = typedContentErrors(existing.typeId, merged, type.schema);
-      if (contentErrors.length > 0) throw new StackValidationError(contentErrors);
-
-      if (existing.typeId === `${SYSTEM_TYPES.ATTACHMENT}@1`) {
-        // Presence decides mimeType and value decides the rest: re-sending
-        // the mimeType a record already holds is refused outright, while a
-        // client round-tripping fileId or size unchanged has claimed nothing.
-        assertAttachmentImmutable(
-          (field) =>
-            Object.prototype.hasOwnProperty.call(contentPatch, field) &&
-            (field === 'mimeType' ||
-              (merged as AttachmentContent)[field] !==
-                (existing.content as AttachmentContent)[field]),
-        );
-      }
-
-      await checkBindingsOnUpdate(
-        this,
-        existing.typeId,
-        id,
-        contentPatch,
-        existing.content,
-        merged,
+    if (existing.typeId === `${SYSTEM_TYPES.ATTACHMENT}@1`) {
+      // Presence decides mimeType and value decides the rest: re-sending
+      // the mimeType a record already holds is refused outright, while a
+      // client round-tripping fileId or size unchanged has claimed nothing.
+      assertAttachmentImmutable(
+        (field) =>
+          Object.prototype.hasOwnProperty.call(patch, field) &&
+          (field === 'mimeType' ||
+            (merged as AttachmentContent)[field] !==
+              (existing.content as AttachmentContent)[field]),
       );
-
-      if (id === SYSTEM_TYPES.CONFIG) {
-        checkConfigEntityIdUnchanged(
-          (existing.content as ConfigContent).entityId,
-          (merged as ConfigContent).entityId,
-        );
-      }
     }
 
-    if (associations !== undefined) {
-      assertGroupAdminRemains(existing, associations);
-    }
+    await checkBindingsOnUpdate(this, existing.typeId, id, patch, existing.content, merged);
 
-    if (parentId !== undefined && parentId !== null && parentId !== (existing.parentId ?? null)) {
-      await assertParentExists(this.readRecord, id, parentId);
-      await assertNoParentCycle(this.readRecord, id, parentId);
+    if (id === SYSTEM_TYPES.CONFIG) {
+      checkConfigEntityIdUnchanged(
+        (existing.content as ConfigContent).entityId,
+        (merged as ConfigContent).entityId,
+      );
     }
-
     return merged;
   }
 
   /**
-   * Add associations to a record, without a version bump. One matching an
-   * existing association's identity but a different `attachmentRecordId`
-   * re-points it in place. See docs/spec/attachments.md § Naming the upload
-   * a reference came from.
+   * Move a record under another, or to the root with `null`. The
+   * destination is checked only when it changes: it has to exist, and the
+   * move must not make the record its own ancestor.
+   * See docs/spec/data-model.md § Reparenting.
    */
-  async associate(
+  async setParent(
     id: RecordId,
-    associations: DataAssociation[],
-    opts: ActorOptions & ExpectationOptions = {},
-  ): Promise<StackRecord> {
-    assertAssociationList(associations, 'associate()', 'associations', 'data');
-    return this.amendAssociations(id, editsOf('add', associations), opts, 'associate()');
-  }
-
-  /**
-   * Remove associations from a record — see associate(). Matched by kind,
-   * label and payload; an element not found is a no-op. The emitted event
-   * names each association by identity only, since an attachment's
-   * `attachmentRecordId` describes nothing current once it is gone; the
-   * journal is where it survives.
-   */
-  async dissociate(
-    id: RecordId,
-    associations: DataAssociation[],
-    opts: ActorOptions & ExpectationOptions = {},
-  ): Promise<StackRecord> {
-    assertAssociationList(associations, 'dissociate()', 'associations', 'data');
-    return this.amendAssociations(id, editsOf('remove', associations), opts, 'dissociate()');
-  }
-
-  /**
-   * The atomic form of associate() and dissociate(): one list of adds and
-   * removes, one adapter write, one journal entry. The journal records each
-   * element in full — a remove with its annotation, a re-point with what it
-   * overwrote — so the entry is as undoable as a single-element one.
-   * See docs/spec/data-model.md § Mutations.
-   */
-  async amendAssociations(
-    id: RecordId,
-    changes: AssociationEdit[],
-    opts: ActorOptions & ExpectationOptions = {},
-    surface = 'amendAssociations()',
+    parentId: RecordId | null,
+    opts: IfVersionOptions & ActorOptions & ExpectationOptions = {},
   ): Promise<StackRecord> {
     this.assertOpen();
-    assertAssociationEdits(changes, surface, 'data');
-    const existing = await this.requireRecord(id);
-    checkFamily(existing, opts);
-    this.refuseIfDeleted(existing);
+    if (parentId !== null && typeof parentId !== 'string') {
+      throw new StackBadRequestError('parentId is a record id, or null for the root.');
+    }
+    const existing = await this.requireWritable(id, opts);
+    const previousParentId = existing.parentId ?? null;
+    if (parentId === previousParentId) return existing;
+    if (parentId !== null) {
+      await assertParentExists(this.readRecord, id, parentId);
+      await assertNoParentCycle(this.readRecord, id, parentId);
+    }
+
+    const change = new PendingChange('reparent', {
+      actor: normalizeActor(opts.actor),
+      previousParentId,
+    });
+    const updated = await this.adapter.setParent(id, parentId, {
+      ifVersion: opts.ifVersion,
+      journal: change.journal,
+    });
+    this.announce(change, updated);
+    return updated;
+  }
+
+  /**
+   * Withhold a record from enumeration, or restore it. Restating the
+   * current state writes nothing, so `unlistedAt` is never dragged forward.
+   * See docs/spec/unlisted.md.
+   */
+  async setUnlisted(
+    id: RecordId,
+    unlisted: boolean,
+    opts: IfVersionOptions & ActorOptions & ExpectationOptions = {},
+  ): Promise<StackRecord> {
+    this.assertOpen();
+    if (typeof unlisted !== 'boolean') {
+      throw new StackBadRequestError('unlisted is a boolean.');
+    }
+    const existing = await this.requireWritable(id, opts);
+    if (Boolean(existing.unlistedAt) === unlisted) return existing;
+
+    const change = new PendingChange(unlisted ? 'unlist' : 'list', {
+      actor: normalizeActor(opts.actor),
+    });
+    const updated = await this.adapter.setUnlisted(id, unlisted, {
+      ifVersion: opts.ifVersion,
+      journal: change.journal,
+    });
+    this.announce(change, updated);
+    return updated;
+  }
+
+  /**
+   * Apply adds and removes to a record's data associations: one adapter
+   * write, one journal entry carrying each element in full, so the entry is
+   * as undoable as a single-element one. An add naming a held identity with
+   * a new `attachmentRecordId` re-points it — see docs/spec/attachments.md
+   * § Naming the upload a reference came from.
+   */
+  async editAssociations(
+    id: RecordId,
+    edits: AssociationEdit[],
+    opts: IfVersionOptions & ActorOptions & ExpectationOptions = {},
+  ): Promise<StackRecord> {
+    this.assertOpen();
+    assertAssociationEdits(edits, 'editAssociations()', 'data');
+    const existing = await this.requireWritable(id, opts);
     const current = existing.associations ?? [];
-    const next = applyAssociationEdits(current, changes) as DataAssociation[];
+    const next = applyAssociationEdits(current, edits) as DataAssociation[];
+    const adds = edits.flatMap((e) => (e.op === 'add' ? [e.association as DataAssociation] : []));
+    return this.writeAssociations(existing, next, adds, opts, (journal) =>
+      this.adapter.editAssociations(id, edits, { ifVersion: opts.ifVersion, journal }),
+    );
+  }
+
+  /**
+   * Make a record's data associations exactly `associations`. Its
+   * permissions are another aspect, which this never reads or writes.
+   */
+  async setAssociations(
+    id: RecordId,
+    associations: DataAssociation[],
+    opts: IfVersionOptions & ActorOptions & ExpectationOptions = {},
+  ): Promise<StackRecord> {
+    this.assertOpen();
+    assertArgumentList(associations, 'associations');
+    // Ahead of the shape checks, so a misrouted element is reported as the
+    // wrong surface rather than as a malformed value of the right one.
+    assertDataAssociations(associations, 'associations');
+    const errors = validateAssociations(associations);
+    if (errors.length > 0) throw new StackValidationError(errors, ARGUMENTS_INVALID);
+    const existing = await this.requireWritable(id, opts);
+    return this.writeAssociations(existing, associations, associations, opts, (journal) =>
+      this.adapter.setAssociations(id, associations, { ifVersion: opts.ifVersion, journal }),
+    );
+  }
+
+  /**
+   * The shared half of the two data-association writes, from the set the
+   * write would leave: nothing moved writes nothing, a roster keeps an
+   * admin, and every new attachment pointer names its own upload.
+   */
+  private async writeAssociations(
+    existing: StackRecord,
+    next: DataAssociation[],
+    named: DataAssociation[],
+    opts: ActorOptions,
+    write: (journal: JournalEntryInput | undefined) => Promise<StackRecord>,
+  ): Promise<StackRecord> {
+    const current = existing.associations ?? [];
     const delta = associationDelta(current, next);
     if (delta.length === 0) return existing;
-    // Only a roster can lose its last admin, and only the post-state says so.
     assertGroupAdminRemains(existing, next);
-    await checkAttachmentAssociationPointers(
-      this.readRecord,
-      changes.flatMap((c) => (c.op === 'add' ? [c.association] : [])),
-      current,
-    );
+    await checkAttachmentAssociationPointers(this.readRecord, named, current);
 
     const change = new PendingChange(
       [
@@ -966,68 +941,66 @@ export class Stack implements StackClient {
       ],
       { actor: normalizeActor(opts.actor), associations: delta },
     );
-    const updated = await this.adapter.amendAssociations(id, changes, { journal: change.journal });
+    const updated = await write(change.journal);
     this.announce(change, updated);
     return updated;
   }
 
   /**
-   * Extend who reaches a record. The spelling that survives two admins
-   * sharing a record at once: a `permissions` key write replaces the whole
-   * set, so the later of two concurrent ones drops what the earlier
-   * granted. No-bump, like associate(); an element the record already
-   * carries is a no-op. `write` never implies `read` — name both.
+   * Apply adds and removes to who reaches a record. The write-implies-read
+   * invariant is asked once, of the set the whole list produces, so a
+   * downgrade is one call. See docs/spec/access-control.md § Write implies read.
    */
-  async grantAccess(
+  async editAccess(
     id: RecordId,
-    permissions: AuthorityAssociation[],
-    opts: ActorOptions & ExpectationOptions = {},
-  ): Promise<StackRecord> {
-    assertAssociationList(permissions, 'grantAccess()', 'permissions', 'authority');
-    return this.amendAccess(id, editsOf('add', permissions), opts, 'grantAccess()');
-  }
-
-  /**
-   * Withdraw elements of who reaches a record — see grantAccess() for why
-   * this is a verb rather than a key write. An element the record does not
-   * carry is a no-op. Returns the record as it now stands.
-   */
-  async revokeAccess(
-    id: RecordId,
-    permissions: AuthorityAssociation[],
-    opts: ActorOptions & ExpectationOptions = {},
-  ): Promise<StackRecord> {
-    assertAssociationList(permissions, 'revokeAccess()', 'permissions', 'authority');
-    return this.amendAccess(id, editsOf('remove', permissions), opts, 'revokeAccess()');
-  }
-
-  /**
-   * The atomic form of grantAccess() and revokeAccess(). The
-   * write-implies-read invariant is asked once, of the set the whole list
-   * produces. See docs/spec/access-control.md § Write implies read.
-   */
-  async amendAccess(
-    id: RecordId,
-    changes: AssociationEdit[],
-    opts: ActorOptions & ExpectationOptions = {},
-    surface = 'amendAccess()',
+    edits: AssociationEdit[],
+    opts: IfVersionOptions & ActorOptions & ExpectationOptions = {},
   ): Promise<StackRecord> {
     this.assertOpen();
-    assertAssociationEdits(changes, surface, 'authority');
-    const existing = await this.requireRecord(id);
-    checkFamily(existing, opts);
-    this.refuseIfDeleted(existing);
-    const current = existing.permissions ?? [];
-    const next = applyAssociationEdits(current, changes) as AuthorityAssociation[];
-    const delta = associationDelta(current, next);
-    if (delta.length === 0) return existing;
-    this.assertPermissionSet(next);
+    assertAssociationEdits(edits, 'editAccess()', 'authority');
+    const existing = await this.requireWritable(id, opts);
+    const next = applyAssociationEdits(existing.permissions ?? [], edits) as AuthorityAssociation[];
+    return this.writeAccess(existing, next, opts, (journal) =>
+      this.adapter.editAccess(id, edits, { ifVersion: opts.ifVersion, journal }),
+    );
+  }
 
+  /** Make who reaches a record exactly `permissions`; `[]` is private. */
+  async setAccess(
+    id: RecordId,
+    permissions: AuthorityAssociation[],
+    opts: IfVersionOptions & ActorOptions & ExpectationOptions = {},
+  ): Promise<StackRecord> {
+    this.assertOpen();
+    assertArgumentList(permissions, 'permissions');
+    assertAuthorityAssociations(permissions, 'permissions');
+    const errors = [
+      ...validateAssociations(permissions, 'permissions'),
+      ...validatePermissions(permissions),
+    ];
+    if (errors.length > 0) throw new StackValidationError(errors, ARGUMENTS_INVALID);
+    const existing = await this.requireWritable(id, opts);
+    return this.writeAccess(existing, permissions, opts, (journal) =>
+      this.adapter.setAccess(id, permissions, { ifVersion: opts.ifVersion, journal }),
+    );
+  }
+
+  private async writeAccess(
+    existing: StackRecord,
+    next: AuthorityAssociation[],
+    opts: ActorOptions,
+    write: (journal: JournalEntryInput | undefined) => Promise<StackRecord>,
+  ): Promise<StackRecord> {
+    const delta = associationDelta(existing.permissions ?? [], next);
+    if (delta.length === 0) return existing;
+    // After the no-op check: a call that moves nothing is not refused for
+    // a stored set it did not write.
+    this.assertPermissionSet(next);
     const change = new PendingChange('reshare', {
       actor: normalizeActor(opts.actor),
       associations: delta,
     });
-    const updated = await this.adapter.amendAssociations(id, changes, { journal: change.journal });
+    const updated = await write(change.journal);
     this.announce(change, updated);
     return updated;
   }
@@ -1057,6 +1030,26 @@ export class Stack implements StackClient {
   }
 
   /**
+   * The record a write addresses, past every refusal owed before
+   * validation: missing, another family, soft-deleted, then a stale
+   * `ifVersion` — before validation, so a caller that lost the race hears
+   * that first, and before any no-op, so a write that moved nothing never
+   * satisfies a precondition.
+   */
+  private async requireWritable(
+    id: RecordId,
+    opts: IfVersionOptions & ExpectationOptions,
+    patchesContent = false,
+  ): Promise<StackRecord> {
+    const existing = await this.requireRecord(id);
+    checkFamily(existing, opts);
+    this.refuseIfDeleted(existing);
+    this.checkIfVersion(existing, opts.ifVersion);
+    checkStoredVersion(existing, opts, patchesContent);
+    return existing;
+  }
+
+  /**
    * A by-id read straight from the adapter, for the integrity checks a write
    * runs once it is under way: they read past the open-check, as the write
    * they belong to was admitted before any close() began.
@@ -1072,29 +1065,16 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Soft-delete a record, or purge it with its history. A purge reports
-   * the files the record referenced, deleting none of them. Use
-   * deleteAndReturn() when the record is needed too. See
-   * docs/spec/versioning.md § Deletion and docs/spec/attachments.md § A
-   * purge strands the bytes it referenced.
+   * Soft-delete a record, or purge it with its history, reporting the
+   * record as the write left it — or as a purge destroyed it — captured in
+   * the same write, so nothing lands unseen between a read and the delete.
+   * See docs/spec/versioning.md § Deletion and docs/spec/attachments.md
+   * § A purge strands the bytes it referenced.
    */
   async delete(
     id: RecordId,
     opts: DeleteRecordOptions & ActorOptions & ExpectationOptions = {},
   ): Promise<DeleteResult> {
-    const { referencedFileIds } = await this.deleteAndReturn(id, opts);
-    return { referencedFileIds };
-  }
-
-  /**
-   * delete(), plus the record it acted on — before destruction for a purge,
-   * the tombstone for a soft delete — captured inside the same write, so no
-   * concurrent write can land unseen between a read and the delete.
-   */
-  async deleteAndReturn(
-    id: RecordId,
-    opts: DeleteRecordOptions & ActorOptions & ExpectationOptions = {},
-  ): Promise<DeleteAndReturnResult> {
     this.assertOpen();
     if (id === SYSTEM_TYPES.CONFIG) {
       throw new StackConflictError(

@@ -30,7 +30,6 @@ export type {
   GetRecordOptions,
   DeleteRecordOptions,
   DeleteResult,
-  DeleteAndReturnResult,
   CollectAttachmentGarbageOptions,
   CollectAttachmentGarbageResult,
   MigrateAllOptions,
@@ -67,7 +66,6 @@ export type {
   CollectionPage,
   CollectionQuery,
   CollectionChange,
-  CollectionChangeSet,
   CollectionSubscribeOptions,
   ContentPatch,
   ContentPathOf,
@@ -105,7 +103,6 @@ export type {
   AppId,
   AttachmentContent,
   StackRecord,
-  RecordChangeSet,
   RecordVersion,
   RecordJournalEntry,
   JournalQuery,
@@ -184,4 +181,4 @@ export { hashSchema, isCompatible } from './schema.js';
 export type { SchemaDriftViolation } from './schema.js';
 export type { ValidationError } from './validate.js';
 export { applyMergePatch } from './merge.js';
-export { assertOneSurface, isAuthorityAssociation } from './associations/identity.js';
+export { isAuthorityAssociation } from './associations/identity.js';

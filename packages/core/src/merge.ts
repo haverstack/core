@@ -3,7 +3,7 @@
  * -------------------------------------------------------
  * Shallow merge-patch semantics for record content: a field set to `null`
  * removes it, any other value replaces it, and omitted fields are retained.
- * Shared by Stack.mutate() (for client-side validation) and every
+ * Shared by Stack.patchContent() (for client-side validation) and every
  * StackRecordAdapter's patchContent() implementation, so a patch produces
  * the same merged content everywhere it's applied.
  */

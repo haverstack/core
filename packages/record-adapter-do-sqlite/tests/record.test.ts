@@ -65,9 +65,9 @@ type TestStub = {
   ): Promise<StackRecord | null>;
   queryRecords(query: StackQuery): Promise<QueryResult>;
   getVersions(id: string): Promise<RecordVersion[]>;
-  amendAssociations(
-    recordId: string,
-    changes: AssociationEdit[],
+  editAssociations(
+    id: string,
+    edits: AssociationEdit[],
     opts?: Record<string, unknown>,
   ): Promise<StackRecord>;
   commitMigration(
@@ -229,14 +229,14 @@ describe('ifVersion / transactional rollback', () => {
    * before the first write and proves nothing about atomicity.
    *
    * deleteRecord({ snapshot, ifVersion }) is the shape that does
-   * reach it: unlike patchContent/mutateRecord, a soft delete has no
+   * reach it: unlike patchContent, a soft delete has no
    * pre-transaction ifVersion check of its own — it goes straight
    * into exec.transaction(), where snapshotBeforeMutation() writes a real
    * row into `versions` and versionedUpdate()'s CAS then fails on the
    * stale ifVersion and throws — both inside the same transaction
-   * callback. (amendAssociations() cannot stand in for this: they
-   * never bump and never snapshot, so they touch neither `versions` nor the
-   * CAS path — see docs/spec/versioning.md § Version history.) If transactionSync() did not roll back, that orphan version
+   * callback. (An association write cannot stand in for this: it never
+   * snapshots, so it touches no `versions` row — see
+   * docs/spec/versioning.md § Version history.) If transactionSync() did not roll back, that orphan version
    * row would survive a mutation that reported failure.
    */
   test('a mid-transaction failure rolls back writes already made in the same transaction', async () => {
@@ -458,7 +458,7 @@ describe('associations', () => {
     const stub = getStub();
     const record = makeRecord();
     await stub.createRecord(record);
-    await stub.amendAssociations(record.id, [
+    await stub.editAssociations(record.id, [
       { op: 'add', association: { kind: 'tag', label: 'starred' } },
     ]);
     const withTag = await stub.getRecord(record.id);
@@ -467,7 +467,7 @@ describe('associations', () => {
     );
     expect(withTag?.version).toBe(1);
 
-    await stub.amendAssociations(record.id, [
+    await stub.editAssociations(record.id, [
       { op: 'remove', association: { kind: 'tag', label: 'starred' } },
     ]);
     const withoutTag = await stub.getRecord(record.id);
@@ -475,10 +475,10 @@ describe('associations', () => {
     expect(withoutTag?.version).toBe(1);
   });
 
-  test('amending a nonexistent record throws StackNotFoundError (FK constraint mapping) instead of creating an orphan row', async () => {
+  test('editing a nonexistent record throws StackNotFoundError (FK constraint mapping) instead of creating an orphan row', async () => {
     const stub = getStub();
     const err = await stub
-      .amendAssociations('nonexistent', [
+      .editAssociations('nonexistent', [
         { op: 'add', association: { kind: 'tag', label: 'starred' } },
       ])
       .catch((e: unknown) => e);

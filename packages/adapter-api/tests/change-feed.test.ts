@@ -286,7 +286,7 @@ describe('frames', () => {
     stop();
   });
 
-  test('parses associationsAdded/associationsRemoved off an associate/dissociate frame', async () => {
+  test('parses associationsAdded/associationsRemoved off an editAssociations frame', async () => {
     const { stream, seen, stop } = await subscribe();
 
     stream.write(

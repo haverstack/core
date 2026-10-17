@@ -59,9 +59,9 @@ import type {
   SubscribeOptions,
   TypeId,
   Unsubscribe,
-  RecordChangeSet,
 } from '../types/index.js';
 import {
+  StackBadRequestError,
   StackConflictError,
   StackNotFoundError,
   StackPermissionError,
@@ -70,11 +70,10 @@ import {
 } from '../errors.js';
 import {
   assertAssociationEdits,
-  assertAssociationList,
   assertAuthorityAssociations,
   assertDataAssociations,
 } from '../associations/validation.js';
-import { associationDelta, associationEqual, editsOf } from '../associations/identity.js';
+import { associationEqual } from '../associations/identity.js';
 import { isGroupRecord } from '../access.js';
 import {
   assertSortCapability,
@@ -98,11 +97,7 @@ import {
   findAppCardByDid,
   lookupEntityByDid,
 } from '../stack/reads.js';
-import {
-  assertNonEmptyChangeSet,
-  presentDeleted,
-  withoutAuthorityChanges,
-} from '../record-changes.js';
+import { presentDeleted, withoutAuthorityChanges } from '../record-changes.js';
 import type { ContentOf, ReadonlyTypeSchema, TypeHandle } from '../type-handle.js';
 import { createCollection } from '../collection.js';
 import type { Collection } from '../collection.js';
@@ -118,7 +113,6 @@ import type {
   BackdatableCreateRecordOptions,
   CollectAttachmentGarbageOptions,
   CollectAttachmentGarbageResult,
-  DeleteAndReturnResult,
   DeleteRecordOptions,
   DeleteResult,
   GetRecordOptions,
@@ -503,70 +497,30 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Apply a change set on behalf of the subject. Each key is gated against
-   * the record as it stands, never as the set would leave it, and one
-   * refused key refuses the call. See docs/spec/access-control.md
-   * § Composing a change set.
+   * Patch content on behalf of the subject, on the write gate, plus the
+   * gates a content value can carry: a card's binding fields and the files
+   * a `file-ref` field names. See docs/spec/access-control.md § Per-verb gates.
    */
-  async mutate(
+  async patchContent(
     id: RecordId,
-    changes: RecordChangeSet,
+    patch: Record<string, unknown | null>,
     opts: IfVersionOptions & ExpectationOptions = {},
   ): Promise<StackRecord> {
-    // Ahead of every gate: a malformed change set is a validation error
-    // for every requester, rather than one for the owner and a permission
-    // refusal for everyone else.
-    assertNonEmptyChangeSet(changes);
-    if (changes.contentPatch) {
-      const patchErrors = validatePatchValues(changes.contentPatch);
-      if (patchErrors.length > 0) throw new StackValidationError(patchErrors);
+    // Ahead of the gate: a malformed patch is the same refusal for every
+    // requester, rather than one for the owner and a not-found for the rest.
+    if (typeof patch !== 'object' || patch === null || Array.isArray(patch)) {
+      throw new StackBadRequestError('A content patch is an object of content keys.');
     }
-
-    // Refused here as well as in `Stack` below, so the partition is a
-    // refusal rather than a permission question: an `associations` key
-    // naming an authority kind is the wrong surface for every requester,
-    // owner included.
-    if (changes.associations) assertDataAssociations(changes.associations, 'associations');
-    if (changes.permissions) assertAuthorityAssociations(changes.permissions, 'permissions');
-
-    const writes =
-      changes.contentPatch !== undefined ||
-      changes.associations !== undefined ||
-      changes.parentId !== undefined;
-    // `unlisted` reshares on presence alone; a restated `permissions` set
-    // does not, which permissionsMove() decides once the record is in hand.
-    // See docs/spec/access-control.md § Storage unifies; the API does not.
-    const unlists = changes.unlisted !== undefined;
-
-    // requireUpdatable() reads the record and applies the write gate; the
-    // reshare keys need the record before their own gate, and a change set
-    // carrying only those must not be held to the write gate it doesn't
-    // need. One read either way.
-    const record = writes
-      ? await this.requireUpdatable(id, { expect: opts })
-      : await this.requireReshareable(id, opts);
-    // A key the gate read as inert is dropped, not forwarded: `Stack`
-    // recomputes the delta from its own read, and must not write an ACL on
-    // the strength of this one. See docs/spec/access-control.md
-    // § Storage unifies; the API does not.
-    let authorized = changes;
-    if (writes) {
-      const moves = this.permissionsMove(record, changes);
-      if (unlists || moves) await this.requireReshareOf(record);
-      if (changes.permissions !== undefined && !moves && !this.#authority.canReshare(record)) {
-        const { permissions: _inert, ...rest } = changes;
-        authorized = rest;
-      }
-    }
+    const patchErrors = validatePatchValues(patch);
+    if (patchErrors.length > 0) throw new StackValidationError(patchErrors);
+    const record = await this.requireUpdatable(id, { expect: opts });
 
     // A patch for another version is refused by `Stack`, which owes the
     // tombstone and `ifVersion` refusals first; the content gates would read
     // a stored Type it was not written for. Pinned to this read, `Stack`
     // cannot find a record the patch lands on.
-    const mismatched = storedVersionDiffers(record, opts, changes.contentPatch !== undefined);
-
-    if (changes.contentPatch && !mismatched) {
-      const patch = changes.contentPatch;
+    const mismatched = storedVersionDiffers(record, opts, true);
+    if (!mismatched) {
       // Value-wise, not presence-wise: a client that reads a card, edits
       // its `name` and sends the whole content object back is not setting
       // the binding it round-trips, and `name` is writable by record-level
@@ -584,38 +538,112 @@ export class ScopedStack implements StackClient {
       await this.requireFileRefAccess(record.typeId, patch);
     }
 
-    // Every association the change set would add is a reference this
-    // requester has to be allowed to create — asked against the stored
-    // set, so an association already on the record is not re-gated.
-    for (const assoc of changes.associations ?? []) {
-      if ((record.associations ?? []).some((a) => associationEqual(a, assoc))) continue;
-      await this.requireAssociationAccess(record.typeId, assoc);
-    }
-
-    if (changes.parentId != null && !(await this.#authority.canReadReferent(changes.parentId))) {
-      throw new StackPermissionError(
-        `Cannot reference record "${changes.parentId}" as parent: it does not exist or you cannot read it`,
-      );
-    }
-
     const ifVersion = mismatched ? (opts.ifVersion ?? record.version) : opts.ifVersion;
-    return this.stack.mutate(id, authorized, { ...opts, ifVersion, ...this.actor });
+    return this.stack.patchContent(id, patch, { ...opts, ifVersion, ...this.actor });
   }
 
-  async patchContent(
+  /**
+   * The write gate, plus read access to the destination: a container is a
+   * reference the requester has to be allowed to create.
+   */
+  async setParent(
     id: RecordId,
-    patch: Record<string, unknown | null>,
-    opts?: IfVersionOptions & ExpectationOptions,
+    parentId: RecordId | null,
+    opts: IfVersionOptions & ExpectationOptions = {},
   ): Promise<StackRecord> {
-    return this.mutate(id, { contentPatch: patch }, opts);
+    const record = await this.requireUpdatable(id, { expect: opts });
+    if (
+      typeof parentId === 'string' &&
+      parentId !== (record.parentId ?? null) &&
+      !(await this.#authority.canReadReferent(parentId))
+    ) {
+      throw new StackPermissionError(
+        `Cannot reference record "${parentId}" as parent: it does not exist or you cannot read it`,
+      );
+    }
+    return this.stack.setParent(id, parentId, { ...opts, ...this.actor });
+  }
+
+  /**
+   * Listing decides who can enumerate a record, so it carries the reshare
+   * gate rather than the write bit. See docs/spec/unlisted.md.
+   */
+  async setUnlisted(
+    id: RecordId,
+    unlisted: boolean,
+    opts: IfVersionOptions & ExpectationOptions = {},
+  ): Promise<StackRecord> {
+    await this.requireReshareable(id, opts);
+    return this.stack.setUnlisted(id, unlisted, { ...opts, ...this.actor });
+  }
+
+  /**
+   * The write gate, plus the reference gate on each add: what a remove
+   * names is already on the record, so it is gated by the write bit alone.
+   * The list is held to its rules first, so an authority element is the
+   * wrong surface for every requester rather than a permission question.
+   */
+  async editAssociations(
+    id: RecordId,
+    edits: AssociationEdit[],
+    opts: IfVersionOptions & ExpectationOptions = {},
+  ): Promise<StackRecord> {
+    assertAssociationEdits(edits, 'editAssociations()', 'data');
+    const record = await this.requireUpdatable(id, { expect: opts });
+    for (const edit of edits) {
+      if (edit.op === 'add') await this.requireAssociationAccess(record.typeId, edit.association);
+    }
+    return this.stack.editAssociations(id, edits, { ...opts, ...this.actor });
+  }
+
+  /** editAssociations()'s gates, with every element new to the set an add. */
+  async setAssociations(
+    id: RecordId,
+    associations: DataAssociation[],
+    opts: IfVersionOptions & ExpectationOptions = {},
+  ): Promise<StackRecord> {
+    if (Array.isArray(associations)) assertDataAssociations(associations, 'associations');
+    const record = await this.requireUpdatable(id, { expect: opts });
+    // Asked against the stored set, so an association the record already
+    // carries is not re-gated.
+    for (const association of Array.isArray(associations) ? associations : []) {
+      if ((record.associations ?? []).some((a) => associationEqual(a, association))) continue;
+      await this.requireAssociationAccess(record.typeId, association);
+    }
+    return this.stack.setAssociations(id, associations, { ...opts, ...this.actor });
+  }
+
+  /**
+   * Extend or withdraw who reaches a record, on the reshare gate. The write
+   * bit does not confer it, or a write-holder could decide who else reaches
+   * the record. See docs/spec/access-control.md § Record-level permissions.
+   */
+  async editAccess(
+    id: RecordId,
+    edits: AssociationEdit[],
+    opts: IfVersionOptions & ExpectationOptions = {},
+  ): Promise<StackRecord> {
+    assertAssociationEdits(edits, 'editAccess()', 'authority');
+    await this.requireReshareable(id, opts);
+    return this.stack.editAccess(id, edits, { ...opts, ...this.actor });
+  }
+
+  /** See editAccess() — the same gate. */
+  async setAccess(
+    id: RecordId,
+    permissions: AuthorityAssociation[],
+    opts: IfVersionOptions & ExpectationOptions = {},
+  ): Promise<StackRecord> {
+    if (Array.isArray(permissions)) assertAuthorityAssociations(permissions, 'permissions');
+    await this.requireReshareable(id, opts);
+    return this.stack.setAccess(id, permissions, { ...opts, ...this.actor });
   }
 
   /**
    * The record, having established that this request may decide who else
    * reaches it — the owner-or-creator rule, asked of both sides of a
-   * delegation, or a Group's admin rule for a `_group`. The gate the
-   * `permissions` and `unlisted` keys carry, which the write bit
-   * deliberately does not confer.
+   * delegation, or a Group's admin rule for a `_group`. The gate the access
+   * and listing verbs carry, which the write bit deliberately does not confer.
    */
   private async requireReshareable(id: string, expect?: ExpectationOptions): Promise<StackRecord> {
     const record = await this.stack.get(id, { includeDeleted: true });
@@ -624,16 +652,6 @@ export class ScopedStack implements StackClient {
     await this.requireOwnerForGrantRecord(record);
     await this.requireReshareOf(record);
     return record;
-  }
-
-  /**
-   * Whether a change set's `permissions` key moves the ACL, read off the
-   * computed delta so a replacement that drops everything — naming nothing
-   * — still counts. See docs/spec/access-control.md § Record-level permissions.
-   */
-  private permissionsMove(record: StackRecord, changes: RecordChangeSet): boolean {
-    if (changes.permissions === undefined) return false;
-    return associationDelta(record.permissions ?? [], changes.permissions).length > 0;
   }
 
   /** The reshare decision alone, for a record already read and write-gated. */
@@ -705,88 +723,6 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Gated on the write bit alone, which is why the list is held to its
-   * rules first: authority reached through this verb would be exactly the
-   * escalation the partition exists to stop, decided before any record is
-   * read so it cannot depend on who is asking.
-   */
-  async associate(
-    id: RecordId,
-    associations: DataAssociation[],
-    opts: ExpectationOptions = {},
-  ): Promise<StackRecord> {
-    assertAssociationList(associations, 'associate()', 'associations', 'data');
-    return this.amendAssociations(id, editsOf('add', associations), opts, 'associate()');
-  }
-
-  /** See associate() — the same write gate, the same kind refusal. */
-  async dissociate(
-    id: RecordId,
-    associations: DataAssociation[],
-    opts: ExpectationOptions = {},
-  ): Promise<StackRecord> {
-    assertAssociationList(associations, 'dissociate()', 'associations', 'data');
-    return this.amendAssociations(id, editsOf('remove', associations), opts, 'dissociate()');
-  }
-
-  /**
-   * The write gate, plus the per-element reference gate on each add: what a
-   * remove names is already on the record, so it is gated by the write bit
-   * alone. See associate().
-   */
-  async amendAssociations(
-    id: RecordId,
-    changes: AssociationEdit[],
-    opts: ExpectationOptions = {},
-    surface = 'amendAssociations()',
-  ): Promise<StackRecord> {
-    assertAssociationEdits(changes, surface, 'data');
-    const record = await this.requireUpdatable(id, { expect: opts });
-    for (const change of changes) {
-      if (change.op === 'add')
-        await this.requireAssociationAccess(record.typeId, change.association);
-    }
-    return this.stack.amendAssociations(id, changes, { ...opts, ...this.actor }, surface);
-  }
-
-  /**
-   * Extend who reaches a record, on the reshare gate the `permissions` key
-   * carries. The write bit does not confer it, or a write-holder could
-   * decide who else reaches the record.
-   * See docs/spec/access-control.md § Record-level permissions.
-   */
-  async grantAccess(
-    id: RecordId,
-    permissions: AuthorityAssociation[],
-    opts: ExpectationOptions = {},
-  ): Promise<StackRecord> {
-    assertAssociationList(permissions, 'grantAccess()', 'permissions', 'authority');
-    return this.amendAccess(id, editsOf('add', permissions), opts, 'grantAccess()');
-  }
-
-  /** Withdraw elements of who reaches a record — see grantAccess(). */
-  async revokeAccess(
-    id: RecordId,
-    permissions: AuthorityAssociation[],
-    opts: ExpectationOptions = {},
-  ): Promise<StackRecord> {
-    assertAssociationList(permissions, 'revokeAccess()', 'permissions', 'authority');
-    return this.amendAccess(id, editsOf('remove', permissions), opts, 'revokeAccess()');
-  }
-
-  /** The reshare gate over an edit list — see grantAccess(). */
-  async amendAccess(
-    id: RecordId,
-    changes: AssociationEdit[],
-    opts: ExpectationOptions = {},
-    surface = 'amendAccess()',
-  ): Promise<StackRecord> {
-    assertAssociationEdits(changes, surface, 'authority');
-    await this.requireReshareable(id, opts);
-    return this.stack.amendAccess(id, changes, { ...opts, ...this.actor }, surface);
-  }
-
-  /**
    * Purge is owner-only: it is irreversible and destroys version
    * history, so neither the write bit nor delete-own/delete-any grants
    * reach it, and delegation doesn't carry it either. Everyone else is
@@ -796,34 +732,24 @@ export class ScopedStack implements StackClient {
     id: RecordId,
     opts: DeleteRecordOptions & ExpectationOptions = {},
   ): Promise<DeleteResult> {
-    const { referencedFileIds } = await this.deleteAndReturn(id, opts);
-    return { referencedFileIds };
-  }
-
-  /**
-   * delete(), plus the record it acted on. Gated identically — the
-   * existence/visibility check that produces a 404 ahead of the 403
-   * permission gate still runs via requireDeletable() before either kind
-   * of delete, so this changes what a successful call reports, not the
-   * disclosure ordering a refused one follows.
-   */
-  async deleteAndReturn(
-    id: RecordId,
-    opts: DeleteRecordOptions & ExpectationOptions = {},
-  ): Promise<DeleteAndReturnResult> {
     const record = await this.requireDeletable(id, opts);
     if (opts.purge && !this.#authority.ownerActingAlone) {
       throw new StackPermissionError('Purge is owner-only');
     }
-    if (!opts[WRITE_EXPECTATION]) return this.stack.deleteAndReturn(id, { ...opts, ...this.actor });
     // Checked against the read above, which the delete is pinned to.
     // Forwarded, it would cost a purge the read `Stack` otherwise skips.
-    const { [WRITE_EXPECTATION]: _checked, ...rest } = opts;
-    return this.stack.deleteAndReturn(id, {
+    const { [WRITE_EXPECTATION]: expectation, ...rest } = opts;
+    const result = await this.stack.delete(id, {
       ...rest,
-      ifVersion: opts.ifVersion ?? record.version,
+      ...(expectation && { ifVersion: opts.ifVersion ?? record.version }),
       ...this.actor,
     });
+    // A soft delete's record reaches the caller as every scoped read
+    // presents one; a purge is the owner's, and reports what it destroyed.
+    // See docs/spec/versioning.md § The tombstone is literal.
+    return opts.purge || !result.record
+      ? result
+      : { ...result, record: presentDeleted(result.record) };
   }
 
   /**

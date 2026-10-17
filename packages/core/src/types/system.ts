@@ -95,7 +95,7 @@ export type GrantGrantee = Grantee | { kind: 'authenticated' };
 /**
  * What `Stack.grantType()` and `Stack.revokeType()` take beside the type they act
  * on — the type-level counterpart of the `AuthorityAssociation`
- * `grantAccess()` takes beside a record id.
+ * `editAccess()` takes beside a record id.
  */
 export type TypeGrant = {
   actions: GrantAction[];

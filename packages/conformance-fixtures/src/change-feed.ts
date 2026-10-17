@@ -155,8 +155,8 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
           name: 'change-feed-changed-frame-mutation',
           description: 'A contributor edits the note.',
           method: 'PATCH',
-          path: '/records/1hk153x00001',
-          requestBody: { contentPatch: { title: 'edited by a contributor' } },
+          path: '/records/1hk153x00001/content',
+          requestBody: { title: 'edited by a contributor' },
           responseStatus: 200,
           responseBody: {
             id: '1hk153x00001',
@@ -190,7 +190,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
   {
     name: 'change-feed-associate-frame-carries-associationsAdded',
     description:
-      'An associate() call reports op "associate" on the change feed, but never bumps version ' +
+      'An editAssociations() call reports op "associate" on the change feed, but never bumps version ' +
       "or touches updatedAt — the frame's version/updatedAt are exactly what the record already " +
       'held. `associationsAdded` is the only record of what the call moved: the association ' +
       'itself is never snapshotted, so a subscriber not listening for this exact frame has no ' +
@@ -240,10 +240,10 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
   {
     name: 'change-feed-dissociate-frame-carries-associationsRemoved',
     description:
-      'A dissociate() call reports op "dissociate" on the change feed, with the same non-bumping ' +
-      'version/updatedAt an associate() frame carries. `associationsRemoved` names the removed ' +
+      'A editAssociations() call reports op "dissociate" on the change feed, with the same non-bumping ' +
+      'version/updatedAt an editAssociations() frame carries. `associationsRemoved` names the removed ' +
       'association by identity only — never the annotation it carried — since it is no longer ' +
-      'current. Assumes the note already carries the "starred" tag from a prior associate(). ' +
+      'current. Assumes the note already carries the "starred" tag from a prior editAssociations(). ' +
       'See docs/spec/events.md § The event shape.',
     path: '/changes',
     responseStatus: 200,
@@ -355,8 +355,8 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
         mutation: {
           name: 'change-feed-unlist-frame-mutation',
           description: 'The owner marks the note unlisted.',
-          method: 'PATCH',
-          path: '/records/1hk153x00001',
+          method: 'PUT',
+          path: '/records/1hk153x00001/unlisted',
           requestBody: { unlisted: true },
           responseStatus: 200,
           responseBody: {
@@ -408,8 +408,8 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
         mutation: {
           name: 'change-feed-reparent-frame-mutation',
           description: 'The owner moves the note out of the container the subscriber watches.',
-          method: 'PATCH',
-          path: '/records/1hk153x00001',
+          method: 'PUT',
+          path: '/records/1hk153x00001/parent',
           requestBody: { parentId: '1hk153x0000g' },
           responseStatus: 200,
           responseBody: {
@@ -459,8 +459,8 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
         mutation: {
           name: 'change-feed-list-frame-mutation',
           description: 'The owner relists the note.',
-          method: 'PATCH',
-          path: '/records/1hk153x00001',
+          method: 'PUT',
+          path: '/records/1hk153x00001/unlisted',
           requestBody: { unlisted: false },
           responseStatus: 200,
           responseBody: {
@@ -509,8 +509,8 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
           name: 'change-feed-unlisted-record-edit-mutation',
           description: 'The owner edits the still-unlisted note.',
           method: 'PATCH',
-          path: '/records/1hk153x00001',
-          requestBody: { contentPatch: { title: 'Edited while unlisted' } },
+          path: '/records/1hk153x00001/content',
+          requestBody: { title: 'Edited while unlisted' },
           responseStatus: 200,
           responseBody: {
             id: '1hk153x00001',
@@ -600,8 +600,8 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
           name: 'change-feed-include-record-mutation',
           description: 'The owner edits the note.',
           method: 'PATCH',
-          path: '/records/1hk153x00001',
-          requestBody: { contentPatch: { title: 'Updated title' } },
+          path: '/records/1hk153x00001/content',
+          requestBody: { title: 'Updated title' },
           responseStatus: 200,
           responseBody: {
             id: '1hk153x00001',
@@ -663,8 +663,8 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
           name: 'change-feed-unreadable-record-mutation',
           description: "The owner edits a private record the connection's session cannot read.",
           method: 'PATCH',
-          path: '/records/1hk153x09001',
-          requestBody: { contentPatch: { title: 'private' } },
+          path: '/records/1hk153x09001/content',
+          requestBody: { title: 'private' },
           responseStatus: 200,
           responseBody: {
             id: '1hk153x09001',
@@ -685,8 +685,8 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
           name: 'change-feed-readable-record-mutation',
           description: 'The owner edits a note this session may read.',
           method: 'PATCH',
-          path: '/records/1hk153x00001',
-          requestBody: { contentPatch: { title: 'shared' } },
+          path: '/records/1hk153x00001/content',
+          requestBody: { title: 'shared' },
           responseStatus: 200,
           responseBody: {
             id: '1hk153x00001',
@@ -735,8 +735,8 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
           name: 'change-feed-typeid-filter-other-type-mutation',
           description: 'A change to a record of an unrelated type.',
           method: 'PATCH',
-          path: '/records/1hk153x03001',
-          requestBody: { contentPatch: { url: 'https://example.com' } },
+          path: '/records/1hk153x03001/content',
+          requestBody: { url: 'https://example.com' },
           responseStatus: 200,
           responseBody: {
             id: '1hk153x03001',
@@ -756,8 +756,8 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
           name: 'change-feed-typeid-filter-later-version-mutation',
           description: 'A change to a record already at note@2.',
           method: 'PATCH',
-          path: '/records/1hk153x03002',
-          requestBody: { contentPatch: { title: 'Later' } },
+          path: '/records/1hk153x03002/content',
+          requestBody: { title: 'Later' },
           responseStatus: 200,
           responseBody: {
             id: '1hk153x03002',
@@ -831,8 +831,8 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
           name: 'change-feed-baseid-filter-other-type-mutation',
           description: 'A change to a record of an unrelated type.',
           method: 'PATCH',
-          path: '/records/1hk153x03001',
-          requestBody: { contentPatch: { url: 'https://example.com' } },
+          path: '/records/1hk153x03001/content',
+          requestBody: { url: 'https://example.com' },
           responseStatus: 200,
           responseBody: {
             id: '1hk153x03001',
@@ -852,8 +852,8 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
           name: 'change-feed-baseid-filter-later-version-mutation',
           description: 'A change to a record already at note@2.',
           method: 'PATCH',
-          path: '/records/1hk153x03002',
-          requestBody: { contentPatch: { title: 'Later' } },
+          path: '/records/1hk153x03002/content',
+          requestBody: { title: 'Later' },
           responseStatus: 200,
           responseBody: {
             id: '1hk153x03002',
@@ -956,8 +956,8 @@ export const changeFeedSequenceFixtures: ChangeFeedSequenceFixture[] = [
               name: 'change-feed-resume-first-change',
               description: 'The owner edits the note while the client is connected.',
               method: 'PATCH',
-              path: '/records/1hk153x00001',
-              requestBody: { contentPatch: { title: 'first' } },
+              path: '/records/1hk153x00001/content',
+              requestBody: { title: 'first' },
               responseStatus: 200,
               responseBody: {
                 id: '1hk153x00001',
@@ -999,8 +999,8 @@ export const changeFeedSequenceFixtures: ChangeFeedSequenceFixture[] = [
             name: 'change-feed-resume-missed-change',
             description: 'A second edit, made while no connection was open.',
             method: 'PATCH',
-            path: '/records/1hk153x00001',
-            requestBody: { contentPatch: { title: 'second' } },
+            path: '/records/1hk153x00001/content',
+            requestBody: { title: 'second' },
             responseStatus: 200,
             responseBody: {
               id: '1hk153x00001',
