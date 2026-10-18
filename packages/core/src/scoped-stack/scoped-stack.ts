@@ -84,6 +84,7 @@ import {
   WRITE_EXPECTATION,
 } from '../stack/write-expectation.js';
 import type { ExpectationOptions } from '../stack/write-expectation.js';
+import { WRITE_GATE } from '../stack/write-gate.js';
 import { assertAttachmentSize } from '../stack/limits.js';
 import { validateIdTimestampSkew, validateRecordId } from '../stack/record-id.js';
 import {
@@ -258,7 +259,18 @@ export class ScopedStack implements StackClient {
     // Ahead of the gate, so another family's record is not found whatever
     // this requester may do to it — the answer a collection's get() gives.
     checkFamily(record, opts.expect);
-    if (opts.fenceGrantRecord) await this.requireOwnerForGrantRecord(record);
+    await this.gateVerb(record, actions, opts.fenceGrantRecord);
+    return record;
+  }
+
+  /** requireVerb()'s gate, asked of a record already found in its family. */
+  private async gateVerb(
+    record: StackRecord,
+    actions: GrantAction[],
+    fenceGrantRecord: boolean,
+  ): Promise<void> {
+    const { id } = record;
+    if (fenceGrantRecord) await this.requireOwnerForGrantRecord(record);
     if (isGroupRecord(record)) {
       if (!this.#authority.isGroupManager(record)) {
         throw await this.#authority.denialFor(
@@ -266,7 +278,7 @@ export class ScopedStack implements StackClient {
           `Cannot change group "${id}": only its admins can manage it`,
         );
       }
-      return record;
+      return;
     }
     const subjectReaches =
       (await this.#authority.recordPermits(record, 'write')) ||
@@ -282,7 +294,6 @@ export class ScopedStack implements StackClient {
           : `${what}: requires ${actions.join(' or ')}`,
       );
     }
-    return record;
   }
 
   /**
@@ -589,9 +600,11 @@ export class ScopedStack implements StackClient {
     opts: IfVersionOptions & ExpectationOptions = {},
   ): Promise<StackRecord> {
     assertAssociationEdits(edits, 'editAssociations()', 'data');
-    const record = await this.requireUpdatable(id, { expect: opts });
-    await this.requireNewAssociationAccess(record, addsOf(edits));
-    return this.stack.editAssociations(id, edits, { ...opts, ...this.actor });
+    return this.stack.editAssociations(id, edits, {
+      ...opts,
+      ...this.actor,
+      [WRITE_GATE]: (record) => this.gateAssociationWrite(record, addsOf(edits)),
+    });
   }
 
   /** editAssociations()'s gates, with every element new to the set an add. */
@@ -601,19 +614,21 @@ export class ScopedStack implements StackClient {
     opts: IfVersionOptions & ExpectationOptions = {},
   ): Promise<StackRecord> {
     assertAssociationSet(associations, 'associations');
-    const record = await this.requireUpdatable(id, { expect: opts });
-    await this.requireNewAssociationAccess(record, associations);
-    return this.stack.setAssociations(id, associations, { ...opts, ...this.actor });
+    return this.stack.setAssociations(id, associations, {
+      ...opts,
+      ...this.actor,
+      [WRITE_GATE]: (record) => this.gateAssociationWrite(record, associations),
+    });
   }
 
   /**
-   * The reference gate over the elements a write adds, asked against the
-   * stored set so an association the record already carries is not re-gated.
+   * The write gate, then the reference gate over the elements a write adds,
+   * asked against the stored set so an association the record already
+   * carries is not re-gated. `Stack` asks it of each read it writes from,
+   * so a retried write is gated on the set it lands on.
    */
-  private async requireNewAssociationAccess(
-    record: StackRecord,
-    added: Association[],
-  ): Promise<void> {
+  private async gateAssociationWrite(record: StackRecord, added: Association[]): Promise<void> {
+    await this.gateVerb(record, ['update-own', 'update-any'], true);
     for (const association of added) {
       if ((record.associations ?? []).some((a) => associationEqual(a, association))) continue;
       await this.requireAssociationAccess(record.typeId, association);
@@ -631,8 +646,11 @@ export class ScopedStack implements StackClient {
     opts: IfVersionOptions & ExpectationOptions = {},
   ): Promise<StackRecord> {
     assertAssociationEdits(edits, 'editAccess()', 'authority');
-    await this.requireReshareable(id, opts);
-    return this.stack.editAccess(id, edits, { ...opts, ...this.actor });
+    return this.stack.editAccess(id, edits, {
+      ...opts,
+      ...this.actor,
+      [WRITE_GATE]: this.gateReshare,
+    });
   }
 
   /** See editAccess() — the same gate. */
@@ -642,8 +660,11 @@ export class ScopedStack implements StackClient {
     opts: IfVersionOptions & ExpectationOptions = {},
   ): Promise<StackRecord> {
     assertAssociationSet(permissions, 'permissions');
-    await this.requireReshareable(id, opts);
-    return this.stack.setAccess(id, permissions, { ...opts, ...this.actor });
+    return this.stack.setAccess(id, permissions, {
+      ...opts,
+      ...this.actor,
+      [WRITE_GATE]: this.gateReshare,
+    });
   }
 
   /**
@@ -656,6 +677,12 @@ export class ScopedStack implements StackClient {
     const record = await this.stack.get(id, { includeDeleted: true });
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
     checkFamily(record, expect);
+    await this.gateReshare(record);
+    return record;
+  }
+
+  /** requireReshareable()'s gate, asked of a record already found in its family. */
+  private readonly gateReshare = async (record: StackRecord): Promise<void> => {
     await this.requireOwnerForGrantRecord(record);
     if (!this.#authority.canReshare(record)) {
       throw await this.#authority.denialFor(
@@ -663,8 +690,7 @@ export class ScopedStack implements StackClient {
         `Cannot change permissions on "${record.id}": only its author or the stack owner can reshare it`,
       );
     }
-    return record;
-  }
+  };
 
   /**
    * An `_app` card's `did` and `appId` are the owner's alone to set, or
