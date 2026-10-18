@@ -23,7 +23,7 @@
 import { describe, test, expect, beforeEach, afterEach } from 'vitest';
 import { SYSTEM_TYPES } from '@haverstack/core';
 import type { AuthorityAssociation, DataAssociation, StackCapabilities } from '@haverstack/core';
-import { ElementSetMovedError } from '@haverstack/core/adapter';
+import { RecordMovedError } from '@haverstack/core/adapter';
 import type { StackRecordAdapter } from '@haverstack/core/adapter';
 import { expectStackErrorCode } from './errors.js';
 import { CONFORMANCE_TYPE_ID, conformanceType, makeRecord, uniqueId } from './helpers.js';
@@ -489,7 +489,7 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
             ),
           () => adapter.setAccess(record.id, [], stalePermissions),
         ]) {
-          await expect(write()).rejects.toBeInstanceOf(ElementSetMovedError);
+          await expect(write()).rejects.toBeInstanceOf(RecordMovedError);
         }
         const after = await adapter.getRecord(record.id);
         expect(after!.associations).toEqual(expect.arrayContaining([tag('a'), tag('b')]));
@@ -505,6 +505,42 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         expect(held.associations).toHaveLength(3);
         const cleared = await adapter.setAccess(record.id, [], { expectSet: [anyone] });
         expect(cleared.permissions ?? []).toEqual([]);
+      });
+
+      // Stack passes expectLive on every aspect write, so none lands on a
+      // record soft-deleted after Stack read it. Asked before ifVersion: a
+      // soft delete bumps, and the tombstone is what Stack must re-read.
+      // See docs/spec/adapters.md § Interface split.
+      test('an aspect write under expectLive refuses a soft-deleted record, and changes nothing', async () => {
+        const parent = makeRecord();
+        const record = makeRecord();
+        await adapter.createRecord(parent);
+        await adapter.createRecord(record);
+        await adapter.deleteRecord(record.id);
+        const before = await adapter.getRecord(record.id);
+
+        const opts = { expectLive: true, ifVersion: record.version };
+        for (const write of [
+          () => adapter.setParent(record.id, parent.id, opts),
+          () => adapter.setUnlisted(record.id, true, opts),
+          () => adapter.editAssociations(record.id, [{ op: 'add', association: tag('a') }], opts),
+          () => adapter.setAssociations(record.id, [tag('a')], opts),
+          () =>
+            adapter.editAccess(
+              record.id,
+              [{ op: 'add', association: { kind: 'anyone', label: 'read' } }],
+              opts,
+            ),
+          () => adapter.setAccess(record.id, [{ kind: 'anyone', label: 'read' }], opts),
+        ]) {
+          await expect(write()).rejects.toBeInstanceOf(RecordMovedError);
+        }
+        expect(await adapter.getRecord(record.id)).toEqual(before);
+
+        const live = makeRecord();
+        await adapter.createRecord(live);
+        const listed = await adapter.setUnlisted(live.id, true, { expectLive: true });
+        expect(listed.unlistedAt).toBeInstanceOf(Date);
       });
 
       // Stack's expectSet is what getRecord() answered, so a set read back

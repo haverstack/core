@@ -7,7 +7,7 @@
  * subclass carries its wire discriminator as an instance `code`.
  *
  * Several errors sit deliberately outside that root (UseAfterCloseError,
- * InvalidAdapterError, OwnerMismatchError, ElementSetMovedError, RelayScopeError, and — in their own
+ * InvalidAdapterError, OwnerMismatchError, RecordMovedError, RelayScopeError, and — in their own
  * modules — IdGenerationError, InvalidDidError, InvalidAuthChallengeError,
  * StoredVersionError and MisfitError): they report a local programming error, malformed
  * local input or an assembled topology, not a state a request can be in, so
@@ -257,15 +257,16 @@ export class OwnerMismatchError extends Error {
 }
 
 /**
- * Thrown by an adapter's element-set write when the stored set no longer
- * matches the `expectSet` it was handed. Outside the StackError taxonomy:
- * Stack catches it and reads again, so no request ever answers with it.
- * See docs/spec/versioning.md § Element-set writes compare the set they read.
+ * Thrown by an aspect write when the stored record no longer matches what
+ * `Stack` read: a set other than its `expectSet`, or a tombstone under
+ * `expectLive`. Outside the StackError taxonomy: Stack catches it and reads
+ * again, so no request ever answers with it.
+ * See docs/spec/versioning.md § An aspect write lands on the state it read.
  */
-export class ElementSetMovedError extends Error {
+export class RecordMovedError extends Error {
   constructor(public readonly recordId: string) {
-    super(`Record "${recordId}"'s set changed since it was read`);
-    this.name = 'ElementSetMovedError';
+    super(`Record "${recordId}" changed since it was read`);
+    this.name = 'RecordMovedError';
   }
 }
 

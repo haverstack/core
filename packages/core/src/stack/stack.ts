@@ -84,7 +84,7 @@ import type {
 } from '../types/index.js';
 
 import {
-  ElementSetMovedError,
+  RecordMovedError,
   UseAfterCloseError,
   InvalidAdapterError,
   StackConflictError,
@@ -815,7 +815,7 @@ export class Stack implements StackClient {
   ): Promise<StackRecord> {
     this.assertOpen();
     assertParentArgument(parentId);
-    return this.untilReadHolds(opts, async () => {
+    return this.untilReadHolds(async () => {
       const existing = await this.requireWritable(id, opts);
       const previousParentId = existing.parentId ?? null;
       if (parentId === previousParentId) return existing;
@@ -828,9 +828,7 @@ export class Stack implements StackClient {
         actor: normalizeActor(opts.actor),
         previousParentId,
       });
-      return this.writeAspect(existing, change, opts, (o) =>
-        this.adapter.setParent(id, parentId, o),
-      );
+      return this.writeAspect(change, opts, (o) => this.adapter.setParent(id, parentId, o));
     });
   }
 
@@ -846,16 +844,14 @@ export class Stack implements StackClient {
   ): Promise<StackRecord> {
     this.assertOpen();
     assertUnlistedArgument(unlisted);
-    return this.untilReadHolds(opts, async () => {
+    return this.untilReadHolds(async () => {
       const existing = await this.requireWritable(id, opts);
       if (Boolean(existing.unlistedAt) === unlisted) return existing;
 
       const change = new PendingChange(unlisted ? 'unlist' : 'list', {
         actor: normalizeActor(opts.actor),
       });
-      return this.writeAspect(existing, change, opts, (o) =>
-        this.adapter.setUnlisted(id, unlisted, o),
-      );
+      return this.writeAspect(change, opts, (o) => this.adapter.setUnlisted(id, unlisted, o));
     });
   }
 
@@ -873,7 +869,7 @@ export class Stack implements StackClient {
   ): Promise<StackRecord> {
     this.assertOpen();
     assertAssociationEdits(edits, 'editAssociations()', 'data');
-    return this.untilReadHolds(opts, async () => {
+    return this.untilReadHolds(async () => {
       const existing = await this.requireWritable(id, opts);
       const next = applyAssociationEdits(existing.associations ?? [], edits) as DataAssociation[];
       return this.writeAssociations(existing, next, opts, (o) =>
@@ -893,7 +889,7 @@ export class Stack implements StackClient {
   ): Promise<StackRecord> {
     this.assertOpen();
     assertAssociationSet(associations, 'associations');
-    return this.untilReadHolds(opts, async () => {
+    return this.untilReadHolds(async () => {
       const existing = await this.requireWritable(id, opts);
       return this.writeAssociations(existing, associations, opts, (o) =>
         this.adapter.setAssociations(id, associations, o),
@@ -925,7 +921,7 @@ export class Stack implements StackClient {
       ],
       { actor: normalizeActor(opts.actor), associations: delta },
     );
-    return this.writeAspect(existing, change, opts, (o) => write({ ...o, expectSet: current }));
+    return this.writeAspect(change, opts, (o) => write({ ...o, expectSet: current }));
   }
 
   /**
@@ -940,7 +936,7 @@ export class Stack implements StackClient {
   ): Promise<StackRecord> {
     this.assertOpen();
     assertAssociationEdits(edits, 'editAccess()', 'authority');
-    return this.untilReadHolds(opts, async () => {
+    return this.untilReadHolds(async () => {
       const existing = await this.requireWritable(id, opts);
       const next = applyAssociationEdits(
         existing.permissions ?? [],
@@ -958,7 +954,7 @@ export class Stack implements StackClient {
   ): Promise<StackRecord> {
     this.assertOpen();
     assertAssociationSet(permissions, 'permissions');
-    return this.untilReadHolds(opts, async () => {
+    return this.untilReadHolds(async () => {
       const existing = await this.requireWritable(id, opts);
       return this.writeAccess(existing, permissions, opts, (o) =>
         this.adapter.setAccess(id, permissions, o),
@@ -982,46 +978,39 @@ export class Stack implements StackClient {
       actor: normalizeActor(opts.actor),
       associations: delta,
     });
-    return this.writeAspect(existing, change, opts, (o) => write({ ...o, expectSet: current }));
+    return this.writeAspect(change, opts, (o) => write({ ...o, expectSet: current }));
   }
 
   /**
    * Run an aspect write from its read onward, again from a fresh read each
-   * time the adapter finds the record moved since the last one, so every
-   * check is asked of the state the write lands on. A version mismatch is
-   * the caller's to hear only when they named the version.
-   * Unbounded: each refusal means another write landed.
+   * time the adapter finds the record moved since the last one, so Stack's
+   * checks are asked of the state the write lands on. Unbounded: each
+   * refusal means another write landed.
    * See docs/spec/versioning.md § An aspect write lands on the state it read.
    */
-  private async untilReadHolds(
-    opts: IfVersionOptions,
-    attempt: () => Promise<StackRecord>,
-  ): Promise<StackRecord> {
+  private async untilReadHolds(attempt: () => Promise<StackRecord>): Promise<StackRecord> {
     for (;;) {
       try {
         return await attempt();
       } catch (err) {
-        const moved =
-          err instanceof ElementSetMovedError ||
-          (err instanceof StackVersionConflictError && opts.ifVersion === undefined);
-        if (!moved) throw err;
+        if (!(err instanceof RecordMovedError)) throw err;
       }
     }
   }
 
   /**
-   * Land a write that never bumps, held to the version it was checked
-   * against. Its precondition and journal entry travel together here, so
-   * no aspect verb can drop either.
+   * Land a write that never bumps, and never on a tombstone. Its
+   * precondition and journal entry travel together here, so no aspect verb
+   * can drop either.
    */
   private async writeAspect(
-    existing: StackRecord,
     change: PendingChange,
     opts: IfVersionOptions,
     write: (o: AspectWriteOptions) => Promise<StackRecord>,
   ): Promise<StackRecord> {
     const updated = await write({
-      ifVersion: opts.ifVersion ?? existing.version,
+      ifVersion: opts.ifVersion,
+      expectLive: true,
       journal: change.journal,
     });
     this.announce(change, updated);

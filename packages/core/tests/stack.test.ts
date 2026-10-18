@@ -8,7 +8,7 @@ import {
   StackNotFoundError,
   StackConflictError,
   StackVersionConflictError,
-  ElementSetMovedError,
+  RecordMovedError,
   StackSchemaDriftError,
   StackBadRequestError,
   StackPayloadTooLargeError,
@@ -2741,6 +2741,23 @@ describe('_group — at least one admin', () => {
   });
 });
 
+type AspectVerb =
+  | 'setParent'
+  | 'setUnlisted'
+  | 'editAssociations'
+  | 'setAssociations'
+  | 'editAccess'
+  | 'setAccess';
+
+/** Land `other` just before the adapter applies Stack's next `verb`. */
+function racing(verb: AspectVerb, other: () => Promise<unknown>) {
+  const write = adapter[verb].bind(adapter) as (...args: unknown[]) => Promise<StackRecord>;
+  return vi.spyOn(adapter, verb).mockImplementationOnce((async (...args: unknown[]) => {
+    await other();
+    return write(...args);
+  }) as never);
+}
+
 // -------------------------------------------------------
 // Element-set writes compare the set they read
 // -------------------------------------------------------
@@ -2757,18 +2774,6 @@ describe('element-set writes check their rules against the set they land on', ()
     label,
     grantee: { kind: 'entity', entityId: 'x' },
   });
-
-  /** Land `other` straight on the adapter just before Stack's next write to it. */
-  function racing(
-    verb: 'editAssociations' | 'setAssociations' | 'editAccess' | 'setAccess',
-    other: () => Promise<unknown>,
-  ) {
-    const write = adapter[verb].bind(adapter) as (...args: unknown[]) => Promise<StackRecord>;
-    return vi.spyOn(adapter, verb).mockImplementationOnce((async (...args: unknown[]) => {
-      await other();
-      return write(...args);
-    }) as never);
-  }
 
   test('two admins removing each other concurrently leave one admin', async () => {
     const group = await stack.create('_group@1', { name: 'Editors' });
@@ -2851,7 +2856,7 @@ describe('element-set writes check their rules against the set they land on', ()
 
   test('a write keeps reading again for as long as the adapter finds its set moved', async () => {
     const note = await stack.create(NOTE_V1, { text: 'hello' });
-    const moved = new ElementSetMovedError(note.id);
+    const moved = new RecordMovedError(note.id);
     const write = vi
       .spyOn(adapter, 'editAssociations')
       .mockRejectedValueOnce(moved)
@@ -2877,21 +2882,14 @@ describe('element-set writes check their rules against the set they land on', ()
 // An aspect write lands on the state it read
 // -------------------------------------------------------
 
-describe('aspect writes land on the state they were checked against', () => {
+describe('aspect writes never land on a record soft-deleted after Stack read it', () => {
   const tag: DataAssociation = { kind: 'tag', label: 'a' };
   const grant: AuthorityAssociation = {
     kind: 'permission',
     label: 'read',
     grantee: { kind: 'entity', entityId: 'x' },
   };
-  type Verb =
-    | 'setParent'
-    | 'setUnlisted'
-    | 'editAssociations'
-    | 'setAssociations'
-    | 'editAccess'
-    | 'setAccess';
-  const writes: Record<Verb, (id: string) => Promise<StackRecord>> = {
+  const writes: Record<AspectVerb, (id: string) => Promise<StackRecord>> = {
     setParent: (id) => stack.setParent(id, null),
     setUnlisted: (id) => stack.setUnlisted(id, true),
     editAssociations: (id) => stack.editAssociations(id, [{ op: 'add', association: tag }]),
@@ -2899,6 +2897,7 @@ describe('aspect writes land on the state they were checked against', () => {
     editAccess: (id) => stack.editAccess(id, [{ op: 'add', association: grant }]),
     setAccess: (id) => stack.setAccess(id, [grant]),
   };
+  const verbs = Object.keys(writes) as AspectVerb[];
 
   /** A note under a parent, so every verb above moves something. */
   async function note(): Promise<StackRecord> {
@@ -2906,59 +2905,22 @@ describe('aspect writes land on the state they were checked against', () => {
     return stack.create(NOTE_V1, { text: 'hello' }, { parentId: parent.id });
   }
 
-  /** Land `other` just before the adapter applies Stack's next `verb`. */
-  function racing(verb: Verb, other: () => Promise<unknown>) {
-    const write = adapter[verb].bind(adapter) as (...args: unknown[]) => Promise<StackRecord>;
-    return vi.spyOn(adapter, verb).mockImplementationOnce((async (...args: unknown[]) => {
-      await other();
-      return write(...args);
-    }) as never);
-  }
-
-  test.each(Object.keys(writes) as Verb[])(
-    '%s is refused when a soft delete lands first',
-    async (verb) => {
-      const record = await note();
-      racing(verb, () => stack.delete(record.id));
-
-      await expect(writes[verb](record.id)).rejects.toThrow(/soft-deleted/);
-      const after = (await stack.get(record.id, { includeDeleted: true }))!;
-      const aspects = (r: StackRecord) => [r.parentId, r.unlistedAt, r.associations, r.permissions];
-      expect(aspects(after)).toEqual(aspects(record));
-    },
-  );
-
-  test.each(Object.keys(writes) as Verb[])(
-    '%s still lands when a content patch lands first',
-    async (verb) => {
-      const record = await note();
-      const write = racing(verb, () => stack.patchContent(record.id, { text: 'edited' }));
-
-      const updated = await writes[verb](record.id);
-      expect(updated.content).toEqual({ text: 'edited' });
-      expect(write).toHaveBeenCalledTimes(2);
-    },
-  );
-
-  test('the adapter is handed the version Stack read when the caller names none', async () => {
+  test.each(verbs)('%s is refused when a soft delete lands first', async (verb) => {
     const record = await note();
-    const write = vi.spyOn(adapter, 'setUnlisted');
+    racing(verb, () => stack.delete(record.id));
 
-    await stack.setUnlisted(record.id, true);
-    expect(write).toHaveBeenCalledWith(
-      record.id,
-      true,
-      expect.objectContaining({ ifVersion: record.version }),
-    );
+    await expect(writes[verb](record.id)).rejects.toThrow(/soft-deleted/);
+    const after = (await stack.get(record.id, { includeDeleted: true }))!;
+    const aspects = (r: StackRecord) => [r.parentId, r.unlistedAt, r.associations, r.permissions];
+    expect(aspects(after)).toEqual(aspects(record));
   });
 
-  test("a mismatch on the caller's own ifVersion reaches them on the first attempt", async () => {
+  test.each(verbs)('%s lands without a retry when a content patch lands first', async (verb) => {
     const record = await note();
-    const write = racing('setParent', () => stack.patchContent(record.id, { text: 'edited' }));
+    const write = racing(verb, () => stack.patchContent(record.id, { text: 'edited' }));
 
-    await expect(
-      stack.setParent(record.id, null, { ifVersion: record.version }),
-    ).rejects.toBeInstanceOf(StackVersionConflictError);
+    const updated = await writes[verb](record.id);
+    expect(updated.content).toEqual({ text: 'edited' });
     expect(write).toHaveBeenCalledTimes(1);
   });
 });

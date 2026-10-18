@@ -33,7 +33,7 @@ import type {
   ActorOptions,
   IfVersionOptions,
 } from '@haverstack/core';
-import { ElementSetMovedError, sameAssociationSet } from '@haverstack/core/adapter';
+import { RecordMovedError, sameAssociationSet } from '@haverstack/core/adapter';
 import type {
   AspectWriteOptions,
   ElementWriteOptions,
@@ -147,6 +147,15 @@ export class SharedSqlRecordLogic {
     const version = this.currentVersion(id);
     if (version === undefined) throw recordNotFound(id);
     throw versionConflict(id, expectedVersion as number, version);
+  }
+
+  /** The `expectLive` refusal, asked inside the write's transaction. */
+  private checkLive(id: string, expectLive: boolean | undefined): void {
+    if (!expectLive) return;
+    const row = this.exec.get('SELECT 1 FROM records WHERE id = ? AND deleted_at IS NOT NULL', [
+      id,
+    ]);
+    if (row) throw new RecordMovedError(id);
   }
 
   private currentVersion(id: string): number | undefined {
@@ -350,6 +359,7 @@ export class SharedSqlRecordLogic {
   ): StackRecord {
     const guarded = opts.ifVersion !== undefined;
     this.exec.transaction(() => {
+      this.checkLive(id, opts.expectLive);
       const changed = this.exec.run(
         `UPDATE records SET ${set} WHERE id = ?${guarded ? ' AND version = ?' : ''}`,
         [value, id, ...(guarded ? [opts.ifVersion] : [])],
@@ -759,8 +769,8 @@ export class SharedSqlRecordLogic {
 
   /**
    * A write to one of a record's two element tables, inside a transaction
-   * that first checks the record exists at `ifVersion` and the table holds
-   * `expectSet`. Never bumps and never snapshots.
+   * that first checks the record exists, is live under `expectLive`, is at
+   * `ifVersion`, and that the table holds `expectSet`. Never bumps and never snapshots.
    */
   private elementWrite(
     id: string,
@@ -772,12 +782,13 @@ export class SharedSqlRecordLogic {
     this.exec.transaction(() => {
       const version = this.currentVersion(id);
       if (version === undefined) throw recordNotFound(id);
+      this.checkLive(id, opts.expectLive);
       this.checkExpectedVersion(id, version, opts.ifVersion);
       if (opts.expectSet) {
         const ids = JSON.stringify([id]);
         const map = table === 'associations' ? rowToAssociation : rowToPermission;
         const stored = this.elementsByRecord<Association>(table, ids, map).get(id) ?? [];
-        if (!sameAssociationSet(stored, opts.expectSet)) throw new ElementSetMovedError(id);
+        if (!sameAssociationSet(stored, opts.expectSet)) throw new RecordMovedError(id);
       }
       write();
       this.appendJournal(id, opts.journal);

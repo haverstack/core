@@ -12,6 +12,8 @@ The adapter contract is split into two focused interfaces that are composed into
 
 **Every method takes `ifVersion`, checked inside its own write** — an `UPDATE … WHERE version = ?` on the records row, or a check-then-write inside one transaction for the methods that touch another table. See [Versioning § Optimistic concurrency](./versioning.md#optimistic-concurrency-ifversion).
 
+**The six aspect writes also take `expectLive`, checked inside the same write and before `ifVersion`.** If the record is soft-deleted, the write throws `RecordMovedError` and changes nothing. `Stack` always passes it, so a soft delete landing after `Stack`'s read never lets the write reach the tombstone; see [Versioning § An aspect write lands on the state it read](./versioning.md#an-aspect-write-lands-on-the-state-it-read). `APIAdapter` does not send it: the server's own `Stack` makes the same check inside the request.
+
 **Every mutating record method is atomic, whatever it touches.** A record write is rarely one statement — a create alone writes the record row, its associations, the full-text index, the content index and a [journal entry](./journal.md) — and an adapter must apply the whole set or none of it. Partial application is worse than failure: the method raises, so the caller takes the write as lost, while what survives contradicts that and can outlive the retry. The [snapshot's atomicity rule](./versioning.md#snapshot-atomicity) is one instance of this, not a separate one.
 
 **`getJournal()` refuses a record that isn't there.** `StackNotFoundError`, never an empty log — a purged record is gone, so it gets the same refusal. See [Change journal § Reading it](./journal.md#reading-it).
@@ -44,7 +46,7 @@ Every adapter stores a record's associations under the [identity](./data-model.m
 - **An add landing on an identity already stored overwrites it in place.** `Stack` hands an adapter only a list naming each identity once, so the order of its edits is never observable.
 - **Never bumps `version` or `updatedAt`, and never snapshots.** One call appends at most one [journal entry](./journal.md#the-entry), carrying the `JournalEntryInput` the caller passed.
 - **A record that is not there is `StackNotFoundError`**, never an orphan row.
-- **`expectSet`, when given, is compared inside the write.** If the stored set differs from it — by element or annotation, order aside — the write throws `ElementSetMovedError` and changes nothing. `Stack` always passes the set it read, so the rules it asked of that set hold for the set the write lands on; see [Versioning § Element-set writes compare the set they read](./versioning.md#element-set-writes-compare-the-set-they-read). `APIAdapter` does not send it: the server's own `Stack` makes the same comparison inside the request.
+- **`expectSet`, when given, is compared inside the write.** If the stored set differs from it — by element or annotation, order aside — the write throws `RecordMovedError` and changes nothing. `Stack` always passes the set it read, so the rules it asked of that set hold for the set the write lands on; see [Versioning § Element-set writes compare the set they read](./versioning.md#element-set-writes-compare-the-set-they-read). `APIAdapter` does not send it: the server's own `Stack` makes the same comparison inside the request.
 
 `setAssociations()` and `setAccess()` replace the whole set in their own table under the same rules; `setAccess(id, [])` leaves the record private.
 
