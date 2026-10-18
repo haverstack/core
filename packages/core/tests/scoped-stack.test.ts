@@ -158,6 +158,9 @@ describe('ScopedStack — an element-set write is gated on the set it lands on',
       label: 'read',
       grantee: { kind: 'entity', entityId: STRANGER },
     };
+    // The race moves `permissions` too: only a move of the set the write
+    // compares prompts a re-read, so a demotion alone is not seen (see
+    // docs/spec/versioning.md § Element-set writes compare the set they read).
     racing('setAccess', async () => {
       await stack.setAssociations(group.id, [admin(OWNER)]);
       await stack.setAccess(group.id, [strangerReads]);
