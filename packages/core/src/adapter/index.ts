@@ -18,7 +18,9 @@ export type {
   JournalOptions,
   MutateOptions,
   AspectWriteOptions,
+  ElementWriteOptions,
 } from '../types/index.js';
+export { sameAssociationSet } from '../associations/identity.js';
 export { OwnerMismatchError } from '../errors.js';
 export { combineAdapters } from './combine.js';
 export {

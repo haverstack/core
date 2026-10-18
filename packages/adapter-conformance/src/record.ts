@@ -463,6 +463,49 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         expect(await adapter.getJournal(record.id)).toHaveLength(2);
       });
 
+      // The compare-and-swap Stack retries on: the set its rules were asked
+      // of must be the set the write lands on. Order is not part of a set.
+      // See docs/spec/adapters.md § Editing associations.
+      test('an element write refuses an expectSet the stored set no longer matches, and changes nothing', async () => {
+        const record = makeRecord();
+        await adapter.createRecord(record);
+        const anyone: AuthorityAssociation = { kind: 'anyone', label: 'read' };
+        await adapter.setAssociations(record.id, [tag('a'), tag('b')]);
+        await adapter.setAccess(record.id, [anyone]);
+
+        const journal = { ops: ['associate' as const], kind: 'changed' as const };
+        const staleTags = { expectSet: [tag('a')], journal };
+        const stalePermissions = { expectSet: [], journal };
+        for (const write of [
+          () =>
+            adapter.editAssociations(record.id, [{ op: 'add', association: tag('c') }], staleTags),
+          () => adapter.setAssociations(record.id, [tag('c')], staleTags),
+          () =>
+            adapter.editAccess(
+              record.id,
+              [{ op: 'remove', association: anyone }],
+              stalePermissions,
+            ),
+          () => adapter.setAccess(record.id, [], stalePermissions),
+        ]) {
+          await expectStackErrorCode(write(), 'conflict');
+        }
+        const after = await adapter.getRecord(record.id);
+        expect(after!.associations).toEqual(expect.arrayContaining([tag('a'), tag('b')]));
+        expect(after!.associations).toHaveLength(2);
+        expect(after!.permissions).toEqual([anyone]);
+        expect(await adapter.getJournal(record.id)).toHaveLength(0);
+
+        const held = await adapter.editAssociations(
+          record.id,
+          [{ op: 'add', association: tag('c') }],
+          { expectSet: [tag('b'), tag('a')] },
+        );
+        expect(held.associations).toHaveLength(3);
+        const cleared = await adapter.setAccess(record.id, [], { expectSet: [anyone] });
+        expect(cleared.permissions ?? []).toEqual([]);
+      });
+
       test('each set verb replaces only its own aspect', async () => {
         const record = makeRecord();
         await adapter.createRecord(record);

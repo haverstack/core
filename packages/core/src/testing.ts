@@ -22,6 +22,7 @@ import type {
   JournalQuery,
   VersionsQuery,
   AspectWriteOptions,
+  ElementWriteOptions,
   ActorOptions,
   StackQuery,
   QueryResult,
@@ -47,7 +48,7 @@ import {
   StackBadRequestError,
 } from './errors.js';
 import { matchesContent } from './content-match.js';
-import { applyAssociationEdits } from './associations/identity.js';
+import { applyAssociationEdits, sameAssociationSet } from './associations/identity.js';
 
 /** Core resolves the default direction; an adapter only ever sees an explicit one. */
 const requireDirection = (sort: QuerySort): 'asc' | 'desc' => {
@@ -203,8 +204,12 @@ export class MemoryAdapter implements StackAdapter {
     return this.store(id, { ...rest, ...(unlisted && { unlistedAt: new Date() }) }, opts.journal);
   }
 
-  async editAssociations(id: string, edits: AssociationEdit[], opts: AspectWriteOptions = {}) {
-    const existing = this.requireForWrite(id, opts.ifVersion);
+  async editAssociations(
+    id: string,
+    edits: AssociationEdit[],
+    opts: ElementWriteOptions<DataAssociation> = {},
+  ) {
+    const existing = this.requireSetForWrite(id, 'associations', opts);
     const next = applyAssociationEdits(existing.associations ?? [], edits);
     return this.store(id, withHalf(existing, 'associations', next), opts.journal);
   }
@@ -212,21 +217,42 @@ export class MemoryAdapter implements StackAdapter {
   async setAssociations(
     id: string,
     associations: DataAssociation[],
-    opts: AspectWriteOptions = {},
+    opts: ElementWriteOptions<DataAssociation> = {},
   ) {
-    const existing = this.requireForWrite(id, opts.ifVersion);
+    const existing = this.requireSetForWrite(id, 'associations', opts);
     return this.store(id, withHalf(existing, 'associations', associations), opts.journal);
   }
 
-  async editAccess(id: string, edits: AssociationEdit[], opts: AspectWriteOptions = {}) {
-    const existing = this.requireForWrite(id, opts.ifVersion);
+  async editAccess(
+    id: string,
+    edits: AssociationEdit[],
+    opts: ElementWriteOptions<AuthorityAssociation> = {},
+  ) {
+    const existing = this.requireSetForWrite(id, 'permissions', opts);
     const next = applyAssociationEdits(existing.permissions ?? [], edits);
     return this.store(id, withHalf(existing, 'permissions', next), opts.journal);
   }
 
-  async setAccess(id: string, permissions: AuthorityAssociation[], opts: AspectWriteOptions = {}) {
-    const existing = this.requireForWrite(id, opts.ifVersion);
+  async setAccess(
+    id: string,
+    permissions: AuthorityAssociation[],
+    opts: ElementWriteOptions<AuthorityAssociation> = {},
+  ) {
+    const existing = this.requireSetForWrite(id, 'permissions', opts);
     return this.store(id, withHalf(existing, 'permissions', permissions), opts.journal);
+  }
+
+  /** requireForWrite(), past the `expectSet` check on the half it writes too. */
+  private requireSetForWrite(
+    id: string,
+    half: 'associations' | 'permissions',
+    opts: ElementWriteOptions<Association>,
+  ): StackRecord {
+    const existing = this.requireForWrite(id, opts.ifVersion);
+    if (opts.expectSet && !sameAssociationSet(existing[half] ?? [], opts.expectSet)) {
+      throw new StackConflictError(`Record "${id}"'s ${half} changed since they were read`);
+    }
+    return existing;
   }
 
   async deleteRecord(id: string, opts: { purge?: boolean } & MutateOptions = {}) {

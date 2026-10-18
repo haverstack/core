@@ -34,6 +34,7 @@ import type {
 import type {
   StackRecordAdapter,
   AspectWriteOptions,
+  ElementWriteOptions,
   JournalOptions,
   MutateOptions,
 } from '@haverstack/core/adapter';
@@ -191,7 +192,7 @@ export abstract class SharedSqlRecordAdapter implements StackRecordAdapter {
   editAssociations(
     id: string,
     edits: AssociationEdit[],
-    opts?: AspectWriteOptions,
+    opts?: ElementWriteOptions<DataAssociation>,
   ): Promise<StackRecord> {
     return this.record.editAssociations(id, edits, opts);
   }
@@ -199,7 +200,7 @@ export abstract class SharedSqlRecordAdapter implements StackRecordAdapter {
   setAssociations(
     id: string,
     associations: DataAssociation[],
-    opts?: AspectWriteOptions,
+    opts?: ElementWriteOptions<DataAssociation>,
   ): Promise<StackRecord> {
     return this.record.setAssociations(id, associations, opts);
   }
@@ -207,7 +208,7 @@ export abstract class SharedSqlRecordAdapter implements StackRecordAdapter {
   editAccess(
     id: string,
     edits: AssociationEdit[],
-    opts?: AspectWriteOptions,
+    opts?: ElementWriteOptions<AuthorityAssociation>,
   ): Promise<StackRecord> {
     return this.record.editAccess(id, edits, opts);
   }
@@ -215,7 +216,7 @@ export abstract class SharedSqlRecordAdapter implements StackRecordAdapter {
   setAccess(
     id: string,
     permissions: AuthorityAssociation[],
-    opts?: AspectWriteOptions,
+    opts?: ElementWriteOptions<AuthorityAssociation>,
   ): Promise<StackRecord> {
     return this.record.setAccess(id, permissions, opts);
   }

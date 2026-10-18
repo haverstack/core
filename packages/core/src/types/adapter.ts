@@ -2,7 +2,12 @@
  * The storage adapter interfaces and the per-call options Stack hands them.
  */
 
-import type { AssociationEdit, AuthorityAssociation, DataAssociation } from './associations.js';
+import type {
+  Association,
+  AssociationEdit,
+  AuthorityAssociation,
+  DataAssociation,
+} from './associations.js';
 import type { StackCapabilities } from './capabilities.js';
 import type { RecordChange, Unsubscribe, SubscribeOptions } from './events.js';
 import type { RecordId, TypeId, FileId, AppId, EntityId, Actor } from './ids.js';
@@ -63,6 +68,17 @@ export type MutateOptions = IfVersionOptions & SnapshotOptions & ActorOptions & 
  * travels in the entry. See docs/spec/versioning.md § Version history.
  */
 export type AspectWriteOptions = IfVersionOptions & JournalOptions;
+
+/**
+ * What the four element-set writes take: `expectSet` is the set `Stack`
+ * read and checked its rules against. An adapter compares it with the
+ * stored set inside its write and throws StackConflictError on a mismatch,
+ * changing nothing. Omitted, the write is unconditional.
+ * See docs/spec/adapters.md § Editing associations.
+ */
+export type ElementWriteOptions<E extends Association> = AspectWriteOptions & {
+  expectSet?: readonly E[];
+};
 
 /** The metadata an upload's `_attachment@1` record carries beside its bytes. */
 export type PutAttachmentOptions = {
@@ -146,25 +162,25 @@ export interface StackRecordAdapter {
   editAssociations(
     id: RecordId,
     edits: AssociationEdit[],
-    opts?: AspectWriteOptions,
+    opts?: ElementWriteOptions<DataAssociation>,
   ): Promise<StackRecord>;
   /** Replace the record's data associations with exactly `associations`. */
   setAssociations(
     id: RecordId,
     associations: DataAssociation[],
-    opts?: AspectWriteOptions,
+    opts?: ElementWriteOptions<DataAssociation>,
   ): Promise<StackRecord>;
   /** editAssociations() over the record's permissions. */
   editAccess(
     id: RecordId,
     edits: AssociationEdit[],
-    opts?: AspectWriteOptions,
+    opts?: ElementWriteOptions<AuthorityAssociation>,
   ): Promise<StackRecord>;
   /** Replace the record's permissions with exactly `permissions`; `[]` is private. */
   setAccess(
     id: RecordId,
     permissions: AuthorityAssociation[],
-    opts?: AspectWriteOptions,
+    opts?: ElementWriteOptions<AuthorityAssociation>,
   ): Promise<StackRecord>;
 
   // Versions
