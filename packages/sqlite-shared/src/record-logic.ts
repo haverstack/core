@@ -26,14 +26,17 @@ import type {
   RecordVersion,
   StackQuery,
   QueryResult,
+  Association,
   AssociationEdit,
   AuthorityAssociation,
   DataAssociation,
   ActorOptions,
   IfVersionOptions,
 } from '@haverstack/core';
+import { ElementSetMovedError, sameAssociationSet } from '@haverstack/core/adapter';
 import type {
   AspectWriteOptions,
+  ElementWriteOptions,
   JournalEntryInput,
   JournalOptions,
   MutateOptions,
@@ -756,12 +759,13 @@ export class SharedSqlRecordLogic {
 
   /**
    * A write to one of a record's two element tables, inside a transaction
-   * that first checks the record exists at `ifVersion`. Never bumps and
-   * never snapshots.
+   * that first checks the record exists at `ifVersion` and the table holds
+   * `expectSet`. Never bumps and never snapshots.
    */
   private elementWrite(
     id: string,
-    opts: AspectWriteOptions,
+    table: 'associations' | 'permissions',
+    opts: ElementWriteOptions<Association>,
     write: () => void,
     verb: string,
   ): StackRecord {
@@ -769,6 +773,12 @@ export class SharedSqlRecordLogic {
       const version = this.currentVersion(id);
       if (version === undefined) throw recordNotFound(id);
       this.checkExpectedVersion(id, version, opts.ifVersion);
+      if (opts.expectSet) {
+        const ids = JSON.stringify([id]);
+        const map = table === 'associations' ? rowToAssociation : rowToPermission;
+        const stored = this.elementsByRecord<Association>(table, ids, map).get(id) ?? [];
+        if (!sameAssociationSet(stored, opts.expectSet)) throw new ElementSetMovedError(id);
+      }
       write();
       this.appendJournal(id, opts.journal);
     });
@@ -778,10 +788,11 @@ export class SharedSqlRecordLogic {
   async editAssociations(
     id: string,
     edits: AssociationEdit[],
-    opts: AspectWriteOptions = {},
+    opts: ElementWriteOptions<DataAssociation> = {},
   ): Promise<StackRecord> {
     return this.elementWrite(
       id,
+      'associations',
       opts,
       () => {
         for (const edit of edits) {
@@ -804,10 +815,11 @@ export class SharedSqlRecordLogic {
   async setAssociations(
     id: string,
     associations: DataAssociation[],
-    opts: AspectWriteOptions = {},
+    opts: ElementWriteOptions<DataAssociation> = {},
   ): Promise<StackRecord> {
     return this.elementWrite(
       id,
+      'associations',
       opts,
       () => {
         this.exec.run('DELETE FROM associations WHERE record_id = ?', [id]);
@@ -821,10 +833,11 @@ export class SharedSqlRecordLogic {
   async editAccess(
     id: string,
     edits: AssociationEdit[],
-    opts: AspectWriteOptions = {},
+    opts: ElementWriteOptions<AuthorityAssociation> = {},
   ): Promise<StackRecord> {
     return this.elementWrite(
       id,
+      'permissions',
       opts,
       () => {
         for (const edit of edits) {
@@ -846,10 +859,11 @@ export class SharedSqlRecordLogic {
   async setAccess(
     id: string,
     permissions: AuthorityAssociation[],
-    opts: AspectWriteOptions = {},
+    opts: ElementWriteOptions<AuthorityAssociation> = {},
   ): Promise<StackRecord> {
     return this.elementWrite(
       id,
+      'permissions',
       opts,
       () => {
         this.exec.run('DELETE FROM permissions WHERE record_id = ?', [id]);

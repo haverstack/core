@@ -8,6 +8,7 @@ import {
   StackNotFoundError,
   StackConflictError,
   StackVersionConflictError,
+  ElementSetMovedError,
   StackSchemaDriftError,
   StackBadRequestError,
   StackPayloadTooLargeError,
@@ -2737,6 +2738,138 @@ describe('_group — at least one admin', () => {
       const restored = await stack.restoreVersion(note.id, v);
       expect(restored.associations).toEqual([member('other')]);
     });
+  });
+});
+
+// -------------------------------------------------------
+// Element-set writes compare the set they read
+// -------------------------------------------------------
+
+describe('element-set writes check their rules against the set they land on', () => {
+  const admin = (entityId: string): DataAssociation => ({
+    kind: 'relationship',
+    label: 'admin',
+    target: { kind: 'entity', entityId },
+  });
+  const tag = (label: string): DataAssociation => ({ kind: 'tag', label });
+  const grant = (label: 'read' | 'write'): AuthorityAssociation => ({
+    kind: 'permission',
+    label,
+    grantee: { kind: 'entity', entityId: 'x' },
+  });
+
+  /** Land `other` straight on the adapter just before Stack's next write to it. */
+  function racing(
+    verb: 'editAssociations' | 'setAssociations' | 'editAccess' | 'setAccess',
+    other: () => Promise<unknown>,
+  ) {
+    const write = adapter[verb].bind(adapter) as (...args: unknown[]) => Promise<StackRecord>;
+    return vi.spyOn(adapter, verb).mockImplementationOnce((async (...args: unknown[]) => {
+      await other();
+      return write(...args);
+    }) as never);
+  }
+
+  test('two admins removing each other concurrently leave one admin', async () => {
+    const group = await stack.create('_group@1', { name: 'Editors' });
+    await stack.editAssociations(group.id, [{ op: 'add', association: admin('alice') }]);
+
+    const results = await Promise.allSettled([
+      stack.editAssociations(group.id, [{ op: 'remove', association: admin('owner-123') }]),
+      stack.editAssociations(group.id, [{ op: 'remove', association: admin('alice') }]),
+    ]);
+
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    const refused = results.find((r) => r.status === 'rejected') as PromiseRejectedResult;
+    expect(refused.reason).toBeInstanceOf(StackConflictError);
+    expect(refused.reason).toHaveProperty('message', expect.stringMatching(/without an admin/));
+    expect((await stack.get(group.id))!.associations).toHaveLength(1);
+  });
+
+  test('a roster write is refused when a write landing first leaves it the last admin', async () => {
+    const group = await stack.create('_group@1', { name: 'Editors' });
+    await stack.editAssociations(group.id, [{ op: 'add', association: admin('alice') }]);
+    racing('editAssociations', () =>
+      adapter.editAssociations(group.id, [{ op: 'remove', association: admin('alice') }]),
+    );
+
+    await expect(
+      stack.editAssociations(group.id, [{ op: 'remove', association: admin('owner-123') }]),
+    ).rejects.toThrow(/without an admin/);
+    expect((await stack.get(group.id))!.associations).toEqual([admin('owner-123')]);
+  });
+
+  test('a grant is refused when a write landing first removes the read it relied on', async () => {
+    const note = await stack.create(NOTE_V1, { text: 'hello' });
+    await stack.setAccess(note.id, [grant('read')]);
+    racing('editAccess', () => adapter.setAccess(note.id, []));
+
+    await expect(
+      stack.editAccess(note.id, [{ op: 'add', association: grant('write') }]),
+    ).rejects.toThrow(StackValidationError);
+    expect((await stack.get(note.id))!.permissions ?? []).toEqual([]);
+  });
+
+  test('the journal entry carries the delta against the set the write replaced', async () => {
+    const note = await stack.create(NOTE_V1, { text: 'hello' });
+    racing('setAssociations', () =>
+      adapter.editAssociations(note.id, [{ op: 'add', association: tag('b') }]),
+    );
+
+    await stack.setAssociations(note.id, [tag('a')]);
+    const entries = await stack.getJournal(note.id);
+    expect(entries.at(-1)!.associations).toEqual([
+      { op: 'add', association: tag('a') },
+      { op: 'remove', association: tag('b') },
+    ]);
+  });
+
+  test('a write that the moved set already satisfies returns the record unchanged', async () => {
+    const note = await stack.create(NOTE_V1, { text: 'hello' });
+    racing('setAccess', () => adapter.setAccess(note.id, [grant('read')]));
+
+    const same = await stack.setAccess(note.id, [grant('read')]);
+    expect(same.permissions).toEqual([grant('read')]);
+    expect(await stack.getJournal(note.id)).toHaveLength(1);
+  });
+
+  test('concurrent edits to one set all land, however many race', async () => {
+    const note = await stack.create(NOTE_V1, { text: 'hello' });
+    const labels = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+    const write = vi.spyOn(adapter, 'editAssociations');
+
+    await Promise.all(
+      labels.map((l) => stack.editAssociations(note.id, [{ op: 'add', association: tag(l) }])),
+    );
+
+    const after = await stack.get(note.id);
+    expect(after!.associations).toEqual(expect.arrayContaining(labels.map(tag)));
+    expect(after!.associations).toHaveLength(labels.length);
+    // More calls than writers: the edits really did race.
+    expect(write.mock.calls.length).toBeGreaterThan(labels.length);
+  });
+
+  test('a write keeps reading again for as long as the adapter finds its set moved', async () => {
+    const note = await stack.create(NOTE_V1, { text: 'hello' });
+    const moved = new ElementSetMovedError(note.id);
+    const write = vi
+      .spyOn(adapter, 'editAssociations')
+      .mockRejectedValueOnce(moved)
+      .mockRejectedValueOnce(moved)
+      .mockRejectedValueOnce(moved);
+
+    const updated = await stack.editAssociations(note.id, [{ op: 'add', association: tag('a') }]);
+    expect(updated.associations).toEqual([tag('a')]);
+    expect(write).toHaveBeenCalledTimes(4);
+  });
+
+  test('any other refusal from the adapter reaches the caller on the first attempt', async () => {
+    const note = await stack.create(NOTE_V1, { text: 'hello' });
+    const refusal = new StackConflictError('something else');
+    const write = vi.spyOn(adapter, 'setAccess').mockRejectedValue(refusal);
+
+    await expect(stack.setAccess(note.id, [grant('read')])).rejects.toBe(refusal);
+    expect(write).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -37,6 +37,7 @@ import type {
   BlobInfo,
   StackBlobAdapter,
   AspectWriteOptions,
+  ElementWriteOptions,
   JournalOptions,
   MutateOptions,
 } from '@haverstack/core/adapter';
@@ -185,7 +186,7 @@ export class LocalAdapter implements StackAdapter {
   async editAssociations(
     id: RecordId,
     edits: AssociationEdit[],
-    opts?: AspectWriteOptions,
+    opts?: ElementWriteOptions<DataAssociation>,
   ): Promise<StackRecord> {
     return this.record.editAssociations(id, edits, opts);
   }
@@ -193,7 +194,7 @@ export class LocalAdapter implements StackAdapter {
   async setAssociations(
     id: RecordId,
     associations: DataAssociation[],
-    opts?: AspectWriteOptions,
+    opts?: ElementWriteOptions<DataAssociation>,
   ): Promise<StackRecord> {
     return this.record.setAssociations(id, associations, opts);
   }
@@ -201,7 +202,7 @@ export class LocalAdapter implements StackAdapter {
   async editAccess(
     id: RecordId,
     edits: AssociationEdit[],
-    opts?: AspectWriteOptions,
+    opts?: ElementWriteOptions<AuthorityAssociation>,
   ): Promise<StackRecord> {
     return this.record.editAccess(id, edits, opts);
   }
@@ -209,7 +210,7 @@ export class LocalAdapter implements StackAdapter {
   async setAccess(
     id: RecordId,
     permissions: AuthorityAssociation[],
-    opts?: AspectWriteOptions,
+    opts?: ElementWriteOptions<AuthorityAssociation>,
   ): Promise<StackRecord> {
     return this.record.setAccess(id, permissions, opts);
   }

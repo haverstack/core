@@ -114,7 +114,10 @@ export function isAuthorityAssociation(a: Association): a is AuthorityAssociatio
  * an overwritten `attachmentRecordId` survives.
  * See docs/spec/journal.md § The entry.
  */
-export function associationDelta(before: Association[], after: Association[]): AssociationChange[] {
+export function associationDelta(
+  before: readonly Association[],
+  after: readonly Association[],
+): AssociationChange[] {
   const changes: AssociationChange[] = after
     .filter((a) => !before.some((b) => associationIdentical(a, b)))
     .map((association) => {
@@ -128,6 +131,14 @@ export function associationDelta(before: Association[], after: Association[]): A
       .filter((b) => !after.some((a) => associationEqual(a, b)))
       .map((association) => ({ op: 'remove', association })),
   );
+}
+
+/**
+ * Whether two sets hold the same elements, annotations included, in any
+ * order — what an element-set write's `expectSet` is compared by.
+ */
+export function sameAssociationSet(a: readonly Association[], b: readonly Association[]): boolean {
+  return associationDelta(a, b).length === 0;
 }
 
 /**

@@ -44,6 +44,7 @@ Every adapter stores a record's associations under the [identity](./data-model.m
 - **An add landing on an identity already stored overwrites it in place.** `Stack` hands an adapter only a list naming each identity once, so the order of its edits is never observable.
 - **Never bumps `version` or `updatedAt`, and never snapshots.** One call appends at most one [journal entry](./journal.md#the-entry), carrying the `JournalEntryInput` the caller passed.
 - **A record that is not there is `StackNotFoundError`**, never an orphan row.
+- **`expectSet`, when given, is compared inside the write.** If the stored set differs from it — by element or annotation, order aside — the write throws `ElementSetMovedError` and changes nothing. `Stack` always passes the set it read, so the rules it asked of that set hold for the set the write lands on; see [Versioning § Element-set writes compare the set they read](./versioning.md#element-set-writes-compare-the-set-they-read). `APIAdapter` does not send it: the server's own `Stack` makes the same comparison inside the request.
 
 `setAssociations()` and `setAccess()` replace the whole set in their own table under the same rules; `setAccess(id, [])` leaves the record private.
 

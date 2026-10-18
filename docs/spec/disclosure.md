@@ -35,7 +35,7 @@ A write to an existing Record can fail more than one check at once, and which an
 4. **The Record's state** — `409` if it is soft-deleted, then `412` if `ifVersion` is stale. A stale caller learns that before anything about its input, since its input was written against a Record that has moved on.
 5. **What the write changes, checked against the Record as it stands** — merged content against the Record's type (`422`); a new parent's form (`400`), existence and ancestry (`409`).
 6. **A write that moves nothing returns the Record unchanged**, writing and announcing nothing. It never reaches step 7, so it is never refused for a stored state it did not produce.
-7. **Rules over the set the write would produce** — a `_group` keeps an `admin` (`409`), and no grantee holds `write` without `read` (`422`).
+7. **Rules over the set the write would produce** — a `_group` keeps an `admin` (`409`), and no grantee holds `write` without `read` (`422`), asked of the set the write lands on rather than an earlier read ([Versioning § Element-set writes compare the set they read](./versioning.md#element-set-writes-compare-the-set-they-read)).
 
 Steps 2 and 3 are `ScopedStack`'s; an unscoped `Stack` asks the rest in the same order.
 

@@ -75,6 +75,7 @@ import type {
   ChangeActor,
   RecordChange,
   AspectWriteOptions,
+  ElementWriteOptions,
   SubscribeOptions,
   Unsubscribe,
   JournalQuery,
@@ -83,6 +84,7 @@ import type {
 } from '../types/index.js';
 
 import {
+  ElementSetMovedError,
   UseAfterCloseError,
   InvalidAdapterError,
   StackConflictError,
@@ -863,11 +865,13 @@ export class Stack implements StackClient {
   ): Promise<StackRecord> {
     this.assertOpen();
     assertAssociationEdits(edits, 'editAssociations()', 'data');
-    const existing = await this.requireWritable(id, opts);
-    const next = applyAssociationEdits(existing.associations ?? [], edits) as DataAssociation[];
-    return this.writeAssociations(existing, next, opts, (o) =>
-      this.adapter.editAssociations(id, edits, o),
-    );
+    return this.untilSetHolds(async () => {
+      const existing = await this.requireWritable(id, opts);
+      const next = applyAssociationEdits(existing.associations ?? [], edits) as DataAssociation[];
+      return this.writeAssociations(existing, next, opts, (o) =>
+        this.adapter.editAssociations(id, edits, o),
+      );
+    });
   }
 
   /**
@@ -881,10 +885,12 @@ export class Stack implements StackClient {
   ): Promise<StackRecord> {
     this.assertOpen();
     assertAssociationSet(associations, 'associations');
-    const existing = await this.requireWritable(id, opts);
-    return this.writeAssociations(existing, associations, opts, (o) =>
-      this.adapter.setAssociations(id, associations, o),
-    );
+    return this.untilSetHolds(async () => {
+      const existing = await this.requireWritable(id, opts);
+      return this.writeAssociations(existing, associations, opts, (o) =>
+        this.adapter.setAssociations(id, associations, o),
+      );
+    });
   }
 
   /**
@@ -896,7 +902,7 @@ export class Stack implements StackClient {
     existing: StackRecord,
     next: DataAssociation[],
     opts: IfVersionOptions & ActorOptions,
-    write: (o: AspectWriteOptions) => Promise<StackRecord>,
+    write: (o: ElementWriteOptions<DataAssociation>) => Promise<StackRecord>,
   ): Promise<StackRecord> {
     const current = existing.associations ?? [];
     const delta = associationDelta(current, next);
@@ -911,7 +917,7 @@ export class Stack implements StackClient {
       ],
       { actor: normalizeActor(opts.actor), associations: delta },
     );
-    return this.writeAspect(change, opts, write);
+    return this.writeAspect(change, opts, (o) => write({ ...o, expectSet: current }));
   }
 
   /**
@@ -926,9 +932,14 @@ export class Stack implements StackClient {
   ): Promise<StackRecord> {
     this.assertOpen();
     assertAssociationEdits(edits, 'editAccess()', 'authority');
-    const existing = await this.requireWritable(id, opts);
-    const next = applyAssociationEdits(existing.permissions ?? [], edits) as AuthorityAssociation[];
-    return this.writeAccess(existing, next, opts, (o) => this.adapter.editAccess(id, edits, o));
+    return this.untilSetHolds(async () => {
+      const existing = await this.requireWritable(id, opts);
+      const next = applyAssociationEdits(
+        existing.permissions ?? [],
+        edits,
+      ) as AuthorityAssociation[];
+      return this.writeAccess(existing, next, opts, (o) => this.adapter.editAccess(id, edits, o));
+    });
   }
 
   /** Make who reaches a record exactly `permissions`; `[]` is private. */
@@ -939,19 +950,22 @@ export class Stack implements StackClient {
   ): Promise<StackRecord> {
     this.assertOpen();
     assertAssociationSet(permissions, 'permissions');
-    const existing = await this.requireWritable(id, opts);
-    return this.writeAccess(existing, permissions, opts, (o) =>
-      this.adapter.setAccess(id, permissions, o),
-    );
+    return this.untilSetHolds(async () => {
+      const existing = await this.requireWritable(id, opts);
+      return this.writeAccess(existing, permissions, opts, (o) =>
+        this.adapter.setAccess(id, permissions, o),
+      );
+    });
   }
 
   private async writeAccess(
     existing: StackRecord,
     next: AuthorityAssociation[],
     opts: IfVersionOptions & ActorOptions,
-    write: (o: AspectWriteOptions) => Promise<StackRecord>,
+    write: (o: ElementWriteOptions<AuthorityAssociation>) => Promise<StackRecord>,
   ): Promise<StackRecord> {
-    const delta = associationDelta(existing.permissions ?? [], next);
+    const current = existing.permissions ?? [];
+    const delta = associationDelta(current, next);
     if (delta.length === 0) return existing;
     // After the no-op check: a call that moves nothing is not refused for
     // a stored set it did not write.
@@ -960,7 +974,24 @@ export class Stack implements StackClient {
       actor: normalizeActor(opts.actor),
       associations: delta,
     });
-    return this.writeAspect(change, opts, write);
+    return this.writeAspect(change, opts, (o) => write({ ...o, expectSet: current }));
+  }
+
+  /**
+   * Run an element-set write from its read onward, again from a fresh read
+   * each time the adapter finds the set moved since the last one, so the
+   * rules over the resulting set are asked of the set the write lands on.
+   * Unbounded: each refusal means another write landed.
+   * See docs/spec/versioning.md § Element-set writes compare the set they read.
+   */
+  private async untilSetHolds(attempt: () => Promise<StackRecord>): Promise<StackRecord> {
+    for (;;) {
+      try {
+        return await attempt();
+      } catch (err) {
+        if (!(err instanceof ElementSetMovedError)) throw err;
+      }
+    }
   }
 
   /**

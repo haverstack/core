@@ -18,6 +18,7 @@ import type {
   StackQuery,
   QueryResult,
   AssociationEdit,
+  DataAssociation,
   RecordVersion,
   StackType,
   StackCapabilities,
@@ -68,6 +69,11 @@ type TestStub = {
   editAssociations(
     id: string,
     edits: AssociationEdit[],
+    opts?: Record<string, unknown>,
+  ): Promise<StackRecord>;
+  setAssociations(
+    id: string,
+    associations: DataAssociation[],
     opts?: Record<string, unknown>,
   ): Promise<StackRecord>;
   commitMigration(
@@ -483,6 +489,26 @@ describe('associations', () => {
       ])
       .catch((e: unknown) => e);
     expect((err as { code?: string }).code).toBe('not_found');
+  });
+
+  // The transaction must roll back here, or Stack's retry re-checks a set
+  // that half of a refused write already moved.
+  test('a stale expectSet is refused inside the transaction and changes nothing', async () => {
+    const stub = getStub();
+    const record = makeRecord();
+    await stub.createRecord(record);
+    const a = { kind: 'tag' as const, label: 'a' };
+    const b = { kind: 'tag' as const, label: 'b' };
+    await stub.setAssociations(record.id, [a]);
+
+    const err = await stub
+      .setAssociations(record.id, [b], { expectSet: [b] })
+      .catch((e: unknown) => e);
+    expect((err as Error).message).toMatch(/changed since it was read/);
+    expect((await stub.getRecord(record.id))?.associations).toEqual([a]);
+
+    const held = await stub.setAssociations(record.id, [b], { expectSet: [a] });
+    expect(held.associations).toEqual([b]);
   });
 });
 
