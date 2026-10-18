@@ -4,9 +4,10 @@
  * Two jobs that share one question — what does this Record actually say?
  *
  * The write helpers answer it against a proposed write: whether a patch
- * moved content, and whether the ops a write reports bump its version. The projections answer it against a reader: a soft-deleted
- * Record is its tombstone, and a journal entry names the ACL it moved
- * only to a reader who could have moved it.
+ * moved content, and whether the ops a write reports bump its version.
+ * The projections answer it against a reader: a soft-deleted Record is its
+ * tombstone, and a journal entry names the ACL it moved only to a reader
+ * who could have moved it.
  *
  * See docs/spec/events.md § The event shape and docs/spec/versioning.md
  * § The tombstone is literal.

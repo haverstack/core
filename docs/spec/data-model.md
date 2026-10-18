@@ -152,11 +152,12 @@ stack.editAssociations(bookId, [
 Final content, widened access and relisting are three aspects, so a publish is three writes and cannot land as one. **Write them in this order: content, then access, then listing.** If a step fails, the Record is left private or unlisted with its new content, never exposed with the old. Fence each to the version the review produced, so a content edit landing in between refuses the rest with `StackVersionConflictError` (`412`) and changes nothing:
 
 ```ts
-const r = await stack.get(id); // reviewed at version 7
-const v = await stack.patchContent(id, final, { ifVersion: 7 }); // → version 8
-await stack.setAccess(id, [...(r.permissions ?? []), anyone], { ifVersion: v.version });
+const v = await stack.patchContent(id, final, { ifVersion: 7 }); // reviewed at 7 → now 8
+await stack.editAccess(id, [{ op: 'add', association: anyone }], { ifVersion: v.version });
 await stack.setUnlisted(id, false, { ifVersion: v.version });
 ```
+
+Widen access with `editAccess()`, not `setAccess()`: a set built from the permissions read at review time would silently revoke any grant made since, which the fence cannot see (below).
 
 **The fence does not cover writes that don't bump.** `version` moves only on content and lifecycle writes, so `ifVersion` does not detect an association, permission, parent or listing change made between the review and the publish. A collaborator with write access can, in that window, attach a file — which the publish then makes reachable to anyone, since [anyone who can read a Record can fetch the files it references](./attachments.md#stack-vs-scopedstack-methods) — or add tags or relationships that become visible with it. Closing this needs a precondition over every change, not just content; the journal's [`seq`](./journal.md#ordering) counts every change, but no precondition over it is offered.
 

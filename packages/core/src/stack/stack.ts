@@ -74,7 +74,7 @@ import type {
   ActorOptions,
   ChangeActor,
   RecordChange,
-  JournalEntryInput,
+  AspectWriteOptions,
   SubscribeOptions,
   Unsubscribe,
   JournalQuery,
@@ -129,6 +129,12 @@ import {
 } from './record-id.js';
 import { queryAllPages, lookupEntityByDid, MAX_QUERY_LIMIT } from './reads.js';
 import { contentEqual } from '../record-changes.js';
+import {
+  assertAssociationSet,
+  assertContentPatch,
+  assertParentArgument,
+  assertUnlistedArgument,
+} from './arguments.js';
 import { ScopedStack, scopeToken } from '../scoped-stack/scoped-stack.js';
 import { MigrationRegistry } from './migrations.js';
 import * as apps from './install-app.js';
@@ -210,18 +216,6 @@ function throwValidation(
     throw new StackValidationError([...argumentErrors, ...contentErrors], ARGUMENTS_INVALID);
   }
   if (contentErrors.length > 0) throw new StackValidationError(contentErrors);
-}
-
-/**
- * A list argument a set verb replaces an aspect with. The elements are
- * the aspect's own validators' to judge; this asks only for a list.
- */
-function assertArgumentList(value: unknown, param: string): void {
-  if (Array.isArray(value)) return;
-  throw new StackValidationError(
-    [{ path: param, message: `${param} must be an array.` }],
-    ARGUMENTS_INVALID,
-  );
 }
 
 /**
@@ -738,9 +732,7 @@ export class Stack implements StackClient {
     opts: IfVersionOptions & ActorOptions & ExpectationOptions = {},
   ): Promise<StackRecord> {
     this.assertOpen();
-    if (typeof patch !== 'object' || patch === null || Array.isArray(patch)) {
-      throw new StackBadRequestError('A content patch is an object of content keys.');
-    }
+    assertContentPatch(patch);
     const existing = await this.requireWritable(id, opts, true);
     const merged = await this.validatePatch(id, existing, patch);
     if (contentEqual(existing.content, merged)) return existing;
@@ -820,9 +812,7 @@ export class Stack implements StackClient {
     opts: IfVersionOptions & ActorOptions & ExpectationOptions = {},
   ): Promise<StackRecord> {
     this.assertOpen();
-    if (parentId !== null && typeof parentId !== 'string') {
-      throw new StackBadRequestError('parentId is a record id, or null for the root.');
-    }
+    assertParentArgument(parentId);
     const existing = await this.requireWritable(id, opts);
     const previousParentId = existing.parentId ?? null;
     if (parentId === previousParentId) return existing;
@@ -835,12 +825,7 @@ export class Stack implements StackClient {
       actor: normalizeActor(opts.actor),
       previousParentId,
     });
-    const updated = await this.adapter.setParent(id, parentId, {
-      ifVersion: opts.ifVersion,
-      journal: change.journal,
-    });
-    this.announce(change, updated);
-    return updated;
+    return this.writeAspect(change, opts, (o) => this.adapter.setParent(id, parentId, o));
   }
 
   /**
@@ -854,21 +839,14 @@ export class Stack implements StackClient {
     opts: IfVersionOptions & ActorOptions & ExpectationOptions = {},
   ): Promise<StackRecord> {
     this.assertOpen();
-    if (typeof unlisted !== 'boolean') {
-      throw new StackBadRequestError('unlisted is a boolean.');
-    }
+    assertUnlistedArgument(unlisted);
     const existing = await this.requireWritable(id, opts);
     if (Boolean(existing.unlistedAt) === unlisted) return existing;
 
     const change = new PendingChange(unlisted ? 'unlist' : 'list', {
       actor: normalizeActor(opts.actor),
     });
-    const updated = await this.adapter.setUnlisted(id, unlisted, {
-      ifVersion: opts.ifVersion,
-      journal: change.journal,
-    });
-    this.announce(change, updated);
-    return updated;
+    return this.writeAspect(change, opts, (o) => this.adapter.setUnlisted(id, unlisted, o));
   }
 
   /**
@@ -886,11 +864,10 @@ export class Stack implements StackClient {
     this.assertOpen();
     assertAssociationEdits(edits, 'editAssociations()', 'data');
     const existing = await this.requireWritable(id, opts);
-    const current = existing.associations ?? [];
-    const next = applyAssociationEdits(current, edits) as DataAssociation[];
+    const next = applyAssociationEdits(existing.associations ?? [], edits) as DataAssociation[];
     const adds = edits.flatMap((e) => (e.op === 'add' ? [e.association as DataAssociation] : []));
-    return this.writeAssociations(existing, next, adds, opts, (journal) =>
-      this.adapter.editAssociations(id, edits, { ifVersion: opts.ifVersion, journal }),
+    return this.writeAssociations(existing, next, adds, opts, (o) =>
+      this.adapter.editAssociations(id, edits, o),
     );
   }
 
@@ -904,15 +881,10 @@ export class Stack implements StackClient {
     opts: IfVersionOptions & ActorOptions & ExpectationOptions = {},
   ): Promise<StackRecord> {
     this.assertOpen();
-    assertArgumentList(associations, 'associations');
-    // Ahead of the shape checks, so a misrouted element is reported as the
-    // wrong surface rather than as a malformed value of the right one.
-    assertDataAssociations(associations, 'associations');
-    const errors = validateAssociations(associations);
-    if (errors.length > 0) throw new StackValidationError(errors, ARGUMENTS_INVALID);
+    assertAssociationSet(associations, 'associations');
     const existing = await this.requireWritable(id, opts);
-    return this.writeAssociations(existing, associations, associations, opts, (journal) =>
-      this.adapter.setAssociations(id, associations, { ifVersion: opts.ifVersion, journal }),
+    return this.writeAssociations(existing, associations, associations, opts, (o) =>
+      this.adapter.setAssociations(id, associations, o),
     );
   }
 
@@ -925,8 +897,8 @@ export class Stack implements StackClient {
     existing: StackRecord,
     next: DataAssociation[],
     named: DataAssociation[],
-    opts: ActorOptions,
-    write: (journal: JournalEntryInput | undefined) => Promise<StackRecord>,
+    opts: IfVersionOptions & ActorOptions,
+    write: (o: AspectWriteOptions) => Promise<StackRecord>,
   ): Promise<StackRecord> {
     const current = existing.associations ?? [];
     const delta = associationDelta(current, next);
@@ -941,9 +913,7 @@ export class Stack implements StackClient {
       ],
       { actor: normalizeActor(opts.actor), associations: delta },
     );
-    const updated = await write(change.journal);
-    this.announce(change, updated);
-    return updated;
+    return this.writeAspect(change, opts, write);
   }
 
   /**
@@ -960,9 +930,7 @@ export class Stack implements StackClient {
     assertAssociationEdits(edits, 'editAccess()', 'authority');
     const existing = await this.requireWritable(id, opts);
     const next = applyAssociationEdits(existing.permissions ?? [], edits) as AuthorityAssociation[];
-    return this.writeAccess(existing, next, opts, (journal) =>
-      this.adapter.editAccess(id, edits, { ifVersion: opts.ifVersion, journal }),
-    );
+    return this.writeAccess(existing, next, opts, (o) => this.adapter.editAccess(id, edits, o));
   }
 
   /** Make who reaches a record exactly `permissions`; `[]` is private. */
@@ -972,24 +940,18 @@ export class Stack implements StackClient {
     opts: IfVersionOptions & ActorOptions & ExpectationOptions = {},
   ): Promise<StackRecord> {
     this.assertOpen();
-    assertArgumentList(permissions, 'permissions');
-    assertAuthorityAssociations(permissions, 'permissions');
-    const errors = [
-      ...validateAssociations(permissions, 'permissions'),
-      ...validatePermissions(permissions),
-    ];
-    if (errors.length > 0) throw new StackValidationError(errors, ARGUMENTS_INVALID);
+    assertAssociationSet(permissions, 'permissions');
     const existing = await this.requireWritable(id, opts);
-    return this.writeAccess(existing, permissions, opts, (journal) =>
-      this.adapter.setAccess(id, permissions, { ifVersion: opts.ifVersion, journal }),
+    return this.writeAccess(existing, permissions, opts, (o) =>
+      this.adapter.setAccess(id, permissions, o),
     );
   }
 
   private async writeAccess(
     existing: StackRecord,
     next: AuthorityAssociation[],
-    opts: ActorOptions,
-    write: (journal: JournalEntryInput | undefined) => Promise<StackRecord>,
+    opts: IfVersionOptions & ActorOptions,
+    write: (o: AspectWriteOptions) => Promise<StackRecord>,
   ): Promise<StackRecord> {
     const delta = associationDelta(existing.permissions ?? [], next);
     if (delta.length === 0) return existing;
@@ -1000,7 +962,19 @@ export class Stack implements StackClient {
       actor: normalizeActor(opts.actor),
       associations: delta,
     });
-    const updated = await write(change.journal);
+    return this.writeAspect(change, opts, write);
+  }
+
+  /**
+   * Land a write that never bumps. Its precondition and journal entry
+   * travel together here, so no aspect verb can drop either.
+   */
+  private async writeAspect(
+    change: PendingChange,
+    opts: IfVersionOptions,
+    write: (o: AspectWriteOptions) => Promise<StackRecord>,
+  ): Promise<StackRecord> {
+    const updated = await write({ ifVersion: opts.ifVersion, journal: change.journal });
     this.announce(change, updated);
     return updated;
   }

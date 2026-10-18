@@ -109,8 +109,9 @@ export function isAuthorityAssociation(a: Association): a is AuthorityAssociatio
 
 /**
  * What replacing a record's set with `after` moves, one tagged edit each.
- * An entry matching an existing identity displaced it: a `repoint`, carrying the prior association in full as `previous` — the
- * only place an overwritten `attachmentRecordId` survives.
+ * An entry matching an existing identity displaced it: a `repoint`,
+ * carrying the prior association in full as `previous` — the only place
+ * an overwritten `attachmentRecordId` survives.
  * See docs/spec/journal.md § The entry.
  */
 export function associationDelta(before: Association[], after: Association[]): AssociationChange[] {

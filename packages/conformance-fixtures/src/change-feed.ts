@@ -240,7 +240,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
   {
     name: 'change-feed-dissociate-frame-carries-associationsRemoved',
     description:
-      'A editAssociations() call reports op "dissociate" on the change feed, with the same non-bumping ' +
+      'An editAssociations() call reports op "dissociate" on the change feed, with the same non-bumping ' +
       'version/updatedAt an editAssociations() frame carries. `associationsRemoved` names the removed ' +
       'association by identity only — never the annotation it carried — since it is no longer ' +
       'current. Assumes the note already carries the "starred" tag from a prior editAssociations(). ' +

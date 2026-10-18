@@ -478,7 +478,18 @@ export class APIAdapter implements StackAdapter {
     patch: Record<string, unknown | null>,
     opts: IfVersionOptions = {},
   ): Promise<StackRecord> {
-    return this.requestRecord('PATCH', `/records/${pathSegment(id)}/content`, patch, {
+    return this.writeAspect('PATCH', id, 'content', patch, opts);
+  }
+
+  /** One aspect write: a request to `/records/:id/<aspect>`, fenced by `If-Match`. */
+  private writeAspect(
+    method: 'PATCH' | 'PUT' | 'POST',
+    id: RecordId,
+    aspect: 'content' | 'parent' | 'unlisted' | 'associations' | 'permissions',
+    body: unknown,
+    opts: IfVersionOptions,
+  ): Promise<StackRecord> {
+    return this.requestRecord(method, `/records/${pathSegment(id)}/${aspect}`, body, {
       ifMatch: opts.ifVersion,
     });
   }
@@ -488,14 +499,7 @@ export class APIAdapter implements StackAdapter {
     parentId: RecordId | null,
     opts: IfVersionOptions = {},
   ): Promise<StackRecord> {
-    return this.requestRecord(
-      'PUT',
-      `/records/${pathSegment(id)}/parent`,
-      { parentId },
-      {
-        ifMatch: opts.ifVersion,
-      },
-    );
+    return this.writeAspect('PUT', id, 'parent', { parentId }, opts);
   }
 
   async setUnlisted(
@@ -503,14 +507,7 @@ export class APIAdapter implements StackAdapter {
     unlisted: boolean,
     opts: IfVersionOptions = {},
   ): Promise<StackRecord> {
-    return this.requestRecord(
-      'PUT',
-      `/records/${pathSegment(id)}/unlisted`,
-      { unlisted },
-      {
-        ifMatch: opts.ifVersion,
-      },
-    );
+    return this.writeAspect('PUT', id, 'unlisted', { unlisted }, opts);
   }
 
   /**
@@ -642,14 +639,7 @@ export class APIAdapter implements StackAdapter {
     edits: AssociationEdit[],
     opts: IfVersionOptions = {},
   ): Promise<StackRecord> {
-    return this.requestRecord(
-      'POST',
-      `/records/${pathSegment(id)}/associations`,
-      { changes: edits },
-      {
-        ifMatch: opts.ifVersion,
-      },
-    );
+    return this.writeAspect('POST', id, 'associations', { changes: edits }, opts);
   }
 
   async setAssociations(
@@ -657,14 +647,7 @@ export class APIAdapter implements StackAdapter {
     associations: DataAssociation[],
     opts: IfVersionOptions = {},
   ): Promise<StackRecord> {
-    return this.requestRecord(
-      'PUT',
-      `/records/${pathSegment(id)}/associations`,
-      { associations },
-      {
-        ifMatch: opts.ifVersion,
-      },
-    );
+    return this.writeAspect('PUT', id, 'associations', { associations }, opts);
   }
 
   async editAccess(
@@ -672,14 +655,7 @@ export class APIAdapter implements StackAdapter {
     edits: AssociationEdit[],
     opts: IfVersionOptions = {},
   ): Promise<StackRecord> {
-    return this.requestRecord(
-      'POST',
-      `/records/${pathSegment(id)}/permissions`,
-      { changes: edits },
-      {
-        ifMatch: opts.ifVersion,
-      },
-    );
+    return this.writeAspect('POST', id, 'permissions', { changes: edits }, opts);
   }
 
   async setAccess(
@@ -687,14 +663,7 @@ export class APIAdapter implements StackAdapter {
     permissions: AuthorityAssociation[],
     opts: IfVersionOptions = {},
   ): Promise<StackRecord> {
-    return this.requestRecord(
-      'PUT',
-      `/records/${pathSegment(id)}/permissions`,
-      { permissions },
-      {
-        ifMatch: opts.ifVersion,
-      },
-    );
+    return this.writeAspect('PUT', id, 'permissions', { permissions }, opts);
   }
 
   // -------------------------------------------------------

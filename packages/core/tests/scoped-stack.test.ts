@@ -6119,6 +6119,43 @@ describe('ScopedStack — each write verb passes exactly one gate', () => {
     ).rejects.toThrow(StackValidationError);
   });
 
+  // Every argument check precedes the gate, so a stranger is refused for the
+  // argument exactly as the owner is, never with a not-found or a crash.
+  test('a malformed argument to any aspect write is refused before any gate', async () => {
+    const stranger = stack.asEntity(STRANGER);
+    await expect(stranger.setParent(note.id, 7 as never)).rejects.toThrow(StackBadRequestError);
+    await expect(stranger.setUnlisted(note.id, 'yes' as never)).rejects.toThrow(
+      StackBadRequestError,
+    );
+    for (const list of ['x', [null], [{ kind: 'relationship', label: 'r' }]]) {
+      await expect(stranger.setAssociations(note.id, list as never)).rejects.toThrow(
+        StackValidationError,
+      );
+    }
+    for (const list of ['x', [null], [{ kind: 'permission', label: 'read' }]]) {
+      await expect(stranger.setAccess(note.id, list as never)).rejects.toThrow(
+        StackValidationError,
+      );
+    }
+  });
+
+  // Asked against the stored set by both verbs, so an add the record already
+  // carries answers the same whichever spelling a write-holder used.
+  test('an association the record already holds is not re-gated by either verb', async () => {
+    const secret = await stack.create(NOTE, { text: 's' }, { createdBy: { subjectId: OWNER } });
+    const link = {
+      kind: 'relationship' as const,
+      label: 'see-also',
+      target: { kind: 'record' as const, recordId: secret.id },
+    };
+    await stack.editAssociations(note.id, [{ op: 'add', association: link }]);
+    const scoped = stack.asEntity(MEMBER);
+    expect(
+      (await scoped.editAssociations(note.id, [{ op: 'add', association: link }])).version,
+    ).toBe(note.version);
+    expect((await scoped.setAssociations(note.id, [link])).associations).toEqual([link]);
+  });
+
   test('a patch that is not an object is a bad request before any gate', async () => {
     for (const patch of [null, 'x', ['text']]) {
       await expect(stack.asEntity(STRANGER).patchContent(note.id, patch as never)).rejects.toThrow(

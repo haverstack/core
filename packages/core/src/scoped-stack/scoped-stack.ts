@@ -61,18 +61,13 @@ import type {
   Unsubscribe,
 } from '../types/index.js';
 import {
-  StackBadRequestError,
   StackConflictError,
   StackNotFoundError,
   StackPermissionError,
   RelayScopeError,
   StackValidationError,
 } from '../errors.js';
-import {
-  assertAssociationEdits,
-  assertAuthorityAssociations,
-  assertDataAssociations,
-} from '../associations/validation.js';
+import { assertAssociationEdits } from '../associations/validation.js';
 import { associationEqual } from '../associations/identity.js';
 import { isGroupRecord } from '../access.js';
 import {
@@ -103,6 +98,12 @@ import { createCollection } from '../collection.js';
 import type { Collection } from '../collection.js';
 import type { MigrationRegistry } from '../stack/migrations.js';
 import { uploadContent } from '../stack/attachments.js';
+import {
+  assertAssociationSet,
+  assertContentPatch,
+  assertParentArgument,
+  assertUnlistedArgument,
+} from '../stack/arguments.js';
 // Type-only: a ScopedStack never constructs a Stack, so nothing here
 // closes a runtime cycle with stack.ts, which does construct a ScopedStack.
 import type { Stack } from '../stack/stack.js';
@@ -506,11 +507,9 @@ export class ScopedStack implements StackClient {
     patch: Record<string, unknown | null>,
     opts: IfVersionOptions & ExpectationOptions = {},
   ): Promise<StackRecord> {
-    // Ahead of the gate: a malformed patch is the same refusal for every
-    // requester, rather than one for the owner and a not-found for the rest.
-    if (typeof patch !== 'object' || patch === null || Array.isArray(patch)) {
-      throw new StackBadRequestError('A content patch is an object of content keys.');
-    }
+    // Every argument check sits ahead of the gate, here and in each write
+    // verb below, so a malformed call earns one refusal from every requester.
+    assertContentPatch(patch);
     const patchErrors = validatePatchValues(patch);
     if (patchErrors.length > 0) throw new StackValidationError(patchErrors);
     const record = await this.requireUpdatable(id, { expect: opts });
@@ -551,6 +550,7 @@ export class ScopedStack implements StackClient {
     parentId: RecordId | null,
     opts: IfVersionOptions & ExpectationOptions = {},
   ): Promise<StackRecord> {
+    assertParentArgument(parentId);
     const record = await this.requireUpdatable(id, { expect: opts });
     if (
       typeof parentId === 'string' &&
@@ -573,15 +573,15 @@ export class ScopedStack implements StackClient {
     unlisted: boolean,
     opts: IfVersionOptions & ExpectationOptions = {},
   ): Promise<StackRecord> {
+    assertUnlistedArgument(unlisted);
     await this.requireReshareable(id, opts);
     return this.stack.setUnlisted(id, unlisted, { ...opts, ...this.actor });
   }
 
   /**
-   * The write gate, plus the reference gate on each add: what a remove
-   * names is already on the record, so it is gated by the write bit alone.
-   * The list is held to its rules first, so an authority element is the
-   * wrong surface for every requester rather than a permission question.
+   * The write gate, plus the reference gate on each add new to the record:
+   * a remove, or an add of an identity already held, names a reference the
+   * record carries, so it is gated by the write bit alone.
    */
   async editAssociations(
     id: RecordId,
@@ -590,9 +590,8 @@ export class ScopedStack implements StackClient {
   ): Promise<StackRecord> {
     assertAssociationEdits(edits, 'editAssociations()', 'data');
     const record = await this.requireUpdatable(id, { expect: opts });
-    for (const edit of edits) {
-      if (edit.op === 'add') await this.requireAssociationAccess(record.typeId, edit.association);
-    }
+    const adds = edits.flatMap((e) => (e.op === 'add' ? [e.association] : []));
+    await this.requireNewAssociationAccess(record, adds);
     return this.stack.editAssociations(id, edits, { ...opts, ...this.actor });
   }
 
@@ -602,15 +601,24 @@ export class ScopedStack implements StackClient {
     associations: DataAssociation[],
     opts: IfVersionOptions & ExpectationOptions = {},
   ): Promise<StackRecord> {
-    if (Array.isArray(associations)) assertDataAssociations(associations, 'associations');
+    assertAssociationSet(associations, 'associations');
     const record = await this.requireUpdatable(id, { expect: opts });
-    // Asked against the stored set, so an association the record already
-    // carries is not re-gated.
-    for (const association of Array.isArray(associations) ? associations : []) {
+    await this.requireNewAssociationAccess(record, associations);
+    return this.stack.setAssociations(id, associations, { ...opts, ...this.actor });
+  }
+
+  /**
+   * The reference gate over the elements a write adds, asked against the
+   * stored set so an association the record already carries is not re-gated.
+   */
+  private async requireNewAssociationAccess(
+    record: StackRecord,
+    added: Association[],
+  ): Promise<void> {
+    for (const association of added) {
       if ((record.associations ?? []).some((a) => associationEqual(a, association))) continue;
       await this.requireAssociationAccess(record.typeId, association);
     }
-    return this.stack.setAssociations(id, associations, { ...opts, ...this.actor });
   }
 
   /**
@@ -634,7 +642,7 @@ export class ScopedStack implements StackClient {
     permissions: AuthorityAssociation[],
     opts: IfVersionOptions & ExpectationOptions = {},
   ): Promise<StackRecord> {
-    if (Array.isArray(permissions)) assertAuthorityAssociations(permissions, 'permissions');
+    assertAssociationSet(permissions, 'permissions');
     await this.requireReshareable(id, opts);
     return this.stack.setAccess(id, permissions, { ...opts, ...this.actor });
   }
