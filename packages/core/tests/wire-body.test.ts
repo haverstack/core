@@ -288,3 +288,40 @@ describe('parseInstallBody', () => {
     ).toBe('manifest.requests[0].actions[0]');
   });
 });
+
+// The library and the wire answer one malformed value with one error, so a
+// server built on core never reports a different status than the call it makes.
+describe('aspect arguments refuse a wrong-typed value as the wire parsers do', () => {
+  const cases: [string, (stack: Stack, id: string) => Promise<unknown>, () => unknown][] = [
+    ['parentId', (s, id) => s.setParent(id, 7 as never), () => parseParentBody({ parentId: 7 })],
+    [
+      'unlisted',
+      (s, id) => s.setUnlisted(id, 'yes' as never),
+      () => parseUnlistedBody({ unlisted: 'yes' }),
+    ],
+    [
+      'associations',
+      (s, id) => s.setAssociations(id, {} as never),
+      () => parseAssociationsBody({ associations: {} }),
+    ],
+    [
+      'permissions',
+      (s, id) => s.setAccess(id, {} as never),
+      () => parsePermissionsBody({ permissions: {} }),
+    ],
+  ];
+
+  for (const [field, call, parse] of cases) {
+    test(field, async () => {
+      const stack = await Stack.open(
+        await MemoryAdapter.open({ ownerEntityId: DID, timezone: 'UTC' }),
+      );
+      await stack.defineType({ id: 'com.example/note@1', name: 'Note', schema: {} });
+      const { id } = await stack.create('com.example/note@1', {});
+      const err = await call(stack, id).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(StackValidationError);
+      expect((err as StackValidationError).errors[0]?.path).toBe(field);
+      expect(pathOf(parse)).toBe(field);
+    });
+  }
+});

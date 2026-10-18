@@ -6123,9 +6123,9 @@ describe('ScopedStack — each write verb passes exactly one gate', () => {
   // argument exactly as the owner is, never with a not-found or a crash.
   test('a malformed argument to any aspect write is refused before any gate', async () => {
     const stranger = stack.asEntity(STRANGER);
-    await expect(stranger.setParent(note.id, 7 as never)).rejects.toThrow(StackBadRequestError);
+    await expect(stranger.setParent(note.id, 7 as never)).rejects.toThrow(StackValidationError);
     await expect(stranger.setUnlisted(note.id, 'yes' as never)).rejects.toThrow(
-      StackBadRequestError,
+      StackValidationError,
     );
     for (const list of ['x', [null], [{ kind: 'relationship', label: 'r' }]]) {
       await expect(stranger.setAssociations(note.id, list as never)).rejects.toThrow(

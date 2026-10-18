@@ -17,6 +17,11 @@ import {
 } from '../associations/validation.js';
 import type { Association } from '../types/index.js';
 
+/**
+ * The split the wire parsers make: a patch that is not an object is not a
+ * patch at all (400), while a named argument of the wrong type is a 422
+ * naming it. See docs/spec/wire-format.md § Unrecognized input.
+ */
 export function assertContentPatch(patch: unknown): asserts patch is Record<string, unknown> {
   if (typeof patch === 'object' && patch !== null && !Array.isArray(patch)) return;
   throw new StackBadRequestError('A content patch is an object of content keys.');
@@ -24,12 +29,12 @@ export function assertContentPatch(patch: unknown): asserts patch is Record<stri
 
 export function assertParentArgument(parentId: unknown): asserts parentId is string | null {
   if (parentId === null || typeof parentId === 'string') return;
-  throw new StackBadRequestError('parentId is a record id, or null for the root.');
+  argumentError('parentId', 'parentId must be a record id, or null for the root.');
 }
 
 export function assertUnlistedArgument(unlisted: unknown): asserts unlisted is boolean {
   if (typeof unlisted === 'boolean') return;
-  throw new StackBadRequestError('unlisted is a boolean.');
+  argumentError('unlisted', 'unlisted must be a boolean.');
 }
 
 /**
@@ -42,14 +47,13 @@ export function assertAssociationSet(
   list: unknown,
   param: 'associations' | 'permissions',
 ): asserts list is Association[] {
-  if (!Array.isArray(list)) {
-    throw new StackValidationError(
-      [{ path: param, message: `${param} must be an array.` }],
-      ARGUMENTS_INVALID,
-    );
-  }
+  if (!Array.isArray(list)) argumentError(param, `${param} must be an array.`);
   if (param === 'associations') assertDataAssociations(list, param);
   else assertAuthorityAssociations(list, param);
   const errors = validateAssociations(list, param);
   if (errors.length > 0) throw new StackValidationError(errors, ARGUMENTS_INVALID);
+}
+
+function argumentError(path: string, message: string): never {
+  throw new StackValidationError([{ path, message }], ARGUMENTS_INVALID);
 }
