@@ -22,7 +22,7 @@
 
 import { describe, test, expect, beforeEach, afterEach } from 'vitest';
 import { SYSTEM_TYPES } from '@haverstack/core';
-import type { AuthorityAssociation, StackCapabilities } from '@haverstack/core';
+import type { AuthorityAssociation, DataAssociation, StackCapabilities } from '@haverstack/core';
 import { ElementSetMovedError } from '@haverstack/core/adapter';
 import type { StackRecordAdapter } from '@haverstack/core/adapter';
 import { expectStackErrorCode } from './errors.js';
@@ -505,6 +505,66 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         expect(held.associations).toHaveLength(3);
         const cleared = await adapter.setAccess(record.id, [], { expectSet: [anyone] });
         expect(cleared.permissions ?? []).toEqual([]);
+      });
+
+      // Stack's expectSet is what getRecord() answered, so a set read back
+      // must match itself in every shape an element can take.
+      test('a set read back through getRecord matches itself as expectSet', async () => {
+        const record = makeRecord();
+        await adapter.createRecord(record);
+        const associations: DataAssociation[] = [
+          tag('t'),
+          { kind: 'attachment', label: 'cover', fileId: 'a'.repeat(64) },
+          {
+            kind: 'attachment',
+            label: 'cover',
+            fileId: 'b'.repeat(64),
+            attachmentRecordId: uniqueId('att'),
+          },
+          { kind: 'relationship', label: 'cites', target: { kind: 'record', recordId: 'r1' } },
+          {
+            kind: 'relationship',
+            label: 'cites',
+            target: { kind: 'record', recordId: 'r1', stackUrl: 'https://example.com' },
+          },
+          {
+            kind: 'relationship',
+            label: 'about',
+            target: { kind: 'entity', entityId: 'did:key:z6MkConformance' },
+          },
+          {
+            kind: 'relationship',
+            label: 'link',
+            target: { kind: 'external', ns: 'isbn', id: '1' },
+          },
+        ];
+        const permissions: AuthorityAssociation[] = [
+          { kind: 'anyone', label: 'read' },
+          {
+            kind: 'permission',
+            label: 'read',
+            grantee: { kind: 'entity', entityId: 'did:key:z6MkConformance' },
+          },
+          {
+            kind: 'permission',
+            label: 'write',
+            grantee: { kind: 'group', groupId: uniqueId('grp'), role: 'admin' },
+          },
+        ];
+        await adapter.setAssociations(record.id, associations);
+        await adapter.setAccess(record.id, permissions);
+
+        const read = (await adapter.getRecord(record.id))!;
+        const tagged = await adapter.editAssociations(
+          record.id,
+          [{ op: 'add', association: tag('u') }],
+          { expectSet: read.associations ?? [] },
+        );
+        expect(tagged.associations).toHaveLength(associations.length + 1);
+        const shared = await adapter.setAccess(record.id, permissions.slice(1), {
+          expectSet: read.permissions ?? [],
+        });
+        expect(shared.permissions).toHaveLength(permissions.length - 1);
       });
 
       test('each set verb replaces only its own aspect', async () => {
