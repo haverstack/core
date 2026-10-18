@@ -108,6 +108,93 @@ describe('ScopedStack — identity it acts as', () => {
 });
 
 // -------------------------------------------------------
+// Gates are asked of the read the write lands on
+// -------------------------------------------------------
+
+describe('ScopedStack — an element-set write is gated on the set it lands on', () => {
+  const admin = (entityId: string): DataAssociation => ({
+    kind: 'relationship',
+    label: 'admin',
+    target: { kind: 'entity', entityId },
+  });
+
+  /** Land `other` just before the adapter applies the next `verb`. */
+  function racing(
+    verb: 'editAssociations' | 'setAssociations' | 'setAccess',
+    other: () => Promise<unknown>,
+  ) {
+    const write = adapter[verb].bind(adapter) as (...args: unknown[]) => Promise<StackRecord>;
+    return vi.spyOn(adapter, verb).mockImplementationOnce((async (...args: unknown[]) => {
+      await other();
+      return write(...args);
+    }) as never);
+  }
+
+  beforeEach(async () => {
+    await stack.grantType('_group', {
+      actions: ['create'],
+      grantee: { kind: 'entity', entityId: MEMBER },
+    });
+  });
+
+  test('an admin demoted while their roster edit is in flight is refused', async () => {
+    const group = await stack.asEntity(MEMBER).create('_group@1', { name: 'Editors' });
+    await stack.setAssociations(group.id, [admin(MEMBER), admin(OWNER)]);
+    racing('editAssociations', () => stack.setAssociations(group.id, [admin(OWNER)]));
+
+    await expect(
+      stack
+        .asEntity(MEMBER)
+        .editAssociations(group.id, [{ op: 'add', association: admin(STRANGER) }]),
+    ).rejects.toThrow(StackNotFoundError);
+    expect((await stack.get(group.id))!.associations).toEqual([admin(OWNER)]);
+  });
+
+  test('an admin demoted while their reshare is in flight is refused', async () => {
+    const group = await stack.asEntity(MEMBER).create('_group@1', { name: 'Editors' });
+    await stack.setAssociations(group.id, [admin(MEMBER), admin(OWNER)]);
+    const strangerReads: AuthorityAssociation = {
+      kind: 'permission',
+      label: 'read',
+      grantee: { kind: 'entity', entityId: STRANGER },
+    };
+    // The race moves `permissions` too: only a move of the set the write
+    // compares prompts a re-read, so a demotion alone is not seen (see
+    // docs/spec/versioning.md § Element-set writes compare the set they read).
+    racing('setAccess', async () => {
+      await stack.setAssociations(group.id, [admin(OWNER)]);
+      await stack.setAccess(group.id, [strangerReads]);
+    });
+
+    await expect(
+      stack.asEntity(MEMBER).setAccess(group.id, [{ kind: 'anyone', label: 'read' }]),
+    ).rejects.toThrow(StackNotFoundError);
+    expect((await stack.get(group.id))!.permissions).toEqual([strangerReads]);
+  });
+
+  test('a reference removed while a write re-sending it is in flight meets the reference gate', async () => {
+    await stack.grantType(fam(NOTE), {
+      actions: ['create', 'read-own', 'update-own'],
+      grantee: { kind: 'entity', entityId: MEMBER },
+    });
+    const secret = await adapter.createRecord(makeRecord());
+    const related: DataAssociation = {
+      kind: 'relationship',
+      label: 'related',
+      target: { kind: 'record', recordId: secret.id },
+    };
+    const note = await stack.asEntity(MEMBER).create(NOTE, { text: 'mine' });
+    await stack.setAssociations(note.id, [related]);
+    racing('setAssociations', () => stack.setAssociations(note.id, []));
+
+    await expect(
+      stack.asEntity(MEMBER).setAssociations(note.id, [related, { kind: 'tag', label: 'a' }]),
+    ).rejects.toThrow(StackPermissionError);
+    expect((await stack.get(note.id))!.associations ?? []).toEqual([]);
+  });
+});
+
+// -------------------------------------------------------
 // _group — the invariant through the permission layer
 // -------------------------------------------------------
 

@@ -176,6 +176,8 @@ import {
   WRITE_EXPECTATION,
 } from './write-expectation.js';
 import type { ExpectationOptions } from './write-expectation.js';
+import { WRITE_GATE } from './write-gate.js';
+import type { GateOptions } from './write-gate.js';
 import type { ContentOf, ReadonlyTypeSchema, TypeHandle } from '../type-handle.js';
 import { createCollection } from '../collection.js';
 import type { Collection } from '../collection.js';
@@ -862,7 +864,7 @@ export class Stack implements StackClient {
   async editAssociations(
     id: RecordId,
     edits: AssociationEdit[],
-    opts: IfVersionOptions & ActorOptions & ExpectationOptions = {},
+    opts: IfVersionOptions & ActorOptions & ExpectationOptions & GateOptions = {},
   ): Promise<StackRecord> {
     this.assertOpen();
     assertAssociationEdits(edits, 'editAssociations()', 'data');
@@ -882,7 +884,7 @@ export class Stack implements StackClient {
   async setAssociations(
     id: RecordId,
     associations: DataAssociation[],
-    opts: IfVersionOptions & ActorOptions & ExpectationOptions = {},
+    opts: IfVersionOptions & ActorOptions & ExpectationOptions & GateOptions = {},
   ): Promise<StackRecord> {
     this.assertOpen();
     assertAssociationSet(associations, 'associations');
@@ -929,7 +931,7 @@ export class Stack implements StackClient {
   async editAccess(
     id: RecordId,
     edits: AssociationEdit[],
-    opts: IfVersionOptions & ActorOptions & ExpectationOptions = {},
+    opts: IfVersionOptions & ActorOptions & ExpectationOptions & GateOptions = {},
   ): Promise<StackRecord> {
     this.assertOpen();
     assertAssociationEdits(edits, 'editAccess()', 'authority');
@@ -947,7 +949,7 @@ export class Stack implements StackClient {
   async setAccess(
     id: RecordId,
     permissions: AuthorityAssociation[],
-    opts: IfVersionOptions & ActorOptions & ExpectationOptions = {},
+    opts: IfVersionOptions & ActorOptions & ExpectationOptions & GateOptions = {},
   ): Promise<StackRecord> {
     this.assertOpen();
     assertAssociationSet(permissions, 'permissions');
@@ -1031,18 +1033,19 @@ export class Stack implements StackClient {
 
   /**
    * The record a write addresses, past every refusal owed before
-   * validation: missing, another family, soft-deleted, then a stale
-   * `ifVersion` — before validation, so a caller that lost the race hears
-   * that first, and before any no-op, so a write that moved nothing never
-   * satisfies a precondition.
+   * validation: missing, another family, a caller's gate, soft-deleted,
+   * then a stale `ifVersion` — before validation, so a caller that lost the
+   * race hears that first, and before any no-op, so a write that moved
+   * nothing never satisfies a precondition.
    */
   private async requireWritable(
     id: RecordId,
-    opts: IfVersionOptions & ExpectationOptions,
+    opts: IfVersionOptions & ExpectationOptions & GateOptions,
     patchesContent = false,
   ): Promise<StackRecord> {
     const existing = await this.requireRecord(id);
     checkFamily(existing, opts);
+    await opts[WRITE_GATE]?.(existing);
     this.refuseIfDeleted(existing);
     this.checkIfVersion(existing, opts.ifVersion);
     checkStoredVersion(existing, opts, patchesContent);
