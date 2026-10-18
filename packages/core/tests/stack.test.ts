@@ -2873,6 +2873,96 @@ describe('element-set writes check their rules against the set they land on', ()
   });
 });
 
+// -------------------------------------------------------
+// An aspect write lands on the state it read
+// -------------------------------------------------------
+
+describe('aspect writes land on the state they were checked against', () => {
+  const tag: DataAssociation = { kind: 'tag', label: 'a' };
+  const grant: AuthorityAssociation = {
+    kind: 'permission',
+    label: 'read',
+    grantee: { kind: 'entity', entityId: 'x' },
+  };
+  type Verb =
+    | 'setParent'
+    | 'setUnlisted'
+    | 'editAssociations'
+    | 'setAssociations'
+    | 'editAccess'
+    | 'setAccess';
+  const writes: Record<Verb, (id: string) => Promise<StackRecord>> = {
+    setParent: (id) => stack.setParent(id, null),
+    setUnlisted: (id) => stack.setUnlisted(id, true),
+    editAssociations: (id) => stack.editAssociations(id, [{ op: 'add', association: tag }]),
+    setAssociations: (id) => stack.setAssociations(id, [tag]),
+    editAccess: (id) => stack.editAccess(id, [{ op: 'add', association: grant }]),
+    setAccess: (id) => stack.setAccess(id, [grant]),
+  };
+
+  /** A note under a parent, so every verb above moves something. */
+  async function note(): Promise<StackRecord> {
+    const parent = await stack.create(NOTE_V1, { text: 'parent' });
+    return stack.create(NOTE_V1, { text: 'hello' }, { parentId: parent.id });
+  }
+
+  /** Land `other` just before the adapter applies Stack's next `verb`. */
+  function racing(verb: Verb, other: () => Promise<unknown>) {
+    const write = adapter[verb].bind(adapter) as (...args: unknown[]) => Promise<StackRecord>;
+    return vi.spyOn(adapter, verb).mockImplementationOnce((async (...args: unknown[]) => {
+      await other();
+      return write(...args);
+    }) as never);
+  }
+
+  test.each(Object.keys(writes) as Verb[])(
+    '%s is refused when a soft delete lands first',
+    async (verb) => {
+      const record = await note();
+      racing(verb, () => stack.delete(record.id));
+
+      await expect(writes[verb](record.id)).rejects.toThrow(/soft-deleted/);
+      const after = (await stack.get(record.id, { includeDeleted: true }))!;
+      const aspects = (r: StackRecord) => [r.parentId, r.unlistedAt, r.associations, r.permissions];
+      expect(aspects(after)).toEqual(aspects(record));
+    },
+  );
+
+  test.each(Object.keys(writes) as Verb[])(
+    '%s still lands when a content patch lands first',
+    async (verb) => {
+      const record = await note();
+      const write = racing(verb, () => stack.patchContent(record.id, { text: 'edited' }));
+
+      const updated = await writes[verb](record.id);
+      expect(updated.content).toEqual({ text: 'edited' });
+      expect(write).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  test('the adapter is handed the version Stack read when the caller names none', async () => {
+    const record = await note();
+    const write = vi.spyOn(adapter, 'setUnlisted');
+
+    await stack.setUnlisted(record.id, true);
+    expect(write).toHaveBeenCalledWith(
+      record.id,
+      true,
+      expect.objectContaining({ ifVersion: record.version }),
+    );
+  });
+
+  test("a mismatch on the caller's own ifVersion reaches them on the first attempt", async () => {
+    const record = await note();
+    const write = racing('setParent', () => stack.patchContent(record.id, { text: 'edited' }));
+
+    await expect(
+      stack.setParent(record.id, null, { ifVersion: record.version }),
+    ).rejects.toBeInstanceOf(StackVersionConflictError);
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('Stack.commitMigration — _group', () => {
   test('refuses migrating a record into _group, whose admin roster is stamped at creation', async () => {
     const note = await stack.create(NOTE_V1, { text: 'x' });
