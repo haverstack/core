@@ -39,10 +39,20 @@ A write to an existing Record can fail more than one check at once, and which an
 
 Steps 2 and 3 are `ScopedStack`'s; an unscoped `Stack` asks the rest in the same order.
 
+## Scoped cursors are sealed
+
+> **A cursor a scoped query hands back names nothing its requester could not read, and only a cursor the stack sealed resumes.**
+
+An adapter's cursor says where the next page starts: the ID of the last Record a page scanned and, under a sort, that Record's sort value — for a content sort, the field's stored text. A [permission-scoped](./access-control.md) query scans Records it then withholds, so the adapter's cursor routinely names one of them. Handed back as it stands, it would tell an anonymous requester the IDs and creation times this document withholds, and a content-sorted query would read out the sorted field of every Record it could not see, one page at a time. A cursor the requester could write would be worse: choosing where a scan starts, over a content sort, is a search over values it cannot read.
+
+So `ScopedStack.query()` returns a **sealed** cursor — the adapter's, encrypted and authenticated (AES-GCM) under a key only the stack holds — and opens only cursors it sealed; anything else, including an adapter cursor passed through verbatim, is a malformed cursor and **400**, as an undecodable one is everywhere. The key is `_config.cursorKey`, minted the first time a scoped query needs one and kept in the stack ([The `_config` record](../spec.md#the-_config-record)), so a cursor resumes after a restart and on any instance serving the same store. An unscoped `Stack` returns the adapter's cursor unchanged: its caller can read every Record a cursor could name.
+
 ## What the rule does not close
 
 This is the same closure [reference-creation gating](./access-control.md#reference-creation-gating) applies, pointed the other way. There, a missing target and an inaccessible one both raise `StackPermissionError` for every requester the gate applies to: what failed is the `create()` or `editAssociations()` the requester asked for — that call is genuinely forbidden — and the Record it named is a reference, not the thing addressed. Here the Record _is_ what was addressed, so "not found" is the answer that discloses least. Both collapse the pair; each takes the answer that fits what the caller asked for.
 
 **The closure is in the answer, not in the timing.** Refusing an existing Record does strictly more work than refusing a missing one — a fetch, then a read check that may walk grants and a Group roster — so a caller measuring closely enough can still tell the two apart. Constant-time refusal is not attempted: it would mean paying the read check on every miss, and the deployments this spec targets are not where that trade pays.
+
+**Neither is the page size.** A scoped query reads a bounded window per call, so how many Records one page returns still varies with how many unreadable Records sit between the readable ones. Sealing the cursor hides which Records those are and what they hold, not that the window was spent on something.
 
 A query result carries no count of the whole match, for the same reason — see [Data model § Sorting and pagination](./data-model.md#sorting-and-pagination).

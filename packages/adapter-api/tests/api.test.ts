@@ -124,6 +124,19 @@ describe('open', () => {
       },
     );
 
+    // The scheme is read off the parsed URL, which normalizes it, so no
+    // spelling of the string a caller passed slips past the check.
+    test.each([
+      'HTTP://stack.example.com',
+      'Http://stack.example.com',
+      ' http://stack.example.com',
+    ])('refuses %s however the scheme is spelled', async (url) => {
+      await expect(APIAdapter.open({ url, token: TOKEN })).rejects.toBeInstanceOf(
+        APIAdapterInsecureUrlError,
+      );
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
     test('allows a remote http:// host with allowInsecure', async () => {
       mockFetch.mockResolvedValueOnce(jsonResponse(DISCOVERY));
       await expect(

@@ -113,7 +113,22 @@ export class MemoryAdapter implements StackAdapter {
 
   /** Always a new, empty store; `ownerEntityId` is required so the mistake fails at compile time. */
   static async open(opts: MemoryAdapterOpenOptions): Promise<MemoryAdapter> {
-    return new MemoryAdapter(opts);
+    const adapter = new MemoryAdapter(opts);
+    await adapter.insertConfig();
+    return adapter;
+  }
+
+  /** The singleton `_config@1` record every stack holds, as the SQLite engines write it. */
+  protected async insertConfig(): Promise<void> {
+    const now = new Date();
+    await this.createRecord({
+      id: SYSTEM_TYPES.CONFIG,
+      typeId: `${SYSTEM_TYPES.CONFIG}@1`,
+      createdAt: now,
+      updatedAt: now,
+      content: { entityId: this.ownerEntityId, timezone: this.timezone },
+      version: 1,
+    });
   }
 
   async createRecord(record: StackRecord, opts: JournalOptions = {}) {
@@ -711,7 +726,9 @@ export class IncapableMemoryAdapter extends MemoryAdapter {
   };
 
   static override async open(opts: MemoryAdapterOpenOptions): Promise<IncapableMemoryAdapter> {
-    return new IncapableMemoryAdapter(opts);
+    const adapter = new IncapableMemoryAdapter(opts);
+    await adapter.insertConfig();
+    return adapter;
   }
 }
 

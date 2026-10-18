@@ -706,6 +706,8 @@ Pagination is cursor-based rather than offset-based, so it works consistently ac
 
 A caller that genuinely needs a count follows `cursor` to exhaustion and counts what it receives, which is the only number that was ever true for that requester anyway.
 
+**A scoped cursor is sealed.** The cursor a [permission-scoped](./access-control.md) query returns is not the adapter's: an adapter's names the last Record its page scanned, which a scoped query may not have been allowed to return. `ScopedStack` seals it, and resumes only a cursor it sealed — see [Disclosure § Scoped cursors are sealed](./disclosure.md#scoped-cursors-are-sealed).
+
 ### Sorting by a content field
 
 `sort.contentField` orders by a **top-level scalar** content field — an article listing by `publishedAt`, a contact list by `name`. Without it, a consumer wanting a bounded page in a meaningful order has to read the whole matched set and sort it in memory, a cost that grows with the Stack while the page stays the same size. Content filtering already reaches into `content`; this closes the asymmetry for ordering.

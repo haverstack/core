@@ -13,7 +13,7 @@ import { baseIdOf, familyIdProblem } from './schema.js';
 import { ARGUMENTS_INVALID, StackBadRequestError, StackValidationError } from './errors.js';
 import { granteeErrors } from './associations/validation.js';
 import { SYSTEM_TYPES, GRANT_ACTIONS } from './types/index.js';
-import { resolveGroupRole, roleSatisfies } from './access.js';
+import { granteeReaches } from './access.js';
 import type {
   BaseId,
   EntityId,
@@ -189,22 +189,12 @@ export async function grantCoversGrantee(
   },
 ): Promise<boolean> {
   const g = c.grantee;
-  if (!g || typeof g !== 'object') return false;
-  switch (g.kind) {
-    case 'authenticated':
-      return opts.allowDefault;
-    case 'entity':
-      return !!g.entityId && g.entityId === grantee;
-    case 'group': {
-      if (!opts.allowGroup) return false;
-      if (!g.groupId) return false;
-      if (g.role !== 'member' && g.role !== 'admin') return false;
-      const role = await resolveGroupRole(g.groupId, grantee, opts.resolveRecord, opts.groupRoles);
-      return roleSatisfies(role, g.role);
-    }
-    default:
-      return false;
-  }
+  if (g?.kind === 'authenticated') return opts.allowDefault;
+  return granteeReaches(g, grantee, {
+    resolveRecord: opts.resolveRecord,
+    roles: opts.groupRoles,
+    allowGroup: opts.allowGroup,
+  });
 }
 
 /**

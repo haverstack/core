@@ -121,6 +121,7 @@ import { applyAssociationEdits, associationDelta } from '../associations/identit
 import { validateGrantee, validateGrantBaseId } from '../grants.js';
 import type { GrantQuery } from '../grants.js';
 import { bindingFieldsOf } from './identity-bindings.js';
+import { CursorSeal, generateCursorKey } from './cursor-seal.js';
 import { validateInstall } from '../install.js';
 import type { AppManifest, InstallPlan } from '../install.js';
 import { assertAttachmentSize, assertContentSize } from './limits.js';
@@ -154,7 +155,7 @@ import {
   checkBindingsOnCreate,
   checkBindingsOnMigrate,
   checkBindingsOnUpdate,
-  checkConfigEntityIdUnchanged,
+  checkConfigUnchanged,
 } from './integrity.js';
 import { systemTypeDefinitions } from './system-types.js';
 import type {
@@ -394,7 +395,48 @@ export class Stack implements StackClient {
       assertOpen: () => this.assertOpen(),
       relaysChanges: this.relaysChanges,
       migrations: this.migrations,
+      cursorSeal: () => this.cursorSeal(),
     });
+  }
+
+  /** Shared by every scope, so `_config` is read once per Stack. */
+  private cursorSealing: Promise<CursorSeal> | undefined;
+
+  /**
+   * The sealer for scoped query cursors, keyed by `_config.cursorKey` and
+   * minting that key on first use. A failed load is not cached, so the
+   * next scoped query tries again. See stack/cursor-seal.ts.
+   */
+  private cursorSeal(): Promise<CursorSeal> {
+    this.cursorSealing ??= this.loadCursorSeal().catch((err: unknown) => {
+      this.cursorSealing = undefined;
+      throw err;
+    });
+    return this.cursorSealing;
+  }
+
+  private async loadCursorSeal(): Promise<CursorSeal> {
+    for (;;) {
+      const config = await this.adapter.getRecord(SYSTEM_TYPES.CONFIG);
+      if (!config) {
+        throw new StackNotFoundError(
+          'The _config record is not readable here, so a scoped query has no key to seal its cursor under.',
+        );
+      }
+      const key = (config.content as ConfigContent).cursorKey;
+      if (key !== undefined) return CursorSeal.fromKey(key);
+      try {
+        // Pinned to the read, so two instances minting at once keep one
+        // key: the loser re-reads and adopts the winner's.
+        await this.patchContent(
+          SYSTEM_TYPES.CONFIG,
+          { cursorKey: generateCursorKey() },
+          { ifVersion: config.version },
+        );
+      } catch (err) {
+        if (!(err instanceof StackVersionConflictError)) throw err;
+      }
+    }
   }
 
   collection<S extends ReadonlyTypeSchema>(handle: TypeHandle<S>): Collection<ContentOf<S>> {
@@ -797,10 +839,7 @@ export class Stack implements StackClient {
     await checkBindingsOnUpdate(this, existing.typeId, id, patch, existing.content, merged);
 
     if (id === SYSTEM_TYPES.CONFIG) {
-      checkConfigEntityIdUnchanged(
-        (existing.content as ConfigContent).entityId,
-        (merged as ConfigContent).entityId,
-      );
+      checkConfigUnchanged(existing.content as ConfigContent, merged as ConfigContent);
     }
     return merged;
   }
@@ -972,6 +1011,11 @@ export class Stack implements StackClient {
     if (delta.length === 0) return existing;
     // After the no-op check: a call that moves nothing is not refused for
     // a stored set it did not write.
+    if (existing.id === SYSTEM_TYPES.CONFIG && next.length > 0) {
+      throw new StackConflictError(
+        "Cannot share the _config record: it holds the key the stack's scoped cursors are sealed under.",
+      );
+    }
     this.assertPermissionSet(next);
     const change = new PendingChange('reshare', {
       actor: normalizeActor(opts.actor),
@@ -1301,10 +1345,7 @@ export class Stack implements StackClient {
     }
 
     if (id === SYSTEM_TYPES.CONFIG) {
-      checkConfigEntityIdUnchanged(
-        (existing.content as ConfigContent).entityId,
-        (target.content as ConfigContent).entityId,
-      );
+      checkConfigUnchanged(existing.content as ConfigContent, target.content as ConfigContent);
     }
 
     // Restoring is a write like any other, so it owes the same immutability
@@ -1415,10 +1456,7 @@ export class Stack implements StackClient {
     await checkBindingsOnMigrate(this, existing.typeId, toTypeId, id, existingContent, content);
 
     if (id === SYSTEM_TYPES.CONFIG) {
-      checkConfigEntityIdUnchanged(
-        (existing.content as ConfigContent).entityId,
-        (content as ConfigContent).entityId,
-      );
+      checkConfigUnchanged(existing.content as ConfigContent, content as ConfigContent);
     }
 
     const change = new PendingChange('migrate', {

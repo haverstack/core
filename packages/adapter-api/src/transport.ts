@@ -30,6 +30,19 @@ export const isLoopbackUrl = (url: string): boolean => {
 };
 
 /**
+ * Whether a URL is plaintext HTTP. Read from the parsed scheme, which
+ * URL normalizes, so neither casing nor surrounding whitespace in the
+ * string a caller passed decides it.
+ */
+export const isPlaintextUrl = (url: string): boolean => {
+  try {
+    return new URL(url).protocol === 'http:';
+  } catch {
+    return false;
+  }
+};
+
+/**
  * One caller-supplied value as one URL path segment, so an ID can never
  * reach a different endpoint than the one the method names. `.` and `..`
  * are refused outright: URL parsing collapses them even percent-encoded.

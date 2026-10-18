@@ -3570,22 +3570,7 @@ describe('_config protections', () => {
   const CONFIG_ID = '_config';
   const CONFIG_TYPE = '_config@1';
 
-  // MemoryAdapter never materializes a _config record on its own (ownerEntityId
-  // is a plain constructor field) — the guards under test operate on whatever
-  // record exists at id "_config", so tests seed one directly.
-  async function seedConfig(entityId = 'owner-123', timezone = 'UTC') {
-    return adapter.createRecord({
-      id: CONFIG_ID,
-      typeId: CONFIG_TYPE,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-      content: { entityId, timezone },
-      version: 1,
-    });
-  }
-
   test('patchContent() rejects a change to entityId', async () => {
-    await seedConfig();
     await expect(stack.patchContent(CONFIG_ID, { entityId: 'someone-else' })).rejects.toThrow(
       StackConflictError,
     );
@@ -3593,30 +3578,25 @@ describe('_config protections', () => {
   });
 
   test('patchContent() allows changing timezone', async () => {
-    await seedConfig();
     const updated = await stack.patchContent(CONFIG_ID, { timezone: 'America/New_York' });
     expect((updated.content as Record<string, unknown>).timezone).toBe('America/New_York');
   });
 
   test('setting entityId to its current value is a no-op, not an error', async () => {
-    await seedConfig('owner-123');
     await expect(stack.patchContent(CONFIG_ID, { entityId: 'owner-123' })).resolves.toBeDefined();
   });
 
   test('soft delete is rejected', async () => {
-    await seedConfig();
     await expect(stack.delete(CONFIG_ID)).rejects.toThrow(StackConflictError);
     expect(await adapter.getRecord(CONFIG_ID)).not.toBeNull();
   });
 
   test('purge is rejected', async () => {
-    await seedConfig();
     await expect(stack.delete(CONFIG_ID, { purge: true })).rejects.toThrow(StackConflictError);
     expect(await adapter.getRecord(CONFIG_ID)).not.toBeNull();
   });
 
   test('restoreVersion() rejects a snapshot with a different entityId', async () => {
-    await seedConfig('owner-123');
     // Simulates a snapshot that predates this guard, or a bypassed
     // direct-adapter write — either way, a stored version whose entityId
     // disagrees with the live record's must not be restorable.
@@ -3630,37 +3610,31 @@ describe('_config protections', () => {
   });
 
   test('restoreVersion() allows a snapshot with the same entityId', async () => {
-    await seedConfig('owner-123', 'UTC');
     await stack.patchContent(CONFIG_ID, { timezone: 'America/New_York' });
     const restored = await stack.restoreVersion(CONFIG_ID, 1);
     expect((restored.content as Record<string, unknown>).timezone).toBe('UTC');
   });
 
   test('generic query excludes _config', async () => {
-    await seedConfig();
     const result = await stack.query({ filter: { typeId: CONFIG_TYPE } });
     expect(result.records).toHaveLength(0);
   });
 
   test('_config is still addressable directly by ID', async () => {
-    await seedConfig();
     expect(await stack.get(CONFIG_ID)).not.toBeNull();
   });
 
   test('ScopedStack delegation: the owner cannot change entityId via scoped update either', async () => {
-    await seedConfig('owner-123');
     await expect(
       stack.asEntity('owner-123').patchContent(CONFIG_ID, { entityId: 'someone-else' }),
     ).rejects.toThrow(StackConflictError);
   });
 
   test('ScopedStack delegation: the owner cannot delete _config via scoped delete either', async () => {
-    await seedConfig('owner-123');
     await expect(stack.asEntity('owner-123').delete(CONFIG_ID)).rejects.toThrow(StackConflictError);
   });
 
   test('commitMigration() rejects a change to entityId', async () => {
-    await seedConfig('owner-123');
     await stack.defineType({
       id: '_config@2',
       name: 'Config',
@@ -3677,7 +3651,6 @@ describe('_config protections', () => {
   });
 
   test('commitMigration() allows the same entityId', async () => {
-    await seedConfig('owner-123');
     await stack.defineType({
       id: '_config@2',
       name: 'Config',
