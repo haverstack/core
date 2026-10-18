@@ -202,9 +202,6 @@ function normalizeActor(actor: Actor | undefined): Actor | undefined {
     : { subjectId, principalId };
 }
 
-/** How many reads an element-set write takes before it reports the conflict. */
-const SET_WRITE_ATTEMPTS = 5;
-
 /** Sentinel: filter.baseId resolved to zero matching types. */
 const EMPTY_FAMILY = Symbol('empty-family');
 
@@ -868,7 +865,7 @@ export class Stack implements StackClient {
   ): Promise<StackRecord> {
     this.assertOpen();
     assertAssociationEdits(edits, 'editAssociations()', 'data');
-    return this.untilSetHolds(id, async () => {
+    return this.untilSetHolds(async () => {
       const existing = await this.requireWritable(id, opts);
       const next = applyAssociationEdits(existing.associations ?? [], edits) as DataAssociation[];
       return this.writeAssociations(existing, next, opts, (o) =>
@@ -888,7 +885,7 @@ export class Stack implements StackClient {
   ): Promise<StackRecord> {
     this.assertOpen();
     assertAssociationSet(associations, 'associations');
-    return this.untilSetHolds(id, async () => {
+    return this.untilSetHolds(async () => {
       const existing = await this.requireWritable(id, opts);
       return this.writeAssociations(existing, associations, opts, (o) =>
         this.adapter.setAssociations(id, associations, o),
@@ -935,7 +932,7 @@ export class Stack implements StackClient {
   ): Promise<StackRecord> {
     this.assertOpen();
     assertAssociationEdits(edits, 'editAccess()', 'authority');
-    return this.untilSetHolds(id, async () => {
+    return this.untilSetHolds(async () => {
       const existing = await this.requireWritable(id, opts);
       const next = applyAssociationEdits(
         existing.permissions ?? [],
@@ -953,7 +950,7 @@ export class Stack implements StackClient {
   ): Promise<StackRecord> {
     this.assertOpen();
     assertAssociationSet(permissions, 'permissions');
-    return this.untilSetHolds(id, async () => {
+    return this.untilSetHolds(async () => {
       const existing = await this.requireWritable(id, opts);
       return this.writeAccess(existing, permissions, opts, (o) =>
         this.adapter.setAccess(id, permissions, o),
@@ -984,22 +981,15 @@ export class Stack implements StackClient {
    * Run an element-set write from its read onward, again from a fresh read
    * each time the adapter finds the set moved since the last one, so the
    * rules over the resulting set are asked of the set the write lands on.
+   * Unbounded: each refusal means another write landed.
    * See docs/spec/versioning.md § Element-set writes compare the set they read.
    */
-  private async untilSetHolds(
-    id: RecordId,
-    attempt: () => Promise<StackRecord>,
-  ): Promise<StackRecord> {
-    for (let tries = 1; ; tries++) {
+  private async untilSetHolds(attempt: () => Promise<StackRecord>): Promise<StackRecord> {
+    for (;;) {
       try {
         return await attempt();
       } catch (err) {
         if (!(err instanceof ElementSetMovedError)) throw err;
-        if (tries === SET_WRITE_ATTEMPTS) {
-          throw new StackConflictError(
-            `Record "${id}" kept changing under ${tries} attempts to write it.`,
-          );
-        }
       }
     }
   }

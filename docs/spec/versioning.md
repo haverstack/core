@@ -116,7 +116,9 @@ await stack.patchContent(id, { title: 'New' }, { ifVersion: 5 });
 
 So each of the four is a compare-and-swap on its own set. `Stack` hands the adapter the set it read as `expectSet`; the adapter compares it with the stored set inside its write — elements and their annotations, in any order — and on a mismatch throws `ElementSetMovedError` and changes nothing. `Stack` retries on that error alone, reading again and re-asks everything from the Record's state onward: soft deletion, `ifVersion`, the no-op decision, the rules. A retry that finds the write now moves nothing returns the Record unchanged; one that finds a rule broken refuses it as a first attempt would. The [journal entry](./journal.md#the-entry) is computed from the set the write actually replaced, so its delta is exact.
 
-The mismatch stays inside `Stack`: `ElementSetMovedError` sits outside the `StackError` taxonomy and never reaches a caller, who sees `412` only for their own `ifVersion`. Any other refusal from the adapter is passed through on the first attempt. A set that is still moving after five reads is reported as `StackConflictError` (`409`).
+The mismatch stays inside `Stack`: `ElementSetMovedError` sits outside the `StackError` taxonomy and never reaches a caller, who sees `412` only for their own `ifVersion`. Any other refusal from the adapter is passed through on the first attempt. The retry has no limit: each refusal means another write landed, so concurrent edits to one set all land eventually and still compose in any order, as above.
+
+Over `APIAdapter` the comparison is the server's: its own `Stack` reads, checks, journals and retries inside the request. A client-side `Stack` emits to its local subscribers the delta it computed from its own read, which a concurrent write can make stale; the server's journal and feed are exact.
 
 This is not a precondition a caller can hold. `version` is unchanged by these writes, and the comparison covers only the set a single call reads and writes — see [Data model § Publishing is several writes](./data-model.md#publishing-is-several-writes) for what that leaves open.
 

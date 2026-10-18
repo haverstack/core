@@ -2833,18 +2833,34 @@ describe('element-set writes check their rules against the set they land on', ()
     expect(await stack.getJournal(note.id)).toHaveLength(1);
   });
 
-  test('a set that keeps moving is reported as a conflict after a bounded number of reads', async () => {
+  test('concurrent edits to one set all land, however many race', async () => {
     const note = await stack.create(NOTE_V1, { text: 'hello' });
+    const labels = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+    const write = vi.spyOn(adapter, 'editAssociations');
+
+    await Promise.all(
+      labels.map((l) => stack.editAssociations(note.id, [{ op: 'add', association: tag(l) }])),
+    );
+
+    const after = await stack.get(note.id);
+    expect(after!.associations).toEqual(expect.arrayContaining(labels.map(tag)));
+    expect(after!.associations).toHaveLength(labels.length);
+    // More calls than writers: the edits really did race.
+    expect(write.mock.calls.length).toBeGreaterThan(labels.length);
+  });
+
+  test('a write keeps reading again for as long as the adapter finds its set moved', async () => {
+    const note = await stack.create(NOTE_V1, { text: 'hello' });
+    const moved = new ElementSetMovedError(note.id);
     const write = vi
       .spyOn(adapter, 'editAssociations')
-      .mockRejectedValue(new ElementSetMovedError(note.id));
+      .mockRejectedValueOnce(moved)
+      .mockRejectedValueOnce(moved)
+      .mockRejectedValueOnce(moved);
 
-    const err = await stack
-      .editAssociations(note.id, [{ op: 'add', association: tag('a') }])
-      .catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(StackConflictError);
-    expect(err).toHaveProperty('message', expect.stringMatching(/kept changing/));
-    expect(write).toHaveBeenCalledTimes(5);
+    const updated = await stack.editAssociations(note.id, [{ op: 'add', association: tag('a') }]);
+    expect(updated.associations).toEqual([tag('a')]);
+    expect(write).toHaveBeenCalledTimes(4);
   });
 
   test('any other refusal from the adapter reaches the caller on the first attempt', async () => {
