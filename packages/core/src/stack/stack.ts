@@ -53,7 +53,6 @@ import type {
   StackQuery,
   RecordFilter,
   QueryResult,
-  Association,
   AssociationEdit,
   AuthorityAssociation,
   DataAssociation,
@@ -85,6 +84,7 @@ import type {
 } from '../types/index.js';
 
 import {
+  ElementSetMovedError,
   UseAfterCloseError,
   InvalidAdapterError,
   StackConflictError,
@@ -204,25 +204,6 @@ function normalizeActor(actor: Actor | undefined): Actor | undefined {
 
 /** How many reads an element-set write takes before it reports the conflict. */
 const SET_WRITE_ATTEMPTS = 5;
-
-/** An adapter found the set an element write read has since moved. */
-class SetMoved extends Error {}
-
-/**
- * Hand an element write the set it was checked against, and turn the
- * adapter's refusal of a moved set into the signal untilSetHolds() retries on.
- */
-async function expectingSet<E extends Association>(
-  write: (o: ElementWriteOptions<E>) => Promise<StackRecord>,
-  opts: AspectWriteOptions,
-  expectSet: readonly E[],
-): Promise<StackRecord> {
-  try {
-    return await write({ ...opts, expectSet });
-  } catch (err) {
-    throw err instanceof StackConflictError ? new SetMoved() : err;
-  }
-}
 
 /** Sentinel: filter.baseId resolved to zero matching types. */
 const EMPTY_FAMILY = Symbol('empty-family');
@@ -939,7 +920,7 @@ export class Stack implements StackClient {
       ],
       { actor: normalizeActor(opts.actor), associations: delta },
     );
-    return this.writeAspect(change, opts, (o) => expectingSet(write, o, current));
+    return this.writeAspect(change, opts, (o) => write({ ...o, expectSet: current }));
   }
 
   /**
@@ -996,7 +977,7 @@ export class Stack implements StackClient {
       actor: normalizeActor(opts.actor),
       associations: delta,
     });
-    return this.writeAspect(change, opts, (o) => expectingSet(write, o, current));
+    return this.writeAspect(change, opts, (o) => write({ ...o, expectSet: current }));
   }
 
   /**
@@ -1013,7 +994,7 @@ export class Stack implements StackClient {
       try {
         return await attempt();
       } catch (err) {
-        if (!(err instanceof SetMoved)) throw err;
+        if (!(err instanceof ElementSetMovedError)) throw err;
         if (tries === SET_WRITE_ATTEMPTS) {
           throw new StackConflictError(
             `Record "${id}" kept changing under ${tries} attempts to write it.`,

@@ -8,6 +8,7 @@ import {
   StackNotFoundError,
   StackConflictError,
   StackVersionConflictError,
+  ElementSetMovedError,
   StackSchemaDriftError,
   StackBadRequestError,
   StackPayloadTooLargeError,
@@ -2781,6 +2782,7 @@ describe('element-set writes check their rules against the set they land on', ()
     expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
     const refused = results.find((r) => r.status === 'rejected') as PromiseRejectedResult;
     expect(refused.reason).toBeInstanceOf(StackConflictError);
+    expect(refused.reason).toHaveProperty('message', expect.stringMatching(/without an admin/));
     expect((await stack.get(group.id))!.associations).toHaveLength(1);
   });
 
@@ -2835,12 +2837,23 @@ describe('element-set writes check their rules against the set they land on', ()
     const note = await stack.create(NOTE_V1, { text: 'hello' });
     const write = vi
       .spyOn(adapter, 'editAssociations')
-      .mockRejectedValue(new StackConflictError('moved'));
+      .mockRejectedValue(new ElementSetMovedError(note.id));
 
-    await expect(
-      stack.editAssociations(note.id, [{ op: 'add', association: tag('a') }]),
-    ).rejects.toThrow(/kept changing/);
+    const err = await stack
+      .editAssociations(note.id, [{ op: 'add', association: tag('a') }])
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(StackConflictError);
+    expect(err).toHaveProperty('message', expect.stringMatching(/kept changing/));
     expect(write).toHaveBeenCalledTimes(5);
+  });
+
+  test('any other refusal from the adapter reaches the caller on the first attempt', async () => {
+    const note = await stack.create(NOTE_V1, { text: 'hello' });
+    const refusal = new StackConflictError('something else');
+    const write = vi.spyOn(adapter, 'setAccess').mockRejectedValue(refusal);
+
+    await expect(stack.setAccess(note.id, [grant('read')])).rejects.toBe(refusal);
+    expect(write).toHaveBeenCalledTimes(1);
   });
 });
 

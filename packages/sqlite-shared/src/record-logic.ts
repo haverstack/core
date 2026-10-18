@@ -33,7 +33,7 @@ import type {
   ActorOptions,
   IfVersionOptions,
 } from '@haverstack/core';
-import { sameAssociationSet } from '@haverstack/core/adapter';
+import { ElementSetMovedError, sameAssociationSet } from '@haverstack/core/adapter';
 import type {
   AspectWriteOptions,
   ElementWriteOptions,
@@ -777,9 +777,7 @@ export class SharedSqlRecordLogic {
         const ids = JSON.stringify([id]);
         const map = table === 'associations' ? rowToAssociation : rowToPermission;
         const stored = this.elementsByRecord<Association>(table, ids, map).get(id) ?? [];
-        if (!sameAssociationSet(stored, opts.expectSet)) {
-          throw new StackConflictError(`Record "${id}"'s ${table} changed since they were read`);
-        }
+        if (!sameAssociationSet(stored, opts.expectSet)) throw new ElementSetMovedError(id);
       }
       write();
       this.appendJournal(id, opts.journal);

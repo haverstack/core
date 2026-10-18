@@ -23,6 +23,7 @@
 import { describe, test, expect, beforeEach, afterEach } from 'vitest';
 import { SYSTEM_TYPES } from '@haverstack/core';
 import type { AuthorityAssociation, StackCapabilities } from '@haverstack/core';
+import { ElementSetMovedError } from '@haverstack/core/adapter';
 import type { StackRecordAdapter } from '@haverstack/core/adapter';
 import { expectStackErrorCode } from './errors.js';
 import { CONFORMANCE_TYPE_ID, conformanceType, makeRecord, uniqueId } from './helpers.js';
@@ -488,7 +489,7 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
             ),
           () => adapter.setAccess(record.id, [], stalePermissions),
         ]) {
-          await expectStackErrorCode(write(), 'conflict');
+          await expect(write()).rejects.toBeInstanceOf(ElementSetMovedError);
         }
         const after = await adapter.getRecord(record.id);
         expect(after!.associations).toEqual(expect.arrayContaining([tag('a'), tag('b')]));

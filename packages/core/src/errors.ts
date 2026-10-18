@@ -7,7 +7,7 @@
  * subclass carries its wire discriminator as an instance `code`.
  *
  * Several errors sit deliberately outside that root (UseAfterCloseError,
- * InvalidAdapterError, OwnerMismatchError, RelayScopeError, and — in their own
+ * InvalidAdapterError, OwnerMismatchError, ElementSetMovedError, RelayScopeError, and — in their own
  * modules — IdGenerationError, InvalidDidError, InvalidAuthChallengeError,
  * StoredVersionError and MisfitError): they report a local programming error, malformed
  * local input or an assembled topology, not a state a request can be in, so
@@ -253,6 +253,19 @@ export class OwnerMismatchError extends Error {
         : `Cannot open ${where}: it reports no owner, but ownerEntityId "${expected}" was given.`,
     );
     this.name = 'OwnerMismatchError';
+  }
+}
+
+/**
+ * Thrown by an adapter's element-set write when the stored set no longer
+ * matches the `expectSet` it was handed. Outside the StackError taxonomy:
+ * Stack catches it and reads again, so no request ever answers with it.
+ * See docs/spec/versioning.md § Element-set writes compare the set they read.
+ */
+export class ElementSetMovedError extends Error {
+  constructor(public readonly recordId: string) {
+    super(`Record "${recordId}"'s set changed since it was read`);
+    this.name = 'ElementSetMovedError';
   }
 }
 

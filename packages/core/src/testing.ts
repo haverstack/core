@@ -42,6 +42,7 @@ import { compareSortEntries, constantSortEntry, contentSortEntry } from './adapt
 import type { SortEntry } from './adapter/sort.js';
 
 import {
+  ElementSetMovedError,
   StackVersionConflictError,
   StackConflictError,
   StackNotFoundError,
@@ -250,7 +251,7 @@ export class MemoryAdapter implements StackAdapter {
   ): StackRecord {
     const existing = this.requireForWrite(id, opts.ifVersion);
     if (opts.expectSet && !sameAssociationSet(existing[half] ?? [], opts.expectSet)) {
-      throw new StackConflictError(`Record "${id}"'s ${half} changed since they were read`);
+      throw new ElementSetMovedError(id);
     }
     return existing;
   }
