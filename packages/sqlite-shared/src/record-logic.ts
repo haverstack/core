@@ -275,13 +275,25 @@ export class SharedSqlRecordLogic {
    */
   private readRecord(id: string): StackRecord | null {
     const row = this.exec.get<Record<string, unknown>>('SELECT * FROM records WHERE id = ?', [id]);
-    return row ? this.hydrate(row) : null;
+    return row ? this.hydrate([row])[0]! : null;
   }
 
-  /** A records row with its associations and permissions attached. */
-  private hydrate(row: Record<string, unknown>): StackRecord {
-    const id = row.id as string;
-    return rowToRecord(row, this.getAssociationsForRecord(id), this.getPermissionsForRecord(id));
+  /**
+   * Records rows with their associations and permissions attached: one
+   * statement per element table for the whole list, so a page costs three
+   * reads however many records it holds.
+   */
+  private hydrate(rows: Record<string, unknown>[]): StackRecord[] {
+    const ids = JSON.stringify(rows.map((row) => row.id));
+    const associations = this.elementsByRecord('associations', ids, rowToAssociation);
+    const permissions = this.elementsByRecord('permissions', ids, rowToPermission);
+    return rows.map((row) =>
+      rowToRecord(
+        row,
+        associations.get(row.id as string) ?? [],
+        permissions.get(row.id as string) ?? [],
+      ),
+    );
   }
 
   /**
@@ -480,7 +492,7 @@ export class SharedSqlRecordLogic {
     const hasMore = rows.length > limit;
     const page = hasMore ? rows.slice(0, limit) : rows;
 
-    const records = page.map((row) => this.hydrate(row));
+    const records = this.hydrate(page);
 
     const lastRecord = records[records.length - 1];
     const cursor =
@@ -896,20 +908,35 @@ export class SharedSqlRecordLogic {
     }
   }
 
-  private getPermissionsForRecord(recordId: string): AuthorityAssociation[] {
-    return this.exec
-      .all<Record<string, unknown>>('SELECT * FROM permissions WHERE record_id = ?', [recordId])
-      .map(rowToPermission);
-  }
-
-  private getAssociationsForRecord(recordId: string): DataAssociation[] {
+  /**
+   * One element table's rows for every record in `ids` (a JSON array), in
+   * primary-key order — the order a single record's read has always had.
+   */
+  private elementsByRecord<T>(
+    table: 'associations' | 'permissions',
+    ids: string,
+    map: (row: Record<string, unknown>) => T,
+  ): Map<string, T[]> {
+    const byRecord = new Map<string, T[]>();
     const rows = this.exec.all<Record<string, unknown>>(
-      'SELECT * FROM associations WHERE record_id = ?',
-      [recordId],
+      `SELECT * FROM ${table} WHERE record_id IN (SELECT value FROM json_each(?))
+       ORDER BY ${table === 'associations' ? ASSOCIATION_KEY : PERMISSION_KEY}`,
+      [ids],
     );
-    return rows.map(rowToAssociation);
+    for (const row of rows) {
+      const id = row.record_id as string;
+      const list = byRecord.get(id);
+      if (list) list.push(map(row));
+      else byRecord.set(id, [map(row)]);
+    }
+    return byRecord;
   }
 }
+
+/** Each element table's primary key, so a batched read keeps one record's own order. */
+const ASSOCIATION_KEY =
+  'record_id, kind, label, file_id, related_scope, related_id, related_ns, related_stack';
+const PERMISSION_KEY = 'record_id, kind, label, grantee_kind, grantee_id, role';
 
 const addsOf = (edits: readonly AssociationEdit[]) =>
   edits.flatMap((e) => (e.op === 'add' ? [e.association] : []));

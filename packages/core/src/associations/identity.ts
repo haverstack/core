@@ -154,6 +154,11 @@ export function feedAssociationDelta(changes: AssociationChange[]): {
   return { added, removed };
 }
 
+/** The elements an edit list adds. */
+export function addsOf(edits: readonly AssociationEdit[]): Association[] {
+  return edits.flatMap((e) => (e.op === 'add' ? [e.association] : []));
+}
+
 /**
  * The set a list of edits leaves behind, an add landing on an identity
  * already held in place. See docs/spec/adapters.md § Editing associations.

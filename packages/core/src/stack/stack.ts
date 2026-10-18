@@ -865,8 +865,7 @@ export class Stack implements StackClient {
     assertAssociationEdits(edits, 'editAssociations()', 'data');
     const existing = await this.requireWritable(id, opts);
     const next = applyAssociationEdits(existing.associations ?? [], edits) as DataAssociation[];
-    const adds = edits.flatMap((e) => (e.op === 'add' ? [e.association as DataAssociation] : []));
-    return this.writeAssociations(existing, next, adds, opts, (o) =>
+    return this.writeAssociations(existing, next, opts, (o) =>
       this.adapter.editAssociations(id, edits, o),
     );
   }
@@ -883,7 +882,7 @@ export class Stack implements StackClient {
     this.assertOpen();
     assertAssociationSet(associations, 'associations');
     const existing = await this.requireWritable(id, opts);
-    return this.writeAssociations(existing, associations, associations, opts, (o) =>
+    return this.writeAssociations(existing, associations, opts, (o) =>
       this.adapter.setAssociations(id, associations, o),
     );
   }
@@ -896,7 +895,6 @@ export class Stack implements StackClient {
   private async writeAssociations(
     existing: StackRecord,
     next: DataAssociation[],
-    named: DataAssociation[],
     opts: IfVersionOptions & ActorOptions,
     write: (o: AspectWriteOptions) => Promise<StackRecord>,
   ): Promise<StackRecord> {
@@ -904,7 +902,7 @@ export class Stack implements StackClient {
     const delta = associationDelta(current, next);
     if (delta.length === 0) return existing;
     assertGroupAdminRemains(existing, next);
-    await checkAttachmentAssociationPointers(this.readRecord, named, current);
+    await checkAttachmentAssociationPointers(this.readRecord, next, current);
 
     const change = new PendingChange(
       [

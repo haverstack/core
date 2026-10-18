@@ -68,7 +68,7 @@ import {
   StackValidationError,
 } from '../errors.js';
 import { assertAssociationEdits } from '../associations/validation.js';
-import { associationEqual } from '../associations/identity.js';
+import { addsOf, associationEqual } from '../associations/identity.js';
 import { isGroupRecord } from '../access.js';
 import {
   assertSortCapability,
@@ -590,8 +590,7 @@ export class ScopedStack implements StackClient {
   ): Promise<StackRecord> {
     assertAssociationEdits(edits, 'editAssociations()', 'data');
     const record = await this.requireUpdatable(id, { expect: opts });
-    const adds = edits.flatMap((e) => (e.op === 'add' ? [e.association] : []));
-    await this.requireNewAssociationAccess(record, adds);
+    await this.requireNewAssociationAccess(record, addsOf(edits));
     return this.stack.editAssociations(id, edits, { ...opts, ...this.actor });
   }
 
@@ -658,18 +657,13 @@ export class ScopedStack implements StackClient {
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
     checkFamily(record, expect);
     await this.requireOwnerForGrantRecord(record);
-    await this.requireReshareOf(record);
-    return record;
-  }
-
-  /** The reshare decision alone, for a record already read and write-gated. */
-  private async requireReshareOf(record: StackRecord): Promise<void> {
     if (!this.#authority.canReshare(record)) {
       throw await this.#authority.denialFor(
         record,
         `Cannot change permissions on "${record.id}": only its author or the stack owner can reshare it`,
       );
     }
+    return record;
   }
 
   /**
