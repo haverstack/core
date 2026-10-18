@@ -143,6 +143,8 @@ stack.editAssociations(bookId, [
 
 **Every write takes `ifVersion`, and always checks it** — see [Versioning § Optimistic concurrency](./versioning.md#optimistic-concurrency-ifversion). A precondition is a claim about the Record's `version`, not about what the write moves, so it is checked before the no-op decision as well.
 
+**Which refusal a write earns** when it fails more than one check is fixed per step — see [Refusals and disclosure § The order a write's refusals are asked in](./disclosure.md#the-order-a-writes-refusals-are-asked-in).
+
 **What the verbs do not carry.** `typeId` moves only through [`commitMigration()`](#type-migrations), which replaces content wholesale under a new schema and carries its own owner-only gate. `deletedAt` moves only through `delete()`/`undelete()`: a tombstone transition is a lifecycle step rather than an edit, and [writes are refused against a tombstone](./versioning.md#mutations-are-refused-not-applied-to-a-tombstone). `createdAt` and `updatedAt` are settable at [create time only, by the owner acting alone](#backdating-on-import). Every remaining native field is stamped by the write itself or is create-only — [Reparenting](#reparenting) gives the full split.
 
 **`delete(id, opts)` reports the Record it acted on**, captured inside the same atomic write: the tombstone for a soft delete, the Record as it stood immediately before destruction for a purge, and `null` when a purge found nothing at `id`. Beside it, `referencedFileIds` names the files a purge stranded — see [Attachments § A purge strands the bytes it referenced](./attachments.md#a-purge-strands-the-bytes-it-referenced).

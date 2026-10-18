@@ -5,7 +5,8 @@
  * read. `Stack` and `ScopedStack` both call them, `ScopedStack` ahead of its
  * gates, so a malformed argument earns the same refusal from every
  * requester rather than a validation error for the owner and a not-found
- * for everyone else. See docs/spec/disclosure.md.
+ * for everyone else. See docs/spec/disclosure.md § The order a write's
+ * refusals are asked in.
  */
 
 import { ARGUMENTS_INVALID, StackBadRequestError, StackValidationError } from '../errors.js';
