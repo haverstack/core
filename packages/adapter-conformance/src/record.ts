@@ -23,7 +23,7 @@
 import { describe, test, expect, beforeEach, afterEach } from 'vitest';
 import { SYSTEM_TYPES } from '@haverstack/core';
 import type { AuthorityAssociation, DataAssociation, StackCapabilities } from '@haverstack/core';
-import { RecordMovedError } from '@haverstack/core/adapter';
+import { ElementSetMovedError } from '@haverstack/core/adapter';
 import type { StackRecordAdapter } from '@haverstack/core/adapter';
 import { expectStackErrorCode } from './errors.js';
 import { CONFORMANCE_TYPE_ID, conformanceType, makeRecord, uniqueId } from './helpers.js';
@@ -489,7 +489,7 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
             ),
           () => adapter.setAccess(record.id, [], stalePermissions),
         ]) {
-          await expect(write()).rejects.toBeInstanceOf(RecordMovedError);
+          await expect(write()).rejects.toBeInstanceOf(ElementSetMovedError);
         }
         const after = await adapter.getRecord(record.id);
         expect(after!.associations).toEqual(expect.arrayContaining([tag('a'), tag('b')]));
@@ -507,8 +507,8 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         expect(cleared.permissions ?? []).toEqual([]);
       });
 
-      // Asked before ifVersion: a soft delete bumps, and the tombstone is
-      // what Stack must re-read to answer 409.
+      // Asked before ifVersion: the stale version here would otherwise
+      // answer 412 for a record whose state is the reason for refusing.
       // See docs/spec/adapters.md § Interface split.
       test('an aspect write refuses a soft-deleted record, and changes nothing', async () => {
         const parent = makeRecord();
@@ -530,7 +530,7 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
           () => adapter.editAccess(record.id, [{ op: 'add', association: anyone }], opts),
           () => adapter.setAccess(record.id, [anyone], opts),
         ]) {
-          await expect(write()).rejects.toBeInstanceOf(RecordMovedError);
+          await expectStackErrorCode(write(), 'conflict');
         }
         expect(await adapter.getRecord(record.id)).toEqual(before);
         expect(await adapter.getJournal(record.id)).toEqual(journalBefore);

@@ -7,7 +7,7 @@
  * subclass carries its wire discriminator as an instance `code`.
  *
  * Several errors sit deliberately outside that root (UseAfterCloseError,
- * InvalidAdapterError, OwnerMismatchError, RecordMovedError, RelayScopeError, and — in their own
+ * InvalidAdapterError, OwnerMismatchError, ElementSetMovedError, RelayScopeError, and — in their own
  * modules — IdGenerationError, InvalidDidError, InvalidAuthChallengeError,
  * StoredVersionError and MisfitError): they report a local programming error, malformed
  * local input or an assembled topology, not a state a request can be in, so
@@ -110,6 +110,14 @@ export class StackConflictError extends StackError {
     this.name = 'StackConflictError';
   }
 }
+
+/**
+ * The refusal a mutation of a soft-deleted record earns, from `Stack` or
+ * from inside an adapter's aspect write: one message, wherever it is asked.
+ * See docs/spec/versioning.md § Mutations are refused, not applied to a tombstone.
+ */
+export const softDeletedRefusal = (id: string): StackConflictError =>
+  new StackConflictError(`Record "${id}" is soft-deleted; undelete it before mutating it.`);
 
 /**
  * Thrown when an `ifVersion` precondition doesn't match a record's current
@@ -257,15 +265,15 @@ export class OwnerMismatchError extends Error {
 }
 
 /**
- * Thrown by an aspect write when the stored record no longer matches what
- * `Stack` read: soft-deleted, or a set other than its `expectSet`. Outside
- * the StackError taxonomy: Stack catches it and reads again, so no request
- * ever answers with it. See docs/spec/adapters.md § Interface split.
+ * Thrown by an adapter's element-set write when the stored set no longer
+ * matches the `expectSet` it was handed. Outside the StackError taxonomy:
+ * Stack catches it and reads again, so no request ever answers with it.
+ * See docs/spec/versioning.md § Element-set writes compare the set they read.
  */
-export class RecordMovedError extends Error {
+export class ElementSetMovedError extends Error {
   constructor(public readonly recordId: string) {
-    super(`Record "${recordId}" changed since it was read`);
-    this.name = 'RecordMovedError';
+    super(`Record "${recordId}"'s set changed since it was read`);
+    this.name = 'ElementSetMovedError';
   }
 }
 

@@ -84,7 +84,7 @@ import type {
 } from '../types/index.js';
 
 import {
-  RecordMovedError,
+  ElementSetMovedError,
   UseAfterCloseError,
   InvalidAdapterError,
   StackConflictError,
@@ -96,6 +96,7 @@ import {
   StackVersionConflictError,
   ARGUMENTS_INVALID,
   SCHEMA_INVALID,
+  softDeletedRefusal,
 } from '../errors.js';
 import {
   assertQueryCapabilities,
@@ -815,21 +816,19 @@ export class Stack implements StackClient {
   ): Promise<StackRecord> {
     this.assertOpen();
     assertParentArgument(parentId);
-    return this.untilReadHolds(async () => {
-      const existing = await this.requireWritable(id, opts);
-      const previousParentId = existing.parentId ?? null;
-      if (parentId === previousParentId) return existing;
-      if (parentId !== null) {
-        await assertParentExists(this.readRecord, id, parentId);
-        await assertNoParentCycle(this.readRecord, id, parentId);
-      }
+    const existing = await this.requireWritable(id, opts);
+    const previousParentId = existing.parentId ?? null;
+    if (parentId === previousParentId) return existing;
+    if (parentId !== null) {
+      await assertParentExists(this.readRecord, id, parentId);
+      await assertNoParentCycle(this.readRecord, id, parentId);
+    }
 
-      const change = new PendingChange('reparent', {
-        actor: normalizeActor(opts.actor),
-        previousParentId,
-      });
-      return this.writeAspect(change, opts, (o) => this.adapter.setParent(id, parentId, o));
+    const change = new PendingChange('reparent', {
+      actor: normalizeActor(opts.actor),
+      previousParentId,
     });
+    return this.writeAspect(change, opts, (o) => this.adapter.setParent(id, parentId, o));
   }
 
   /**
@@ -844,15 +843,13 @@ export class Stack implements StackClient {
   ): Promise<StackRecord> {
     this.assertOpen();
     assertUnlistedArgument(unlisted);
-    return this.untilReadHolds(async () => {
-      const existing = await this.requireWritable(id, opts);
-      if (Boolean(existing.unlistedAt) === unlisted) return existing;
+    const existing = await this.requireWritable(id, opts);
+    if (Boolean(existing.unlistedAt) === unlisted) return existing;
 
-      const change = new PendingChange(unlisted ? 'unlist' : 'list', {
-        actor: normalizeActor(opts.actor),
-      });
-      return this.writeAspect(change, opts, (o) => this.adapter.setUnlisted(id, unlisted, o));
+    const change = new PendingChange(unlisted ? 'unlist' : 'list', {
+      actor: normalizeActor(opts.actor),
     });
+    return this.writeAspect(change, opts, (o) => this.adapter.setUnlisted(id, unlisted, o));
   }
 
   /**
@@ -869,7 +866,7 @@ export class Stack implements StackClient {
   ): Promise<StackRecord> {
     this.assertOpen();
     assertAssociationEdits(edits, 'editAssociations()', 'data');
-    return this.untilReadHolds(async () => {
+    return this.untilSetHolds(async () => {
       const existing = await this.requireWritable(id, opts);
       const next = applyAssociationEdits(existing.associations ?? [], edits) as DataAssociation[];
       return this.writeAssociations(existing, next, opts, (o) =>
@@ -889,7 +886,7 @@ export class Stack implements StackClient {
   ): Promise<StackRecord> {
     this.assertOpen();
     assertAssociationSet(associations, 'associations');
-    return this.untilReadHolds(async () => {
+    return this.untilSetHolds(async () => {
       const existing = await this.requireWritable(id, opts);
       return this.writeAssociations(existing, associations, opts, (o) =>
         this.adapter.setAssociations(id, associations, o),
@@ -936,7 +933,7 @@ export class Stack implements StackClient {
   ): Promise<StackRecord> {
     this.assertOpen();
     assertAssociationEdits(edits, 'editAccess()', 'authority');
-    return this.untilReadHolds(async () => {
+    return this.untilSetHolds(async () => {
       const existing = await this.requireWritable(id, opts);
       const next = applyAssociationEdits(
         existing.permissions ?? [],
@@ -954,7 +951,7 @@ export class Stack implements StackClient {
   ): Promise<StackRecord> {
     this.assertOpen();
     assertAssociationSet(permissions, 'permissions');
-    return this.untilReadHolds(async () => {
+    return this.untilSetHolds(async () => {
       const existing = await this.requireWritable(id, opts);
       return this.writeAccess(existing, permissions, opts, (o) =>
         this.adapter.setAccess(id, permissions, o),
@@ -982,18 +979,18 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Run an aspect write from its read onward, again from a fresh read each
-   * time the adapter finds the record moved since the last one, so Stack's
-   * checks are asked of the state the write lands on. Unbounded: each
-   * refusal means another write landed.
-   * See docs/spec/versioning.md § An aspect write never lands on a tombstone.
+   * Run an element-set write from its read onward, again from a fresh read
+   * each time the adapter finds the set moved since the last one, so the
+   * rules over the resulting set are asked of the set the write lands on.
+   * Unbounded: each refusal means another write landed.
+   * See docs/spec/versioning.md § Element-set writes compare the set they read.
    */
-  private async untilReadHolds(attempt: () => Promise<StackRecord>): Promise<StackRecord> {
+  private async untilSetHolds(attempt: () => Promise<StackRecord>): Promise<StackRecord> {
     for (;;) {
       try {
         return await attempt();
       } catch (err) {
-        if (!(err instanceof RecordMovedError)) throw err;
+        if (!(err instanceof ElementSetMovedError)) throw err;
       }
     }
   }
@@ -1029,11 +1026,7 @@ export class Stack implements StackClient {
    * not applied to a tombstone.
    */
   private refuseIfDeleted(record: StackRecord): void {
-    if (record.deletedAt) {
-      throw new StackConflictError(
-        `Record "${record.id}" is soft-deleted; undelete it before mutating it.`,
-      );
-    }
+    if (record.deletedAt) throw softDeletedRefusal(record.id);
   }
 
   /**

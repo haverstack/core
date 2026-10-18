@@ -72,7 +72,7 @@ export type AspectWriteOptions = IfVersionOptions & JournalOptions;
 /**
  * What the four element-set writes take: `expectSet` is the set `Stack`
  * read and checked its rules against. An adapter compares it with the
- * stored set inside its write and throws RecordMovedError on a
+ * stored set inside its write and throws ElementSetMovedError on a
  * mismatch, changing nothing. Omitted, the write is unconditional.
  * See docs/spec/adapters.md § Editing associations.
  */

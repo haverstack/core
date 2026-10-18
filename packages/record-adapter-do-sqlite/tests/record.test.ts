@@ -76,6 +76,7 @@ type TestStub = {
     associations: DataAssociation[],
     opts?: Record<string, unknown>,
   ): Promise<StackRecord>;
+  setUnlisted(id: string, unlisted: boolean, opts?: Record<string, unknown>): Promise<StackRecord>;
   commitMigration(
     id: string,
     toTypeId: string,
@@ -509,6 +510,25 @@ describe('associations', () => {
 
     const held = await stub.setAssociations(record.id, [b], { expectSet: [a] });
     expect(held.associations).toEqual([b]);
+  });
+
+  // Both write paths: a records-column UPDATE and an element-table write.
+  test('an aspect write refuses a soft-deleted record as a conflict and changes nothing', async () => {
+    const stub = getStub();
+    const record = makeRecord();
+    await stub.createRecord(record);
+    await stub.deleteRecord(record.id);
+    const before = await stub.getRecord(record.id);
+
+    for (const write of [
+      () => stub.setUnlisted(record.id, true),
+      () => stub.setAssociations(record.id, [{ kind: 'tag', label: 'a' }]),
+    ]) {
+      const err = await write().catch((e: unknown) => e);
+      expect((err as { code?: string }).code).toBe('conflict');
+      expect((err as Error).message).toMatch(/soft-deleted/);
+    }
+    expect(await stub.getRecord(record.id)).toEqual(before);
   });
 });
 

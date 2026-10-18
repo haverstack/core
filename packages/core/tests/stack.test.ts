@@ -8,7 +8,7 @@ import {
   StackNotFoundError,
   StackConflictError,
   StackVersionConflictError,
-  RecordMovedError,
+  ElementSetMovedError,
   StackSchemaDriftError,
   StackBadRequestError,
   StackPayloadTooLargeError,
@@ -2856,7 +2856,7 @@ describe('element-set writes check their rules against the set they land on', ()
 
   test('a write keeps reading again for as long as the adapter finds its set moved', async () => {
     const note = await stack.create(NOTE_V1, { text: 'hello' });
-    const moved = new RecordMovedError(note.id);
+    const moved = new ElementSetMovedError(note.id);
     const write = vi
       .spyOn(adapter, 'editAssociations')
       .mockRejectedValueOnce(moved)
@@ -2905,11 +2905,12 @@ describe('aspect writes never land on a record soft-deleted after Stack read it'
     return stack.create(NOTE_V1, { text: 'hello' }, { parentId: parent.id });
   }
 
-  test.each(verbs)('%s is refused when a soft delete lands first', async (verb) => {
+  test.each(verbs)('%s is refused, unretried, when a soft delete lands first', async (verb) => {
     const record = await note();
-    racing(verb, () => stack.delete(record.id));
+    const write = racing(verb, () => stack.delete(record.id));
 
     await expect(writes[verb](record.id)).rejects.toThrow(/soft-deleted/);
+    expect(write).toHaveBeenCalledTimes(1);
     const after = (await stack.get(record.id, { includeDeleted: true }))!;
     const aspects = (r: StackRecord) => [r.parentId, r.unlistedAt, r.associations, r.permissions];
     expect(aspects(after)).toEqual(aspects(record));

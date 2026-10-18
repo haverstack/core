@@ -33,7 +33,11 @@ import type {
   ActorOptions,
   IfVersionOptions,
 } from '@haverstack/core';
-import { RecordMovedError, sameAssociationSet } from '@haverstack/core/adapter';
+import {
+  ElementSetMovedError,
+  sameAssociationSet,
+  softDeletedRefusal,
+} from '@haverstack/core/adapter';
 import type {
   AspectWriteOptions,
   ElementWriteOptions,
@@ -151,7 +155,7 @@ export class SharedSqlRecordLogic {
 
   /**
    * An aspect write's record, inside its transaction: missing is not found,
-   * a tombstone is moved, and anything else answers its version.
+   * a tombstone is refused, and anything else answers its version.
    */
   private liveVersion(id: string): number {
     const row = this.exec.get<{ version: number; deleted_at: number | null }>(
@@ -159,7 +163,7 @@ export class SharedSqlRecordLogic {
       [id],
     );
     if (!row) throw recordNotFound(id);
-    if (row.deleted_at !== null) throw new RecordMovedError(id);
+    if (row.deleted_at !== null) throw softDeletedRefusal(id);
     return row.version;
   }
 
@@ -793,7 +797,7 @@ export class SharedSqlRecordLogic {
         const ids = JSON.stringify([id]);
         const map = table === 'associations' ? rowToAssociation : rowToPermission;
         const stored = this.elementsByRecord<Association>(table, ids, map).get(id) ?? [];
-        if (!sameAssociationSet(stored, opts.expectSet)) throw new RecordMovedError(id);
+        if (!sameAssociationSet(stored, opts.expectSet)) throw new ElementSetMovedError(id);
       }
       write();
       this.appendJournal(id, opts.journal);
