@@ -29,18 +29,18 @@ describe('an association element carries only the keys its kind defines', () => 
   ];
 
   for (const a of data) {
-    test(`a ${a.kind} with an unknown key is refused on create, mutate and associate`, async () => {
+    test(`a ${a.kind} with an unknown key is refused on create and on both association writes`, async () => {
       const bad = extra(a, 'scope');
       const message = 'Unknown key in associations[0]: scope';
       await expect(stack.create(NOTE, { text: 'y' }, { associations: [bad] })).rejects.toThrow(
         new StackBadRequestError(message),
       );
-      await expect(stack.mutate(recordId, { associations: [bad] })).rejects.toThrow(
+      await expect(stack.setAssociations(recordId, [bad])).rejects.toThrow(
         new StackBadRequestError(message),
       );
-      await expect(stack.associate(recordId, [bad])).rejects.toThrow(
-        new StackBadRequestError(message),
-      );
+      await expect(
+        stack.editAssociations(recordId, [{ op: 'add', association: bad }]),
+      ).rejects.toThrow(new StackBadRequestError('Unknown key in changes[0].association: scope'));
     });
   }
 
@@ -48,7 +48,9 @@ describe('an association element carries only the keys its kind defines', () => 
     const upload = await stack.putAttachment(new Uint8Array([1]), { mimeType: 'text/plain' });
     const { fileId } = upload.content as { fileId: string };
     const a = { kind: 'attachment', label: 'avatar', fileId, attachmentRecordId: upload.id };
-    await expect(stack.associate(recordId, [a as DataAssociation])).resolves.toBeDefined();
+    await expect(
+      stack.editAssociations(recordId, [{ op: 'add', association: a as DataAssociation }]),
+    ).resolves.toBeDefined();
   });
 
   test('a key its target arm does not define is refused, even one another arm defines', async () => {
@@ -57,8 +59,8 @@ describe('an association element carries only the keys its kind defines', () => 
       label: 'author',
       target: { kind: 'entity', entityId: 'did:key:a', ns: 'atproto' },
     } as DataAssociation;
-    await expect(stack.associate(recordId, [a])).rejects.toThrow(
-      new StackBadRequestError('Unknown key in associations[0].target: ns'),
+    await expect(stack.editAssociations(recordId, [{ op: 'add', association: a }])).rejects.toThrow(
+      new StackBadRequestError('Unknown key in changes[0].association.target: ns'),
     );
   });
 
@@ -79,23 +81,25 @@ describe('a permission element carries only the keys its kind and grantee define
 
   test('an unknown key on the grantee is refused', async () => {
     const p = read({ kind: 'entity', entityId: 'did:key:a', scope: 'all' });
-    await expect(stack.grantAccess(recordId, [p])).rejects.toThrow(
-      new StackBadRequestError('Unknown key in permissions[0].grantee: scope'),
+    await expect(stack.editAccess(recordId, [{ op: 'add', association: p }])).rejects.toThrow(
+      new StackBadRequestError('Unknown key in changes[0].association.grantee: scope'),
     );
-    await expect(stack.mutate(recordId, { permissions: [p] })).rejects.toThrow(
+    await expect(stack.setAccess(recordId, [p])).rejects.toThrow(
       new StackBadRequestError('Unknown key in permissions[0].grantee: scope'),
     );
   });
 
   test('a key from the other grantee arm is refused rather than ignored', async () => {
     const p = read({ kind: 'entity', entityId: 'did:key:a', role: 'admin' });
-    await expect(stack.grantAccess(recordId, [p])).rejects.toThrow(StackBadRequestError);
+    await expect(stack.editAccess(recordId, [{ op: 'add', association: p }])).rejects.toThrow(
+      StackBadRequestError,
+    );
   });
 
   test('an unknown key on the element itself is refused', async () => {
     const anyone = extra({ kind: 'anyone', label: 'read' } as AuthorityAssociation, 'until');
-    await expect(stack.grantAccess(recordId, [anyone])).rejects.toThrow(
-      new StackBadRequestError('Unknown key in permissions[0]: until'),
+    await expect(stack.editAccess(recordId, [{ op: 'add', association: anyone }])).rejects.toThrow(
+      new StackBadRequestError('Unknown key in changes[0].association: until'),
     );
   });
 });

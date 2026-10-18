@@ -14,7 +14,6 @@ import {
   StackNotFoundError,
   StackBadRequestError,
   applyMergePatch,
-  assertOneSurface,
 } from '@haverstack/core';
 import type {
   RecordJournalEntry,
@@ -25,21 +24,20 @@ import type {
   TypeId,
   FileId,
   RecordVersion,
-  RecordChangeSet,
   StackQuery,
   QueryResult,
-  Association,
   AssociationEdit,
+  AuthorityAssociation,
+  DataAssociation,
   ActorOptions,
   IfVersionOptions,
 } from '@haverstack/core';
 import type {
-  BumpVersionOptions,
+  AspectWriteOptions,
   JournalEntryInput,
   JournalOptions,
   MutateOptions,
 } from '@haverstack/core/adapter';
-import { AUTHORITY_ASSOCIATION_KINDS } from '@haverstack/core/adapter';
 import type { SqlExecutor } from './executor.js';
 import { isForeignKeyViolation, isUniqueConstraintViolation } from './executor.js';
 import { buildQueryPlan, atBudget } from './query.js';
@@ -47,6 +45,8 @@ import { ContentIndex, SearchIndex } from './indexes.js';
 import {
   rowToRecord,
   rowToAssociation,
+  rowToPermission,
+  permissionKeyColumns,
   rowToType,
   rowToVersion,
   rowToJournalEntry,
@@ -252,8 +252,8 @@ export class SharedSqlRecordLogic {
         throw err;
       }
 
-      const edges = [...(record.associations ?? []), ...(record.permissions ?? [])];
-      if (edges.length) this.insertAssociations(record.id, edges);
+      if (record.associations?.length) this.insertAssociations(record.id, record.associations);
+      if (record.permissions?.length) this.insertPermissions(record.id, record.permissions);
 
       this.searchIndex.insert(record.id, JSON.stringify(record.content));
       this.contentIndex.sync(record.id, record.typeId, record.content);
@@ -275,79 +275,86 @@ export class SharedSqlRecordLogic {
    */
   private readRecord(id: string): StackRecord | null {
     const row = this.exec.get<Record<string, unknown>>('SELECT * FROM records WHERE id = ?', [id]);
-    return row ? this.hydrate(row) : null;
-  }
-
-  /** A records row with its association set attached. */
-  private hydrate(row: Record<string, unknown>): StackRecord {
-    return rowToRecord(row, this.getAssociationsForRecord(row.id as string));
+    return row ? this.hydrate([row])[0]! : null;
   }
 
   /**
-   * One transaction, so one call is one version whatever it moved, and the
-   * patch applies to the content as it stands when the write lands.
+   * Records rows with their associations and permissions attached: one
+   * statement per element table for the whole list, so a page costs three
+   * reads however many records it holds.
    */
-  async mutateRecord(
+  private hydrate(rows: Record<string, unknown>[]): StackRecord[] {
+    const ids = JSON.stringify(rows.map((row) => row.id));
+    const associations = this.elementsByRecord('associations', ids, rowToAssociation);
+    const permissions = this.elementsByRecord('permissions', ids, rowToPermission);
+    return rows.map((row) =>
+      rowToRecord(
+        row,
+        associations.get(row.id as string) ?? [],
+        permissions.get(row.id as string) ?? [],
+      ),
+    );
+  }
+
+  /**
+   * The patch applies to the content as it stands when the write lands,
+   * read inside the same transaction.
+   */
+  async patchContent(
     id: string,
-    changes: RecordChangeSet,
-    opts: MutateOptions & BumpVersionOptions = {},
+    patch: Record<string, unknown | null>,
+    opts: MutateOptions = {},
   ): Promise<StackRecord> {
-    const now = toMs(new Date());
-
-    // Assembled, since a fixed statement per combination of aspects would
-    // be 2^4 of them. Shared by both paths; only `content` is the bumping
-    // path's alone, since a patch always bumps.
-    const sets: string[] = [];
-    const values: unknown[] = [];
-    if (changes.parentId !== undefined) {
-      sets.push('parent_id = ?');
-      values.push(changes.parentId);
-    }
-    if (changes.unlisted !== undefined) {
-      sets.push('unlisted_at = ?');
-      // Stamped fresh because this key is only ever present on a
-      // transition — Stack narrows a change set to the aspects that
-      // actually moved before it reaches an adapter.
-      values.push(changes.unlisted ? now : null);
-    }
-
     this.exec.transaction(() => {
       const current = this.readForWrite(id, opts.ifVersion);
-
-      // No versioned UPDATE to carry `ifVersion`, so readForWrite() is the
-      // only check. See docs/spec/versioning.md § Version history.
-      if (opts.bumpsVersion === false) {
-        if (sets.length > 0) {
-          this.exec.run(`UPDATE records SET ${sets.join(', ')} WHERE id = ?`, [...values, id]);
-        }
-        this.replaceAssociationHalves(id, changes);
-        this.appendJournal(id, opts.journal);
-        return;
-      }
-
-      const merged = changes.contentPatch
-        ? applyMergePatch(current.content, changes.contentPatch)
-        : undefined;
-      if (merged !== undefined) {
-        sets.unshift('content = ?');
-        values.unshift(JSON.stringify(merged));
-      }
-
       if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
-      if (merged !== undefined) this.searchIndex.remove(id);
-
-      this.versionedUpdate(id, sets, values, opts, now);
-
-      this.replaceAssociationHalves(id, changes);
-
-      if (merged !== undefined) {
-        this.searchIndex.insert(id, JSON.stringify(merged));
-        this.contentIndex.sync(id, current.typeId, merged);
-      }
+      this.rewriteContent(id, current.typeId, applyMergePatch(current.content, patch), opts);
       this.appendJournal(id, opts.journal);
     });
 
-    return this.reread(id, 'mutateRecord');
+    return this.reread(id, 'patchContent');
+  }
+
+  async setParent(
+    id: string,
+    parentId: string | null,
+    opts: AspectWriteOptions = {},
+  ): Promise<StackRecord> {
+    return this.aspectUpdate(id, 'parent_id = ?', parentId, opts, 'setParent');
+  }
+
+  /** Stamped fresh: `Stack` hands this only a transition. */
+  async setUnlisted(id: string, unlisted: boolean, opts: AspectWriteOptions = {}) {
+    return this.aspectUpdate(
+      id,
+      'unlisted_at = ?',
+      unlisted ? toMs(new Date()) : null,
+      opts,
+      'setUnlisted',
+    );
+  }
+
+  /**
+   * One records column that never bumps. The `ifVersion` guard rides in the
+   * WHERE clause, as it does on a versioned update.
+   */
+  private aspectUpdate(
+    id: string,
+    set: string,
+    value: unknown,
+    opts: AspectWriteOptions,
+    verb: string,
+  ): StackRecord {
+    const guarded = opts.ifVersion !== undefined;
+    this.exec.transaction(() => {
+      const changed = this.exec.run(
+        `UPDATE records SET ${set} WHERE id = ?${guarded ? ' AND version = ?' : ''}`,
+        [value, id, ...(guarded ? [opts.ifVersion] : [])],
+      );
+      if (changed === 0) this.throwVersionConflict(id, opts.ifVersion);
+      this.appendJournal(id, opts.journal);
+    });
+    return this.reread(id, verb);
   }
 
   async deleteRecord(
@@ -388,6 +395,7 @@ export class SharedSqlRecordLogic {
     this.checkExpectedVersion(id, purged.version, ifVersion);
     this.searchIndex.remove(id);
     this.exec.run('DELETE FROM associations WHERE record_id = ?', [id]);
+    this.exec.run('DELETE FROM permissions WHERE record_id = ?', [id]);
     this.exec.run('DELETE FROM versions WHERE record_id = ?', [id]);
     // A purge takes the journal with it, for the reason it takes the
     // version history: a log naming what a destroyed record once held is
@@ -484,7 +492,7 @@ export class SharedSqlRecordLogic {
     const hasMore = rows.length > limit;
     const page = hasMore ? rows.slice(0, limit) : rows;
 
-    const records = page.map((row) => this.hydrate(row));
+    const records = this.hydrate(page);
 
     const lastRecord = records[records.length - 1];
     const cursor =
@@ -747,73 +755,108 @@ export class SharedSqlRecordLogic {
   // -------------------------------------------------------
 
   /**
-   * Never bumps `version`/`updatedAt` and never snapshots — see
-   * StackRecordAdapter.amendAssociations(). Removes apply before adds, so
-   * removing and re-adding one identity in a call leaves it present.
+   * A write to one of a record's two element tables, inside a transaction
+   * that first checks the record exists at `ifVersion`. Never bumps and
+   * never snapshots.
    */
-  async amendAssociations(
-    recordId: string,
-    changes: AssociationEdit[],
-    opts: JournalOptions = {},
-  ): Promise<StackRecord> {
-    assertOneSurface(changes);
+  private elementWrite(
+    id: string,
+    opts: AspectWriteOptions,
+    write: () => void,
+    verb: string,
+  ): StackRecord {
     this.exec.transaction(() => {
-      if (this.currentVersion(recordId) === undefined) throw recordNotFound(recordId);
-      for (const change of changes) {
-        if (change.op !== 'remove') continue;
-        const { association } = change;
-        this.exec.run(
-          `DELETE FROM associations
-       WHERE record_id = ?
-         AND kind = ?
-         AND label = ?
-         AND file_id       = ?
-         AND related_scope = ?
-         AND related_id    = ?
-         AND related_ns    = ?
-         AND related_stack = ?
-         AND related_role  = ?`,
-          [recordId, association.kind, association.label, ...associationKeyColumns(association)],
-        );
-      }
-      const adds = changes.flatMap((c) => (c.op === 'add' ? [c.association] : []));
-      if (adds.length) this.insertAssociations(recordId, adds);
-      this.appendJournal(recordId, opts.journal);
+      const version = this.currentVersion(id);
+      if (version === undefined) throw recordNotFound(id);
+      this.checkExpectedVersion(id, version, opts.ifVersion);
+      write();
+      this.appendJournal(id, opts.journal);
     });
-
-    return this.reread(recordId, 'amendAssociations');
+    return this.reread(id, verb);
   }
 
-  /**
-   * Each key replaces only within its own half of the partition, which is
-   * why a tag write cannot drop an ACL. Caller-transactional.
-   * See docs/spec/access-control.md § Record-level permissions.
-   */
-  private replaceAssociationHalves(recordId: string, changes: RecordChangeSet): void {
-    if (changes.associations !== undefined) {
-      this.replaceAssociations(recordId, changes.associations, 'data');
-    }
-    if (changes.permissions !== undefined) {
-      this.replaceAssociations(recordId, changes.permissions, 'authority');
-    }
-  }
-
-  /**
-   * Swap one half of a record's association set wholesale — the "replace,
-   * don't merge" semantics a change set's association list carries. The data
-   * half is "not an authority kind", so core's list is the only one.
-   */
-  private replaceAssociations(
-    recordId: string,
-    associations: Association[],
-    half: 'data' | 'authority',
-  ): void {
-    this.exec.run(
-      `DELETE FROM associations WHERE record_id = ? AND kind ${half === 'data' ? 'NOT IN' : 'IN'} ` +
-        `(${AUTHORITY_ASSOCIATION_KINDS.map(() => '?').join(', ')})`,
-      [recordId, ...AUTHORITY_ASSOCIATION_KINDS],
+  async editAssociations(
+    id: string,
+    edits: AssociationEdit[],
+    opts: AspectWriteOptions = {},
+  ): Promise<StackRecord> {
+    return this.elementWrite(
+      id,
+      opts,
+      () => {
+        for (const edit of edits) {
+          if (edit.op !== 'remove') continue;
+          const association = edit.association as DataAssociation;
+          this.exec.run(
+            `DELETE FROM associations
+             WHERE record_id = ? AND kind = ? AND label = ?
+               AND file_id = ? AND related_scope = ? AND related_id = ?
+               AND related_ns = ? AND related_stack = ?`,
+            [id, association.kind, association.label, ...associationKeyColumns(association)],
+          );
+        }
+        this.insertAssociations(id, addsOf(edits) as DataAssociation[]);
+      },
+      'editAssociations',
     );
-    if (associations.length) this.insertAssociations(recordId, associations);
+  }
+
+  async setAssociations(
+    id: string,
+    associations: DataAssociation[],
+    opts: AspectWriteOptions = {},
+  ): Promise<StackRecord> {
+    return this.elementWrite(
+      id,
+      opts,
+      () => {
+        this.exec.run('DELETE FROM associations WHERE record_id = ?', [id]);
+        this.insertAssociations(id, associations);
+      },
+      'setAssociations',
+    );
+  }
+
+  /** editAssociations() over the permissions table. */
+  async editAccess(
+    id: string,
+    edits: AssociationEdit[],
+    opts: AspectWriteOptions = {},
+  ): Promise<StackRecord> {
+    return this.elementWrite(
+      id,
+      opts,
+      () => {
+        for (const edit of edits) {
+          if (edit.op !== 'remove') continue;
+          const permission = edit.association as AuthorityAssociation;
+          this.exec.run(
+            `DELETE FROM permissions
+             WHERE record_id = ? AND kind = ? AND label = ?
+               AND grantee_kind = ? AND grantee_id = ? AND role = ?`,
+            [id, permission.kind, permission.label, ...permissionKeyColumns(permission)],
+          );
+        }
+        this.insertPermissions(id, addsOf(edits) as AuthorityAssociation[]);
+      },
+      'editAccess',
+    );
+  }
+
+  async setAccess(
+    id: string,
+    permissions: AuthorityAssociation[],
+    opts: AspectWriteOptions = {},
+  ): Promise<StackRecord> {
+    return this.elementWrite(
+      id,
+      opts,
+      () => {
+        this.exec.run('DELETE FROM permissions WHERE record_id = ?', [id]);
+        this.insertPermissions(id, permissions);
+      },
+      'setAccess',
+    );
   }
 
   /**
@@ -821,14 +864,14 @@ export class SharedSqlRecordLogic {
    * (outside the key) costs no second row. A missing record trips the
    * foreign key, reported as StackNotFoundError rather than an orphan row.
    */
-  private insertAssociations(recordId: string, associations: Association[]): void {
+  private insertAssociations(recordId: string, associations: DataAssociation[]): void {
     for (const assoc of associations) {
-      try {
+      this.insertRow(recordId, () =>
         this.exec.run(
           `INSERT INTO associations
             (record_id, kind, label, file_id, related_scope, related_id, related_ns,
-             related_stack, related_role, attachment_record_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             related_stack, attachment_record_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT DO UPDATE SET attachment_record_id = excluded.attachment_record_id`,
           [
             recordId,
@@ -837,21 +880,63 @@ export class SharedSqlRecordLogic {
             ...associationKeyColumns(assoc),
             assoc.kind === 'attachment' ? (assoc.attachmentRecordId ?? '') : '',
           ],
-        );
-      } catch (err) {
-        if (isForeignKeyViolation(err)) {
-          throw recordNotFound(recordId);
-        }
-        throw err;
-      }
+        ),
+      );
     }
   }
 
-  private getAssociationsForRecord(recordId: string): Association[] {
+  /** Every column is in the key, so a repeated element is the same row. */
+  private insertPermissions(recordId: string, permissions: AuthorityAssociation[]): void {
+    for (const p of permissions) {
+      this.insertRow(recordId, () =>
+        this.exec.run(
+          `INSERT INTO permissions (record_id, kind, label, grantee_kind, grantee_id, role)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT DO NOTHING`,
+          [recordId, p.kind, p.label, ...permissionKeyColumns(p)],
+        ),
+      );
+    }
+  }
+
+  private insertRow(recordId: string, insert: () => void): void {
+    try {
+      insert();
+    } catch (err) {
+      if (isForeignKeyViolation(err)) throw recordNotFound(recordId);
+      throw err;
+    }
+  }
+
+  /**
+   * One element table's rows for every record in `ids` (a JSON array), in
+   * primary-key order — the order a single record's read has always had.
+   */
+  private elementsByRecord<T>(
+    table: 'associations' | 'permissions',
+    ids: string,
+    map: (row: Record<string, unknown>) => T,
+  ): Map<string, T[]> {
+    const byRecord = new Map<string, T[]>();
     const rows = this.exec.all<Record<string, unknown>>(
-      'SELECT * FROM associations WHERE record_id = ?',
-      [recordId],
+      `SELECT * FROM ${table} WHERE record_id IN (SELECT value FROM json_each(?))
+       ORDER BY ${table === 'associations' ? ASSOCIATION_KEY : PERMISSION_KEY}`,
+      [ids],
     );
-    return rows.map(rowToAssociation);
+    for (const row of rows) {
+      const id = row.record_id as string;
+      const list = byRecord.get(id);
+      if (list) list.push(map(row));
+      else byRecord.set(id, [map(row)]);
+    }
+    return byRecord;
   }
 }
+
+/** Each element table's primary key, so a batched read keeps one record's own order. */
+const ASSOCIATION_KEY =
+  'record_id, kind, label, file_id, related_scope, related_id, related_ns, related_stack';
+const PERMISSION_KEY = 'record_id, kind, label, grantee_kind, grantee_id, role';
+
+const addsOf = (edits: readonly AssociationEdit[]) =>
+  edits.flatMap((e) => (e.op === 'add' ? [e.association] : []));

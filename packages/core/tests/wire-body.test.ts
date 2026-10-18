@@ -3,7 +3,11 @@ import {
   parseAssociationEditsBody,
   parseAuthChallengeBody,
   parseAuthTokenBody,
-  parseEntityPatchBody,
+  parseContentPatchBody,
+  parseParentBody,
+  parseUnlistedBody,
+  parseAssociationsBody,
+  parsePermissionsBody,
   parseTypeBody,
   parseMigrationBody,
   parseInstallBody,
@@ -30,7 +34,11 @@ describe('body parsers — shared refusals', () => {
   const parsers = {
     parseAuthChallengeBody,
     parseAuthTokenBody,
-    parseEntityPatchBody,
+    parseContentPatchBody,
+    parseParentBody,
+    parseUnlistedBody,
+    parseAssociationsBody,
+    parsePermissionsBody,
     parseTypeBody,
     parseMigrationBody,
   };
@@ -86,24 +94,60 @@ describe('parseAuthTokenBody', () => {
   });
 });
 
-describe('parseEntityPatchBody', () => {
-  test('reads contentPatch, keeping null as a removal', () => {
-    expect(parseEntityPatchBody({ contentPatch: { name: 'Jane', handle: null } })).toEqual({
-      contentPatch: { name: 'Jane', handle: null },
+describe('parseContentPatchBody', () => {
+  test('the body is the bare patch, null kept as a removal', () => {
+    expect(parseContentPatchBody({ name: 'Jane', handle: null })).toEqual({
+      name: 'Jane',
+      handle: null,
     });
   });
 
-  test('an unknown key is 400, content included', () => {
-    expect(() => parseEntityPatchBody({ contentPatch: {}, did: DID })).toThrow(
-      StackBadRequestError,
-    );
-    expect(() => parseEntityPatchBody({ content: {} })).toThrow(StackBadRequestError);
+  // Every key is a content key, so a native field's name is content here,
+  // and an undeclared one is patchContent()'s 422 to give, not a 400.
+  test('a key named like a record field is content', () => {
+    expect(parseContentPatchBody({ parentId: 'clipped-from', typeId: 'x' })).toEqual({
+      parentId: 'clipped-from',
+      typeId: 'x',
+    });
+  });
+});
+
+describe('parseParentBody', () => {
+  test('reads a record id, or null for the root', () => {
+    expect(parseParentBody({ parentId: 'box1' })).toEqual({ parentId: 'box1' });
+    expect(parseParentBody({ parentId: null })).toEqual({ parentId: null });
   });
 
-  test('an absent contentPatch is 400; a non-object one is 422 naming the field', () => {
-    expect(() => parseEntityPatchBody({})).toThrow(StackBadRequestError);
-    expect(pathOf(() => parseEntityPatchBody({ contentPatch: [] }))).toBe('contentPatch');
-    expect(pathOf(() => parseEntityPatchBody({ contentPatch: null }))).toBe('contentPatch');
+  test('an absent or unknown key is 400; a wrong-shaped value is 422 naming it', () => {
+    expect(() => parseParentBody({})).toThrow(StackBadRequestError);
+    expect(() => parseParentBody({ parentId: null, unlisted: true })).toThrow(StackBadRequestError);
+    expect(pathOf(() => parseParentBody({ parentId: 7 }))).toBe('parentId');
+  });
+});
+
+describe('parseUnlistedBody', () => {
+  test('reads a boolean, false included', () => {
+    expect(parseUnlistedBody({ unlisted: false })).toEqual({ unlisted: false });
+  });
+
+  test('an absent key is 400; a non-boolean is 422 naming it', () => {
+    expect(() => parseUnlistedBody({})).toThrow(StackBadRequestError);
+    expect(pathOf(() => parseUnlistedBody({ unlisted: 'yes' }))).toBe('unlisted');
+  });
+});
+
+describe('parseAssociationsBody and parsePermissionsBody', () => {
+  test('read the whole set, the empty one included', () => {
+    expect(parseAssociationsBody({ associations: [{ kind: 'tag', label: 'x' }] })).toEqual([
+      { kind: 'tag', label: 'x' },
+    ]);
+    expect(parsePermissionsBody({ permissions: [] })).toEqual([]);
+  });
+
+  test('the other aspect’s key is 400; a non-array is 422 naming it', () => {
+    expect(() => parseAssociationsBody({ permissions: [] })).toThrow(StackBadRequestError);
+    expect(() => parsePermissionsBody({ associations: [] })).toThrow(StackBadRequestError);
+    expect(pathOf(() => parsePermissionsBody({ permissions: {} }))).toBe('permissions');
   });
 });
 
@@ -243,4 +287,41 @@ describe('parseInstallBody', () => {
       ),
     ).toBe('manifest.requests[0].actions[0]');
   });
+});
+
+// The library and the wire answer one malformed value with one error, so a
+// server built on core never reports a different status than the call it makes.
+describe('aspect arguments refuse a wrong-typed value as the wire parsers do', () => {
+  const cases: [string, (stack: Stack, id: string) => Promise<unknown>, () => unknown][] = [
+    ['parentId', (s, id) => s.setParent(id, 7 as never), () => parseParentBody({ parentId: 7 })],
+    [
+      'unlisted',
+      (s, id) => s.setUnlisted(id, 'yes' as never),
+      () => parseUnlistedBody({ unlisted: 'yes' }),
+    ],
+    [
+      'associations',
+      (s, id) => s.setAssociations(id, {} as never),
+      () => parseAssociationsBody({ associations: {} }),
+    ],
+    [
+      'permissions',
+      (s, id) => s.setAccess(id, {} as never),
+      () => parsePermissionsBody({ permissions: {} }),
+    ],
+  ];
+
+  for (const [field, call, parse] of cases) {
+    test(field, async () => {
+      const stack = await Stack.open(
+        await MemoryAdapter.open({ ownerEntityId: DID, timezone: 'UTC' }),
+      );
+      await stack.defineType({ id: 'com.example/note@1', name: 'Note', schema: {} });
+      const { id } = await stack.create('com.example/note@1', {});
+      const err = await call(stack, id).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(StackValidationError);
+      expect((err as StackValidationError).errors[0]?.path).toBe(field);
+      expect(pathOf(parse)).toBe(field);
+    });
+  }
 });

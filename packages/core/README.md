@@ -74,14 +74,12 @@ await notes.patchContent(note.id, { title: 'Updated title' });
 const same = await notes.get(note.id);
 
 // Tag it
-await notes.associate(note.id, [{ kind: 'tag', label: 'favourite' }]);
+await notes.editAssociations(note.id, [
+  { op: 'add', association: { kind: 'tag', label: 'favourite' } },
+]);
 
-// Or change several things at once — one version, one atomic write
-await notes.mutate(note.id, {
-  contentPatch: { title: 'Final title' },
-  permissions: [{ kind: 'anyone', label: 'read' }],
-  unlisted: false,
-});
+// Share it with everyone — each aspect of a record has its own verb
+await notes.setAccess(note.id, [{ kind: 'anyone', label: 'read' }]);
 
 // Query the family. stack.query() reads across every type you can see instead.
 const { records: favourites } = await notes.query({

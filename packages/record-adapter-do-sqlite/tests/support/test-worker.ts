@@ -13,7 +13,8 @@ import type {
   StackRecord,
   StackQuery,
   AssociationEdit,
-  RecordChangeSet,
+  AuthorityAssociation,
+  DataAssociation,
   RecordVersion,
   StackType,
   TypeId,
@@ -22,6 +23,7 @@ import type {
 } from '@haverstack/core';
 
 type MutationOpts = { ifVersion?: number; snapshot?: RecordVersion } & ActorOptions;
+type AspectOpts = { ifVersion?: number };
 
 export class TestRecordAdapterDO extends DurableObject {
   private adapter!: DoSQLiteRecordAdapter;
@@ -82,7 +84,7 @@ export class TestRecordAdapterDO extends DurableObject {
 
   async patchContent(id: string, patch: Record<string, unknown | null>, opts?: MutationOpts) {
     await this.ready;
-    return this.adapter.mutateRecord(id, { contentPatch: patch }, opts);
+    return this.adapter.patchContent(id, patch, opts);
   }
 
   async deleteRecord(id: string, opts?: { purge?: boolean } & MutationOpts) {
@@ -95,9 +97,14 @@ export class TestRecordAdapterDO extends DurableObject {
     return this.adapter.undeleteRecord(id, opts);
   }
 
-  async mutateRecord(id: string, changes: RecordChangeSet, opts?: MutationOpts) {
+  async setParent(id: string, parentId: string | null, opts?: AspectOpts) {
     await this.ready;
-    return this.adapter.mutateRecord(id, changes, opts);
+    return this.adapter.setParent(id, parentId, opts);
+  }
+
+  async setUnlisted(id: string, unlisted: boolean, opts?: AspectOpts) {
+    await this.ready;
+    return this.adapter.setUnlisted(id, unlisted, opts);
   }
 
   async restoreVersion(id: string, version: number, opts?: MutationOpts) {
@@ -155,9 +162,24 @@ export class TestRecordAdapterDO extends DurableObject {
     return this.adapter.listTypes();
   }
 
-  async amendAssociations(recordId: string, changes: AssociationEdit[]) {
+  async editAssociations(id: string, edits: AssociationEdit[], opts?: AspectOpts) {
     await this.ready;
-    return this.adapter.amendAssociations(recordId, changes);
+    return this.adapter.editAssociations(id, edits, opts);
+  }
+
+  async setAssociations(id: string, associations: DataAssociation[], opts?: AspectOpts) {
+    await this.ready;
+    return this.adapter.setAssociations(id, associations, opts);
+  }
+
+  async editAccess(id: string, edits: AssociationEdit[], opts?: AspectOpts) {
+    await this.ready;
+    return this.adapter.editAccess(id, edits, opts);
+  }
+
+  async setAccess(id: string, permissions: AuthorityAssociation[], opts?: AspectOpts) {
+    await this.ready;
+    return this.adapter.setAccess(id, permissions, opts);
   }
 }
 

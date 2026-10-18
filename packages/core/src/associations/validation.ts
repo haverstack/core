@@ -271,7 +271,7 @@ export function granteeErrors(
  * Refuse an authority element on the data surface. The two halves share
  * storage but never a call, or an app editing tags could replace an ACL it
  * was never shown. Thrown, not collected: the caller named the wrong
- * surface, and wanted grantAccess()/revokeAccess().
+ * surface, and wanted editAccess()/setAccess().
  * See docs/spec/access-control.md § Record-level permissions.
  */
 export function assertDataAssociations(
@@ -282,7 +282,7 @@ export function assertDataAssociations(
   if (!authority) return;
   throw new StackBadRequestError(
     `${surface} does not carry authority: a "${authority.kind}" association belongs to the ` +
-      '`permissions` surface — use grantAccess()/revokeAccess(), or the `permissions` change-set key.',
+      '`permissions` surface — use editAccess() or setAccess().',
   );
 }
 
@@ -299,7 +299,7 @@ export function assertAuthorityAssociations(
   if (!data) return;
   throw new StackBadRequestError(
     `${surface} carries authority alone: a "${data.kind}" association belongs to the ` +
-      '`associations` surface — use associate()/dissociate(), or the `associations` change-set key.',
+      '`associations` surface — use editAssociations() or setAssociations().',
   );
 }
 
@@ -380,37 +380,4 @@ export function assertAssociationEdits(
 
   const duplicates = duplicateIdentityErrors(associations, 'changes');
   if (duplicates.length > 0) throw new StackValidationError(duplicates, ARGUMENTS_INVALID);
-}
-
-/**
- * assertAssociationEdits() for the verbs taking a bare list — associate(),
- * grantAccess() and their inverses — asked before wrapping, so problems are
- * reported under `param`, the name the caller used. Same order of checks,
- * so a wrong-surface element is refused as such before duplicates count.
- */
-export function assertAssociationList(
-  associations: unknown,
-  surface: string,
-  param: string,
-  half: 'data' | 'authority',
-): asserts associations is Association[] {
-  if (!Array.isArray(associations) || associations.length === 0) {
-    throw new StackValidationError(
-      [{ path: param, message: `${surface} names at least one association.` }],
-      ARGUMENTS_INVALID,
-    );
-  }
-  const errors = associations.flatMap((raw: unknown, i) =>
-    typeof raw === 'object' && raw !== null && !Array.isArray(raw)
-      ? []
-      : [{ path: `${param}[${i}]`, message: `${param}[${i}] must be an object.` }],
-  );
-  if (errors.length > 0) throw new StackValidationError(errors, ARGUMENTS_INVALID);
-  const list = associations as Association[];
-  const shapeErrors = list.flatMap((a, i) => validateAssociation(a, `${param}[${i}]`));
-  if (shapeErrors.length > 0) throw new StackValidationError(shapeErrors, ARGUMENTS_INVALID);
-  if (half === 'data') assertDataAssociations(list, surface);
-  else assertAuthorityAssociations(list, surface);
-  const listErrors = validateAssociations(list, param);
-  if (listErrors.length > 0) throw new StackValidationError(listErrors, ARGUMENTS_INVALID);
 }

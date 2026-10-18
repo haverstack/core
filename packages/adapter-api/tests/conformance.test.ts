@@ -27,11 +27,12 @@ import {
   patchContentFixtures,
   deleteRecordFixtures,
   undeleteRecordFixtures,
-  amendAssociationsFixtures,
-  amendPermissionsFixtures,
-  permissionsChangeFixtures,
-  unlistedChangeFixtures,
-  parentChangeFixtures,
+  editAssociationsFixtures,
+  setAssociationsFixtures,
+  editAccessFixtures,
+  setAccessFixtures,
+  setUnlistedFixtures,
+  setParentFixtures,
   getVersionsFixtures,
   getVersionFixtures,
   getVersionsSequenceFixtures,
@@ -53,7 +54,7 @@ import {
   AUTH_FIXTURE_SIGNATURE,
   AUTH_FIXTURE_FOREIGN_SIGNATURE,
 } from '@haverstack/conformance-fixtures';
-import type { AssociationEdit, RecordChangeSet, StackType } from '@haverstack/core';
+import type { AssociationEdit, StackType } from '@haverstack/core';
 import type { WireAuthError, WireVersionsResponse } from '@haverstack/wire-types';
 import {
   StackPermissionError,
@@ -398,21 +399,21 @@ describe('queryRecords fixtures', () => {
   }
 });
 
-describe('change set fixtures', () => {
+describe('patchContent fixtures', () => {
   for (const fixture of patchContentFixtures) {
     test(fixture.name, async () => {
       const adapter = await openAdapter();
       mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
 
-      const result = await adapter.mutateRecord(
+      const result = await adapter.patchContent(
         idFromPath(fixture.path),
-        fixture.requestBody as RecordChangeSet,
+        fixture.requestBody as Record<string, unknown>,
       );
 
       const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
       expect(url).toBe(`${BASE_URL}${fixture.path}`);
       expect(init.method).toBe(fixture.method);
-      // The wire body is the change set itself — never typeId, version, or updatedAt.
+      // The wire body is the bare patch — never typeId, version, or updatedAt.
       expect(JSON.parse(init.body as string)).toEqual(fixture.requestBody);
       expect(result.content).toEqual(fixture.responseBody!.content);
       expect(result.version).toBe(fixture.responseBody!.version);
@@ -457,26 +458,32 @@ describe('undeleteRecord fixtures', () => {
   }
 });
 
-/**
- * The association endpoints carry no precondition, so APIAdapter sends no
- * `If-Match` on one however a caller reached it. A server ignores a header
- * a foreign client sends anyway rather than refusing it — the half of the
- * rule only a server-side run can exercise. See
- * docs/spec/wire-format.md § Associations.
- */
-const expectNoIfMatch = (init: RequestInit) => {
-  expect((init.headers as Record<string, string>)['If-Match']).toBeUndefined();
+/** The If-Match a fixture sends, as the ifVersion that produces it. */
+const ifVersionOf = (fixture: { requestHeaders?: Record<string, string> }) => {
+  const ifMatch = fixture.requestHeaders?.['If-Match'];
+  return ifMatch ? { ifVersion: Number(ifMatch.replace(/"/g, '')) } : {};
 };
 
-describe('amendAssociations fixtures', () => {
-  for (const fixture of amendAssociationsFixtures) {
+/** A fixture's If-Match, sent exactly when the fixture sends one. */
+const expectIfMatchOf = (
+  fixture: { requestHeaders?: Record<string, string> },
+  init: RequestInit,
+) => {
+  expect((init.headers as Record<string, string>)['If-Match']).toBe(
+    fixture.requestHeaders?.['If-Match'],
+  );
+};
+
+describe('editAssociations fixtures', () => {
+  for (const fixture of editAssociationsFixtures) {
     test(fixture.name, async () => {
       const adapter = await openAdapter();
       mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
 
-      const result = await adapter.amendAssociations(
+      const result = await adapter.editAssociations(
         idFromPath(fixture.path),
         (fixture.requestBody as { changes: AssociationEdit[] }).changes,
+        ifVersionOf(fixture),
       );
 
       const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
@@ -484,23 +491,40 @@ describe('amendAssociations fixtures', () => {
       expect(init.method).toBe(fixture.method);
       expect(JSON.parse(init.body as string)).toEqual(fixture.requestBody);
       expect(result.version).toBe(fixture.responseBody!.version);
-      expectNoIfMatch(init);
+      expectIfMatchOf(fixture, init);
     });
   }
 });
 
-// The adapter routes by kind: one storage primitive, two endpoints. A
-// permission travelling on the association path would be refused by any
-// server built on ScopedStack, so the routing is what keeps the client
-// honest. See docs/spec/access-control.md
-// § Storage unifies; the API does not.
-describe('amendPermissions fixtures', () => {
-  for (const fixture of amendPermissionsFixtures) {
+describe('setAssociations fixtures', () => {
+  for (const fixture of setAssociationsFixtures) {
     test(fixture.name, async () => {
       const adapter = await openAdapter();
       mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
 
-      const result = await adapter.amendAssociations(
+      const result = await adapter.setAssociations(
+        idFromPath(fixture.path),
+        fixture.requestBody!.associations as never,
+        ifVersionOf(fixture),
+      );
+
+      const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
+      expect(url).toBe(`${BASE_URL}${fixture.path}`);
+      expect(init.method).toBe(fixture.method);
+      expect(JSON.parse(init.body as string)).toEqual(fixture.requestBody);
+      expect(result.associations).toEqual(fixture.responseBody!.associations);
+      expectIfMatchOf(fixture, init);
+    });
+  }
+});
+
+describe('editAccess fixtures', () => {
+  for (const fixture of editAccessFixtures) {
+    test(fixture.name, async () => {
+      const adapter = await openAdapter();
+      mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
+
+      const result = await adapter.editAccess(
         idFromPath(fixture.path),
         (fixture.requestBody as { changes: AssociationEdit[] }).changes,
       );
@@ -510,20 +534,21 @@ describe('amendPermissions fixtures', () => {
       expect(init.method).toBe(fixture.method);
       expect(JSON.parse(init.body as string)).toEqual(fixture.requestBody);
       expect(result.permissions).toEqual(fixture.responseBody!.permissions);
-      expectNoIfMatch(init);
+      expectIfMatchOf(fixture, init);
     });
   }
 });
 
-describe('permissions change-set fixtures', () => {
-  for (const fixture of permissionsChangeFixtures) {
+describe('setAccess fixtures', () => {
+  for (const fixture of setAccessFixtures) {
     test(fixture.name, async () => {
       const adapter = await openAdapter();
       mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
 
-      const result = await adapter.mutateRecord(idFromPath(fixture.path), {
-        permissions: fixture.requestBody!.permissions as never,
-      });
+      const result = await adapter.setAccess(
+        idFromPath(fixture.path),
+        fixture.requestBody!.permissions as never,
+      );
 
       const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
       expect(url).toBe(`${BASE_URL}${fixture.path}`);
@@ -534,15 +559,16 @@ describe('permissions change-set fixtures', () => {
   }
 });
 
-describe('unlisted change-set fixtures', () => {
-  for (const fixture of unlistedChangeFixtures) {
+describe('setUnlisted fixtures', () => {
+  for (const fixture of setUnlistedFixtures) {
     test(fixture.name, async () => {
       const adapter = await openAdapter();
       mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
 
-      const result = await adapter.mutateRecord(idFromPath(fixture.path), {
-        unlisted: fixture.requestBody!.unlisted,
-      });
+      const result = await adapter.setUnlisted(
+        idFromPath(fixture.path),
+        fixture.requestBody!.unlisted,
+      );
 
       const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
       expect(url).toBe(`${BASE_URL}${fixture.path}`);
@@ -555,15 +581,16 @@ describe('unlisted change-set fixtures', () => {
   }
 });
 
-describe('parentId change-set fixtures', () => {
-  for (const fixture of parentChangeFixtures) {
+describe('setParent fixtures', () => {
+  for (const fixture of setParentFixtures) {
     test(fixture.name, async () => {
       const adapter = await openAdapter();
       mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
 
-      const result = await adapter.mutateRecord(idFromPath(fixture.path), {
-        parentId: fixture.requestBody!.parentId,
-      });
+      const result = await adapter.setParent(
+        idFromPath(fixture.path),
+        fixture.requestBody!.parentId,
+      );
 
       const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
       expect(url).toBe(`${BASE_URL}${fixture.path}`);
@@ -644,7 +671,7 @@ describe('getVersions sequence fixtures', () => {
           for (const version of result) expect(Object.keys(version)).not.toContain('associations');
         } else if (step.path.endsWith('/associations')) {
           const { changes } = step.requestBody as { changes: AssociationEdit[] };
-          await adapter.amendAssociations(id, changes);
+          await adapter.editAssociations(id, changes);
         } else if (step.path.endsWith('/migrate')) {
           const { toTypeId, content } = step.requestBody as {
             toTypeId: string;
@@ -816,7 +843,7 @@ const SERVER_ONLY_ERROR_FIXTURES = new Set([
   'error-bad-request-unknown-query-body-key',
   'error-bad-request-unknown-record-key',
   'error-bad-request-unknown-grantee-key',
-  'error-bad-request-amend-associations-repoint',
+  'error-bad-request-edit-associations-repoint',
   'error-bad-request-non-boolean-purge',
   'error-bad-request-unknown-auth-token-key',
 ]);
@@ -851,13 +878,32 @@ describe('error response fixtures', () => {
             createdAt: new Date(createdAt as string),
           });
         }
-        // An `anyone`/`permission` element travels on the permissions
-        // endpoint, which amendAssociations() selects from the element's own kind —
-        // see APIAdapter.associationPath().
         if (fixture.method === 'POST' && fixture.path.endsWith('/permissions')) {
-          return adapter.amendAssociations(
+          return adapter.editAccess(
             idFromPath(fixture.path),
             (fixture.requestBody as { changes: AssociationEdit[] }).changes,
+            ifVersionOf(fixture),
+          );
+        }
+        if (fixture.method === 'PUT' && fixture.path.endsWith('/permissions')) {
+          return adapter.setAccess(
+            idFromPath(fixture.path),
+            (fixture.requestBody as { permissions: never[] }).permissions,
+            ifVersionOf(fixture),
+          );
+        }
+        if (fixture.method === 'PUT' && fixture.path.endsWith('/associations')) {
+          return adapter.setAssociations(
+            idFromPath(fixture.path),
+            (fixture.requestBody as { associations: never[] }).associations,
+            ifVersionOf(fixture),
+          );
+        }
+        if (fixture.method === 'PUT' && fixture.path.endsWith('/parent')) {
+          return adapter.setParent(
+            idFromPath(fixture.path),
+            (fixture.requestBody as { parentId: string | null }).parentId,
+            ifVersionOf(fixture),
           );
         }
         if (fixture.method === 'POST' && fixture.path.includes('/restore/')) {
@@ -873,15 +919,11 @@ describe('error response fixtures', () => {
         if (fixture.method === 'DELETE') {
           return adapter.deleteRecord(idFromPath(fixture.path));
         }
-        if (fixture.method === 'PATCH') {
-          // If-Match (see error-version-conflict-if-match-mismatch) travels as a quoted
-          // version number, matching the header APIAdapter itself sends for ifVersion.
-          const ifMatch = fixture.requestHeaders?.['If-Match'];
-          const ifVersion = ifMatch ? Number(ifMatch.replace(/"/g, '')) : undefined;
-          return adapter.mutateRecord(
+        if (fixture.method === 'PATCH' && fixture.path.endsWith('/content')) {
+          return adapter.patchContent(
             idFromPath(fixture.path),
-            fixture.requestBody as RecordChangeSet,
-            { ifVersion },
+            fixture.requestBody as Record<string, unknown>,
+            ifVersionOf(fixture),
           );
         }
         throw new Error(`no dispatch wired for error fixture "${fixture.name}"`);

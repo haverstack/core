@@ -174,7 +174,9 @@ export async function installApp(
       { ifVersion: current.version },
     );
     if (!linkedIds(install, INSTALL_APP_LABEL).includes(card.id)) {
-      install = await stack.associate(install.id, [installAppLink(card.id)]);
+      install = await stack.editAssociations(install.id, [
+        { op: 'add', association: installAppLink(card.id) },
+      ]);
     }
   }
   return (await reconcileInstallGrants(stack, install)) as StackRecord & {
@@ -195,8 +197,8 @@ export async function uninstallApp(
     if (await stack.get(id)) await stack.delete(id);
     edits.push({ op: 'remove', association: installGrantLink(id) });
   }
-  if (edits.length > 0) await stack.amendAssociations(install.id, edits);
-  const { record } = await stack.deleteAndReturn(install.id);
+  if (edits.length > 0) await stack.editAssociations(install.id, edits);
+  const { record } = await stack.delete(install.id);
   return record as StackRecord & { content: InstallContent };
 }
 
@@ -307,7 +309,7 @@ async function reconcileInstallGrants(stack: Stack, install: StackRecord): Promi
       edits.push({ op: 'add', association: installGrantLink(grant.id) });
     }
   }
-  let result = edits.length > 0 ? await stack.amendAssociations(install.id, edits) : install;
+  let result = edits.length > 0 ? await stack.editAssociations(install.id, edits) : install;
 
   // Each linked key may read its own install, which is how an app learns
   // what was approved; a key of this app no longer linked may not.
@@ -335,6 +337,6 @@ async function reconcileInstallGrants(stack: Stack, install: StackRecord): Promi
       .filter((did): did is EntityId => did !== null && appKeys.has(did) && !dids.includes(did))
       .map((entityId) => ({ op: 'remove' as const, association: installReader(entityId) })),
   ];
-  if (access.length > 0) result = await stack.amendAccess(install.id, access);
+  if (access.length > 0) result = await stack.editAccess(install.id, access);
   return result;
 }

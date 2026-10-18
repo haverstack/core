@@ -81,18 +81,22 @@ describe('attribution — updatedBy tracks the actor', () => {
     expect((await stack.get(created.id))?.updatedBy?.subjectId).toBe(EDITOR);
   });
 
-  // associate()/dissociate() never bump `version`, so they never touch
+  // editAssociations() never bump `version`, so they never touch
   // updatedBy either — the record's stamp stays exactly where the last
   // version-bumping write left it. See docs/spec/versioning.md § Version
   // history.
-  test('associate()/dissociate() never restamp the record, even under a different actor', async () => {
+  test('editAssociations() never restamp the record, even under a different actor', async () => {
     const created = await stack.asEntity(AUTHOR).create(NOTE, { text: 'v1' });
     const view = stack.asEntity(EDITOR);
 
-    await view.associate(created.id, [{ kind: 'tag', label: 'x' }]);
+    await view.editAssociations(created.id, [
+      { op: 'add', association: { kind: 'tag', label: 'x' } },
+    ]);
     expect((await stack.get(created.id))?.updatedBy?.subjectId).toBe(AUTHOR);
 
-    await view.dissociate(created.id, [{ kind: 'tag', label: 'x' }]);
+    await view.editAssociations(created.id, [
+      { op: 'remove', association: { kind: 'tag', label: 'x' } },
+    ]);
     expect((await stack.get(created.id))?.updatedBy?.subjectId).toBe(AUTHOR);
   });
 
@@ -100,14 +104,12 @@ describe('attribution — updatedBy tracks the actor', () => {
   // is the only non-owner who can perform it. A reshare bumps no version,
   // so it leaves the record's own stamps where they stand and answers
   // "who widened access to this" from the journal entry's actor instead.
-  test('a permissions change set records who reshared', async () => {
+  test('setAccess() records who reshared', async () => {
     const created = await stack.asEntity(AUTHOR).create(NOTE, { text: 'v1' });
     await stack.asEntity(EDITOR).patchContent(created.id, { text: 'v2' });
     expect((await stack.get(created.id))?.updatedBy?.subjectId).toBe(EDITOR);
 
-    await stack
-      .asEntity(AUTHOR)
-      .mutate(created.id, { permissions: [{ kind: 'anyone', label: 'read' }] });
+    await stack.asEntity(AUTHOR).setAccess(created.id, [{ kind: 'anyone', label: 'read' }]);
 
     expect((await stack.get(created.id))?.updatedBy?.subjectId).toBe(EDITOR);
     const entry = (await stack.getJournal(created.id)).at(-1);

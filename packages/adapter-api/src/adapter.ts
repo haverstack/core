@@ -13,8 +13,8 @@
  *
  * Every call is a request: nothing is queued while the server is
  * unreachable. Opt-in optimistic concurrency (ifVersion → If-Match) is
- * supported: see the ifVersion option on mutateRecord(), deleteRecord()
- * and every other mutation that bumps a version.
+ * supported on every write: each method maps to one request, and the
+ * precondition rides on it as `If-Match`.
  *
  * The write options that describe storage rather than the request are
  * omitted from the methods below rather than dropped inside them, so the
@@ -24,7 +24,7 @@
  * adapter.
  */
 
-import { StackError, StackBadRequestError, assertOneSurface } from '@haverstack/core';
+import { StackError, StackBadRequestError } from '@haverstack/core';
 import type {
   JournalQuery,
   VersionsQuery,
@@ -36,13 +36,14 @@ import type {
   RecordVersion,
   StackQuery,
   QueryResult,
-  Association,
+  IfVersionOptions,
   AssociationEdit,
   RecordId,
   FileId,
   EntityId,
   RecordChange,
-  RecordChangeSet,
+  AuthorityAssociation,
+  DataAssociation,
   StackCapabilities,
   AppManifest,
   InstallContent,
@@ -467,18 +468,46 @@ export class APIAdapter implements StackAdapter {
     return raw ? parseRecord(raw) : null;
   }
 
-  async mutateRecord(
+  /**
+   * The bare patch travels — no record fields ride along. The server merges
+   * it into its own current state and assigns the new version; the response
+   * is authoritative.
+   */
+  async patchContent(
     id: RecordId,
-    changes: RecordChangeSet,
-    opts: { ifVersion?: number } = {},
+    patch: Record<string, unknown | null>,
+    opts: IfVersionOptions = {},
   ): Promise<StackRecord> {
-    // The change set travels as-is — no record fields (typeId, version,
-    // updatedAt) ride along. The server applies it against its own current
-    // state and assigns the new version/updatedAt; the response is
-    // authoritative. One If-Match fences the whole set.
-    return this.requestRecord('PATCH', `/records/${pathSegment(id)}`, changes, {
+    return this.writeAspect('PATCH', id, 'content', patch, opts);
+  }
+
+  /** One aspect write: a request to `/records/:id/<aspect>`, fenced by `If-Match`. */
+  private writeAspect(
+    method: 'PATCH' | 'PUT' | 'POST',
+    id: RecordId,
+    aspect: 'content' | 'parent' | 'unlisted' | 'associations' | 'permissions',
+    body: unknown,
+    opts: IfVersionOptions,
+  ): Promise<StackRecord> {
+    return this.requestRecord(method, `/records/${pathSegment(id)}/${aspect}`, body, {
       ifMatch: opts.ifVersion,
     });
+  }
+
+  async setParent(
+    id: RecordId,
+    parentId: RecordId | null,
+    opts: IfVersionOptions = {},
+  ): Promise<StackRecord> {
+    return this.writeAspect('PUT', id, 'parent', { parentId }, opts);
+  }
+
+  async setUnlisted(
+    id: RecordId,
+    unlisted: boolean,
+    opts: IfVersionOptions = {},
+  ): Promise<StackRecord> {
+    return this.writeAspect('PUT', id, 'unlisted', { unlisted }, opts);
   }
 
   /**
@@ -602,31 +631,39 @@ export class APIAdapter implements StackAdapter {
   }
 
   // -------------------------------------------------------
-  // Associations
+  // Associations and permissions
   // -------------------------------------------------------
 
-  /**
-   * One storage primitive, two endpoints: authority and data never share a
-   * call, so the element's own kind picks the surface it travels on. A
-   * permission sent to the association endpoint is refused by any server
-   * built on `ScopedStack`, which is the partition doing its job.
-   * See docs/spec/access-control.md § Storage unifies; the API does not.
-   */
-  private static associationPath(association: Association | undefined): string {
-    return association?.kind === 'permission' || association?.kind === 'anyone'
-      ? 'permissions'
-      : 'associations';
+  async editAssociations(
+    id: RecordId,
+    edits: AssociationEdit[],
+    opts: IfVersionOptions = {},
+  ): Promise<StackRecord> {
+    return this.writeAspect('POST', id, 'associations', { changes: edits }, opts);
   }
 
-  /**
-   * No `If-Match` — amendAssociations() never bumps `version`, so
-   * there's nothing an `ifVersion` precondition could guard here. See
-   * docs/spec/versioning.md § Version history.
-   */
-  async amendAssociations(id: RecordId, changes: AssociationEdit[]): Promise<StackRecord> {
-    assertOneSurface(changes);
-    const path = `/records/${pathSegment(id)}/${APIAdapter.associationPath(changes[0]?.association)}`;
-    return this.requestRecord('POST', path, { changes });
+  async setAssociations(
+    id: RecordId,
+    associations: DataAssociation[],
+    opts: IfVersionOptions = {},
+  ): Promise<StackRecord> {
+    return this.writeAspect('PUT', id, 'associations', { associations }, opts);
+  }
+
+  async editAccess(
+    id: RecordId,
+    edits: AssociationEdit[],
+    opts: IfVersionOptions = {},
+  ): Promise<StackRecord> {
+    return this.writeAspect('POST', id, 'permissions', { changes: edits }, opts);
+  }
+
+  async setAccess(
+    id: RecordId,
+    permissions: AuthorityAssociation[],
+    opts: IfVersionOptions = {},
+  ): Promise<StackRecord> {
+    return this.writeAspect('PUT', id, 'permissions', { permissions }, opts);
   }
 
   // -------------------------------------------------------

@@ -11,7 +11,7 @@ export const getJournalFixtures: ConformanceFixture<undefined, WireJournalRespon
     name: 'get-journal-reads-the-whole-log-oldest-first',
     description:
       'GET /records/:id/journal with no params reads the whole log, oldest first, and answers ' +
-      'cursor null because nothing follows. `version` stands still across the associate() at ' +
+      'cursor null because nothing follows. `version` stands still across the editAssociations() at ' +
       'seq 2, which is why `seq` is the only ordering the log carries. ' +
       'See docs/spec/wire-format.md § Journal and docs/spec/journal.md § Ordering.',
     method: 'GET',

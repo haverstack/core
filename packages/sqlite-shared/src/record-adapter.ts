@@ -1,6 +1,6 @@
 /**
  * The engine-independent half of a SQLite-backed StackRecordAdapter: the
- * capability declaration and the delegation of all seventeen
+ * capability declaration and the delegation of all twenty-two
  * StackRecordAdapter methods onto SharedSqlRecordLogic. Every method here
  * is a forward with no engine-specific content, so an adapter that owns a
  * SqlExecutor already knows how to answer all of them.
@@ -27,12 +27,13 @@ import type {
   StackQuery,
   QueryResult,
   AssociationEdit,
-  RecordChangeSet,
+  AuthorityAssociation,
+  DataAssociation,
   StackCapabilities,
 } from '@haverstack/core';
 import type {
   StackRecordAdapter,
-  BumpVersionOptions,
+  AspectWriteOptions,
   JournalOptions,
   MutateOptions,
 } from '@haverstack/core/adapter';
@@ -92,12 +93,20 @@ export abstract class SharedSqlRecordAdapter implements StackRecordAdapter {
     return this.record.getRecord(id);
   }
 
-  mutateRecord(
+  patchContent(
     id: string,
-    changes: RecordChangeSet,
-    opts?: MutateOptions & BumpVersionOptions,
+    patch: Record<string, unknown | null>,
+    opts?: MutateOptions,
   ): Promise<StackRecord> {
-    return this.record.mutateRecord(id, changes, opts);
+    return this.record.patchContent(id, patch, opts);
+  }
+
+  setParent(id: string, parentId: string | null, opts?: AspectWriteOptions): Promise<StackRecord> {
+    return this.record.setParent(id, parentId, opts);
+  }
+
+  setUnlisted(id: string, unlisted: boolean, opts?: AspectWriteOptions): Promise<StackRecord> {
+    return this.record.setUnlisted(id, unlisted, opts);
   }
 
   deleteRecord(
@@ -176,15 +185,39 @@ export abstract class SharedSqlRecordAdapter implements StackRecordAdapter {
   }
 
   // -------------------------------------------------------
-  // Associations
+  // Associations and permissions
   // -------------------------------------------------------
 
-  amendAssociations(
-    recordId: string,
-    changes: AssociationEdit[],
-    opts?: JournalOptions,
+  editAssociations(
+    id: string,
+    edits: AssociationEdit[],
+    opts?: AspectWriteOptions,
   ): Promise<StackRecord> {
-    return this.record.amendAssociations(recordId, changes, opts);
+    return this.record.editAssociations(id, edits, opts);
+  }
+
+  setAssociations(
+    id: string,
+    associations: DataAssociation[],
+    opts?: AspectWriteOptions,
+  ): Promise<StackRecord> {
+    return this.record.setAssociations(id, associations, opts);
+  }
+
+  editAccess(
+    id: string,
+    edits: AssociationEdit[],
+    opts?: AspectWriteOptions,
+  ): Promise<StackRecord> {
+    return this.record.editAccess(id, edits, opts);
+  }
+
+  setAccess(
+    id: string,
+    permissions: AuthorityAssociation[],
+    opts?: AspectWriteOptions,
+  ): Promise<StackRecord> {
+    return this.record.setAccess(id, permissions, opts);
   }
 
   // -------------------------------------------------------

@@ -57,7 +57,7 @@ export const SCHEMA_INVALID = 'Schema validation failed';
 
 /**
  * `header` names what was validated — record content, or the arguments a
- * call was given — so a refusal of `associate([])` doesn't read as a
+ * call was given — so a refusal of `editAssociations(id, [])` doesn't read as a
  * content failure. Only the message varies: `code` is the contract.
  */
 export class StackValidationError extends StackError {

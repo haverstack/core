@@ -10,7 +10,7 @@ One rule governs it:
 
 > **A refusal never tells a requester anything a read wouldn't have.** The "forbidden" answer is available exactly to requesters who can already read the Record; to everyone else a Record that exists answers precisely as a missing one does.
 
-So `get()` returns `null` for an unreadable Record just as it does for a missing one — it never throws `StackPermissionError` — and every verb that names a Record by ID (`mutate()`, `patchContent()`, `associate()`, `dissociate()`, `amendAssociations()`, `grantAccess()`, `revokeAccess()`, `amendAccess()`, `delete()`, `undelete()`, `getVersions()`, `getVersion()`, `getJournal()`, `restoreVersion()`) throws `StackNotFoundError` where the requester cannot read the Record, and `StackPermissionError` where it can. Over the wire that is 404 and 403 per [§ Error responses](./wire-format.md#error-responses). The same rule places the refusal's message: it reaches only a requester holding the Record already, so it is free to be specific: a `StackPermissionError` names the verb, the Record and its type, and what was missing, and says which side lacked it when the requester is delegated.
+So `get()` returns `null` for an unreadable Record just as it does for a missing one — it never throws `StackPermissionError` — and every verb that names a Record by ID (`patchContent()`, `setParent()`, `setUnlisted()`, `editAssociations()`, `setAssociations()`, `editAccess()`, `setAccess()`, `delete()`, `undelete()`, `getVersions()`, `getVersion()`, `getJournal()`, `restoreVersion()`) throws `StackNotFoundError` where the requester cannot read the Record, and `StackPermissionError` where it can. Over the wire that is 404 and 403 per [§ Error responses](./wire-format.md#error-responses). The same rule places the refusal's message: it reaches only a requester holding the Record already, so it is free to be specific: a `StackPermissionError` names the verb, the Record and its type, and what was missing, and says which side lacked it when the requester is delegated.
 
 **The distinction is withheld from the client, not from the operator.** A server should record which of the two a 404 was, and the check that refused — see [Wire format § Server implementation checklist](./wire-format.md#server-implementation-checklist). Nothing above asks anyone to debug a misconfigured grant blind, and a deployment that keeps no such log is the one most likely to conclude this rule costs more than it is worth.
 
@@ -25,9 +25,23 @@ Two edges follow from stating the rule this way rather than in terms of grants:
 - **Record-level `permissions` count, like any other route to a read.** A requester holding a `read` element on a Record is told plainly that a write was refused, rather than that a Record it can fetch does not exist.
 - **A refusal that never reads the Record discloses nothing either way, and stays as it is.** `commitMigration()`, `deleteAttachment()` and `collectAttachmentGarbage()` refuse every non-owner identically whether or not the named Record or file exists, so they are not oracles despite answering 403.
 
+## The order a write's refusals are asked in
+
+A write to an existing Record can fail more than one check at once, and which answer it gets has to be the same for every requester and every verb, or the difference becomes the disclosure this document exists to prevent. Every write asks in this order, and answers with the first refusal it reaches:
+
+1. **The request's own shape** — a list that is not a list, a parent that is neither an id nor `null`, a content patch that is not an object or carries an `undefined`, a malformed or misrouted element: `400` or `422`. Asked before anything is read, so it answers the same whether or not the Record exists.
+2. **Whether the requester may reach the Record** — `404` when it is missing, outside the family a typed call names, or unreadable to this requester ([above](#which-refusal-a-record-answers-with)).
+3. **Whether the requester may make this write** — `403`, including the [reference gates](./access-control.md#reference-creation-gating) on what the write would add.
+4. **The Record's state** — `409` if it is soft-deleted, then `412` if `ifVersion` is stale. A stale caller learns that before anything about its input, since its input was written against a Record that has moved on.
+5. **What the write changes, checked against the Record as it stands** — merged content against the Record's type (`422`); a new parent's form (`400`), existence and ancestry (`409`).
+6. **A write that moves nothing returns the Record unchanged**, writing and announcing nothing. It never reaches step 7, so it is never refused for a stored state it did not produce.
+7. **Rules over the set the write would produce** — a `_group` keeps an `admin` (`409`), and no grantee holds `write` without `read` (`422`).
+
+Steps 2 and 3 are `ScopedStack`'s; an unscoped `Stack` asks the rest in the same order.
+
 ## What the rule does not close
 
-This is the same closure [reference-creation gating](./access-control.md#reference-creation-gating) applies, pointed the other way. There, a missing target and an inaccessible one both raise `StackPermissionError` for every requester the gate applies to: what failed is the `create()` or `associate()` the requester asked for — that call is genuinely forbidden — and the Record it named is a reference, not the thing addressed. Here the Record _is_ what was addressed, so "not found" is the answer that discloses least. Both collapse the pair; each takes the answer that fits what the caller asked for.
+This is the same closure [reference-creation gating](./access-control.md#reference-creation-gating) applies, pointed the other way. There, a missing target and an inaccessible one both raise `StackPermissionError` for every requester the gate applies to: what failed is the `create()` or `editAssociations()` the requester asked for — that call is genuinely forbidden — and the Record it named is a reference, not the thing addressed. Here the Record _is_ what was addressed, so "not found" is the answer that discloses least. Both collapse the pair; each takes the answer that fits what the caller asked for.
 
 **The closure is in the answer, not in the timing.** Refusing an existing Record does strictly more work than refusing a missing one — a fetch, then a read check that may walk grants and a Group roster — so a caller measuring closely enough can still tell the two apart. Constant-time refusal is not attempted: it would mean paying the read check on every miss, and the deployments this spec targets are not where that trade pays.
 

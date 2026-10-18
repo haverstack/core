@@ -26,34 +26,43 @@ export const RECORD_SCHEMA_SQL = `
     unlisted_at INTEGER
   ) STRICT;
 
-  -- Every edge a record carries, authority and data alike: a permission
-  -- has element identity and a delta shaped like a tag's, so it earns the
-  -- same table. The permissions and associations fields are projections
-  -- over it, partitioned by kind.
-  -- See docs/spec/access-control.md § Record-level permissions.
+  -- A record's data associations: tags, attachments and relationships.
+  -- Its permissions are in their own table below, so no predicate over this
+  -- one can match a grantee as a relationship target.
   CREATE TABLE IF NOT EXISTS associations (
     record_id     TEXT NOT NULL REFERENCES records(id),
-    kind          TEXT NOT NULL CHECK (kind IN ('tag', 'attachment', 'relationship', 'permission', 'anyone')),
+    kind          TEXT NOT NULL CHECK (kind IN ('tag', 'attachment', 'relationship')),
     label         TEXT NOT NULL,
     file_id       TEXT NOT NULL DEFAULT '',
     -- A relationship target is (related_scope, related_id) qualified by
-    -- related_ns (a foreign namespace) or related_stack (another stack); a
-    -- permission's grantee reuses scope and id. All are in the key, so
-    -- targets differing only by a qualifier are distinct associations.
-    related_scope TEXT NOT NULL DEFAULT '' CHECK (related_scope IN ('', 'record', 'entity', 'external', 'group')),
+    -- related_ns (a foreign namespace) or related_stack (another stack).
+    -- All are in the key, so targets differing only by a qualifier are
+    -- distinct associations.
+    related_scope TEXT NOT NULL DEFAULT '' CHECK (related_scope IN ('', 'record', 'entity', 'external')),
     related_id    TEXT NOT NULL DEFAULT '',
     related_ns    TEXT NOT NULL DEFAULT '',
     related_stack TEXT NOT NULL DEFAULT '',
-    -- Set only by a group grantee; in the key because member and admin name
-    -- two different sets of people.
-    related_role  TEXT NOT NULL DEFAULT '' CHECK (related_role IN ('', 'member', 'admin')),
     -- Out of the key: it annotates a reference rather than naming one, so
     -- re-pointing it updates the existing row. See docs/spec/attachments.md
     -- § Naming the upload a reference came from.
     attachment_record_id TEXT NOT NULL DEFAULT '',
     -- Leads with record_id, so its implicit index serves every by-record
     -- read and delete; the indexes below cover only the filter directions.
-    PRIMARY KEY (record_id, kind, label, file_id, related_scope, related_id, related_ns, related_stack, related_role)
+    PRIMARY KEY (record_id, kind, label, file_id, related_scope, related_id, related_ns, related_stack)
+  ) STRICT;
+
+  -- Who reaches a record, one row per element. An 'anyone' row names no
+  -- grantee; a group grantee's role is in the key, because member and
+  -- admin name two different sets of people.
+  -- See docs/spec/access-control.md § Record-level permissions.
+  CREATE TABLE IF NOT EXISTS permissions (
+    record_id    TEXT NOT NULL REFERENCES records(id),
+    kind         TEXT NOT NULL CHECK (kind IN ('permission', 'anyone')),
+    label        TEXT NOT NULL CHECK (label IN ('read', 'write')),
+    grantee_kind TEXT NOT NULL DEFAULT '' CHECK (grantee_kind IN ('', 'entity', 'group')),
+    grantee_id   TEXT NOT NULL DEFAULT '',
+    role         TEXT NOT NULL DEFAULT '' CHECK (role IN ('', 'member', 'admin')),
+    PRIMARY KEY (record_id, kind, label, grantee_kind, grantee_id, role)
   ) STRICT;
 
   -- Content and the type it is read under. No parent_id, unlisted_at or

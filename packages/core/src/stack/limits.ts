@@ -23,7 +23,7 @@ export function assertAttachmentSize(byteLength: number, attachmentBytes: number
 
 /**
  * The content half of the same pre-check, on Stack.create() and
- * Stack.mutate(). A `null` ceiling — every local adapter's — skips the
+ * Stack.patchContent(). A `null` ceiling — every local adapter's — skips the
  * serialization entirely.
  */
 export function assertContentSize(

@@ -13,11 +13,11 @@ export type {
   StackRecordAdapter,
   StackBlobAdapter,
   BlobInfo,
-  BumpVersionOptions,
   SnapshotOptions,
   JournalEntryInput,
   JournalOptions,
   MutateOptions,
+  AspectWriteOptions,
 } from '../types/index.js';
 export { OwnerMismatchError } from '../errors.js';
 export { combineAdapters } from './combine.js';
@@ -39,4 +39,3 @@ export {
   sortConstant,
 } from './sort.js';
 export type { SortEntry } from './sort.js';
-export { AUTHORITY_ASSOCIATION_KINDS, partitionAssociations } from '../associations/identity.js';

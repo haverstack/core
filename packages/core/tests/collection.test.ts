@@ -155,14 +155,14 @@ describe.each([
     const book = await books.create({ title: 'Dune', status: 'want' });
     expectTypeOf(book).toEqualTypeOf<CollectionRecord<BookContent>>();
     const results = [
-      await books.mutate(book.id, { contentPatch: { pages: 412 } }),
+      await books.patchContent(book.id, { pages: 412 }),
       await books.patchContent(book.id, { pages: 413 }),
-      await books.associate(book.id, [TAG]),
-      await books.dissociate(book.id, [TAG]),
-      await books.amendAssociations(book.id, [{ op: 'add', association: TAG }]),
-      await books.grantAccess(book.id, [share('read')]),
-      await books.revokeAccess(book.id, [share('read')]),
-      await books.amendAccess(book.id, [{ op: 'add', association: share('read') }]),
+      await books.editAssociations(book.id, [{ op: 'add', association: TAG }]),
+      await books.editAssociations(book.id, [{ op: 'remove', association: TAG }]),
+      await books.editAssociations(book.id, [{ op: 'add', association: TAG }]),
+      await books.editAccess(book.id, [{ op: 'add', association: share('read') }]),
+      await books.editAccess(book.id, [{ op: 'remove', association: share('read') }]),
+      await books.editAccess(book.id, [{ op: 'add', association: share('read') }]),
       await books.undelete(book.id),
       await books.restoreVersion(book.id, 1),
     ];
@@ -428,7 +428,9 @@ describe.each([
   test('a write to a record outside the family is not found and writes nothing', async () => {
     const shelf = await stack.create(Shelf.id, { name: 'Fiction' });
     await expect(books.patchContent(shelf.id, { title: 'x' })).rejects.toThrow(StackNotFoundError);
-    await expect(books.associate(shelf.id, [TAG])).rejects.toThrow(StackNotFoundError);
+    await expect(
+      books.editAssociations(shelf.id, [{ op: 'add', association: TAG }]),
+    ).rejects.toThrow(StackNotFoundError);
     await expect(books.delete(shelf.id)).rejects.toThrow(StackNotFoundError);
     expect(await adapter.getRecord(shelf.id)).toEqual(shelf);
   });
@@ -450,19 +452,9 @@ describe.each([
     await expect(books.patchContent(book.id, { title: 'x' })).rejects.toThrow(/soft-deleted/);
   });
 
-  test('mutate() carries a typed contentPatch beside the other keys', async () => {
-    const book = await books.create({ title: 'Dune', status: 'want' });
-    const updated = await books.mutate(book.id, {
-      contentPatch: { status: 'finished' },
-      unlisted: true,
-    });
-    expect(updated.content.status).toBe('finished');
-    expect(updated.unlistedAt).toBeDefined();
-  });
-
   test('a write that leaves content alone returns an older record migrated, unwritten', async () => {
     const old = await createV1();
-    const tagged = await books.associate(old.id, [TAG]);
+    const tagged = await books.editAssociations(old.id, [{ op: 'add', association: TAG }]);
     expect(tagged.typeId).toBe(Book.id);
     expect(tagged.content).toEqual({ title: 'Dune', status: 'finished' });
     expect((await adapter.getRecord(old.id))?.typeId).toBe(BookV1.id);
@@ -531,7 +523,9 @@ describe.each([
 
   test('a write that leaves a newer record lands, then throws MisfitError', async () => {
     const newer = await stack.create(BookV3.id, { title: 'Dune', status: 'want' });
-    const err = await books.associate(newer.id, [TAG]).catch((e: unknown) => e);
+    const err = await books
+      .editAssociations(newer.id, [{ op: 'add', association: TAG }])
+      .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(MisfitError);
     expect((err as MisfitError).record.associations).toEqual([TAG]);
     expect((err as Error).message).toMatch(/the write landed/);

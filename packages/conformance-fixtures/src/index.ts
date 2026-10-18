@@ -4,7 +4,7 @@
  * Request/response pairs for every record-mutation endpoint in the Stack
  * API wire format (docs/spec/wire-format.md). These pin down
  * the exact wire shape each endpoint accepts and returns — in particular,
- * that PATCH /records/:id carries a content-only merge patch, never
+ * that PATCH /records/:id/content carries a bare content patch, never
  * record fields like typeId/version/updatedAt.
  *
  * This package is pure data: no test framework, no adapter, no server.
@@ -33,11 +33,12 @@ import {
 } from './records.js';
 import { queryRecordsFixtures } from './query.js';
 import {
-  amendAssociationsFixtures,
-  amendPermissionsFixtures,
-  permissionsChangeFixtures,
-  unlistedChangeFixtures,
-  parentChangeFixtures,
+  editAssociationsFixtures,
+  setAssociationsFixtures,
+  editAccessFixtures,
+  setAccessFixtures,
+  setUnlistedFixtures,
+  setParentFixtures,
 } from './record-metadata.js';
 import { getVersionsFixtures, getVersionFixtures, restoreVersionFixtures } from './versions.js';
 import { getJournalFixtures } from './journal.js';
@@ -81,11 +82,12 @@ export const allConformanceFixtures: ConformanceFixture[] = [
   ...patchContentFixtures,
   ...deleteRecordFixtures,
   ...undeleteRecordFixtures,
-  ...amendAssociationsFixtures,
-  ...amendPermissionsFixtures,
-  ...permissionsChangeFixtures,
-  ...unlistedChangeFixtures,
-  ...parentChangeFixtures,
+  ...editAssociationsFixtures,
+  ...setAssociationsFixtures,
+  ...editAccessFixtures,
+  ...setAccessFixtures,
+  ...setUnlistedFixtures,
+  ...setParentFixtures,
   ...getVersionsFixtures,
   ...getVersionFixtures,
   ...restoreVersionFixtures,

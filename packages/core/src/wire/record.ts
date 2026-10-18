@@ -15,12 +15,10 @@ import { isOwnerActingAlone } from '../access.js';
 import { StackBadRequestError } from '../errors.js';
 import { fieldError, requireBody } from './body.js';
 import type { BackdatableCreateRecordOptions } from '../stack/client.js';
-import { RECORD_CHANGE_SET_KEYS } from '../types/index.js';
 import type {
   EntityId,
   AuthorityAssociation,
   DataAssociation,
-  RecordChangeSet,
   StackRecord,
   TokenSession,
   TypeId,
@@ -139,64 +137,4 @@ export function createOptionsFromWireRecord(
   }
 
   return { typeId, content: content as Record<string, unknown>, options };
-}
-
-/**
- * Read a `PATCH /records/:id` body as a change set. An unrecognized key is
- * refused (400), not ignored — a dropped `permissions` silently fails to
- * share — and a wrong-shaped value is a 422. `contentPatch` is checked for
- * being an object only; content is `Stack`'s. See docs/spec/wire-format.md § Records.
- */
-export function changesFromWireBody(body: unknown): RecordChangeSet {
-  const envelope = requireBody(body, 'record body');
-
-  const unknown = Object.keys(envelope).filter(
-    (key) => !(RECORD_CHANGE_SET_KEYS as readonly string[]).includes(key),
-  );
-  if (unknown.length > 0) {
-    throw new StackBadRequestError(
-      `Unknown change-set key${unknown.length > 1 ? 's' : ''}: ${unknown.join(', ')}. ` +
-        `A change set names one or more of: ${RECORD_CHANGE_SET_KEYS.join(', ')}.`,
-    );
-  }
-
-  const changes: RecordChangeSet = {};
-
-  if (envelope.contentPatch !== undefined) {
-    const patch = envelope.contentPatch;
-    if (typeof patch !== 'object' || patch === null || Array.isArray(patch))
-      fieldError('contentPatch', 'contentPatch must be an object');
-    changes.contentPatch = patch as Record<string, unknown | null>;
-  }
-
-  // The one key `null` is a value for rather than a removal spelling: it
-  // is the root, the same sentinel `?parentId=null` carries.
-  if (envelope.parentId !== undefined) {
-    const parentId = envelope.parentId;
-    if (parentId !== null && typeof parentId !== 'string')
-      fieldError('parentId', 'parentId must be a string or null');
-    changes.parentId = parentId;
-  }
-
-  const permissions = optionalArray<AuthorityAssociation>(envelope, 'permissions');
-  if (permissions !== undefined) changes.permissions = permissions;
-  const associations = optionalArray<DataAssociation>(envelope, 'associations');
-  if (associations !== undefined) changes.associations = associations;
-
-  if (envelope.unlisted !== undefined) {
-    if (typeof envelope.unlisted !== 'boolean')
-      fieldError('unlisted', 'unlisted must be a boolean');
-    changes.unlisted = envelope.unlisted;
-  }
-
-  // Every key was absent. Refused here rather than left to mutate(), so a
-  // server answers 400 without a storage round trip; mutate() refuses it
-  // again for callers that never went through the wire.
-  if (Object.keys(changes).length === 0) {
-    throw new StackBadRequestError(
-      `An empty change set addresses nothing. Name one or more of: ${RECORD_CHANGE_SET_KEYS.join(', ')}.`,
-    );
-  }
-
-  return changes;
 }

@@ -25,7 +25,6 @@ import type {
   BaseId,
   DataAssociation,
   IfVersionOptions,
-  RecordChangeSet,
   RecordId,
   RecordVersion,
   StackRecord,
@@ -115,63 +114,39 @@ export const storedVersionDiffers = (
  */
 export type ExpectingClient = Omit<
   StackClient,
-  | 'mutate'
   | 'patchContent'
-  | 'associate'
-  | 'dissociate'
-  | 'amendAssociations'
-  | 'grantAccess'
-  | 'revokeAccess'
-  | 'amendAccess'
+  | 'setParent'
+  | 'setUnlisted'
+  | 'editAssociations'
+  | 'setAssociations'
+  | 'editAccess'
+  | 'setAccess'
   | 'delete'
   | 'undelete'
   | 'restoreVersion'
 > & {
-  mutate(
-    id: RecordId,
-    changes: RecordChangeSet,
-    opts?: IfVersionOptions & ExpectationOptions,
-  ): Promise<StackRecord>;
   patchContent(
     id: RecordId,
     patch: Record<string, unknown | null>,
-    opts?: IfVersionOptions & ExpectationOptions,
+    opts?: Expecting,
   ): Promise<StackRecord>;
-  associate(
+  setParent(id: RecordId, parentId: RecordId | null, opts?: Expecting): Promise<StackRecord>;
+  setUnlisted(id: RecordId, unlisted: boolean, opts?: Expecting): Promise<StackRecord>;
+  editAssociations(id: RecordId, edits: AssociationEdit[], opts?: Expecting): Promise<StackRecord>;
+  setAssociations(
     id: RecordId,
     associations: DataAssociation[],
-    opts?: ExpectationOptions,
+    opts?: Expecting,
   ): Promise<StackRecord>;
-  dissociate(
-    id: RecordId,
-    associations: DataAssociation[],
-    opts?: ExpectationOptions,
-  ): Promise<StackRecord>;
-  amendAssociations(
-    id: RecordId,
-    changes: AssociationEdit[],
-    opts?: ExpectationOptions,
-  ): Promise<StackRecord>;
-  grantAccess(
+  editAccess(id: RecordId, edits: AssociationEdit[], opts?: Expecting): Promise<StackRecord>;
+  setAccess(
     id: RecordId,
     permissions: AuthorityAssociation[],
-    opts?: ExpectationOptions,
-  ): Promise<StackRecord>;
-  revokeAccess(
-    id: RecordId,
-    permissions: AuthorityAssociation[],
-    opts?: ExpectationOptions,
-  ): Promise<StackRecord>;
-  amendAccess(
-    id: RecordId,
-    changes: AssociationEdit[],
-    opts?: ExpectationOptions,
+    opts?: Expecting,
   ): Promise<StackRecord>;
   delete(id: RecordId, opts?: DeleteRecordOptions & ExpectationOptions): Promise<DeleteResult>;
-  undelete(id: RecordId, opts?: IfVersionOptions & ExpectationOptions): Promise<StackRecord>;
-  restoreVersion(
-    id: RecordId,
-    version: number,
-    opts?: IfVersionOptions & ExpectationOptions,
-  ): Promise<StackRecord>;
+  undelete(id: RecordId, opts?: Expecting): Promise<StackRecord>;
+  restoreVersion(id: RecordId, version: number, opts?: Expecting): Promise<StackRecord>;
 };
+
+type Expecting = IfVersionOptions & ExpectationOptions;
