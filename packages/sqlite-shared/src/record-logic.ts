@@ -149,13 +149,18 @@ export class SharedSqlRecordLogic {
     throw versionConflict(id, expectedVersion as number, version);
   }
 
-  /** The `expectLive` refusal, asked inside the write's transaction. */
-  private checkLive(id: string, expectLive: boolean | undefined): void {
-    if (!expectLive) return;
-    const row = this.exec.get('SELECT 1 FROM records WHERE id = ? AND deleted_at IS NOT NULL', [
-      id,
-    ]);
-    if (row) throw new RecordMovedError(id);
+  /**
+   * An aspect write's record, inside its transaction: missing is not found,
+   * a tombstone is moved, and anything else answers its version.
+   */
+  private liveVersion(id: string): number {
+    const row = this.exec.get<{ version: number; deleted_at: number | null }>(
+      'SELECT version, deleted_at FROM records WHERE id = ?',
+      [id],
+    );
+    if (!row) throw recordNotFound(id);
+    if (row.deleted_at !== null) throw new RecordMovedError(id);
+    return row.version;
   }
 
   private currentVersion(id: string): number | undefined {
@@ -347,8 +352,8 @@ export class SharedSqlRecordLogic {
   }
 
   /**
-   * One records column that never bumps. The `ifVersion` guard rides in the
-   * WHERE clause, as it does on a versioned update.
+   * One records column that never bumps. The tombstone refusal and the
+   * `ifVersion` guard ride in the WHERE clause, as on a versioned update.
    */
   private aspectUpdate(
     id: string,
@@ -359,12 +364,14 @@ export class SharedSqlRecordLogic {
   ): StackRecord {
     const guarded = opts.ifVersion !== undefined;
     this.exec.transaction(() => {
-      this.checkLive(id, opts.expectLive);
       const changed = this.exec.run(
-        `UPDATE records SET ${set} WHERE id = ?${guarded ? ' AND version = ?' : ''}`,
+        `UPDATE records SET ${set}
+         WHERE id = ? AND deleted_at IS NULL${guarded ? ' AND version = ?' : ''}`,
         [value, id, ...(guarded ? [opts.ifVersion] : [])],
       );
-      if (changed === 0) this.throwVersionConflict(id, opts.ifVersion);
+      if (changed === 0) {
+        throw versionConflict(id, opts.ifVersion as number, this.liveVersion(id));
+      }
       this.appendJournal(id, opts.journal);
     });
     return this.reread(id, verb);
@@ -769,8 +776,9 @@ export class SharedSqlRecordLogic {
 
   /**
    * A write to one of a record's two element tables, inside a transaction
-   * that first checks the record exists, is live under `expectLive`, is at
-   * `ifVersion`, and that the table holds `expectSet`. Never bumps and never snapshots.
+   * that first checks the record exists, is not soft-deleted, is at
+   * `ifVersion`, and that the table holds `expectSet`. Never bumps and
+   * never snapshots.
    */
   private elementWrite(
     id: string,
@@ -780,10 +788,7 @@ export class SharedSqlRecordLogic {
     verb: string,
   ): StackRecord {
     this.exec.transaction(() => {
-      const version = this.currentVersion(id);
-      if (version === undefined) throw recordNotFound(id);
-      this.checkLive(id, opts.expectLive);
-      this.checkExpectedVersion(id, version, opts.ifVersion);
+      this.checkExpectedVersion(id, this.liveVersion(id), opts.ifVersion);
       if (opts.expectSet) {
         const ids = JSON.stringify([id]);
         const map = table === 'associations' ? rowToAssociation : rowToPermission;

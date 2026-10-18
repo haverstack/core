@@ -67,15 +67,7 @@ export type MutateOptions = IfVersionOptions & SnapshotOptions & ActorOptions & 
  * No actor: such a write stamps nothing on the record, so its requester
  * travels in the entry. See docs/spec/versioning.md § Version history.
  */
-export type AspectWriteOptions = IfVersionOptions &
-  JournalOptions & {
-    /**
-     * Refuse a soft-deleted record with RecordMovedError, changing nothing,
-     * checked inside the write before `ifVersion`. See docs/spec/versioning.md
-     * § An aspect write lands on the state it read.
-     */
-    expectLive?: boolean;
-  };
+export type AspectWriteOptions = IfVersionOptions & JournalOptions;
 
 /**
  * What the four element-set writes take: `expectSet` is the set `Stack`

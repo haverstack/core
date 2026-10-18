@@ -258,10 +258,9 @@ export class OwnerMismatchError extends Error {
 
 /**
  * Thrown by an aspect write when the stored record no longer matches what
- * `Stack` read: a set other than its `expectSet`, or a tombstone under
- * `expectLive`. Outside the StackError taxonomy: Stack catches it and reads
- * again, so no request ever answers with it.
- * See docs/spec/versioning.md § An aspect write lands on the state it read.
+ * `Stack` read: soft-deleted, or a set other than its `expectSet`. Outside
+ * the StackError taxonomy: Stack catches it and reads again, so no request
+ * ever answers with it. See docs/spec/adapters.md § Interface split.
  */
 export class RecordMovedError extends Error {
   constructor(public readonly recordId: string) {

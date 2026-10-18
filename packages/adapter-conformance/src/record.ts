@@ -507,40 +507,33 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         expect(cleared.permissions ?? []).toEqual([]);
       });
 
-      // Stack passes expectLive on every aspect write, so none lands on a
-      // record soft-deleted after Stack read it. Asked before ifVersion: a
-      // soft delete bumps, and the tombstone is what Stack must re-read.
+      // Asked before ifVersion: a soft delete bumps, and the tombstone is
+      // what Stack must re-read to answer 409.
       // See docs/spec/adapters.md § Interface split.
-      test('an aspect write under expectLive refuses a soft-deleted record, and changes nothing', async () => {
+      test('an aspect write refuses a soft-deleted record, and changes nothing', async () => {
         const parent = makeRecord();
         const record = makeRecord();
         await adapter.createRecord(parent);
         await adapter.createRecord(record);
         await adapter.deleteRecord(record.id);
         const before = await adapter.getRecord(record.id);
+        const journalBefore = await adapter.getJournal(record.id);
 
-        const opts = { expectLive: true, ifVersion: record.version };
+        const anyone: AuthorityAssociation = { kind: 'anyone', label: 'read' };
+        const journal = { ops: ['associate' as const], kind: 'changed' as const };
+        const opts = { ifVersion: record.version, journal };
         for (const write of [
           () => adapter.setParent(record.id, parent.id, opts),
           () => adapter.setUnlisted(record.id, true, opts),
           () => adapter.editAssociations(record.id, [{ op: 'add', association: tag('a') }], opts),
           () => adapter.setAssociations(record.id, [tag('a')], opts),
-          () =>
-            adapter.editAccess(
-              record.id,
-              [{ op: 'add', association: { kind: 'anyone', label: 'read' } }],
-              opts,
-            ),
-          () => adapter.setAccess(record.id, [{ kind: 'anyone', label: 'read' }], opts),
+          () => adapter.editAccess(record.id, [{ op: 'add', association: anyone }], opts),
+          () => adapter.setAccess(record.id, [anyone], opts),
         ]) {
           await expect(write()).rejects.toBeInstanceOf(RecordMovedError);
         }
         expect(await adapter.getRecord(record.id)).toEqual(before);
-
-        const live = makeRecord();
-        await adapter.createRecord(live);
-        const listed = await adapter.setUnlisted(live.id, true, { expectLive: true });
-        expect(listed.unlistedAt).toBeInstanceOf(Date);
+        expect(await adapter.getJournal(record.id)).toEqual(journalBefore);
       });
 
       // Stack's expectSet is what getRecord() answered, so a set read back

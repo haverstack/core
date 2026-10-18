@@ -986,7 +986,7 @@ export class Stack implements StackClient {
    * time the adapter finds the record moved since the last one, so Stack's
    * checks are asked of the state the write lands on. Unbounded: each
    * refusal means another write landed.
-   * See docs/spec/versioning.md § An aspect write lands on the state it read.
+   * See docs/spec/versioning.md § An aspect write never lands on a tombstone.
    */
   private async untilReadHolds(attempt: () => Promise<StackRecord>): Promise<StackRecord> {
     for (;;) {
@@ -999,20 +999,15 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Land a write that never bumps, and never on a tombstone. Its
-   * precondition and journal entry travel together here, so no aspect verb
-   * can drop either.
+   * Land a write that never bumps. Its precondition and journal entry
+   * travel together here, so no aspect verb can drop either.
    */
   private async writeAspect(
     change: PendingChange,
     opts: IfVersionOptions,
     write: (o: AspectWriteOptions) => Promise<StackRecord>,
   ): Promise<StackRecord> {
-    const updated = await write({
-      ifVersion: opts.ifVersion,
-      expectLive: true,
-      journal: change.journal,
-    });
+    const updated = await write({ ifVersion: opts.ifVersion, journal: change.journal });
     this.announce(change, updated);
     return updated;
   }

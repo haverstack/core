@@ -177,11 +177,11 @@ export class MemoryAdapter implements StackAdapter {
     return this.store(id, this.bump({ ...existing, content }, opts), opts.journal);
   }
 
-  /** The record a write addresses, past its `expectLive` and `ifVersion` checks. */
-  private requireForWrite(id: string, ifVersion: number | undefined, expectLive = false) {
+  /** The record a write addresses, past its `ifVersion` check; an aspect write's must be live. */
+  private requireForWrite(id: string, ifVersion: number | undefined, aspect = false) {
     const existing = this.records.get(id);
     if (!existing) throw new StackNotFoundError(`Record not found: "${id}"`);
-    if (expectLive && existing.deletedAt) throw new RecordMovedError(id);
+    if (aspect && existing.deletedAt) throw new RecordMovedError(id);
     this.checkExpectedVersion(existing, ifVersion);
     return existing;
   }
@@ -197,12 +197,12 @@ export class MemoryAdapter implements StackAdapter {
   // record grows a `parentId: undefined` every `in` check reads as a container.
 
   async setParent(id: string, parentId: string | null, opts: AspectWriteOptions = {}) {
-    const { parentId: _p, ...rest } = this.requireForWrite(id, opts.ifVersion, opts.expectLive);
+    const { parentId: _p, ...rest } = this.requireForWrite(id, opts.ifVersion, true);
     return this.store(id, { ...rest, ...(parentId !== null && { parentId }) }, opts.journal);
   }
 
   async setUnlisted(id: string, unlisted: boolean, opts: AspectWriteOptions = {}) {
-    const { unlistedAt: _u, ...rest } = this.requireForWrite(id, opts.ifVersion, opts.expectLive);
+    const { unlistedAt: _u, ...rest } = this.requireForWrite(id, opts.ifVersion, true);
     return this.store(id, { ...rest, ...(unlisted && { unlistedAt: new Date() }) }, opts.journal);
   }
 
@@ -250,7 +250,7 @@ export class MemoryAdapter implements StackAdapter {
     half: 'associations' | 'permissions',
     opts: ElementWriteOptions<Association>,
   ): StackRecord {
-    const existing = this.requireForWrite(id, opts.ifVersion, opts.expectLive);
+    const existing = this.requireForWrite(id, opts.ifVersion, true);
     if (opts.expectSet && !sameAssociationSet(existing[half] ?? [], opts.expectSet)) {
       throw new RecordMovedError(id);
     }

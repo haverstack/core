@@ -2879,7 +2879,7 @@ describe('element-set writes check their rules against the set they land on', ()
 });
 
 // -------------------------------------------------------
-// An aspect write lands on the state it read
+// An aspect write never lands on a tombstone
 // -------------------------------------------------------
 
 describe('aspect writes never land on a record soft-deleted after Stack read it', () => {

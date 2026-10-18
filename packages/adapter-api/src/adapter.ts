@@ -634,8 +634,8 @@ export class APIAdapter implements StackAdapter {
   // Associations and permissions
   // -------------------------------------------------------
   //
-  // `expectSet` and `expectLive` are not sent: the server's own Stack reads
-  // the record its rules check and compares it inside the request.
+  // `expectSet` is not sent: the server's own Stack reads the set its rules
+  // check and compares it inside the request.
 
   async editAssociations(
     id: RecordId,
