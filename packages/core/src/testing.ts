@@ -43,6 +43,7 @@ import type { SortEntry } from './adapter/sort.js';
 
 import {
   ElementSetMovedError,
+  softDeletedRefusal,
   StackVersionConflictError,
   StackConflictError,
   StackNotFoundError,
@@ -185,6 +186,13 @@ export class MemoryAdapter implements StackAdapter {
     return existing;
   }
 
+  /** requireForWrite() for an aspect write, which refuses a tombstone first. */
+  private requireLiveForWrite(id: string, ifVersion: number | undefined): StackRecord {
+    const existing = this.records.get(id);
+    if (existing?.deletedAt) throw softDeletedRefusal(id);
+    return this.requireForWrite(id, ifVersion);
+  }
+
   private store(id: string, record: StackRecord, journal: JournalEntryInput | undefined) {
     this.records.set(id, record);
     this.appendJournal(id, journal, record);
@@ -196,12 +204,12 @@ export class MemoryAdapter implements StackAdapter {
   // record grows a `parentId: undefined` every `in` check reads as a container.
 
   async setParent(id: string, parentId: string | null, opts: AspectWriteOptions = {}) {
-    const { parentId: _p, ...rest } = this.requireForWrite(id, opts.ifVersion);
+    const { parentId: _p, ...rest } = this.requireLiveForWrite(id, opts.ifVersion);
     return this.store(id, { ...rest, ...(parentId !== null && { parentId }) }, opts.journal);
   }
 
   async setUnlisted(id: string, unlisted: boolean, opts: AspectWriteOptions = {}) {
-    const { unlistedAt: _u, ...rest } = this.requireForWrite(id, opts.ifVersion);
+    const { unlistedAt: _u, ...rest } = this.requireLiveForWrite(id, opts.ifVersion);
     return this.store(id, { ...rest, ...(unlisted && { unlistedAt: new Date() }) }, opts.journal);
   }
 
@@ -243,13 +251,13 @@ export class MemoryAdapter implements StackAdapter {
     return this.store(id, withHalf(existing, 'permissions', permissions), opts.journal);
   }
 
-  /** requireForWrite(), past the `expectSet` check on the half it writes too. */
+  /** requireLiveForWrite(), past the `expectSet` check on the half it writes too. */
   private requireSetForWrite(
     id: string,
     half: 'associations' | 'permissions',
     opts: ElementWriteOptions<Association>,
   ): StackRecord {
-    const existing = this.requireForWrite(id, opts.ifVersion);
+    const existing = this.requireLiveForWrite(id, opts.ifVersion);
     if (opts.expectSet && !sameAssociationSet(existing[half] ?? [], opts.expectSet)) {
       throw new ElementSetMovedError(id);
     }

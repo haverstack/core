@@ -12,6 +12,8 @@ The adapter contract is split into two focused interfaces that are composed into
 
 **Every method takes `ifVersion`, checked inside its own write** — an `UPDATE … WHERE version = ?` on the records row, or a check-then-write inside one transaction for the methods that touch another table. See [Versioning § Optimistic concurrency](./versioning.md#optimistic-concurrency-ifversion).
 
+**The six aspect writes refuse a soft-deleted record, checked inside the same write and before `ifVersion` or `expectSet`.** The write throws `softDeletedRefusal(id)` — the `StackConflictError` `Stack` itself throws for a tombstone — and changes nothing, journal included. It is final: `Stack` passes it to the caller rather than reading again. See [Versioning § An aspect write never lands on a tombstone](./versioning.md#an-aspect-write-never-lands-on-a-tombstone).
+
 **Every mutating record method is atomic, whatever it touches.** A record write is rarely one statement — a create alone writes the record row, its associations, the full-text index, the content index and a [journal entry](./journal.md) — and an adapter must apply the whole set or none of it. Partial application is worse than failure: the method raises, so the caller takes the write as lost, while what survives contradicts that and can outlive the retry. The [snapshot's atomicity rule](./versioning.md#snapshot-atomicity) is one instance of this, not a separate one.
 
 **`getJournal()` refuses a record that isn't there.** `StackNotFoundError`, never an empty log — a purged record is gone, so it gets the same refusal. See [Change journal § Reading it](./journal.md#reading-it).
@@ -211,6 +213,8 @@ Local, embedded adapters (JSON, native SQLite, Durable Object SQLite) declare bo
 ## Concurrency & storage ownership
 
 A stack's backing storage (a SQLite file, a JSON directory) has exactly one owning process at a time. Multi-app access goes through a server implementation over the wire protocol (`adapter-api`, against `localhost` or a hosted provider) — never by pointing multiple apps at the same storage file directly. This is also the only topology in which permissions, grants, and `appId` attribution mean anything: `Stack` performs no permission checks, `ScopedStack` is opt-in, and `appId` is self-reported by the writing app, so direct storage access implies full trust over everything in the store, including grants and token hashes.
+
+**A read reflects every write the adapter has committed.** `getRecord()` after a write returns returns what that write left, never an earlier state served from a cache or a replica. `Stack`'s [element-set retry](./versioning.md#element-set-writes-compare-the-set-they-read) ends because of it: each refusal means a newer write landed, which the next read sees.
 
 How each adapter honors the single-writer rule differs by what it actually is:
 

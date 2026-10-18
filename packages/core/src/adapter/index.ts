@@ -21,7 +21,7 @@ export type {
   ElementWriteOptions,
 } from '../types/index.js';
 export { sameAssociationSet } from '../associations/identity.js';
-export { ElementSetMovedError, OwnerMismatchError } from '../errors.js';
+export { ElementSetMovedError, OwnerMismatchError, softDeletedRefusal } from '../errors.js';
 export { combineAdapters } from './combine.js';
 export {
   assertQueryCapabilities,

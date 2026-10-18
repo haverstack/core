@@ -112,6 +112,14 @@ export class StackConflictError extends StackError {
 }
 
 /**
+ * The refusal a mutation of a soft-deleted record earns, from `Stack` or
+ * from inside an adapter's aspect write: one message, wherever it is asked.
+ * See docs/spec/versioning.md § Mutations are refused, not applied to a tombstone.
+ */
+export const softDeletedRefusal = (id: string): StackConflictError =>
+  new StackConflictError(`Record "${id}" is soft-deleted; undelete it before mutating it.`);
+
+/**
  * Thrown when an `ifVersion` precondition doesn't match a record's current
  * version. Deliberately not a StackConflictError subtype — the two have
  * different recovery stories and HTTP statuses (409 vs. 412). See

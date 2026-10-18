@@ -96,6 +96,7 @@ import {
   StackVersionConflictError,
   ARGUMENTS_INVALID,
   SCHEMA_INVALID,
+  softDeletedRefusal,
 } from '../errors.js';
 import {
   assertQueryCapabilities,
@@ -1025,11 +1026,7 @@ export class Stack implements StackClient {
    * not applied to a tombstone.
    */
   private refuseIfDeleted(record: StackRecord): void {
-    if (record.deletedAt) {
-      throw new StackConflictError(
-        `Record "${record.id}" is soft-deleted; undelete it before mutating it.`,
-      );
-    }
+    if (record.deletedAt) throw softDeletedRefusal(record.id);
   }
 
   /**

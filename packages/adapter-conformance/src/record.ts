@@ -507,6 +507,35 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         expect(cleared.permissions ?? []).toEqual([]);
       });
 
+      // Asked before ifVersion: the stale version here would otherwise
+      // answer 412 for a record whose state is the reason for refusing.
+      // See docs/spec/adapters.md § Interface split.
+      test('an aspect write refuses a soft-deleted record, and changes nothing', async () => {
+        const parent = makeRecord();
+        const record = makeRecord();
+        await adapter.createRecord(parent);
+        await adapter.createRecord(record);
+        await adapter.deleteRecord(record.id);
+        const before = await adapter.getRecord(record.id);
+        const journalBefore = await adapter.getJournal(record.id);
+
+        const anyone: AuthorityAssociation = { kind: 'anyone', label: 'read' };
+        const journal = { ops: ['associate' as const], kind: 'changed' as const };
+        const opts = { ifVersion: record.version, journal };
+        for (const write of [
+          () => adapter.setParent(record.id, parent.id, opts),
+          () => adapter.setUnlisted(record.id, true, opts),
+          () => adapter.editAssociations(record.id, [{ op: 'add', association: tag('a') }], opts),
+          () => adapter.setAssociations(record.id, [tag('a')], opts),
+          () => adapter.editAccess(record.id, [{ op: 'add', association: anyone }], opts),
+          () => adapter.setAccess(record.id, [anyone], opts),
+        ]) {
+          await expectStackErrorCode(write(), 'conflict');
+        }
+        expect(await adapter.getRecord(record.id)).toEqual(before);
+        expect(await adapter.getJournal(record.id)).toEqual(journalBefore);
+      });
+
       // Stack's expectSet is what getRecord() answered, so a set read back
       // must match itself in every shape an element can take.
       test('a set read back through getRecord matches itself as expectSet', async () => {
