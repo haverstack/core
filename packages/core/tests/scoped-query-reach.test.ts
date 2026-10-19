@@ -3,7 +3,7 @@ import { Stack } from '../src/stack/stack.js';
 import type { ScopedStack } from '../src/scoped-stack/scoped-stack.js';
 import { generateId } from '../src/id.js';
 import { MemoryAdapter } from '../src/testing.js';
-import type { MemoryAdapterOpenOptions } from '../src/testing.js';
+import { ScopeUnavailableError } from '../src/errors.js';
 import type {
   Actor,
   AuthorityAssociation,
@@ -37,14 +37,6 @@ const readForGroup = (groupId: string, role: 'member' | 'admin'): PermissionElem
   label: 'read',
   grantee: { kind: 'group', groupId, role },
 });
-
-/** A MemoryAdapter without queryReadable(), for the fallback ScopedStack pages and filters. */
-class ScanningMemoryAdapter extends MemoryAdapter {
-  static override async open(opts: MemoryAdapterOpenOptions): Promise<ScanningMemoryAdapter> {
-    return new ScanningMemoryAdapter(opts);
-  }
-  override queryReadable: MemoryAdapter['queryReadable'] = undefined;
-}
 
 let adapter: MemoryAdapter;
 let stack: Stack;
@@ -89,21 +81,6 @@ async function everyRecord(query: StackQuery = {}): Promise<StackRecord[]> {
     cursor = page.cursor ?? undefined;
   } while (cursor);
   return all;
-}
-
-/**
- * What the adapter handed back for one scoped query, before canRead() saw
- * it — the page the reach alone decided.
- */
-async function adapterPage(view: ScopedStack, query: StackQuery): Promise<QueryResult> {
-  const spy = vi.spyOn(adapter, 'queryReadable');
-  try {
-    const scoped = await view.query(query);
-    const call = spy.mock.results[0];
-    return call ? ((await call.value) as QueryResult) : scoped;
-  } finally {
-    spy.mockRestore();
-  }
 }
 
 const ids = (records: StackRecord[]): string[] => records.map((r) => r.id).sort();
@@ -196,7 +173,7 @@ describe('the reach a scoped query runs within', () => {
 
   for (const [name, actor] of requesters) {
     for (const includeDeleted of [false, true]) {
-      test(`matches canRead() Record for Record: ${name}${includeDeleted ? ', deleted included' : ''}`, async () => {
+      test(`query() and get() agree Record for Record: ${name}${includeDeleted ? ', deleted included' : ''}`, async () => {
         await populate();
         const view = actor ? stack.asActor(actor) : stack.asEntity(null);
         const filter = { includeDeleted };
@@ -205,7 +182,7 @@ describe('the reach a scoped query runs within', () => {
         for (const record of await everyRecord({ filter })) {
           if (await view.get(record.id, { includeDeleted: true })) readable.push(record);
         }
-        const page = await adapterPage(view, { filter, limit: 1000 });
+        const page = await view.query({ filter, limit: 1000 });
 
         expect(ids(page.records)).toEqual(ids(readable));
         expect(page.cursor).toBeNull();
@@ -280,50 +257,73 @@ describe('the reach a scoped query runs within', () => {
     expect(reach.fence).toEqual([NOTE, NOTE_2]);
   });
 
-  test('the owner acting alone is not narrowed', async () => {
+  test('the owner acting alone has a reach that constrains nothing', async () => {
     const spy = vi.spyOn(adapter, 'queryReadable');
     await adapter.createRecord(makeRecord());
     const result = await stack.asEntity(OWNER).query();
     expect(result.records).toHaveLength(1);
-    expect(spy).not.toHaveBeenCalled();
+    expect(spy.mock.calls[0]![1]).toEqual({});
+    spy.mockRestore();
+  });
+
+  test('an owner subject is fenced by the app acting for it, and by nothing else', async () => {
+    await stack.grantType('com.example.test/comment', {
+      actions: ['read-own'],
+      grantee: { kind: 'entity', entityId: APP },
+    });
+    const spy = vi.spyOn(adapter, 'queryReadable');
+    await stack.asActor({ principalId: APP, subjectId: OWNER }).query();
+    expect(spy.mock.calls[0]![1]).toEqual({ fence: [COMMENT] });
     spy.mockRestore();
   });
 });
 
 describe('a scoped query over an adapter without queryReadable()', () => {
-  beforeEach(async () => {
-    adapter = await ScanningMemoryAdapter.open({ ownerEntityId: OWNER });
-    stack = await Stack.open(adapter);
-    await defineTypes(stack);
+  test('is refused rather than answered by scanning', async () => {
+    Object.assign(adapter, { queryReadable: undefined });
+    const scoped = (await Stack.open(adapter)).asEntity(null);
+    await expect(scoped.query()).rejects.toBeInstanceOf(ScopeUnavailableError);
   });
+});
 
-  test('refills across adapter pages without skipping records, even landing under the limit', async () => {
-    // 6 records fetched 2 at a time, only the last one public: pages 1 and
-    // 2 hold nothing visible, so the scan reads through all three.
-    let visibleId = '';
-    for (let i = 0; i < 6; i++) {
-      const record = await adapter.createRecord(
-        makeRecord(i === 5 ? { permissions: [ANYONE] } : {}),
-      );
-      if (i === 5) visibleId = record.id;
-    }
+describe('what a scoped get() reads', () => {
+  // The record, then each authority set at most once: the grants for an
+  // identified requester, the rosters for an identified subject that is not
+  // the owner. See docs/spec/access-control.md § Who a grant reaches.
+  const cases: [string, Actor | null, number][] = [
+    ['the owner acting alone', { subjectId: OWNER }, 0],
+    ['anonymous', null, 0],
+    ['an identified entity', { subjectId: ALICE }, 2],
+    ['an app acting for an entity', { principalId: APP, subjectId: ALICE }, 2],
+    ['an app acting for the owner', { principalId: APP, subjectId: OWNER }, 1],
+  ];
 
-    const result = await stack.asEntity(null).query({ limit: 2 });
-    expect(result.records.map((r) => r.id)).toEqual([visibleId]);
-    expect(result.cursor).toBeNull();
-  });
+  test.each(cases)('%s', async (_name, actor, authorityReads) => {
+    const editors = await adapter.createRecord(
+      makeRecord({
+        typeId: '_group@1',
+        associations: [
+          { kind: 'relationship', label: 'member', target: { kind: 'entity', entityId: ALICE } },
+        ],
+      }),
+    );
+    await stack.grantType('com.example.test/note', {
+      actions: ['read-any'],
+      grantee: { kind: 'group', groupId: editors.id, role: 'member' },
+    });
+    await stack.grantType('com.example.test/note', {
+      actions: ['read-any'],
+      grantee: { kind: 'entity', entityId: APP },
+    });
+    const record = await adapter.createRecord(
+      makeRecord({ permissions: [ANYONE, readForGroup(editors.id, 'member')] }),
+    );
 
-  test('a page may overshoot the requested limit rather than split an adapter page', async () => {
-    // priv ×3 then pub ×3, oldest first, read 2 at a time: the second
-    // adapter page leaves the result one short, and the third adds two.
-    for (let i = 0; i < 6; i++) {
-      await adapter.createRecord(makeRecord(i >= 3 ? { permissions: [ANYONE] } : {}));
-    }
-
-    const result = await stack
-      .asEntity(null)
-      .query({ limit: 2, sort: { field: 'createdAt', direction: 'asc' } });
-    expect(result.records).toHaveLength(3);
-    expect(result.cursor).toBeNull();
+    const view = actor ? stack.asActor(actor) : stack.asEntity(null);
+    const gets = vi.spyOn(adapter, 'getRecord');
+    const queries = vi.spyOn(adapter, 'queryRecords');
+    expect(await view.get(record.id)).not.toBeNull();
+    expect(gets).toHaveBeenCalledTimes(1);
+    expect(queries).toHaveBeenCalledTimes(authorityReads);
   });
 });

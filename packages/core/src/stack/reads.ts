@@ -12,6 +12,7 @@
  * None of these is a public API.
  */
 
+import { groupRoleFromAssociations } from '../access.js';
 import { StackBadRequestError } from '../errors.js';
 import { filtersContent } from '../query-validation.js';
 import { SYSTEM_TYPES } from '../types/index.js';
@@ -21,8 +22,10 @@ import type {
   EntityContent,
   EntityId,
   GrantContent,
+  GroupRole,
   InstallContent,
   QueryResult,
+  RecordId,
   StackQuery,
   StackRecord,
 } from '../types/index.js';
@@ -166,4 +169,36 @@ export async function loadGrantRecords(
     filter: { typeId: `${SYSTEM_TYPES.GRANT}@1`, includeUnlisted: true },
   });
   return records as (StackRecord & { content: GrantContent })[];
+}
+
+/**
+ * The role `entityId` holds on every roster that holds it, keyed by group
+ * id — the one reading of which rosters reach an entity. A roster is a
+ * live `_group`'s relationships: a Record outside the family or a deleted
+ * Group reaches nobody, and unlisted ones count, as for grants above. See
+ * docs/spec/access-control.md § Record-level permissions.
+ */
+export async function loadRosterRoles(
+  run: (query: StackQuery) => Promise<QueryResult>,
+  entityId: EntityId,
+): Promise<Map<RecordId, GroupRole>> {
+  const groups = await queryAllPages(run, {
+    filter: {
+      baseId: SYSTEM_TYPES.GROUP,
+      relatedTo: { target: { kind: 'entity', entityId } },
+      includeUnlisted: true,
+    },
+  });
+  const roles = new Map<RecordId, GroupRole>();
+  for (const group of groups) {
+    const role = groupRoleFromAssociations(group.associations, entityId);
+    if (role) roles.set(group.id, role);
+  }
+  return roles;
+}
+
+/** `load` run on first call and its answer shared after — one operation's worth of a read. */
+export function once<T>(load: () => Promise<T>): () => Promise<T> {
+  let loaded: Promise<T> | undefined;
+  return () => (loaded ??= load());
 }

@@ -55,6 +55,6 @@ A scoped `query()` is held to the same rule as a refusal: **a page tells a reque
 
 So a scoped query never reads a hidden Record at all. `ScopedStack` describes what the requester may read and the adapter [queries within that reach](./adapters.md#querying-within-a-reach): every page is decided among readable Records, its cursor names one of them, and the query ends exactly where they do. Hidden Records change nothing about any response — the same readable Records answer with the same pages and the same cursors whatever else the Stack holds. Cursors stay plain adapter cursors, with nothing sealed and no state kept between requests, because there is nothing in one to hide.
 
-**An adapter without `queryReadable()` does not close this.** `ScopedStack.query()` then reads a bounded window of stored Records per call and drops what the requester cannot read, so all three disclosures above stand. Every local adapter implements it; the one that need not is `APIAdapter`, whose server answers every query within its own session's reach already.
+**There is no scoped query that reads past the reach.** A scoped `query()` over an adapter that cannot query within one is refused, never answered by reading pages and dropping what the requester cannot see — the shape that produced all three disclosures above. See [Adapters § Querying within a reach](./adapters.md#querying-within-a-reach).
 
 A query result carries no count of the whole match, for the same reason — see [Data model § Sorting and pagination](./data-model.md#sorting-and-pagination).

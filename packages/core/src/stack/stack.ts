@@ -396,8 +396,10 @@ export class Stack implements StackClient {
       relaysChanges: this.relaysChanges,
       migrations: this.migrations,
       ...(this.adapter.queryReadable && {
-        queryReadable: (query: StackQuery, reach: ReadReach) =>
-          this.dispatchQuery(query, (resolved) => this.adapter.queryReadable!(resolved, reach)),
+        queryReadable: (query: StackQuery, reach: ReadReach<BaseId>) =>
+          this.dispatchQuery(query, async (resolved) =>
+            this.adapter.queryReadable!(resolved, await this.resolveReach(reach)),
+          ),
       }),
     });
   }
@@ -1244,6 +1246,35 @@ export class Stack implements StackClient {
 
     if (resolvedTypeIds.length === 0) return EMPTY_FAMILY;
     return { ...rest, typeId: resolvedTypeIds };
+  }
+
+  /**
+   * A reach over families, as the TypeIds an adapter matches — the same
+   * resolution filter.baseId gets. See docs/spec/adapters.md § Querying
+   * within a reach.
+   */
+  private async resolveReach(reach: ReadReach<BaseId>): Promise<ReadReach> {
+    const { fence, within } = reach;
+    // A reach naming no family — the owner acting alone — needs no Types.
+    if (!fence && !within) return {};
+    const types = await this.adapter.listTypes();
+    const typeIdsOf = (baseIds: readonly BaseId[]): TypeId[] =>
+      types.filter((t) => baseIds.includes(t.baseId)).map((t) => t.id);
+    return {
+      ...(fence && { fence: typeIdsOf(fence) }),
+      ...(within && {
+        within: {
+          types: typeIdsOf(within.types),
+          ...(within.authored && {
+            authored: {
+              subjectId: within.authored.subjectId,
+              types: typeIdsOf(within.authored.types),
+            },
+          }),
+          permissions: within.permissions,
+        },
+      }),
+    };
   }
 
   /**

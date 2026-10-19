@@ -34,6 +34,7 @@ import type {
   ActorOptions,
   AppContent,
   AppId,
+  BaseId,
   PutAttachmentOptions,
   Association,
   AssociationEdit,
@@ -43,7 +44,6 @@ import type {
   EntityId,
   FileId,
   GrantAction,
-  GroupRole,
   QueryResult,
   ReadReach,
   RecordChange,
@@ -65,7 +65,7 @@ import {
   StackConflictError,
   StackNotFoundError,
   StackPermissionError,
-  RelayScopeError,
+  ScopeUnavailableError,
   StackValidationError,
 } from '../errors.js';
 import { assertAssociationEdits } from '../associations/validation.js';
@@ -86,12 +86,7 @@ import type { ExpectationOptions } from '../stack/write-expectation.js';
 import { WRITE_GATE } from '../stack/write-gate.js';
 import { assertAttachmentSize } from '../stack/limits.js';
 import { validateIdTimestampSkew, validateRecordId } from '../stack/record-id.js';
-import {
-  DEFAULT_QUERY_LIMIT,
-  MAX_QUERY_LIMIT,
-  findAppCardByDid,
-  lookupEntityByDid,
-} from '../stack/reads.js';
+import { findAppCardByDid, lookupEntityByDid } from '../stack/reads.js';
 import { presentDeleted, withoutAuthorityChanges } from '../record-changes.js';
 import type { ContentOf, ReadonlyTypeSchema, TypeHandle } from '../type-handle.js';
 import { createCollection } from '../collection.js';
@@ -110,7 +105,7 @@ import type { Stack } from '../stack/stack.js';
 import { ScopeAuthority } from './authority.js';
 import { familyPolicy, ownerFieldRefusal } from './family-policy.js';
 import { ScopedSubscription } from './subscription.js';
-import type { FeedAuthorityCache } from './subscription.js';
+import type { AuthorityReads } from './authority-reads.js';
 import type {
   BackdatableCreateRecordOptions,
   CollectAttachmentGarbageOptions,
@@ -148,10 +143,10 @@ export type ScopedStackInit = {
   /** The app's migrations, which collection() migrates records through. */
   migrations: MigrationRegistry;
   /**
-   * Stack.query() within a reach, present when the adapter implements
-   * queryReadable() — see query().
+   * Stack.query() within a reach over type families, present when the
+   * adapter implements queryReadable() — see query().
    */
-  queryReadable?: (query: StackQuery, reach: ReadReach) => Promise<QueryResult>;
+  queryReadable?: (query: StackQuery, reach: ReadReach<BaseId>) => Promise<QueryResult>;
 };
 
 /**
@@ -290,10 +285,11 @@ export class ScopedStack implements StackClient {
       }
       return;
     }
+    const reads = this.#authority.reads();
     const subjectReaches =
-      (await this.#authority.recordPermits(record, 'write')) ||
-      (await this.#authority.subjectAllows(record.typeId, actions, { record }));
-    const principalHolds = await this.#authority.principalAllows(record.typeId, actions);
+      (await this.#authority.permitsWrite(record, reads)) ||
+      (await this.#authority.subjectAllows(record.typeId, actions, { record, reads }));
+    const principalHolds = await this.#authority.principalAllows(record.typeId, actions, reads);
     if (!subjectReaches || !principalHolds) {
       const verb = actions[0]!.split('-')[0]!;
       const what = `Cannot ${verb} "${id}" (${record.typeId})`;
@@ -302,6 +298,7 @@ export class ScopedStack implements StackClient {
         subjectReaches
           ? `${what}: the app acting for this entity holds no ${verb} grant`
           : `${what}: requires ${actions.join(' or ')}`,
+        reads,
       );
     }
   }
@@ -476,11 +473,11 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Query records, among those this request can read. The adapter matches
-   * the request's reach as one more condition, so a page and its cursor are
-   * decided among readable Records alone; canRead() still runs on each,
-   * as the check that the reach and the rules agree. An adapter without
-   * queryReadable() is paged and filtered instead.
+   * Query records, among those this request can read: the adapter matches
+   * the request's reach as one more condition of the query, so a page, its
+   * cursor and whether one comes back are decided among readable Records
+   * alone. Refused over an adapter that cannot, which a server-backed stack
+   * never needs — its server scopes each query to its session.
    * See docs/spec/disclosure.md § What a query reveals.
    */
   async query(query: StackQuery = {}): Promise<QueryResult> {
@@ -491,47 +488,17 @@ export class ScopedStack implements StackClient {
     if (query.filter?.includeUnlisted && !this.#authority.ownerActingAlone) {
       throw new StackPermissionError('includeUnlisted is owner-only');
     }
-
-    const prefetchedGrants = this.#authority.identified
-      ? await this.#authority.loadGrants()
-      : undefined;
-    // Scoped to this query, like prefetchedGrants beside it: every
-    // candidate Record shares one roster resolution per group, and nothing
-    // is carried into the next operation.
-    const groupRoles = new Map<string, GroupRole | null>();
-    const readable = async (page: QueryResult): Promise<StackRecord[]> => {
-      const records: StackRecord[] = [];
-      for (const record of page.records) {
-        // Projected here as well as in get(), or `includeDeleted` would be
-        // a strictly better read channel than the fetch-by-ID it is
-        // supposed to match.
-        if (await this.#authority.canRead(record, prefetchedGrants, groupRoles)) {
-          records.push(presentDeleted(record));
-        }
-      }
-      return records;
-    };
-
-    if (this.queryReadable) {
-      const reach = await this.#authority.readReach(prefetchedGrants, groupRoles);
-      const page = reach ? await this.queryReadable(query, reach) : await this.stack.query(query);
-      return { records: await readable(page), cursor: page.cursor };
+    if (!this.queryReadable) {
+      throw new ScopeUnavailableError(
+        'This stack cannot query within a scope: its adapter does not implement queryReadable(). ' +
+          'Query a server-backed stack through the session you mean instead.',
+      );
     }
-
-    // Filtered then refilled, so a page may overshoot `limit` but never
-    // skips a record, within a bounded window per call.
-    const limit = Math.min(query.limit ?? DEFAULT_QUERY_LIMIT, MAX_QUERY_LIMIT);
-    const records: StackRecord[] = [];
-    const maxFetched = limit * 10;
-    let totalFetched = 0;
-    let page: QueryResult = { records: [], cursor: query.cursor ?? null };
-    do {
-      page = await this.stack.query({ ...query, cursor: page.cursor ?? undefined });
-      totalFetched += page.records.length;
-      records.push(...(await readable(page)));
-    } while (records.length < limit && page.cursor && totalFetched < maxFetched);
-
-    return { records, cursor: page.cursor };
+    const page = await this.queryReadable(query, await this.#authority.readReach());
+    // Projected here as well as in get(), or `includeDeleted` would be a
+    // strictly better read channel than the fetch-by-ID it is supposed to
+    // match.
+    return { records: page.records.map(presentDeleted), cursor: page.cursor };
   }
 
   /**
@@ -982,7 +949,7 @@ export class ScopedStack implements StackClient {
   ): Promise<Unsubscribe> {
     this.assertStackOpen();
     if (this.relaysChanges) {
-      throw new RelayScopeError(
+      throw new ScopeUnavailableError(
         'This stack relays changes from elsewhere, and a scoped view cannot narrow that feed: ' +
           'a relayed frame was already scoped by the session that opened it, and a purge leaves ' +
           'no record to re-check. Subscribe with a session-scoped stack instead.',
@@ -996,20 +963,21 @@ export class ScopedStack implements StackClient {
       throw new StackPermissionError('includeUnlisted is owner-only');
     }
     return this.changes.add(
-      new ScopedSubscription((record, cache) => this.canReadCached(record, cache), handler, opts),
+      new ScopedSubscription(
+        this.#authority.reads(),
+        (record, reads) => this.canReadHeld(record, reads),
+        handler,
+        opts,
+      ),
     );
   }
 
   /**
-   * canRead for one event, through the subscription's own cache. Grants
-   * are prefetched once and refilled after an invalidation rather than
-   * re-queried per event, which would be a `_grant` scan for every change
-   * the stack makes.
+   * canRead for one event, through the authority the subscription holds:
+   * re-read only after an event that changes it, rather than per event,
+   * which would be a `_grant` scan for every change the stack makes.
    */
-  private async canReadCached(record: StackRecord, cache: FeedAuthorityCache): Promise<boolean> {
-    const grants = this.#authority.identified
-      ? await cache.grants(() => this.#authority.loadGrants())
-      : undefined;
-    return this.#authority.canRead(record, grants, cache.roles);
+  private async canReadHeld(record: StackRecord, reads: AuthorityReads): Promise<boolean> {
+    return this.#authority.canRead(record, await this.#authority.readReach(reads));
   }
 }

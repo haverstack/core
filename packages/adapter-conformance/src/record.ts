@@ -1031,40 +1031,54 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
       };
 
       const reaches: [string, ReadReach][] = [
-        ['every Record of a Type', { typeIds: [OTHER_TYPE_ID], permissions: [] }],
+        ['nothing constrained', {}],
+        ['every Record of a Type', { within: { types: [OTHER_TYPE_ID], permissions: [] } }],
         [
           'the Records one subject authored at a Type',
           {
-            typeIds: [],
-            authored: { subjectId: ALICE, typeIds: [CONFORMANCE_TYPE_ID] },
-            permissions: [],
+            within: {
+              types: [],
+              authored: { subjectId: ALICE, types: [CONFORMANCE_TYPE_ID] },
+              permissions: [],
+            },
           },
         ],
-        ['Records carrying `anyone`', { typeIds: [], permissions: [anyone] }],
-        ['Records carrying a read naming an entity', { typeIds: [], permissions: [toAlice] }],
+        ['Records carrying `anyone`', { within: { types: [], permissions: [anyone] } }],
+        [
+          'Records carrying a read naming an entity',
+          { within: { types: [], permissions: [toAlice] } },
+        ],
         [
           'Records carrying a read naming a group at one role',
-          { typeIds: [], permissions: [toAdmins] },
+          { within: { types: [], permissions: [toAdmins] } },
         ],
         [
           'every arm at once',
           {
-            typeIds: [OTHER_TYPE_ID],
-            authored: { subjectId: ALICE, typeIds: [CONFORMANCE_TYPE_ID] },
-            permissions: [anyone, toMembers],
+            within: {
+              types: [OTHER_TYPE_ID],
+              authored: { subjectId: ALICE, types: [CONFORMANCE_TYPE_ID] },
+              permissions: [anyone, toMembers],
+            },
           },
         ],
+        ['a fence alone', { fence: [OTHER_TYPE_ID] }],
         [
           'arms inside a fence',
           {
             fence: [CONFORMANCE_TYPE_ID],
-            typeIds: [OTHER_TYPE_ID],
-            authored: { subjectId: ALICE, typeIds: [CONFORMANCE_TYPE_ID, OTHER_TYPE_ID] },
-            permissions: [anyone],
+            within: {
+              types: [OTHER_TYPE_ID],
+              authored: { subjectId: ALICE, types: [CONFORMANCE_TYPE_ID, OTHER_TYPE_ID] },
+              permissions: [anyone],
+            },
           },
         ],
-        ['an empty fence', { fence: [], typeIds: [CONFORMANCE_TYPE_ID], permissions: [anyone] }],
-        ['no arm at all', { typeIds: [], permissions: [] }],
+        [
+          'an empty fence',
+          { fence: [], within: { types: [CONFORMANCE_TYPE_ID], permissions: [anyone] } },
+        ],
+        ['no arm at all', { within: { types: [], permissions: [] } }],
       ];
 
       test.each(reaches)('returns exactly the Records in reach: %s', async (_name, reach) => {
@@ -1086,7 +1100,7 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
 
         const result = await adapter.queryReadable(
           { filter: { tags: ['pinned'] } },
-          { typeIds: [], permissions: [anyone] },
+          { within: { types: [], permissions: [anyone] } },
         );
         expect(result.records.map((r) => r.id)).toEqual([tagged.id]);
       });
@@ -1096,7 +1110,7 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
       // many Records outside the reach remain.
       const pagesWithin = async (sort: StackQuery['sort']): Promise<void> => {
         if (!adapter.queryReadable) return;
-        const reach: ReadReach = { typeIds: [], permissions: [anyone] };
+        const reach: ReadReach = { within: { types: [], permissions: [anyone] } };
         const inside: string[] = [];
         for (let i = 0; i < 9; i++) {
           const visible = i % 3 === 1;

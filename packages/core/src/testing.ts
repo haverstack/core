@@ -311,13 +311,9 @@ export class MemoryAdapter implements StackAdapter {
     return this.select(query);
   }
 
-  // Declared as an optional field (not a fixed method) so a test subclass
-  // can override it to `undefined`, exercising ScopedStack's fallback for
-  // an adapter without it.
-  queryReadable?: (query: StackQuery, reach: ReadReach) => Promise<QueryResult> = async (
-    query,
-    reach,
-  ) => this.select(query, reach);
+  async queryReadable(query: StackQuery, reach: ReadReach): Promise<QueryResult> {
+    return this.select(query, reach);
+  }
 
   private select(query: StackQuery, reach?: ReadReach): QueryResult {
     const f = query.filter ?? {};

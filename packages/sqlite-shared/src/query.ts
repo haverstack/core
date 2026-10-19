@@ -221,19 +221,22 @@ const carriesPermission = (elements: AuthorityAssociation[], params: unknown[]):
 };
 
 /**
- * The reach as conditions on `r`: inside the fence, and met by one arm.
- * See docs/spec/adapters.md § Querying within a reach.
+ * The reach as conditions on `r`: inside the fence, and inside `within` by
+ * one of its arms. See docs/spec/adapters.md § Querying within a reach.
  */
 const reachConditions = (reach: ReadReach, params: unknown[]): string[] => {
   const conditions: string[] = [];
   if (reach.fence) conditions.push(inList('r.type_id', reach.fence, params));
-  const arms = [inList('r.type_id', reach.typeIds, params)];
-  if (reach.authored) {
-    params.push(reach.authored.subjectId);
-    arms.push(`(r.entity_id = ? AND ${inList('r.type_id', reach.authored.typeIds, params)})`);
+  const within = reach.within;
+  if (within) {
+    const arms = [inList('r.type_id', within.types, params)];
+    if (within.authored) {
+      params.push(within.authored.subjectId);
+      arms.push(`(r.entity_id = ? AND ${inList('r.type_id', within.authored.types, params)})`);
+    }
+    arms.push(carriesPermission(within.permissions, params));
+    conditions.push(`(${arms.join(' OR ')})`);
   }
-  arms.push(carriesPermission(reach.permissions, params));
-  conditions.push(`(${arms.join(' OR ')})`);
   return conditions;
 };
 

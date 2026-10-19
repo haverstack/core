@@ -1,28 +1,39 @@
 /**
  * Matching a ReadReach in memory
  * -------------------------------------------------------
- * The predicate a JavaScript adapter applies for queryReadable(), stated
- * once so every in-process adapter reads a reach the same way. A SQL
- * adapter states the same conditions in its own query language.
+ * The one reading of a reach in JavaScript: MemoryAdapter matches a query
+ * with it, and ScopedStack answers whether one Record is readable with it,
+ * over families rather than TypeIds. A SQL adapter states the same
+ * conditions in its own query language.
  * See docs/spec/adapters.md § Querying within a reach.
  */
 
 import { associationEqual } from '../associations/identity.js';
 import type { ReadReach, StackRecord } from '../types/index.js';
 
-/** Whether `record` is inside the reach: within the fence, and met by one of its arms. */
-export function inReach(record: StackRecord, reach: ReadReach): boolean {
-  if (reach.fence && !reach.fence.includes(record.typeId)) return false;
-  if (reach.typeIds.includes(record.typeId)) return true;
-  const authored = reach.authored;
+/**
+ * Whether `record` is inside the reach. `typeOf` names the Type the reach
+ * lists a Record under — its TypeId unless the reach is over families.
+ */
+export function inReach<Type extends string>(
+  record: StackRecord,
+  reach: ReadReach<Type>,
+  typeOf: (record: StackRecord) => string = (r) => r.typeId,
+): boolean {
+  const type = typeOf(record) as Type;
+  if (reach.fence && !reach.fence.includes(type)) return false;
+  const within = reach.within;
+  if (!within) return true;
+  if (within.types.includes(type)) return true;
+  const authored = within.authored;
   if (
     authored &&
-    authored.typeIds.includes(record.typeId) &&
+    authored.types.includes(type) &&
     record.createdBy?.subjectId === authored.subjectId
   ) {
     return true;
   }
-  return reach.permissions.some((p) =>
+  return within.permissions.some((p) =>
     (record.permissions ?? []).some((held) => associationEqual(p, held)),
   );
 }

@@ -82,21 +82,25 @@ export type ElementWriteOptions<E extends Association> = AspectWriteOptions & {
 
 /**
  * The Records one scoped request may read, as data an adapter matches
- * rather than rules it applies: `ScopedStack` has already resolved the
- * grants, rosters and delegation behind it. A Record is in reach when it
- * is inside `fence` and meets one of the three arms. Every Type is a
- * concrete TypeId, so an adapter needs no family concept.
+ * rather than rules it applies. A Record is in reach when it is inside
+ * `fence` and inside `within`; an absent part constrains nothing, and an
+ * empty list matches nothing, as in a `filter`. `ScopedStack` states the
+ * reach over type families, and `Stack` resolves each to its registered
+ * TypeIds before an adapter sees it, as for `filter.baseId`.
  * See docs/spec/adapters.md § Querying within a reach.
  */
-export type ReadReach = {
-  /** Only Records at these Types are in reach; absent, no Type is fenced off. */
-  fence?: TypeId[];
-  /** Types whose every Record is in reach. */
-  typeIds: TypeId[];
-  /** Types whose Records this subject authored are in reach. */
-  authored?: { subjectId: EntityId; typeIds: TypeId[] };
-  /** Records carrying one of these elements, by association identity, are in reach. */
-  permissions: AuthorityAssociation[];
+export type ReadReach<Type extends string = TypeId> = {
+  /** Only Records at these Types are in reach. */
+  fence?: Type[];
+  /** Records meeting one of these are in reach. */
+  within?: {
+    /** Every Record at these Types. */
+    types: Type[];
+    /** Records this subject authored at these Types. */
+    authored?: { subjectId: EntityId; types: Type[] };
+    /** Records carrying one of these elements, by association identity. */
+    permissions: AuthorityAssociation[];
+  };
 };
 
 /** The metadata an upload's `_attachment@1` record carries beside its bytes. */
@@ -164,8 +168,8 @@ export interface StackRecordAdapter {
    * queryRecords() over the Records in `reach` alone: the reach is one
    * more condition of the query, so the page, its cursor and whether one
    * comes back are decided among those Records only. Optional — without
-   * it, ScopedStack.query() filters pages after reading them.
-   * See docs/spec/adapters.md § Querying within a reach.
+   * it, ScopedStack.query() refuses, as a server already scopes each query
+   * to its session. See docs/spec/adapters.md § Querying within a reach.
    */
   queryReadable?(query: StackQuery, reach: ReadReach): Promise<QueryResult>;
 

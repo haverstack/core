@@ -14,6 +14,7 @@ import { ARGUMENTS_INVALID, StackBadRequestError, StackValidationError } from '.
 import { granteeErrors } from './associations/validation.js';
 import { SYSTEM_TYPES, GRANT_ACTIONS } from './types/index.js';
 import { granteeReaches } from './access.js';
+import type { RosterRoles } from './access.js';
 import type {
   BaseId,
   EntityId,
@@ -22,7 +23,6 @@ import type {
   GrantGrantee,
   GroupRole,
   RecordId,
-  StackRecord,
   TypeId,
 } from './types/index.js';
 import type { ValidationError } from './validate.js';
@@ -181,20 +181,11 @@ export function validateGrantBaseId(typeId: TypeId, content: unknown): Validatio
 export async function grantCoversGrantee(
   c: GrantContent,
   grantee: EntityId,
-  opts: {
-    allowDefault: boolean;
-    allowGroup: boolean;
-    groupRoles: Map<string, GroupRole | null>;
-    resolveRecord: (id: RecordId) => Promise<StackRecord | null>;
-  },
+  opts: { allowDefault: boolean; allowGroup: boolean; roles: RosterRoles },
 ): Promise<boolean> {
   const g = c.grantee;
   if (g?.kind === 'authenticated') return opts.allowDefault;
-  return granteeReaches(g, grantee, {
-    resolveRecord: opts.resolveRecord,
-    roles: opts.groupRoles,
-    allowGroup: opts.allowGroup,
-  });
+  return granteeReaches(g, grantee, opts);
 }
 
 /**
