@@ -69,7 +69,6 @@ import {
 } from '../errors.js';
 import { assertAssociationEdits } from '../associations/validation.js';
 import { addsOf, associationEqual } from '../associations/identity.js';
-import { isGroupRecord } from '../access.js';
 import {
   assertSortCapability,
   assertValidAssociationFilters,
@@ -77,7 +76,6 @@ import {
   assertValidSort,
   filtersContent,
 } from '../query-validation.js';
-import { bindingFieldsOf } from '../stack/identity-bindings.js';
 import {
   checkFamily,
   storedVersionDiffers,
@@ -110,6 +108,7 @@ import {
 // closes a runtime cycle with stack.ts, which does construct a ScopedStack.
 import type { Stack } from '../stack/stack.js';
 import { ScopeAuthority } from './authority.js';
+import { familyPolicy, ownerFieldRefusal } from './family-policy.js';
 import { ScopedSubscription } from './subscription.js';
 import type { FeedAuthorityCache } from './subscription.js';
 import type {
@@ -275,8 +274,11 @@ export class ScopedStack implements StackClient {
     fenceGrantRecord: boolean,
   ): Promise<void> {
     const { id } = record;
-    if (fenceGrantRecord) await this.requireOwnerForGrantRecord(record);
-    if (isGroupRecord(record)) {
+    const { writers } = familyPolicy(record.typeId);
+    // The owner-alone fence is on writes only: reading how a grant came to
+    // be is not the escalation it exists to stop.
+    if (writers === 'owner-alone' && fenceGrantRecord) await this.requireOwnerAlone(record);
+    if (writers === 'group-managers') {
       if (!this.#authority.isGroupManager(record)) {
         throw await this.#authority.denialFor(
           record,
@@ -347,7 +349,7 @@ export class ScopedStack implements StackClient {
           `Cannot reference file "${association.fileId}": it does not exist or you cannot read it`,
         );
       }
-    } else if (association.kind === 'relationship' && baseIdOf(typeId) !== SYSTEM_TYPES.GROUP) {
+    } else if (association.kind === 'relationship' && !familyPolicy(typeId).rosterAssociations) {
       const { target } = association;
       // `stackUrl` is tested for a value, not for presence: absent and
       // empty are one target — storage, targetEqual() and the filter all
@@ -393,8 +395,9 @@ export class ScopedStack implements StackClient {
     // owner principal acting for someone else would otherwise let that
     // subject name any fileId and reach the bytes through the uploader
     // clause, which matches on the subject this create stamps.
-    if (!this.#authority.ownerActingAlone && baseIdOf(typeId) === SYSTEM_TYPES.ATTACHMENT) {
-      const fileId = (content as Record<string, unknown>).fileId;
+    const namesFile = familyPolicy(typeId).createNamesFile;
+    if (!this.#authority.ownerActingAlone && namesFile !== undefined) {
+      const fileId = (content as Record<string, unknown>)[namesFile];
       if (typeof fileId !== 'string' || !(await this.#authority.hasReadableReference(fileId))) {
         throw new StackPermissionError(
           `Cannot reference file "${String(fileId)}": it does not exist or you cannot read it`,
@@ -411,7 +414,7 @@ export class ScopedStack implements StackClient {
         'A delegated principal cannot create an unlisted record, at create time or after',
       );
     }
-    this.requireOwnerForOwnerDid(typeId, (content as Record<string, unknown>).did);
+    this.requireOwnerFields(typeId, undefined, content);
     await this.requireAppIdMatchesPrincipal(opts.appId);
     if (opts.id !== undefined) {
       validateRecordId(opts.id);
@@ -544,17 +547,9 @@ export class ScopedStack implements StackClient {
       // Value-wise, not presence-wise: a client that reads a card, edits
       // its `name` and sends the whole content object back is not setting
       // the binding it round-trips, and `name` is writable by record-level
-      // permission. Same predicate restoreVersion() applies to a snapshot.
-      this.requireOwnerForAppIdentity(
-        record.typeId,
-        (field) =>
-          field in patch && patch[field] !== (record.content as Record<string, unknown>)[field],
-      );
-      // Likewise value-wise: re-sending the DID a card already holds
-      // claims nothing, and immutability refuses changing it regardless.
-      if ('did' in patch && patch.did !== (record.content as Record<string, unknown>).did) {
-        this.requireOwnerForOwnerDid(record.typeId, patch.did);
-      }
+      // permission.
+      const content = record.content as Record<string, unknown>;
+      this.requireOwnerFields(record.typeId, content, { ...content, ...patch });
       await this.requireFileRefAccess(record.typeId, patch);
     }
 
@@ -693,7 +688,7 @@ export class ScopedStack implements StackClient {
 
   /** requireReshareable()'s gate, asked of a record already found in its family. */
   private readonly gateReshare = async (record: StackRecord): Promise<void> => {
-    await this.requireOwnerForGrantRecord(record);
+    if (familyPolicy(record.typeId).writers === 'owner-alone') await this.requireOwnerAlone(record);
     if (!this.#authority.canReshare(record)) {
       throw await this.#authority.denialFor(
         record,
@@ -703,18 +698,18 @@ export class ScopedStack implements StackClient {
   };
 
   /**
-   * An `_app` card's `did` and `appId` are the owner's alone to set, or
-   * record-level `write` would be a second way to name the software behind
-   * a key. `_entity` cards stay writable by grant, as a contacts app needs.
-   * See docs/spec/identity.md § DID bindings.
+   * Refuse a write moving content its family reserves to the owner acting
+   * alone — an `_app` card's bindings, the owner's own DID on an `_entity`
+   * — whichever verb carries it. See docs/spec/identity.md § DID bindings.
    */
-  private requireOwnerForAppIdentity(
+  private requireOwnerFields(
     typeId: TypeId,
-    touches: (field: 'did' | 'appId') => boolean,
+    before: Record<string, unknown> | undefined,
+    after: Record<string, unknown>,
   ): void {
-    if (baseIdOf(typeId) !== SYSTEM_TYPES.APP) return;
-    if (!bindingFieldsOf(SYSTEM_TYPES.APP).some(touches)) return;
-    this.requireOwnerActingAlone('Only the stack owner may set an _app record’s did or appId');
+    if (this.#authority.ownerActingAlone) return;
+    const refusal = ownerFieldRefusal(typeId, before, after, this.stack.ownerEntityId);
+    if (refusal) throw new StackPermissionError(refusal);
   }
 
   /**
@@ -735,28 +730,16 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * The owner's own DID is the one `_entity` binding a grantee may not
-   * claim: `ownerProfile` adopts whichever card holds it.
-   * See docs/spec/identity.md § DID bindings.
-   */
-  private requireOwnerForOwnerDid(typeId: TypeId, did: unknown): void {
-    if (baseIdOf(typeId) !== SYSTEM_TYPES.ENTITY) return;
-    if (did !== this.stack.ownerEntityId) return;
-    this.requireOwnerActingAlone('Only the stack owner may claim the owner’s own did');
-  }
-
-  /**
-   * `_grant` and `_install` Records are authority, so only the owner acting
-   * alone may write one; reading them stays on the ordinary gate.
+   * Refuse anyone but the owner acting alone a write to a family only the
+   * owner writes — `_grant` and `_install`, which are authority — with the
+   * refusal an unreadable Record answers with.
    * See docs/spec/access-control.md § What a grant covers.
    */
-  private async requireOwnerForGrantRecord(record: StackRecord): Promise<void> {
-    const family = baseIdOf(record.typeId);
-    if (family !== SYSTEM_TYPES.GRANT && family !== SYSTEM_TYPES.INSTALL) return;
+  private async requireOwnerAlone(record: StackRecord): Promise<void> {
     if (this.#authority.ownerActingAlone) return;
     throw await this.#authority.denialFor(
       record,
-      `Only the stack owner may write a ${family} record`,
+      `Only the stack owner may write a ${baseIdOf(record.typeId)} record`,
     );
   }
 
@@ -848,13 +831,12 @@ export class ScopedStack implements StackClient {
     if (!this.#authority.ownerActingAlone) {
       const target = await this.stack.getVersion(id, version);
       if (target) {
-        // A rollback that would move a card's binding is the same trust
-        // decision a content patch reserves to the owner, reached by another route.
-        this.requireOwnerForAppIdentity(
+        // A rollback moving a reserved value is the same trust decision a
+        // content patch reserves to the owner, reached by another route.
+        this.requireOwnerFields(
           record.typeId,
-          (field) =>
-            (target.content as Record<string, unknown>)[field] !==
-            (record.content as Record<string, unknown>)[field],
+          record.content as Record<string, unknown>,
+          target.content as Record<string, unknown>,
         );
         await this.requireFileRefAccess(target.typeId, target.content);
         // Content's file refs are the only reference a restore can put
@@ -878,11 +860,14 @@ export class ScopedStack implements StackClient {
     content: Record<string, unknown>,
     opts: IfVersionOptions = {},
   ): Promise<StackRecord> {
-    if (!this.#authority.ownerActingAlone) await this.requireInstallMigration(id, toTypeId);
-    // The new content is a fresh set of file references, so an app is held
-    // to the gate create() applies; otherwise a migration could point one of
-    // its records at any attachment and read the bytes through it.
-    if (!this.#authority.ownerActingAlone) await this.requireFileRefAccess(toTypeId, content);
+    if (!this.#authority.ownerActingAlone) {
+      const record = await this.requireInstallMigration(id, toTypeId);
+      this.requireOwnerFields(toTypeId, record.content, content);
+      // The new content is a fresh set of file references, so an app is held
+      // to the gate create() applies; otherwise a migration could point one
+      // of its records at any attachment and read the bytes through it.
+      await this.requireFileRefAccess(toTypeId, content);
+    }
     return this.stack.commitMigration(id, toTypeId, content, { ...opts, ...this.actor });
   }
 
@@ -893,7 +878,7 @@ export class ScopedStack implements StackClient {
    * owner may migrate a tombstone; an app sees it without content.
    * See docs/spec/apps.md § Migrating an installed app's types.
    */
-  private async requireInstallMigration(id: RecordId, toTypeId: TypeId): Promise<void> {
+  private async requireInstallMigration(id: RecordId, toTypeId: TypeId): Promise<StackRecord> {
     const record = await this.stack.get(id, { includeDeleted: true });
     if (!record || !(await this.#authority.installMayMigrate(record, toTypeId))) {
       throw new StackPermissionError(
@@ -905,6 +890,7 @@ export class ScopedStack implements StackClient {
         `Record "${id}" is soft-deleted; undelete it before migrating it.`,
       );
     }
+    return record;
   }
 
   /**
