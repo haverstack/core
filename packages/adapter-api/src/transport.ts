@@ -30,6 +30,21 @@ export const isLoopbackUrl = (url: string): boolean => {
 };
 
 /**
+ * The scheme a server URL is dialed with, or null for anything this adapter
+ * does not speak. Read from the parsed URL, which normalizes it, so neither
+ * casing nor surrounding whitespace in the string decides it.
+ */
+export const serverUrlScheme = (url: string): 'https' | 'http' | null => {
+  let protocol: string;
+  try {
+    protocol = new URL(url).protocol;
+  } catch {
+    return null;
+  }
+  return protocol === 'https:' ? 'https' : protocol === 'http:' ? 'http' : null;
+};
+
+/**
  * One caller-supplied value as one URL path segment, so an ID can never
  * reach a different endpoint than the one the method names. `.` and `..`
  * are refused outright: URL parsing collapses them even percent-encoded.

@@ -75,7 +75,8 @@ export async function checkAccess(
     // write by validatePermissions() and again here.
     // See docs/spec/access-control.md § Write implies read.
     if (mode === 'write' && !holdsRead(perms, p.grantee)) continue;
-    if (await granteeCovers(p.grantee, subjectEntityId, resolveRecord, roles)) return true;
+    if (!subjectEntityId) continue;
+    if (await granteeReaches(p.grantee, subjectEntityId, { resolveRecord, roles })) return true;
   }
 
   return false;
@@ -106,19 +107,33 @@ function isWorldRead(association: AuthorityAssociation): boolean {
 }
 
 /**
- * Whether a grantee reaches this subject. `role: 'member'` is the wider
- * set — an admin satisfies it — and `role: 'admin'` the narrower.
+ * Whether a grantee reaches `entityId`, for both layers alike. Read as data,
+ * so an arm the write would refuse confers nothing; `member` is the wider
+ * role. See docs/spec/access-control.md § Refused at the write, and again at evaluation.
  */
-async function granteeCovers(
-  grantee: Grantee,
-  subjectEntityId: EntityId | null,
-  resolveRecord: RecordResolver,
-  roles: Map<string, GroupRole | null>,
+export async function granteeReaches(
+  grantee: unknown,
+  entityId: EntityId,
+  opts: {
+    resolveRecord: RecordResolver;
+    roles: Map<string, GroupRole | null>;
+    allowGroup?: boolean;
+  },
 ): Promise<boolean> {
-  if (!subjectEntityId) return false;
-  if (grantee.kind === 'entity') return grantee.entityId === subjectEntityId;
-  const role = await resolveGroupRole(grantee.groupId, subjectEntityId, resolveRecord, roles);
-  return roleSatisfies(role, grantee.role);
+  if (!grantee || typeof grantee !== 'object') return false;
+  const g = grantee as Partial<{ kind: string; entityId: string; groupId: string; role: string }>;
+  switch (g.kind) {
+    case 'entity':
+      return !!g.entityId && g.entityId === entityId;
+    case 'group': {
+      if (opts.allowGroup === false || !g.groupId) return false;
+      if (g.role !== 'member' && g.role !== 'admin') return false;
+      const held = await resolveGroupRole(g.groupId, entityId, opts.resolveRecord, opts.roles);
+      return roleSatisfies(held, g.role);
+    }
+    default:
+      return false;
+  }
 }
 
 /**

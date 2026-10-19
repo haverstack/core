@@ -9,12 +9,7 @@
  * subject.
  */
 
-import {
-  checkAccess,
-  groupRoleFromAssociations,
-  isGroupRecord,
-  isOwnerActingAlone,
-} from '../access.js';
+import { checkAccess, groupRoleFromAssociations, isOwnerActingAlone } from '../access.js';
 import type { AccessMode } from '../access.js';
 import { StackError, StackNotFoundError, StackPermissionError } from '../errors.js';
 import {
@@ -25,6 +20,7 @@ import {
 } from '../grants.js';
 import { filtersContent } from '../query-validation.js';
 import { baseIdOf, fileRefFields } from '../schema.js';
+import { familyPolicy } from './family-policy.js';
 import { claimedFamilies, familyStanding, INSTALL_APP_LABEL, linkedIds } from '../install.js';
 import {
   findFirstMatch,
@@ -457,7 +453,9 @@ export class ScopeAuthority {
    * See docs/spec/access-control.md § Record-level permissions.
    */
   canReshare(record: StackRecord): boolean {
-    if (isGroupRecord(record)) return this.isGroupManager(record);
+    if (familyPolicy(record.typeId).writers === 'group-managers') {
+      return this.isGroupManager(record);
+    }
     if (!this.mayReshare(this.principalId, record)) return false;
     return !this.delegated || this.mayReshare(this.subjectId, record);
   }

@@ -133,3 +133,39 @@ describe('a grant target is refused as a grant target, every problem at once', (
     );
   });
 });
+
+// Both layers read a grantee through one evaluator, so a shape the write
+// would refuse confers nothing at either, however it reached storage.
+// See docs/spec/access-control.md § Refused at the write, and again at evaluation.
+describe('a stored permission grantee the write would refuse reaches nobody', () => {
+  const READER = 'did:key:reader';
+
+  test.each([
+    ['an unknown kind', (groupId: string) => ({ kind: 'team', groupId, role: 'member' })],
+    ['a group arm with no role', (groupId: string) => ({ kind: 'group', groupId })],
+    [
+      'a group arm with an unknown role',
+      (groupId: string) => ({ kind: 'group', groupId, role: 'owner' }),
+    ],
+    ['an entity arm with an empty entityId', () => ({ kind: 'entity', entityId: '' })],
+  ])('%s', async (_, grantee) => {
+    const adapter = await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' });
+    const local = await Stack.open(adapter);
+    await local.defineType({ id: NOTE, name: 'Note', schema: { text: { kind: 'text' } } });
+    const group = await local.create(
+      '_group@1',
+      { name: 'g' },
+      {
+        associations: [
+          { kind: 'relationship', label: 'admin', target: { kind: 'entity', entityId: READER } },
+        ],
+      },
+    );
+    const note = await local.create(NOTE, { text: 'x' });
+    adapter.records.set(note.id, {
+      ...(await adapter.getRecord(note.id))!,
+      permissions: [permission(grantee(group.id))],
+    });
+    expect(await local.asEntity(READER).get(note.id)).toBeNull();
+  });
+});
