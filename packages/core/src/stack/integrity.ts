@@ -18,13 +18,12 @@ import { associationIdentical } from '../associations/identity.js';
 import { validateRecordId } from './record-id.js';
 import { baseIdOf } from '../schema.js';
 import { findFirstMatch } from './reads.js';
-import { cursorKeyProblem } from './cursor-seal.js';
 import { SYSTEM_TYPES } from '../types/index.js';
 import type {
   Association,
   AttachmentContent,
-  ConfigContent,
   DataAssociation,
+  EntityId,
   RecordId,
   StackRecord,
   TypeId,
@@ -335,25 +334,21 @@ export function assertAttachmentImmutable(
 // -------------------------------------------------------
 
 /**
- * `_config.entityId` and `cursorKey` anchor ownership and every outstanding
- * scoped cursor, so no write changes either once set — a conflict with
- * integrity, not a schema violation. See docs/spec.md § The `_config` record.
+ * `_config.entityId` defines stack ownership; neither patchContent() nor
+ * restoreVersion() may change it. A conflict with stack integrity, not a
+ * schema violation — hence StackConflictError. See docs/spec.md § The
+ * `_config` record.
  */
-export function checkConfigUnchanged(existing: ConfigContent, next: ConfigContent): void {
-  if (next.entityId !== existing.entityId) {
+export function checkConfigEntityIdUnchanged(
+  existingEntityId: EntityId,
+  newEntityId: EntityId,
+): void {
+  if (newEntityId !== existingEntityId) {
     throw new StackConflictError(
       'Cannot change _config.entityId: it defines stack ownership. ' +
         'Ownership transfer is not a supported operation.',
     );
   }
-  if (next.cursorKey === existing.cursorKey) return;
-  if (existing.cursorKey !== undefined) {
-    throw new StackConflictError(
-      'Cannot change _config.cursorKey: every outstanding scoped cursor is sealed under it.',
-    );
-  }
-  const problem = cursorKeyProblem(next.cursorKey);
-  if (problem) throw new StackValidationError([{ path: 'cursorKey', message: problem }]);
 }
 
 /**

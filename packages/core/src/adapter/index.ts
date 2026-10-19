@@ -23,7 +23,6 @@ export type {
 export { sameAssociationSet } from '../associations/identity.js';
 export { ElementSetMovedError, OwnerMismatchError, softDeletedRefusal } from '../errors.js';
 export { combineAdapters } from './combine.js';
-export { generateCursorKey } from '../stack/cursor-seal.js';
 export {
   assertQueryCapabilities,
   assertSortCapability,

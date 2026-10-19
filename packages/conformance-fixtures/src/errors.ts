@@ -1099,12 +1099,12 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
   {
     name: 'error-bad-request-malformed-cursor',
     description:
-      'A query with a cursor the server did not issue for it returns 400 with code ' +
-      '"bad_request" — a structurally malformed request, distinct from a 422 ' +
-      'content-validation failure. Reconstructed as StackBadRequestError. A scoped cursor is ' +
-      'sealed and bound to the query that produced it, so a forged, altered or carried-over ' +
-      'cursor fails the same way an undecodable one does, and the message names the input ' +
-      'itself. See docs/spec/disclosure.md § Scoped cursors are sealed.',
+      'A query with an undecodable pagination cursor returns 400 with code "bad_request" — a ' +
+      'structurally malformed request, distinct from a 422 content-validation failure. ' +
+      'Reconstructed as StackBadRequestError. "not-a-valid-cursor" is not valid base64 ' +
+      "(the hyphens aren't in the alphabet), so decoding fails before the sort-field is ever " +
+      'inspected — the message names the malformed input itself, not a sort field. See ' +
+      'error-bad-request-unknown-sort-field-cursor for the distinct, decodable-but-invalid case.',
     method: 'POST',
     path: '/records/query',
     requestBody: { cursor: 'not-a-valid-cursor' },
@@ -1113,6 +1113,28 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       error: {
         code: 'bad_request',
         message: 'Invalid cursor: malformed "not-a-valid-cursor"',
+      },
+    },
+  },
+  {
+    name: 'error-bad-request-unknown-sort-field-cursor',
+    description:
+      'A cursor that decodes cleanly as base64 but names a sort field the server ' +
+      "doesn't recognize is a second, distinct 400 bad_request branch from the malformed-" +
+      'base64 case above (see error-bad-request-malformed-cursor) — both map to the same code, ' +
+      'but a server that only implements one of the two decode failures is only half-conformant. ' +
+      "A cursor payload is a server's own to shape — this one carries the sort position this " +
+      'implementation writes, and what the fixture pins is the branch, not the encoding.',
+    method: 'POST',
+    path: '/records/query',
+    requestBody: {
+      cursor: 'eyJrIjoibmF0aXZlIiwiZiI6ImJhZGZpZWxkIiwiaSI6IjFoazE1M3gwMDAwMSIsInYiOjEyM30=',
+    },
+    responseStatus: 400,
+    responseBody: {
+      error: {
+        code: 'bad_request',
+        message: 'Invalid cursor: unknown sort field "badfield"',
       },
     },
   },

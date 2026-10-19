@@ -53,9 +53,6 @@ export async function checkAccess(
   resolveRecord: RecordResolver,
 ): Promise<boolean> {
   if (subjectEntityId && subjectEntityId === ownerEntityId) return true;
-  // `_config` holds the cursor key and is the owner's alone: refused at the
-  // write, and read as reaching nobody here. See docs/spec.md § The `_config` record.
-  if (record.id === SYSTEM_TYPES.CONFIG) return false;
 
   const perms = record.permissions;
 

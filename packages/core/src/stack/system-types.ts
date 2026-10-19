@@ -23,8 +23,6 @@ export const systemTypeDefinitions = (): DefineTypeOptions[] => [
       entityId: { kind: 'string', required: true },
       // Optional passthrough app metadata — see ConfigContent.timezone.
       timezone: { kind: 'string' },
-      // ScopedStack's cursor key — see ConfigContent.cursorKey.
-      cursorKey: { kind: 'string' },
     },
   },
   {

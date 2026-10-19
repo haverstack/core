@@ -87,7 +87,6 @@ import {
   ElementSetMovedError,
   UseAfterCloseError,
   InvalidAdapterError,
-  RelayScopeError,
   StackConflictError,
   StackMigrationError,
   StackNotFoundError,
@@ -122,7 +121,6 @@ import { applyAssociationEdits, associationDelta } from '../associations/identit
 import { validateGrantee, validateGrantBaseId } from '../grants.js';
 import type { GrantQuery } from '../grants.js';
 import { bindingFieldsOf } from './identity-bindings.js';
-import { CursorSeal, generateCursorKey } from './cursor-seal.js';
 import { validateInstall } from '../install.js';
 import type { AppManifest, InstallPlan } from '../install.js';
 import { assertAttachmentSize, assertContentSize } from './limits.js';
@@ -156,7 +154,7 @@ import {
   checkBindingsOnCreate,
   checkBindingsOnMigrate,
   checkBindingsOnUpdate,
-  checkConfigUnchanged,
+  checkConfigEntityIdUnchanged,
 } from './integrity.js';
 import { systemTypeDefinitions } from './system-types.js';
 import type {
@@ -318,7 +316,6 @@ export class Stack implements StackClient {
       new MigrationRegistry(opts.migrations ?? []),
     );
     for (const type of systemTypeDefinitions()) await stack.defineType(type);
-    await stack.ensureCursorKey();
     if (opts.ownerProfile) {
       await stack.ensureOwnerEntity(opts.ownerProfile);
     }
@@ -397,59 +394,7 @@ export class Stack implements StackClient {
       assertOpen: () => this.assertOpen(),
       relaysChanges: this.relaysChanges,
       migrations: this.migrations,
-      cursorSeal: () => this.cursorSeal(),
     });
-  }
-
-  /** Shared by every scope, so `_config` is read once per Stack. */
-  private cursorSealing: Promise<CursorSeal> | undefined;
-
-  /**
-   * The sealer for scoped query cursors, keyed by `_config.cursorKey`. A
-   * failed load is not cached, so the next scoped query tries again.
-   * See stack/cursor-seal.ts.
-   */
-  private cursorSeal(): Promise<CursorSeal> {
-    this.cursorSealing ??= this.loadCursorSeal().catch((err: unknown) => {
-      this.cursorSealing = undefined;
-      throw err;
-    });
-    return this.cursorSealing;
-  }
-
-  private async loadCursorSeal(): Promise<CursorSeal> {
-    const config = await this.adapter.getRecord(SYSTEM_TYPES.CONFIG);
-    const key = (config?.content as ConfigContent | undefined)?.cursorKey;
-    if (key === undefined) {
-      throw new RelayScopeError(
-        "This stack's _config is not readable here, so a scoped view has no key to seal its " +
-          'query cursors under. Query through a session-scoped stack instead.',
-      );
-    }
-    return CursorSeal.fromKey(key);
-  }
-
-  /**
-   * Give a `_config` holding no cursor key one. The engines in this repo
-   * write it with `_config`; this covers a store another adapter created.
-   * It runs before open() returns, so no subscriber is told of it, and a
-   * `_config` this session cannot read is left to refuse scoped queries.
-   */
-  private async ensureCursorKey(): Promise<void> {
-    for (;;) {
-      const config = await this.adapter.getRecord(SYSTEM_TYPES.CONFIG);
-      if (!config || (config.content as ConfigContent).cursorKey !== undefined) return;
-      try {
-        // Pinned to the read, so two instances opening at once keep one key.
-        await this.patchContent(
-          SYSTEM_TYPES.CONFIG,
-          { cursorKey: generateCursorKey() },
-          { ifVersion: config.version },
-        );
-      } catch (err) {
-        if (!(err instanceof StackVersionConflictError)) throw err;
-      }
-    }
   }
 
   collection<S extends ReadonlyTypeSchema>(handle: TypeHandle<S>): Collection<ContentOf<S>> {
@@ -852,7 +797,10 @@ export class Stack implements StackClient {
     await checkBindingsOnUpdate(this, existing.typeId, id, patch, existing.content, merged);
 
     if (id === SYSTEM_TYPES.CONFIG) {
-      checkConfigUnchanged(existing.content as ConfigContent, merged as ConfigContent);
+      checkConfigEntityIdUnchanged(
+        (existing.content as ConfigContent).entityId,
+        (merged as ConfigContent).entityId,
+      );
     }
     return merged;
   }
@@ -1024,11 +972,6 @@ export class Stack implements StackClient {
     if (delta.length === 0) return existing;
     // After the no-op check: a call that moves nothing is not refused for
     // a stored set it did not write.
-    if (existing.id === SYSTEM_TYPES.CONFIG && next.length > 0) {
-      throw new StackConflictError(
-        "Cannot share the _config record: it holds the key the stack's scoped cursors are sealed under.",
-      );
-    }
     this.assertPermissionSet(next);
     const change = new PendingChange('reshare', {
       actor: normalizeActor(opts.actor),
@@ -1358,7 +1301,10 @@ export class Stack implements StackClient {
     }
 
     if (id === SYSTEM_TYPES.CONFIG) {
-      checkConfigUnchanged(existing.content as ConfigContent, target.content as ConfigContent);
+      checkConfigEntityIdUnchanged(
+        (existing.content as ConfigContent).entityId,
+        (target.content as ConfigContent).entityId,
+      );
     }
 
     // Restoring is a write like any other, so it owes the same immutability
@@ -1469,7 +1415,10 @@ export class Stack implements StackClient {
     await checkBindingsOnMigrate(this, existing.typeId, toTypeId, id, existingContent, content);
 
     if (id === SYSTEM_TYPES.CONFIG) {
-      checkConfigUnchanged(existing.content as ConfigContent, content as ConfigContent);
+      checkConfigEntityIdUnchanged(
+        (existing.content as ConfigContent).entityId,
+        (content as ConfigContent).entityId,
+      );
     }
 
     const change = new PendingChange('migrate', {

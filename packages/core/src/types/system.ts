@@ -162,12 +162,6 @@ export type ConfigContent = {
    * default. See docs/spec.md § The `_config` record.
    */
   timezone?: string;
-  /**
-   * The key ScopedStack seals query cursors under, base64url. Minted on
-   * first use, immutable once set, and read by nothing but the owner — see
-   * docs/spec.md § The `_config` record.
-   */
-  cursorKey?: string;
 };
 
 /** Reserved system type IDs */
