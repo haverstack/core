@@ -278,7 +278,7 @@ export class ScopedStack implements StackClient {
     const { writers } = familyPolicy(record.typeId);
     // The owner-alone fence is on writes only: reading how a grant came to
     // be is not the escalation it exists to stop.
-    if (writers === 'owner-alone' && fenceGrantRecord) await this.requireOwnerAlone(record);
+    if (fenceGrantRecord) await this.requireOwnerAloneWriter(record);
     if (writers === 'group-managers') {
       if (!this.#authority.isGroupManager(record)) {
         throw await this.#authority.denialFor(
@@ -690,7 +690,7 @@ export class ScopedStack implements StackClient {
 
   /** requireReshareable()'s gate, asked of a record already found in its family. */
   private readonly gateReshare = async (record: StackRecord): Promise<void> => {
-    if (familyPolicy(record.typeId).writers === 'owner-alone') await this.requireOwnerAlone(record);
+    await this.requireOwnerAloneWriter(record);
     if (!this.#authority.canReshare(record)) {
       throw await this.#authority.denialFor(
         record,
@@ -734,10 +734,11 @@ export class ScopedStack implements StackClient {
   /**
    * Refuse anyone but the owner acting alone a write to a family only the
    * owner writes — `_grant` and `_install`, which are authority — with the
-   * refusal an unreadable Record answers with.
+   * refusal an unreadable Record answers with. Any other family passes.
    * See docs/spec/access-control.md § What a grant covers.
    */
-  private async requireOwnerAlone(record: StackRecord): Promise<void> {
+  private async requireOwnerAloneWriter(record: StackRecord): Promise<void> {
+    if (familyPolicy(record.typeId).writers !== 'owner-alone') return;
     if (this.#authority.ownerActingAlone) return;
     throw await this.#authority.denialFor(
       record,
