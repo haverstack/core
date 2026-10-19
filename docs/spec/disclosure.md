@@ -45,4 +45,16 @@ This is the same closure [reference-creation gating](./access-control.md#referen
 
 **The closure is in the answer, not in the timing.** Refusing an existing Record does strictly more work than refusing a missing one — a fetch, then a read check that may walk grants and a Group roster — so a caller measuring closely enough can still tell the two apart. Constant-time refusal is not attempted: it would mean paying the read check on every miss, and the deployments this spec targets are not where that trade pays.
 
+## What a query reveals
+
+A scoped `query()` is held to the same rule as a refusal: **a page tells a requester nothing about Records it cannot read.** That covers more of a response than its `records`:
+
+- **The cursor.** A cursor names the last Record its page read — a SQLite adapter's carries that Record's ID and its sort value, which for a content sort is the field's stored text. A cursor naming a hidden Record would hand its content to anyone who decodes it, and since an adapter resumes from any cursor a caller makes up, would let a requester binary-search a hidden field's values or, by ID and timestamp, the Stack's write timing.
+- **Whether a cursor comes back.** A query that stops early for any reason but running out of readable Records answers "is there more that I cannot see?"
+- **How full each page is.** A page sized by how many hidden Records sat between the readable ones measures them.
+
+So a scoped query never reads a hidden Record at all. `ScopedStack` describes what the requester may read and the adapter [queries within that reach](./adapters.md#querying-within-a-reach): every page is decided among readable Records, its cursor names one of them, and the query ends exactly where they do. Hidden Records change nothing about any response — the same readable Records answer with the same pages and the same cursors whatever else the Stack holds. Cursors stay plain adapter cursors, with nothing sealed and no state kept between requests, because there is nothing in one to hide.
+
+**An adapter without `queryReadable()` does not close this.** `ScopedStack.query()` then reads a bounded window of stored Records per call and drops what the requester cannot read, so all three disclosures above stand. Every local adapter implements it; the one that need not is `APIAdapter`, whose server answers every query within its own session's reach already.
+
 A query result carries no count of the whole match, for the same reason — see [Data model § Sorting and pagination](./data-model.md#sorting-and-pagination).

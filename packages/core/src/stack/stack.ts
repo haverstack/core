@@ -53,6 +53,7 @@ import type {
   StackQuery,
   RecordFilter,
   QueryResult,
+  ReadReach,
   AssociationEdit,
   AuthorityAssociation,
   DataAssociation,
@@ -394,6 +395,10 @@ export class Stack implements StackClient {
       assertOpen: () => this.assertOpen(),
       relaysChanges: this.relaysChanges,
       migrations: this.migrations,
+      ...(this.adapter.queryReadable && {
+        queryReadable: (query: StackQuery, reach: ReadReach) =>
+          this.dispatchQuery(query, (resolved) => this.adapter.queryReadable!(resolved, reach)),
+      }),
     });
   }
 
@@ -1177,6 +1182,18 @@ export class Stack implements StackClient {
    * docs/spec/data-model.md § Queries.
    */
   async query(query: StackQuery = {}): Promise<QueryResult> {
+    return this.dispatchQuery(query, (resolved) => this.adapter.queryRecords(resolved));
+  }
+
+  /**
+   * Everything query() does around the adapter call: the checks, the
+   * family resolution, the migration on the way out. `read` is the call,
+   * so a scoped query within a reach gets the same treatment as any other.
+   */
+  private async dispatchQuery(
+    query: StackQuery,
+    read: (resolved: StackQuery) => Promise<QueryResult>,
+  ): Promise<QueryResult> {
     this.assertOpen();
     const { presentAt, filter, limit: rawLimit, ...rest } = query;
     assertValidContentByType(filter);
@@ -1192,7 +1209,7 @@ export class Stack implements StackClient {
       return { records: [], cursor: null };
     }
 
-    const result = await this.adapter.queryRecords({
+    const result = await read({
       ...rest,
       ...(query.sort && { sort: normalizeSort(query.sort) }),
       ...(resolvedFilter !== undefined && { filter: resolvedFilter }),

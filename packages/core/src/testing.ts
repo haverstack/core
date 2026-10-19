@@ -34,12 +34,14 @@ import type {
   StackCapabilities,
   BlobInfo,
   QuerySort,
+  ReadReach,
 } from './types/index.js';
 import { SYSTEM_TYPES } from './types/index.js';
 import { applyMergePatch } from './merge.js';
 import { fileRefFields } from './schema.js';
 import { compareSortEntries, constantSortEntry, contentSortEntry } from './adapter/sort.js';
 import type { SortEntry } from './adapter/sort.js';
+import { inReach } from './adapter/reach.js';
 
 import {
   ElementSetMovedError,
@@ -306,8 +308,21 @@ export class MemoryAdapter implements StackAdapter {
 
   /** Cursor is a stringified offset into insertion order. */
   async queryRecords(query: StackQuery): Promise<QueryResult> {
+    return this.select(query);
+  }
+
+  // Declared as an optional field (not a fixed method) so a test subclass
+  // can override it to `undefined`, exercising ScopedStack's fallback for
+  // an adapter without it.
+  queryReadable?: (query: StackQuery, reach: ReadReach) => Promise<QueryResult> = async (
+    query,
+    reach,
+  ) => this.select(query, reach);
+
+  private select(query: StackQuery, reach?: ReadReach): QueryResult {
     const f = query.filter ?? {};
     let results = this.order.map((id) => this.records.get(id)!);
+    if (reach) results = results.filter((r) => inReach(r, reach));
     // _config is addressable only by ID (getRecord), never returned by a
     // generic query — mirroring the real SQL adapters' WHERE exclusion.
     results = results.filter((r) => r.id !== SYSTEM_TYPES.CONFIG);

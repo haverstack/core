@@ -41,12 +41,12 @@ export const queryRecordsFixtures: ConformanceFixture<
     name: 'query-empty-page-with-live-cursor',
     description:
       'An empty records array with a non-null cursor is a valid response and does NOT mean the ' +
-      'result set is exhausted — the server filtered a bounded window of stored Records against ' +
-      "the requester's permissions and none of them were readable. A requester with little " +
-      'visibility into a large Stack can receive several of these in a row before results ' +
-      'appear. cursor: null is the only end-of-results signal; a client that stops paging on an ' +
-      'empty page silently truncates its own results. See docs/spec/data-model.md § Sorting and ' +
-      'pagination.',
+      "result set is exhausted. A server whose adapter cannot query within the requester's " +
+      'reach filters a bounded window of stored Records against its permissions, and a foreign ' +
+      'server may filter after paging however it likes; either can return several of these in a ' +
+      'row before results appear. cursor: null is the only end-of-results signal; a client that ' +
+      'stops paging on an empty page silently truncates its own results. See ' +
+      'docs/spec/data-model.md § Sorting and pagination.',
     method: 'POST',
     path: '/records/query',
     requestBody: { filter: { typeId: 'com.example/note@1' }, limit: 2 },

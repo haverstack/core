@@ -15,13 +15,14 @@
 
 import {
   StackBadRequestError,
+  type AuthorityAssociation,
   type ContentArm,
   type ContentSortKey,
   type NativeSortField,
   type StackQuery,
 } from '@haverstack/core';
 import { constantSortEntry, contentSortKey, parseContentFilterKey } from '@haverstack/core/adapter';
-import type { SortEntry } from '@haverstack/core/adapter';
+import type { ReadReach, SortEntry } from '@haverstack/core/adapter';
 import {
   byTypeDescriptor,
   decodeCursor,
@@ -30,6 +31,7 @@ import {
   type DecodedCursor,
 } from './cursor.js';
 import { sanitizeFts5Query } from './fts5.js';
+import { permissionKeyColumns } from './mappers.js';
 
 /** One statement plus the parameters it binds, in textual order. */
 export type QueryStatement = { sql: string; params: unknown[] };
@@ -197,12 +199,53 @@ const contentConditions = (
   return conditions;
 };
 
+/** A list of values as the `IN` that matches any of them; an empty list matches nothing. */
+const inList = (column: string, values: readonly string[], params: unknown[]): string => {
+  if (values.length === 0) return '0';
+  params.push(...values);
+  return `${column} IN (${values.map(() => '?').join(',')})`;
+};
+
+/**
+ * Whether the record carries one of `elements`, matched on the permissions
+ * table's key — the identity editAccess() removes by. A semi-join, like the
+ * association filters, read through idx_permissions_element.
+ */
+const carriesPermission = (elements: AuthorityAssociation[], params: unknown[]): string => {
+  if (elements.length === 0) return '0';
+  const match = elements.map((p) => {
+    params.push(p.kind, p.label, ...permissionKeyColumns(p));
+    return '(p.kind = ? AND p.label = ? AND p.grantee_kind = ? AND p.grantee_id = ? AND p.role = ?)';
+  });
+  return `r.id IN (SELECT p.record_id FROM permissions p WHERE ${match.join(' OR ')})`;
+};
+
+/**
+ * The reach as conditions on `r`: inside the fence, and met by one arm.
+ * See docs/spec/adapters.md § Querying within a reach.
+ */
+const reachConditions = (reach: ReadReach, params: unknown[]): string[] => {
+  const conditions: string[] = [];
+  if (reach.fence) conditions.push(inList('r.type_id', reach.fence, params));
+  const arms = [inList('r.type_id', reach.typeIds, params)];
+  if (reach.authored) {
+    params.push(reach.authored.subjectId);
+    arms.push(`(r.entity_id = ? AND ${inList('r.type_id', reach.authored.typeIds, params)})`);
+  }
+  arms.push(carriesPermission(reach.permissions, params));
+  conditions.push(`(${arms.join(' OR ')})`);
+  return conditions;
+};
+
 /**
  * Every condition on the records row itself — everything a query asks
  * except where in the ordering to resume, which is per-partition and gets
  * appended by the caller.
  */
-const recordConditions = (query: StackQuery): { conditions: string[]; params: unknown[] } => {
+const recordConditions = (
+  query: StackQuery,
+  reach: ReadReach | undefined,
+): { conditions: string[]; params: unknown[] } => {
   const conditions: string[] = ["r.id != '_config'"];
   const params: unknown[] = [];
   const f = query.filter ?? {};
@@ -244,6 +287,8 @@ const recordConditions = (query: StackQuery): { conditions: string[]; params: un
   if (!f.includeUnlisted) {
     conditions.push('r.unlisted_at IS NULL');
   }
+
+  if (reach) conditions.push(...reachConditions(reach, params));
 
   inFilter('type_id', f.typeId);
 
@@ -418,17 +463,17 @@ const statement = (
  * so the second is never run for a page that doesn't reach it. Each still
  * needs the row budget its `LIMIT ?` binds — see atBudget.
  */
-export const buildQueryPlan = (query: StackQuery): QueryStatement[] => {
+export const buildQueryPlan = (query: StackQuery, reach?: ReadReach): QueryStatement[] => {
   const dir = sqlDirection(query);
   const op = dir === 'ASC' ? '>' : '<';
   const decoded = query.cursor ? decodeCursor(query.cursor) : null;
   if (query.sort?.contentFieldByType) {
-    return byTypePlan(query, query.sort.contentFieldByType, dir, op, decoded);
+    return byTypePlan(query, reach, query.sort.contentFieldByType, dir, op, decoded);
   }
   const contentField = query.sort?.contentField;
 
   if (contentField === undefined) {
-    const { conditions, params } = recordConditions(query);
+    const { conditions, params } = recordConditions(query, reach);
     const field = getSortField(query);
     const col = getSortColumn(field);
     if (decoded) {
@@ -453,7 +498,7 @@ export const buildQueryPlan = (query: StackQuery): QueryStatement[] => {
   // Records holding a value at the field, in that value's order. A cursor
   // sitting in the absent partition has already passed every one of them.
   if (cursor?.kind !== 'absent') {
-    const { conditions, params } = recordConditions(query);
+    const { conditions, params } = recordConditions(query, reach);
     const from = `content_index ${SORT_ALIAS} JOIN records r ON r.id = ${SORT_ALIAS}.record_id`;
     conditions.push(`${SORT_ALIAS}.field = ?`);
     params.push(contentField);
@@ -470,7 +515,7 @@ export const buildQueryPlan = (query: StackQuery): QueryStatement[] => {
   // Records holding nothing there, which trail the others whichever way
   // the sort runs (docs/spec/data-model.md § Sorting by a content field).
   {
-    const { conditions, params } = recordConditions(query);
+    const { conditions, params } = recordConditions(query, reach);
     conditions.push(
       `NOT EXISTS (SELECT 1 FROM content_index ${SORT_ALIAS} ` +
         `WHERE ${SORT_ALIAS}.record_id = r.id AND ${SORT_ALIAS}.field = ?)`,
@@ -494,6 +539,7 @@ export const buildQueryPlan = (query: StackQuery): QueryStatement[] => {
  */
 const byTypePlan = (
   query: StackQuery,
+  reach: ReadReach | undefined,
   byType: Record<string, ContentSortKey>,
   dir: 'ASC' | 'DESC',
   op: '>' | '<',
@@ -535,7 +581,7 @@ const byTypePlan = (
         typeId,
       );
     }
-    const { conditions, params } = recordConditions(query);
+    const { conditions, params } = recordConditions(query, reach);
     if (cursor) conditions.push(presentCursorCondition(cursor, op, params));
     const from =
       `(${sources.join(' UNION ALL ')}) ${SORT_ALIAS} ` +
@@ -558,7 +604,7 @@ const byTypePlan = (
   // Records holding nothing to order by: a Type's field with no value, a
   // `null` constant, or a Type the map does not name.
   {
-    const { conditions, params } = recordConditions(query);
+    const { conditions, params } = recordConditions(query, reach);
     if (fields.length > 0) {
       conditions.push(
         `NOT EXISTS (SELECT 1 FROM content_index ${SORT_ALIAS} ` +

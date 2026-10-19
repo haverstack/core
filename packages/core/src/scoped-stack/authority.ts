@@ -9,7 +9,12 @@
  * subject.
  */
 
-import { checkAccess, groupRoleFromAssociations, isOwnerActingAlone } from '../access.js';
+import {
+  checkAccess,
+  groupRoleFromAssociations,
+  isOwnerActingAlone,
+  roleSatisfies,
+} from '../access.js';
 import type { AccessMode } from '../access.js';
 import { StackError, StackNotFoundError, StackPermissionError } from '../errors.js';
 import {
@@ -32,16 +37,30 @@ import { SYSTEM_TYPES } from '../types/index.js';
 import type {
   Actor,
   AppContent,
+  AuthorityAssociation,
   AttachmentContent,
   EntityId,
   GrantAction,
   GrantContent,
   GroupRole,
   InstallContent,
+  ReadReach,
   StackRecord,
   TypeId,
 } from '../types/index.js';
 import type { Stack } from '../stack/stack.js';
+
+/**
+ * How each side of a request reads a grant. The subject is the entity a
+ * grant is written about, so every tier counts and `-own` keeps its
+ * meaning; on the principal's side only a grant naming it directly counts,
+ * and the suffix collapses to the bare verb. See
+ * docs/spec/access-control.md § Delegation: principal and subject.
+ */
+const SUBJECT_SIDE = { matchOwn: true, allowDefault: true, allowGroup: true } as const;
+const PRINCIPAL_SIDE = { matchOwn: false, allowDefault: false, allowGroup: false } as const;
+
+const READ_ACTIONS: GrantAction[] = ['read-own', 'read-any'];
 
 export class ScopeAuthority {
   constructor(
@@ -106,10 +125,57 @@ export class ScopeAuthority {
   }
 
   /**
+   * The grants reaching `grantee`, each as the family it names and the
+   * verbs it carries. The flags are fixed per side of a delegation and mean
+   * nothing alone, so this is reached only through the subject-side and
+   * principal-side readings below. See docs/spec/access-control.md § Who a
+   * grant reaches.
+   */
+  private async grantsReaching(
+    grantee: EntityId | null,
+    opts: {
+      familyId?: string;
+      prefetchedGrants?: StackRecord[];
+      groupRoles?: Map<string, GroupRole | null>;
+      allowDefault: boolean;
+      allowGroup: boolean;
+    },
+  ): Promise<{ familyId: string; actions: GrantAction[] }[]> {
+    if (!grantee) return [];
+    // Absent when the caller has no operation-scoped map to share — one
+    // call's worth of memoization, which is still every grant record in
+    // this loop naming the same group.
+    const groupRoles = opts.groupRoles ?? new Map<string, GroupRole | null>();
+    // Cursor-walked to see grants past page one. A stored baseId is
+    // judged by grantReach(), which refuses a versioned one.
+    const grantRecords = opts.prefetchedGrants ?? (await this.loadGrants());
+
+    const reaching: { familyId: string; actions: GrantAction[] }[] = [];
+    for (const r of grantRecords) {
+      const c = r.content as GrantContent;
+      const reach = grantReach(c);
+      if (!reach) continue;
+      if (opts.familyId !== undefined && reach.familyId !== opts.familyId) continue;
+      // grantType() refuses to write these, but a _grant record is an
+      // ordinary Record: an unscoped Stack, an import, or a server mapping
+      // a request body onto Stack can mint one anyway. Refusing at the
+      // point of use is what makes the rule hold regardless of how the
+      // record got there.
+      if (UNGRANTABLE_SYSTEM_TYPES.has(reach.familyId)) continue;
+      const covers = await grantCoversGrantee(c, grantee, {
+        allowDefault: opts.allowDefault,
+        allowGroup: opts.allowGroup,
+        groupRoles,
+        resolveRecord: this.resolveRecord,
+      });
+      if (covers) reaching.push(reach);
+    }
+    return reaching;
+  }
+
+  /**
    * Whether `grantee` holds a _grant covering one of `actions` on the type's
-   * family. The flags are fixed per side of a delegation and mean nothing
-   * alone, so this is reached only through subjectAllows() and
-   * principalHolds(). See docs/spec/access-control.md § Who a grant reaches.
+   * family, with `-own` matched against `record`'s author when `matchOwn`.
    */
   private async hasGrant(
     typeId: TypeId,
@@ -119,61 +185,24 @@ export class ScopeAuthority {
       record?: StackRecord;
       prefetchedGrants?: StackRecord[];
       groupRoles?: Map<string, GroupRole | null>;
-      matchOwn?: boolean;
-      allowDefault?: boolean;
-      allowGroup?: boolean;
+      matchOwn: boolean;
+      allowDefault: boolean;
+      allowGroup: boolean;
     },
   ): Promise<boolean> {
-    const {
-      grantee,
-      record,
-      prefetchedGrants,
-      matchOwn = true,
-      allowDefault = true,
-      allowGroup = true,
-    } = opts;
-    if (!grantee) return false;
-    // Absent when the caller has no operation-scoped map to share — one
-    // call's worth of memoization, which is still every grant record in
-    // this loop naming the same group.
-    const groupRoles = opts.groupRoles ?? new Map<string, GroupRole | null>();
-
-    const familyId = baseIdOf(typeId);
-
-    // grantType() refuses to write these, but a _grant record is an ordinary
-    // Record: an unscoped Stack, an import, or a server mapping a request
-    // body onto Stack can mint one anyway. Refusing at the point of use is
-    // what makes the rule hold regardless of how the record got there.
-    if (UNGRANTABLE_SYSTEM_TYPES.has(familyId)) return false;
-
-    let grantRecords: StackRecord[];
-    if (prefetchedGrants !== undefined) {
-      grantRecords = prefetchedGrants;
-    } else {
-      // Cursor-walked to see grants past page one. A stored baseId is
-      // judged by grantReach(), which refuses a versioned one.
-      grantRecords = await this.loadGrants();
-    }
-
-    for (const r of grantRecords) {
-      const c = r.content as GrantContent;
-      const reach = grantReach(c);
-      if (!reach || reach.familyId !== familyId) continue;
-      const covers = await grantCoversGrantee(c, grantee, {
-        allowDefault,
-        allowGroup,
-        groupRoles,
-        resolveRecord: this.resolveRecord,
-      });
-      if (!covers) continue;
-      const matches = actions.some((action) => {
-        if (!grantConveys(reach.actions, action)) return false;
-        if (matchOwn && action.endsWith('-own')) return record?.createdBy?.subjectId === grantee;
+    const grants = await this.grantsReaching(opts.grantee, {
+      ...opts,
+      familyId: baseIdOf(typeId),
+    });
+    return grants.some((grant) =>
+      actions.some((action) => {
+        if (!grantConveys(grant.actions, action)) return false;
+        if (opts.matchOwn && action.endsWith('-own')) {
+          return opts.record?.createdBy?.subjectId === opts.grantee;
+        }
         return true;
-      });
-      if (matches) return true;
-    }
-    return false;
+      }),
+    );
   }
 
   /**
@@ -206,9 +235,7 @@ export class ScopeAuthority {
     return this.hasGrant(typeId, actions, {
       grantee: this.principalId,
       prefetchedGrants,
-      matchOwn: false,
-      allowDefault: false,
-      allowGroup: false,
+      ...PRINCIPAL_SIDE,
     });
   }
 
@@ -231,6 +258,7 @@ export class ScopeAuthority {
       record: opts.record,
       prefetchedGrants: opts.prefetchedGrants,
       groupRoles: opts.groupRoles,
+      ...SUBJECT_SIDE,
     });
   }
 
@@ -264,6 +292,108 @@ export class ScopeAuthority {
       }));
     if (!reachable) return false;
     return this.principalAllows(record.typeId, ['read-own', 'read-any'], prefetchedGrants);
+  }
+
+  /**
+   * canRead() stated as data, for an adapter to match: which Records this
+   * request may read, or null when nothing narrows it — the owner acting
+   * alone. Built from the same grant readings canRead() asks, so the two
+   * agree Record for Record. See docs/spec/adapters.md § Querying within a
+   * reach.
+   */
+  async readReach(
+    prefetchedGrants?: StackRecord[],
+    groupRoles?: Map<string, GroupRole | null>,
+  ): Promise<ReadReach | null> {
+    if (this.ownerActingAlone) return null;
+    const grants = prefetchedGrants ?? (this.identified ? await this.loadGrants() : []);
+
+    const typeIdsByFamily = new Map<string, TypeId[]>();
+    for (const type of await this.stack.listTypes()) {
+      const list = typeIdsByFamily.get(type.baseId);
+      if (list) list.push(type.id);
+      else typeIdsByFamily.set(type.baseId, [type.id]);
+    }
+    const typeIdsOf = (families: Iterable<string>): TypeId[] =>
+      [...new Set(families)].flatMap((family) => typeIdsByFamily.get(family) ?? []);
+
+    // principalAllows(), family by family.
+    let fence: TypeId[] | undefined;
+    if (this.delegated && this.principalId !== this.stack.ownerEntityId) {
+      const held = await this.grantsReaching(this.principalId, {
+        prefetchedGrants: grants,
+        ...PRINCIPAL_SIDE,
+      });
+      fence = typeIdsOf(
+        held
+          .filter((g) => READ_ACTIONS.some((a) => grantConveys(g.actions, a)))
+          .map((g) => g.familyId),
+      );
+    }
+
+    // recordPermits() passes every Record for an owner subject.
+    if (this.subjectId === this.stack.ownerEntityId) {
+      return { fence, typeIds: typeIdsOf(typeIdsByFamily.keys()), permissions: [] };
+    }
+
+    // subjectAllows(): `read-any` reaches a family whole, `read-own` the
+    // subject's own Records in it.
+    const reaching = await this.grantsReaching(this.subjectId, {
+      prefetchedGrants: grants,
+      groupRoles,
+      ...SUBJECT_SIDE,
+    });
+    const any = reaching.filter((g) => grantConveys(g.actions, 'read-any')).map((g) => g.familyId);
+    const own = reaching.filter((g) => grantConveys(g.actions, 'read-own')).map((g) => g.familyId);
+
+    return {
+      fence,
+      typeIds: typeIdsOf(any),
+      ...(this.subjectId !== null && {
+        authored: { subjectId: this.subjectId, typeIds: typeIdsOf(own) },
+      }),
+      permissions: await this.readElements(),
+    };
+  }
+
+  /**
+   * recordPermits() stated as the elements a Record could carry to pass it:
+   * `anyone`, a `read` naming the subject, and a `read` naming each live
+   * `_group` the subject is rostered on, at every role it holds there.
+   */
+  private async readElements(): Promise<AuthorityAssociation[]> {
+    const elements: AuthorityAssociation[] = [{ kind: 'anyone', label: 'read' }];
+    const subject = this.subjectId;
+    if (subject === null) return elements;
+    elements.push({
+      kind: 'permission',
+      label: 'read',
+      grantee: { kind: 'entity', entityId: subject },
+    });
+
+    // A roster is a live Group's relationships, so the subject's Groups are
+    // the undeleted `_group` Records relating to it — carriesRoster(), asked
+    // by the query. Unlisted ones included: listing state decides
+    // enumeration, never what a roster confers.
+    const groups = await queryAllPages((q) => this.stack.query(q), {
+      filter: {
+        baseId: SYSTEM_TYPES.GROUP,
+        relatedTo: { target: { kind: 'entity', entityId: subject } },
+        includeUnlisted: true,
+      },
+    });
+    for (const group of groups) {
+      const held = groupRoleFromAssociations(group.associations, subject);
+      for (const role of ['member', 'admin'] as const) {
+        if (!roleSatisfies(held, role)) continue;
+        elements.push({
+          kind: 'permission',
+          label: 'read',
+          grantee: { kind: 'group', groupId: group.id, role },
+        });
+      }
+    }
+    return elements;
   }
 
   async checkCreateGrant(typeId: TypeId): Promise<boolean> {

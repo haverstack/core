@@ -22,9 +22,17 @@
 
 import { describe, test, expect, beforeEach, afterEach } from 'vitest';
 import { SYSTEM_TYPES } from '@haverstack/core';
-import type { AuthorityAssociation, DataAssociation, StackCapabilities } from '@haverstack/core';
-import { ElementSetMovedError } from '@haverstack/core/adapter';
-import type { StackRecordAdapter } from '@haverstack/core/adapter';
+import type {
+  AuthorityAssociation,
+  DataAssociation,
+  StackCapabilities,
+  StackQuery,
+  StackRecord,
+} from '@haverstack/core';
+import { ElementSetMovedError, inReach } from '@haverstack/core/adapter';
+import type { ReadReach, StackRecordAdapter } from '@haverstack/core/adapter';
+
+type PermissionElement = Extract<AuthorityAssociation, { kind: 'permission' }>;
 import { expectStackErrorCode } from './errors.js';
 import { CONFORMANCE_TYPE_ID, conformanceType, makeRecord, uniqueId } from './helpers.js';
 
@@ -974,6 +982,152 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
           'bad_request',
         );
       });
+    });
+
+    // -----------------------------------------------------------------
+    // Querying within a reach — optional, so each test asks whether the
+    // adapter has queryReadable() at all. The reference reading is core's
+    // inReach(); see docs/spec/adapters.md § Querying within a reach.
+    // -----------------------------------------------------------------
+    describe('querying within a reach', () => {
+      const OTHER_TYPE_ID = 'org.haverstack.conformance/other@1';
+      const ALICE = 'did:key:conformance-alice';
+      const BOB = 'did:key:conformance-bob';
+      const anyone: AuthorityAssociation = { kind: 'anyone', label: 'read' };
+      const toAlice: PermissionElement = {
+        kind: 'permission',
+        label: 'read',
+        grantee: { kind: 'entity', entityId: ALICE },
+      };
+      const toMembers: PermissionElement = {
+        kind: 'permission',
+        label: 'read',
+        grantee: { kind: 'group', groupId: 'conformance-group', role: 'member' },
+      };
+      const toAdmins: PermissionElement = {
+        kind: 'permission',
+        label: 'read',
+        grantee: { kind: 'group', groupId: 'conformance-group', role: 'admin' },
+      };
+
+      /** One record per route into a reach, and one beside each that misses it. */
+      const populate = async (): Promise<StackRecord[]> => {
+        const records = [
+          makeRecord(),
+          makeRecord({ typeId: OTHER_TYPE_ID }),
+          makeRecord({ createdBy: { subjectId: ALICE } }),
+          makeRecord({ typeId: OTHER_TYPE_ID, createdBy: { subjectId: ALICE } }),
+          makeRecord({ createdBy: { subjectId: BOB, principalId: ALICE } }),
+          makeRecord({ permissions: [anyone] }),
+          makeRecord({ typeId: OTHER_TYPE_ID, permissions: [anyone] }),
+          makeRecord({ permissions: [toAlice] }),
+          makeRecord({ permissions: [{ ...toAlice, label: 'write' }] }),
+          makeRecord({ permissions: [toMembers] }),
+          makeRecord({ permissions: [toAdmins] }),
+          makeRecord({ permissions: [toAlice, toMembers] }),
+        ];
+        for (const record of records) await adapter.createRecord(record);
+        return records;
+      };
+
+      const reaches: [string, ReadReach][] = [
+        ['every Record of a Type', { typeIds: [OTHER_TYPE_ID], permissions: [] }],
+        [
+          'the Records one subject authored at a Type',
+          {
+            typeIds: [],
+            authored: { subjectId: ALICE, typeIds: [CONFORMANCE_TYPE_ID] },
+            permissions: [],
+          },
+        ],
+        ['Records carrying `anyone`', { typeIds: [], permissions: [anyone] }],
+        ['Records carrying a read naming an entity', { typeIds: [], permissions: [toAlice] }],
+        [
+          'Records carrying a read naming a group at one role',
+          { typeIds: [], permissions: [toAdmins] },
+        ],
+        [
+          'every arm at once',
+          {
+            typeIds: [OTHER_TYPE_ID],
+            authored: { subjectId: ALICE, typeIds: [CONFORMANCE_TYPE_ID] },
+            permissions: [anyone, toMembers],
+          },
+        ],
+        [
+          'arms inside a fence',
+          {
+            fence: [CONFORMANCE_TYPE_ID],
+            typeIds: [OTHER_TYPE_ID],
+            authored: { subjectId: ALICE, typeIds: [CONFORMANCE_TYPE_ID, OTHER_TYPE_ID] },
+            permissions: [anyone],
+          },
+        ],
+        ['an empty fence', { fence: [], typeIds: [CONFORMANCE_TYPE_ID], permissions: [anyone] }],
+        ['no arm at all', { typeIds: [], permissions: [] }],
+      ];
+
+      test.each(reaches)('returns exactly the Records in reach: %s', async (_name, reach) => {
+        if (!adapter.queryReadable) return;
+        const records = await populate();
+        const result = await adapter.queryReadable({ limit: 100 }, reach);
+        const expected = records.filter((r) => inReach(r, reach)).map((r) => r.id);
+        expect(result.records.map((r) => r.id).sort()).toEqual(expected.sort());
+        expect(result.cursor).toBeNull();
+      });
+
+      test("a reach narrows the query's own filter rather than widening it", async () => {
+        if (!adapter.queryReadable) return;
+        const pinned: DataAssociation = { kind: 'tag', label: 'pinned' };
+        const tagged = makeRecord({ permissions: [anyone], associations: [pinned] });
+        await adapter.createRecord(tagged);
+        await adapter.createRecord(makeRecord({ permissions: [anyone] }));
+        await adapter.createRecord(makeRecord({ associations: [pinned] }));
+
+        const result = await adapter.queryReadable(
+          { filter: { tags: ['pinned'] } },
+          { typeIds: [], permissions: [anyone] },
+        );
+        expect(result.records.map((r) => r.id)).toEqual([tagged.id]);
+      });
+
+      // Paging is decided among the Records in reach alone: every page is
+      // full, and no cursor comes back once they are exhausted, however
+      // many Records outside the reach remain.
+      const pagesWithin = async (sort: StackQuery['sort']): Promise<void> => {
+        if (!adapter.queryReadable) return;
+        const reach: ReadReach = { typeIds: [], permissions: [anyone] };
+        const inside: string[] = [];
+        for (let i = 0; i < 9; i++) {
+          const visible = i % 3 === 1;
+          const record = makeRecord({
+            content: { title: `t${i}`, priority: i },
+            ...(visible && { permissions: [anyone] }),
+          });
+          await adapter.createRecord(record);
+          if (visible) inside.push(record.id);
+        }
+
+        const seen: string[] = [];
+        let cursor: string | undefined;
+        do {
+          const page = await adapter.queryReadable({ limit: 1, cursor, sort }, reach);
+          expect(page.records).toHaveLength(1);
+          seen.push(page.records[0]!.id);
+          cursor = page.cursor ?? undefined;
+        } while (cursor);
+        expect(seen.sort()).toEqual(inside.sort());
+      };
+
+      test('pages through the Records in reach alone, by a native field', () =>
+        pagesWithin({ field: 'createdAt', direction: 'asc' }));
+
+      if (capabilities.sort.contentField) {
+        test('pages through the Records in reach alone, by a content field', async () => {
+          await adapter.saveType(conformanceType());
+          await pagesWithin({ contentField: 'priority', direction: 'desc' });
+        });
+      }
     });
 
     // -----------------------------------------------------------------

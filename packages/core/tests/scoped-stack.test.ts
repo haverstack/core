@@ -1148,44 +1148,6 @@ describe('ScopedStack.query', () => {
     expect(result.records.map((r) => r.id)).toEqual([pub.id]);
   });
 
-  test('refills across multiple adapter pages without skipping records, even if the result lands under the requested limit', async () => {
-    // 6 records fetched 2-at-a-time (limit: 2), only the last one is public.
-    // Pages 1 and 2 contain zero visible records, so the loop must refetch
-    // through all 3 pages — stopping only because the cursor is exhausted,
-    // not because it hit the limit — and still find the one visible record.
-    let visibleId = '';
-    for (let i = 0; i < 6; i++) {
-      const isPublic = i === 5;
-      const record = await adapter.createRecord(
-        makeRecord(isPublic ? { permissions: [{ kind: 'anyone', label: 'read' }] } : {}),
-      );
-      if (isPublic) visibleId = record.id;
-    }
-
-    const result = await stack.asEntity(null).query({ limit: 2 });
-    expect(result.records.map((r) => r.id)).toEqual([visibleId]);
-    expect(result.cursor).toBeNull();
-  });
-
-  test('a page may overshoot the requested limit rather than split mid-page', async () => {
-    // priv, priv, priv, pub, pub, pub — fetched 2 at a time with limit: 2,
-    // oldest first so the private ones are read first. Page 1 (priv,priv):
-    // 0 visible. Page 2 (priv,pub): 1 visible, still under limit, so a 3rd
-    // page is fetched. Page 3 (pub,pub): both visible, pushing the total to
-    // 3 — over the requested limit of 2, by design.
-    for (let i = 0; i < 6; i++) {
-      await adapter.createRecord(
-        makeRecord(i >= 3 ? { permissions: [{ kind: 'anyone', label: 'read' }] } : {}),
-      );
-    }
-
-    const result = await stack
-      .asEntity(null)
-      .query({ limit: 2, sort: { field: 'createdAt', direction: 'asc' } });
-    expect(result.records).toHaveLength(3);
-    expect(result.cursor).toBeNull();
-  });
-
   test('clamps an oversized limit to MAX_QUERY_LIMIT (1000)', async () => {
     await adapter.createRecord(makeRecord({ permissions: [{ kind: 'anyone', label: 'read' }] }));
     const result = await stack.asEntity(null).query({ limit: 9_999_999 });

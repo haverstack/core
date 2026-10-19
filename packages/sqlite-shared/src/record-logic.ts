@@ -44,6 +44,7 @@ import type {
   JournalEntryInput,
   JournalOptions,
   MutateOptions,
+  ReadReach,
 } from '@haverstack/core/adapter';
 import type { SqlExecutor } from './executor.js';
 import { isForeignKeyViolation, isUniqueConstraintViolation } from './executor.js';
@@ -494,7 +495,8 @@ export class SharedSqlRecordLogic {
     this.contentIndex.sync(id, typeId, content);
   }
 
-  async queryRecords(query: StackQuery): Promise<QueryResult> {
+  /** `reach`, when given, is one more condition of every statement in the plan. */
+  async queryRecords(query: StackQuery, reach?: ReadReach): Promise<QueryResult> {
     const limit = query.limit ?? 50;
     // One extra row, to learn whether a further page follows.
     const fetch = limit + 1;
@@ -502,7 +504,7 @@ export class SharedSqlRecordLogic {
     // A content-field sort is two statements (see buildQueryPlan). Each asks
     // only for what the page still lacks, so the second usually never runs.
     const rows: Record<string, unknown>[] = [];
-    for (const page of buildQueryPlan(query)) {
+    for (const page of buildQueryPlan(query, reach)) {
       const budget = fetch - rows.length;
       if (budget <= 0) break;
       const statement = atBudget(page, budget);

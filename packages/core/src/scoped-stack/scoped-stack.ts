@@ -45,6 +45,7 @@ import type {
   GrantAction,
   GroupRole,
   QueryResult,
+  ReadReach,
   RecordChange,
   RecordId,
   RecordVersion,
@@ -146,6 +147,11 @@ export type ScopedStackInit = {
   relaysChanges: boolean;
   /** The app's migrations, which collection() migrates records through. */
   migrations: MigrationRegistry;
+  /**
+   * Stack.query() within a reach, present when the adapter implements
+   * queryReadable() — see query().
+   */
+  queryReadable?: (query: StackQuery, reach: ReadReach) => Promise<QueryResult>;
 };
 
 /**
@@ -163,6 +169,7 @@ export class ScopedStack implements StackClient {
   private readonly assertStackOpen: () => void;
   private readonly relaysChanges: boolean;
   private readonly migrations: MigrationRegistry;
+  private readonly queryReadable: ScopedStackInit['queryReadable'];
 
   /** Not callable from outside the package — see ScopedStackInit. */
   constructor(token: typeof scopeToken, init: ScopedStackInit) {
@@ -177,6 +184,7 @@ export class ScopedStack implements StackClient {
     this.assertStackOpen = init.assertOpen;
     this.relaysChanges = init.relaysChanges;
     this.migrations = init.migrations;
+    this.queryReadable = init.queryReadable;
   }
 
   collection<S extends ReadonlyTypeSchema>(handle: TypeHandle<S>): Collection<ContentOf<S>> {
@@ -468,10 +476,12 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Query records, filtered to those this request can read. Pages are
-   * filtered then refilled, so a page may slightly overshoot `limit` but
-   * never skips a record. Grants are prefetched once, cursor-walked to
-   * exhaustion.
+   * Query records, among those this request can read. The adapter matches
+   * the request's reach as one more condition, so a page and its cursor are
+   * decided among readable Records alone; canRead() still runs on each,
+   * as the check that the reach and the rules agree. An adapter without
+   * queryReadable() is paged and filtered instead.
+   * See docs/spec/disclosure.md § What a query reveals.
    */
   async query(query: StackQuery = {}): Promise<QueryResult> {
     assertValidSort(query.sort);
@@ -481,10 +491,6 @@ export class ScopedStack implements StackClient {
     if (query.filter?.includeUnlisted && !this.#authority.ownerActingAlone) {
       throw new StackPermissionError('includeUnlisted is owner-only');
     }
-    const limit = Math.min(query.limit ?? DEFAULT_QUERY_LIMIT, MAX_QUERY_LIMIT);
-    const records: StackRecord[] = [];
-    const maxFetched = limit * 10;
-    let totalFetched = 0;
 
     const prefetchedGrants = this.#authority.identified
       ? await this.#authority.loadGrants()
@@ -493,11 +499,8 @@ export class ScopedStack implements StackClient {
     // candidate Record shares one roster resolution per group, and nothing
     // is carried into the next operation.
     const groupRoles = new Map<string, GroupRole | null>();
-
-    let page: QueryResult = { records: [], cursor: query.cursor ?? null };
-    do {
-      page = await this.stack.query({ ...query, cursor: page.cursor ?? undefined });
-      totalFetched += page.records.length;
+    const readable = async (page: QueryResult): Promise<StackRecord[]> => {
+      const records: StackRecord[] = [];
       for (const record of page.records) {
         // Projected here as well as in get(), or `includeDeleted` would be
         // a strictly better read channel than the fetch-by-ID it is
@@ -506,6 +509,26 @@ export class ScopedStack implements StackClient {
           records.push(presentDeleted(record));
         }
       }
+      return records;
+    };
+
+    if (this.queryReadable) {
+      const reach = await this.#authority.readReach(prefetchedGrants, groupRoles);
+      const page = reach ? await this.queryReadable(query, reach) : await this.stack.query(query);
+      return { records: await readable(page), cursor: page.cursor };
+    }
+
+    // Filtered then refilled, so a page may overshoot `limit` but never
+    // skips a record, within a bounded window per call.
+    const limit = Math.min(query.limit ?? DEFAULT_QUERY_LIMIT, MAX_QUERY_LIMIT);
+    const records: StackRecord[] = [];
+    const maxFetched = limit * 10;
+    let totalFetched = 0;
+    let page: QueryResult = { records: [], cursor: query.cursor ?? null };
+    do {
+      page = await this.stack.query({ ...query, cursor: page.cursor ?? undefined });
+      totalFetched += page.records.length;
+      records.push(...(await readable(page)));
     } while (records.length < limit && page.cursor && totalFetched < maxFetched);
 
     return { records, cursor: page.cursor };

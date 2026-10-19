@@ -1,0 +1,329 @@
+import { describe, test, expect, beforeEach, vi } from 'vitest';
+import { Stack } from '../src/stack/stack.js';
+import type { ScopedStack } from '../src/scoped-stack/scoped-stack.js';
+import { generateId } from '../src/id.js';
+import { MemoryAdapter } from '../src/testing.js';
+import type { MemoryAdapterOpenOptions } from '../src/testing.js';
+import type {
+  Actor,
+  AuthorityAssociation,
+  QueryResult,
+  ReadReach,
+  StackQuery,
+  StackRecord,
+} from '../src/types/index.js';
+
+const OWNER = 'did:key:owner';
+const ALICE = 'did:key:alice';
+const BOB = 'did:key:bob';
+const CAROL = 'did:key:carol';
+const APP = 'did:key:app';
+
+const NOTE = 'com.example.test/note@1';
+const NOTE_2 = 'com.example.test/note@2';
+const COMMENT = 'com.example.test/comment@1';
+const SECRET = 'com.example.test/secret@1';
+
+type PermissionElement = Extract<AuthorityAssociation, { kind: 'permission' }>;
+
+const ANYONE: AuthorityAssociation = { kind: 'anyone', label: 'read' };
+const readFor = (entityId: string): PermissionElement => ({
+  kind: 'permission',
+  label: 'read',
+  grantee: { kind: 'entity', entityId },
+});
+const readForGroup = (groupId: string, role: 'member' | 'admin'): PermissionElement => ({
+  kind: 'permission',
+  label: 'read',
+  grantee: { kind: 'group', groupId, role },
+});
+
+/** A MemoryAdapter without queryReadable(), for the fallback ScopedStack pages and filters. */
+class ScanningMemoryAdapter extends MemoryAdapter {
+  static override async open(opts: MemoryAdapterOpenOptions): Promise<ScanningMemoryAdapter> {
+    return new ScanningMemoryAdapter(opts);
+  }
+  override queryReadable: MemoryAdapter['queryReadable'] = undefined;
+}
+
+let adapter: MemoryAdapter;
+let stack: Stack;
+
+function makeRecord(overrides: Partial<StackRecord> = {}): StackRecord {
+  const now = new Date();
+  return {
+    id: generateId(),
+    typeId: NOTE,
+    createdAt: now,
+    updatedAt: now,
+    content: {},
+    version: 1,
+    ...overrides,
+  };
+}
+
+async function defineTypes(target: Stack): Promise<void> {
+  await target.defineType({ id: NOTE, name: 'Note', schema: { text: { kind: 'text' } } });
+  await target.defineType({
+    id: NOTE_2,
+    name: 'Note',
+    schema: { text: { kind: 'text' }, title: { kind: 'text' } },
+  });
+  await target.defineType({ id: COMMENT, name: 'Comment', schema: { text: { kind: 'text' } } });
+  await target.defineType({ id: SECRET, name: 'Secret', schema: { ssn: { kind: 'text' } } });
+}
+
+beforeEach(async () => {
+  adapter = await MemoryAdapter.open({ ownerEntityId: OWNER });
+  stack = await Stack.open(adapter);
+  await defineTypes(stack);
+});
+
+/** Every record an unscoped query lists, cursor-walked. */
+async function everyRecord(query: StackQuery = {}): Promise<StackRecord[]> {
+  const all: StackRecord[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await stack.query({ ...query, cursor });
+    all.push(...page.records);
+    cursor = page.cursor ?? undefined;
+  } while (cursor);
+  return all;
+}
+
+/**
+ * What the adapter handed back for one scoped query, before canRead() saw
+ * it — the page the reach alone decided.
+ */
+async function adapterPage(view: ScopedStack, query: StackQuery): Promise<QueryResult> {
+  const spy = vi.spyOn(adapter, 'queryReadable');
+  try {
+    const scoped = await view.query(query);
+    const call = spy.mock.results[0];
+    return call ? ((await call.value) as QueryResult) : scoped;
+  } finally {
+    spy.mockRestore();
+  }
+}
+
+const ids = (records: StackRecord[]): string[] => records.map((r) => r.id).sort();
+
+describe('the reach a scoped query runs within', () => {
+  // A world holding every route to a read: each grant tier, each permission
+  // element, live, deleted and unlisted rosters, both sides of delegation.
+  async function populate(): Promise<void> {
+    const group = async (overrides: Partial<StackRecord>) =>
+      (await adapter.createRecord(makeRecord({ typeId: '_group@1', ...overrides }))).id;
+    const roster = (entityId: string, label: 'member' | 'admin') => ({
+      kind: 'relationship' as const,
+      label,
+      target: { kind: 'entity' as const, entityId },
+    });
+
+    const editors = await group({ associations: [roster(ALICE, 'admin'), roster(BOB, 'member')] });
+    const disbanded = await group({
+      associations: [roster(CAROL, 'member')],
+      deletedAt: new Date(),
+    });
+    const quiet = await group({ associations: [roster(CAROL, 'member')], unlistedAt: new Date() });
+    // A roster-shaped record outside the `_group` family carries none.
+    const lookalike = (
+      await adapter.createRecord(makeRecord({ associations: [roster(BOB, 'admin')] }))
+    ).id;
+
+    await stack.grantType('com.example.test/comment', {
+      actions: ['read-any'],
+      grantee: { kind: 'group', groupId: editors, role: 'member' },
+    });
+    await stack.grantType('com.example.test/note', {
+      actions: ['read-own'],
+      grantee: { kind: 'authenticated' },
+    });
+    await stack.grantType('com.example.test/secret', {
+      actions: ['read-any'],
+      grantee: { kind: 'entity', entityId: CAROL },
+    });
+    await stack.grantType('com.example.test/comment', {
+      actions: ['read-own'],
+      grantee: { kind: 'entity', entityId: APP },
+    });
+    await stack.grantType('com.example.test/note', {
+      actions: ['read-any'],
+      grantee: { kind: 'group', groupId: disbanded, role: 'member' },
+    });
+    await stack.grantType('com.example.test/secret', {
+      actions: ['create'],
+      grantee: { kind: 'entity', entityId: APP },
+    });
+
+    const author = (subjectId: string) => ({ createdBy: { subjectId } });
+    const fixtures: Partial<StackRecord>[] = [
+      {},
+      { ...author(ALICE) },
+      { typeId: NOTE_2, ...author(BOB) },
+      { typeId: NOTE_2, ...author(CAROL), permissions: [readFor(ALICE)] },
+      { permissions: [ANYONE] },
+      { permissions: [readFor(ALICE)] },
+      { permissions: [readFor(BOB), { ...readFor(BOB), label: 'write' }] },
+      { permissions: [{ ...readFor(CAROL), label: 'write' }] },
+      { permissions: [readForGroup(editors, 'admin')] },
+      { permissions: [readForGroup(editors, 'member')] },
+      { permissions: [readForGroup(disbanded, 'member')] },
+      { permissions: [readForGroup(quiet, 'member')] },
+      { permissions: [readForGroup(lookalike, 'member')] },
+      { typeId: COMMENT },
+      { typeId: COMMENT, ...author(ALICE), permissions: [ANYONE] },
+      { typeId: SECRET, ...author(BOB) },
+      { typeId: SECRET, permissions: [readFor(BOB)] },
+      { permissions: [ANYONE], unlistedAt: new Date() },
+      { permissions: [ANYONE], deletedAt: new Date() },
+    ];
+    for (const fixture of fixtures) await adapter.createRecord(makeRecord(fixture));
+  }
+
+  const requesters: [string, Actor | null][] = [
+    ['anonymous', null],
+    ['an entity on a roster as admin', { subjectId: ALICE }],
+    ['an entity on a roster as member', { subjectId: BOB }],
+    ['an entity on deleted and unlisted rosters', { subjectId: CAROL }],
+    ['an entity nothing names', { subjectId: 'did:key:nobody' }],
+    ['an app acting for an entity', { principalId: APP, subjectId: ALICE }],
+    ['an app acting for the owner', { principalId: APP, subjectId: OWNER }],
+    ['an app with no grants acting for an entity', { principalId: 'did:key:bare', subjectId: BOB }],
+    ['the owner acting for an entity', { principalId: OWNER, subjectId: CAROL }],
+    ['the owner acting alone', { subjectId: OWNER }],
+  ];
+
+  for (const [name, actor] of requesters) {
+    for (const includeDeleted of [false, true]) {
+      test(`matches canRead() Record for Record: ${name}${includeDeleted ? ', deleted included' : ''}`, async () => {
+        await populate();
+        const view = actor ? stack.asActor(actor) : stack.asEntity(null);
+        const filter = { includeDeleted };
+
+        const readable: StackRecord[] = [];
+        for (const record of await everyRecord({ filter })) {
+          if (await view.get(record.id, { includeDeleted: true })) readable.push(record);
+        }
+        const page = await adapterPage(view, { filter, limit: 1000 });
+
+        expect(ids(page.records)).toEqual(ids(readable));
+        expect(page.cursor).toBeNull();
+      });
+    }
+  }
+
+  test('a hidden Record changes nothing about any page: records, fullness or cursor', async () => {
+    const twin = await MemoryAdapter.open({ ownerEntityId: OWNER });
+    const twinStack = await Stack.open(twin);
+    await defineTypes(twinStack);
+
+    // The same readable Records in both stacks, with hidden ones between
+    // them in this one alone.
+    for (let i = 0; i < 5; i++) {
+      for (let j = 0; j < 4; j++) await adapter.createRecord(makeRecord());
+      const shared = makeRecord({ permissions: [ANYONE], content: { text: `n${i}` } });
+      await adapter.createRecord(shared);
+      await twin.createRecord(shared);
+    }
+
+    const pages = async (view: ScopedStack): Promise<QueryResult[]> => {
+      const out: QueryResult[] = [];
+      let cursor: string | undefined;
+      do {
+        const page = await view.query({ limit: 2, cursor, sort: { contentField: 'text' } });
+        out.push(page);
+        cursor = page.cursor ?? undefined;
+      } while (cursor);
+      return out;
+    };
+
+    const withHidden = await pages(stack.asEntity(null));
+    expect(withHidden.map((p) => p.records.length)).toEqual([2, 2, 1]);
+    expect(withHidden).toEqual(await pages(twinStack.asEntity(null)));
+  });
+
+  test('a cursor never comes back for a page whose remainder is hidden', async () => {
+    for (let i = 0; i < 17; i++) {
+      await adapter.createRecord(makeRecord({ typeId: SECRET, content: { ssn: `x${i}` } }));
+    }
+    const result = await stack.asEntity(null).query({
+      filter: { typeId: SECRET },
+      sort: { contentField: 'ssn' },
+      limit: 1,
+    });
+    expect(result).toEqual({ records: [], cursor: null });
+  });
+
+  test('a delegated subject reads through the principal’s fence only', async () => {
+    await stack.grantType('com.example.test/note', {
+      actions: ['read-any'],
+      grantee: { kind: 'entity', entityId: ALICE },
+    });
+    await stack.grantType('com.example.test/comment', {
+      actions: ['read-any'],
+      grantee: { kind: 'entity', entityId: ALICE },
+    });
+    await stack.grantType('com.example.test/note', {
+      actions: ['read-own'],
+      grantee: { kind: 'entity', entityId: APP },
+    });
+    const note = await adapter.createRecord(makeRecord());
+    await adapter.createRecord(makeRecord({ typeId: COMMENT }));
+
+    const spy = vi.spyOn(adapter, 'queryReadable');
+    const result = await stack.asActor({ principalId: APP, subjectId: ALICE }).query();
+    const reach = spy.mock.calls[0]![1] as ReadReach;
+    spy.mockRestore();
+
+    expect(result.records.map((r) => r.id)).toEqual([note.id]);
+    expect(reach.fence).toEqual([NOTE, NOTE_2]);
+  });
+
+  test('the owner acting alone is not narrowed', async () => {
+    const spy = vi.spyOn(adapter, 'queryReadable');
+    await adapter.createRecord(makeRecord());
+    const result = await stack.asEntity(OWNER).query();
+    expect(result.records).toHaveLength(1);
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+});
+
+describe('a scoped query over an adapter without queryReadable()', () => {
+  beforeEach(async () => {
+    adapter = await ScanningMemoryAdapter.open({ ownerEntityId: OWNER });
+    stack = await Stack.open(adapter);
+    await defineTypes(stack);
+  });
+
+  test('refills across adapter pages without skipping records, even landing under the limit', async () => {
+    // 6 records fetched 2 at a time, only the last one public: pages 1 and
+    // 2 hold nothing visible, so the scan reads through all three.
+    let visibleId = '';
+    for (let i = 0; i < 6; i++) {
+      const record = await adapter.createRecord(
+        makeRecord(i === 5 ? { permissions: [ANYONE] } : {}),
+      );
+      if (i === 5) visibleId = record.id;
+    }
+
+    const result = await stack.asEntity(null).query({ limit: 2 });
+    expect(result.records.map((r) => r.id)).toEqual([visibleId]);
+    expect(result.cursor).toBeNull();
+  });
+
+  test('a page may overshoot the requested limit rather than split an adapter page', async () => {
+    // priv ×3 then pub ×3, oldest first, read 2 at a time: the second
+    // adapter page leaves the result one short, and the third adds two.
+    for (let i = 0; i < 6; i++) {
+      await adapter.createRecord(makeRecord(i >= 3 ? { permissions: [ANYONE] } : {}));
+    }
+
+    const result = await stack
+      .asEntity(null)
+      .query({ limit: 2, sort: { field: 'createdAt', direction: 'asc' } });
+    expect(result.records).toHaveLength(3);
+    expect(result.cursor).toBeNull();
+  });
+});

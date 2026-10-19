@@ -3,6 +3,7 @@ import { mkdirSync, rmSync, existsSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { OwnerMismatchError } from '@haverstack/core/adapter';
+import { Stack } from '@haverstack/core';
 import { LocalAdapter } from '../src/index.js';
 import type { StackRecord } from '@haverstack/core';
 
@@ -379,5 +380,36 @@ describe('journal', () => {
     const entries = await adapter.getJournal('rec1');
     expect(entries.map((e) => e.ops)).toEqual([['dissociate']]);
     expect(entries[0]!.associations).toEqual([{ op: 'remove', association }]);
+  });
+});
+
+// -------------------------------------------------------
+// Scoped queries
+// -------------------------------------------------------
+
+describe('scoped query', () => {
+  // The cursor and whether one comes back are decided among the Records
+  // the requester can read. See docs/spec/disclosure.md § What a query reveals.
+  test('names no Record the requester cannot read, and ends where the readable ones do', async () => {
+    const stack = await Stack.open(await initAdapter({ ownerEntityId: 'owner-abc' }));
+    await stack.defineType({
+      id: 'com.ex/secret@1',
+      name: 'Secret',
+      schema: { ssn: { kind: 'text' } },
+    });
+    for (let i = 0; i < 17; i++) await stack.create('com.ex/secret@1', { ssn: `x${i}` });
+    const shared = await stack.create(
+      'com.ex/secret@1',
+      { ssn: 'shared' },
+      { permissions: [{ kind: 'anyone', label: 'read' }] },
+    );
+
+    const anon = stack.asEntity(null);
+    const query = { filter: { typeId: 'com.ex/secret@1' }, sort: { contentField: 'ssn' } };
+    expect(await anon.query({ ...query, limit: 1 })).toEqual({
+      records: [expect.objectContaining({ id: shared.id })],
+      cursor: null,
+    });
+    await stack.close();
   });
 });

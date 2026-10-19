@@ -1,6 +1,6 @@
 /**
  * The engine-independent half of a SQLite-backed StackRecordAdapter: the
- * capability declaration and the delegation of all twenty-two
+ * capability declaration and the delegation of all twenty-three
  * StackRecordAdapter methods onto SharedSqlRecordLogic. Every method here
  * is a forward with no engine-specific content, so an adapter that owns a
  * SqlExecutor already knows how to answer all of them.
@@ -37,6 +37,7 @@ import type {
   ElementWriteOptions,
   JournalOptions,
   MutateOptions,
+  ReadReach,
 } from '@haverstack/core/adapter';
 import type { SqlExecutor } from './executor.js';
 import type { StackConfig } from './config.js';
@@ -136,6 +137,10 @@ export abstract class SharedSqlRecordAdapter implements StackRecordAdapter {
 
   queryRecords(query: StackQuery): Promise<QueryResult> {
     return this.record.queryRecords(query);
+  }
+
+  queryReadable(query: StackQuery, reach: ReadReach): Promise<QueryResult> {
+    return this.record.queryRecords(query, reach);
   }
 
   deleteUnreferencedAttachmentRecords(
