@@ -2,4 +2,4 @@
 '@haverstack/adapter-api': minor
 ---
 
-Refuse a plaintext URL to a remote host by its parsed scheme, so `HTTP://` or a leading space no longer slips past the `allowInsecure` check.
+Read the server URL's parsed scheme: `https:` is required unless the host is loopback or `allowInsecure` is set, however the scheme is spelled, and a URL that is not `http(s)` at all is refused before anything is sent.

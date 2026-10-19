@@ -87,6 +87,7 @@ import {
   ElementSetMovedError,
   UseAfterCloseError,
   InvalidAdapterError,
+  RelayScopeError,
   StackConflictError,
   StackMigrationError,
   StackNotFoundError,
@@ -317,6 +318,7 @@ export class Stack implements StackClient {
       new MigrationRegistry(opts.migrations ?? []),
     );
     for (const type of systemTypeDefinitions()) await stack.defineType(type);
+    await stack.ensureCursorKey();
     if (opts.ownerProfile) {
       await stack.ensureOwnerEntity(opts.ownerProfile);
     }
@@ -403,9 +405,9 @@ export class Stack implements StackClient {
   private cursorSealing: Promise<CursorSeal> | undefined;
 
   /**
-   * The sealer for scoped query cursors, keyed by `_config.cursorKey` and
-   * minting that key on first use. A failed load is not cached, so the
-   * next scoped query tries again. See stack/cursor-seal.ts.
+   * The sealer for scoped query cursors, keyed by `_config.cursorKey`. A
+   * failed load is not cached, so the next scoped query tries again.
+   * See stack/cursor-seal.ts.
    */
   private cursorSeal(): Promise<CursorSeal> {
     this.cursorSealing ??= this.loadCursorSeal().catch((err: unknown) => {
@@ -416,18 +418,29 @@ export class Stack implements StackClient {
   }
 
   private async loadCursorSeal(): Promise<CursorSeal> {
+    const config = await this.adapter.getRecord(SYSTEM_TYPES.CONFIG);
+    const key = (config?.content as ConfigContent | undefined)?.cursorKey;
+    if (key === undefined) {
+      throw new RelayScopeError(
+        "This stack's _config is not readable here, so a scoped view has no key to seal its " +
+          'query cursors under. Query through a session-scoped stack instead.',
+      );
+    }
+    return CursorSeal.fromKey(key);
+  }
+
+  /**
+   * Give a `_config` holding no cursor key one. The engines in this repo
+   * write it with `_config`; this covers a store another adapter created.
+   * It runs before open() returns, so no subscriber is told of it, and a
+   * `_config` this session cannot read is left to refuse scoped queries.
+   */
+  private async ensureCursorKey(): Promise<void> {
     for (;;) {
       const config = await this.adapter.getRecord(SYSTEM_TYPES.CONFIG);
-      if (!config) {
-        throw new StackNotFoundError(
-          'The _config record is not readable here, so a scoped query has no key to seal its cursor under.',
-        );
-      }
-      const key = (config.content as ConfigContent).cursorKey;
-      if (key !== undefined) return CursorSeal.fromKey(key);
+      if (!config || (config.content as ConfigContent).cursorKey !== undefined) return;
       try {
-        // Pinned to the read, so two instances minting at once keep one
-        // key: the loser re-reads and adopts the winner's.
+        // Pinned to the read, so two instances opening at once keep one key.
         await this.patchContent(
           SYSTEM_TYPES.CONFIG,
           { cursorKey: generateCursorKey() },

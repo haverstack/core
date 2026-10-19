@@ -30,16 +30,18 @@ export const isLoopbackUrl = (url: string): boolean => {
 };
 
 /**
- * Whether a URL is plaintext HTTP. Read from the parsed scheme, which
- * URL normalizes, so neither casing nor surrounding whitespace in the
- * string a caller passed decides it.
+ * The scheme a server URL is dialed with, or null for anything this adapter
+ * does not speak. Read from the parsed URL, which normalizes it, so neither
+ * casing nor surrounding whitespace in the string decides it.
  */
-export const isPlaintextUrl = (url: string): boolean => {
+export const serverUrlScheme = (url: string): 'https' | 'http' | null => {
+  let protocol: string;
   try {
-    return new URL(url).protocol === 'http:';
+    protocol = new URL(url).protocol;
   } catch {
-    return false;
+    return null;
   }
+  return protocol === 'https:' ? 'https' : protocol === 'http:' ? 'http' : null;
 };
 
 /**

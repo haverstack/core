@@ -3657,11 +3657,14 @@ describe('_config protections', () => {
       schema: {
         entityId: { kind: 'string', required: true },
         timezone: { kind: 'string' },
+        cursorKey: { kind: 'string' },
       },
     });
 
+    const { cursorKey } = (await adapter.getRecord(CONFIG_ID))!.content;
     const migrated = await stack.commitMigration(CONFIG_ID, '_config@2', {
       entityId: 'owner-123',
+      cursorKey,
       timezone: 'America/New_York',
     });
     expect(migrated.typeId).toBe('_config@2');

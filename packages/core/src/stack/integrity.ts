@@ -335,12 +335,9 @@ export function assertAttachmentImmutable(
 // -------------------------------------------------------
 
 /**
- * `_config` keeps what the stack is anchored to: `entityId` defines
- * ownership, and `cursorKey` is what every outstanding scoped cursor was
- * sealed under. No write may change either once set; `cursorKey` may be
- * set once, to a well-formed key. A conflict with stack integrity, not a
- * schema violation — hence StackConflictError. See docs/spec.md § The
- * `_config` record.
+ * `_config.entityId` and `cursorKey` anchor ownership and every outstanding
+ * scoped cursor, so no write changes either once set — a conflict with
+ * integrity, not a schema violation. See docs/spec.md § The `_config` record.
  */
 export function checkConfigUnchanged(existing: ConfigContent, next: ConfigContent): void {
   if (next.entityId !== existing.entityId) {

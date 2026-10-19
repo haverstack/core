@@ -1,3 +1,4 @@
+import { generateCursorKey } from '@haverstack/core/adapter';
 import type { SqlExecutor } from './executor.js';
 
 /** timezone is optional passthrough app metadata — no default. */
@@ -10,7 +11,7 @@ const CONFIG_ROW_SQL = `SELECT content FROM records WHERE id = '_config'`;
  * Inserts the singleton _config@1 record and returns what it wrote, so a
  * caller that has just created a database reaches the same StackConfig an
  * existing one yields without a read-back. Only valid on a freshly-created
- * database.
+ * database. The cursor key is written with it, so every version carries it.
  */
 export const insertConfigRecord = (
   exec: SqlExecutor,
@@ -21,7 +22,7 @@ export const insertConfigRecord = (
   exec.run(
     `INSERT INTO records (id, type_id, created_at, updated_at, content, version)
      VALUES ('_config', '_config@1', ?, ?, ?, 1)`,
-    [now, now, JSON.stringify({ entityId, timezone })],
+    [now, now, JSON.stringify({ entityId, timezone, cursorKey: generateCursorKey() })],
   );
   return { entityId, timezone };
 };

@@ -1,6 +1,11 @@
-import { describe, test, expect, beforeEach } from 'vitest';
+import { describe, test, expect, beforeEach, vi } from 'vitest';
 import { Stack } from '../src/stack/stack.js';
-import { StackBadRequestError, StackConflictError, StackValidationError } from '../src/errors.js';
+import {
+  RelayScopeError,
+  StackBadRequestError,
+  StackConflictError,
+  StackValidationError,
+} from '../src/errors.js';
 import { MemoryAdapter } from '../src/testing.js';
 import type { ConfigContent, StackRecord } from '../src/index.js';
 
@@ -82,50 +87,98 @@ describe('a scoped cursor is sealed', () => {
     ).rejects.toBeInstanceOf(StackBadRequestError);
   });
 
-  test('the key is minted once and persisted, so another Stack over the store resumes it', async () => {
-    expect(await cursorKey()).toBeUndefined();
-    const page = await stack.asEntity(READER).query({ filter: { typeId: NOTE }, limit: 1 });
-    const key = await cursorKey();
-    expect(key).toBeDefined();
+  test('a cursor resumes only the query and requester it was sealed for', async () => {
+    const query = { filter: { typeId: NOTE }, limit: 1 };
+    const { cursor } = await stack.asEntity(READER).query(query);
+    const resume = (scope: ReturnType<Stack['asEntity']>, q: object) =>
+      scope.query({ ...q, cursor: cursor! });
 
+    await expect(resume(stack.asEntity(READER), { ...query, limit: 5 })).resolves.toBeDefined();
+    await expect(
+      resume(stack.asEntity(READER), { filter: { typeId: NOTE, includeDeleted: true } }),
+    ).rejects.toBeInstanceOf(StackBadRequestError);
+    await expect(
+      resume(stack.asEntity(READER), { ...query, sort: { field: 'updatedAt' } }),
+    ).rejects.toBeInstanceOf(StackBadRequestError);
+    await expect(resume(stack.asEntity(null), query)).rejects.toBeInstanceOf(StackBadRequestError);
+  });
+
+  test('the same query spelled in another key order resumes alike', async () => {
+    const page = await stack
+      .asEntity(READER)
+      .query({ filter: { typeId: NOTE, includeDeleted: false }, limit: 1 });
+    await expect(
+      stack.asEntity(READER).query({
+        filter: { includeDeleted: false, typeId: NOTE },
+        cursor: page.cursor!,
+      }),
+    ).resolves.toBeDefined();
+  });
+
+  test('the key is held by the store, so another Stack over it resumes a cursor', async () => {
+    const page = await stack.asEntity(READER).query({ filter: { typeId: NOTE }, limit: 1 });
     const reopened = await Stack.open(adapter);
     await expect(
       reopened.asEntity(READER).query({ filter: { typeId: NOTE }, cursor: page.cursor! }),
     ).resolves.toBeDefined();
+  });
+
+  test('a scoped query writes nothing', async () => {
+    const before = (await adapter.getRecord('_config'))!.version;
+    await pageThrough(stack.asEntity(READER), 1);
+    expect((await adapter.getRecord('_config'))!.version).toBe(before);
+  });
+
+  test('a stack whose _config cannot be read refuses before scanning', async () => {
+    adapter.records.delete('_config');
+    adapter.order.splice(adapter.order.indexOf('_config'), 1);
+    const remote = await Stack.open(adapter);
+    const scan = vi.spyOn(adapter, 'queryRecords');
+    await expect(
+      remote.asEntity(READER).query({ filter: { typeId: NOTE } }),
+    ).rejects.toBeInstanceOf(RelayScopeError);
+    expect(scan).not.toHaveBeenCalled();
+  });
+});
+
+describe('a store holding no cursor key gets one at open', () => {
+  const withoutKey = () => {
+    const config = adapter.records.get('_config')!;
+    const { cursorKey: _dropped, ...content } = config.content;
+    adapter.records.set('_config', { ...config, content });
+  };
+
+  test('minted once, however many Stacks open at once', async () => {
+    withoutKey();
+    await Promise.all([Stack.open(adapter), Stack.open(adapter), Stack.open(adapter)]);
+    const key = await cursorKey();
+    expect(key).toBeDefined();
+    await Stack.open(adapter);
     expect(await cursorKey()).toBe(key);
   });
 
-  test('two Stacks minting at once keep one key', async () => {
-    const other = await Stack.open(adapter);
-    const [a, b] = await Promise.all([
-      stack.asEntity(READER).query({ filter: { typeId: NOTE }, limit: 1 }),
-      other.asEntity(READER).query({ filter: { typeId: NOTE }, limit: 1 }),
-    ]);
-    await expect(
-      stack.asEntity(READER).query({ filter: { typeId: NOTE }, cursor: b.cursor! }),
-    ).resolves.toBeDefined();
-    await expect(
-      other.asEntity(READER).query({ filter: { typeId: NOTE }, cursor: a.cursor! }),
-    ).resolves.toBeDefined();
+  test('a cursorKey set by hand must be a well-formed key', async () => {
+    withoutKey();
+    await expect(stack.patchContent('_config', { cursorKey: 'short' })).rejects.toBeInstanceOf(
+      StackValidationError,
+    );
   });
 });
 
 describe('_config keeps its cursor key to the owner', () => {
-  const mint = () => stack.asEntity(READER).query({ filter: { typeId: NOTE }, limit: 1 });
+  test('every _config version carries the key, so an old one restores', async () => {
+    const key = await cursorKey();
+    await stack.patchContent('_config', { timezone: 'Europe/London' });
+    await stack.restoreVersion('_config', 1);
+    expect(await cursorKey()).toBe(key);
+  });
 
   test('cursorKey cannot change once set', async () => {
-    await mint();
     await expect(
       stack.patchContent('_config', { cursorKey: 'A'.repeat(43) }),
     ).rejects.toBeInstanceOf(StackConflictError);
     await expect(stack.patchContent('_config', { cursorKey: null })).rejects.toBeInstanceOf(
       StackConflictError,
-    );
-  });
-
-  test('a cursorKey set by hand must be a well-formed key', async () => {
-    await expect(stack.patchContent('_config', { cursorKey: 'short' })).rejects.toBeInstanceOf(
-      StackValidationError,
     );
   });
 
@@ -141,4 +194,12 @@ describe('_config keeps its cursor key to the owner', () => {
     expect(await stack.asEntity(READER).get('_config')).toBeNull();
     expect(await stack.asEntity(null).get('_config')).toBeNull();
   });
+});
+
+// The wire answer a server built on ScopedStack gives, as
+// error-bad-request-malformed-cursor in @haverstack/conformance-fixtures pins it.
+test('a cursor the stack did not issue is refused with the input named', async () => {
+  await expect(stack.asEntity(READER).query({ cursor: 'not-a-valid-cursor' })).rejects.toThrow(
+    'Invalid cursor: malformed "not-a-valid-cursor"',
+  );
 });

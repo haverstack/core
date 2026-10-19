@@ -96,6 +96,7 @@ import type { ContentOf, ReadonlyTypeSchema, TypeHandle } from '../type-handle.j
 import { createCollection } from '../collection.js';
 import type { Collection } from '../collection.js';
 import type { MigrationRegistry } from '../stack/migrations.js';
+import { cursorContext } from '../stack/cursor-seal.js';
 import type { CursorSeal } from '../stack/cursor-seal.js';
 import { uploadContent } from '../stack/attachments.js';
 import {
@@ -474,11 +475,9 @@ export class ScopedStack implements StackClient {
 
   /**
    * Query records, filtered to those this request can read. Pages are
-   * filtered then refilled, so a page may slightly overshoot `limit` but
-   * never skips a record. Grants are prefetched once, cursor-walked to
-   * exhaustion. The cursor is sealed both ways: the adapter's names the
-   * last record scanned, readable or not.
-   * See docs/spec/disclosure.md § Scoped cursors are sealed.
+   * filtered then refilled, so a page may overshoot `limit` but never skips
+   * a record. The cursor is sealed both ways, since the adapter's names the
+   * last record scanned. See docs/spec/disclosure.md § Scoped cursors are sealed.
    */
   async query(query: StackQuery = {}): Promise<QueryResult> {
     assertValidSort(query.sort);
@@ -488,6 +487,10 @@ export class ScopedStack implements StackClient {
     if (query.filter?.includeUnlisted && !this.#authority.ownerActingAlone) {
       throw new StackPermissionError('includeUnlisted is owner-only');
     }
+    // Ahead of the scan, so a stack that cannot seal refuses before any work.
+    const seal = await this.cursorSeal();
+    const { principalId, subjectId } = this.#authority;
+    const context = cursorContext({ principalId, subjectId }, query);
     const limit = Math.min(query.limit ?? DEFAULT_QUERY_LIMIT, MAX_QUERY_LIMIT);
     const records: StackRecord[] = [];
     const maxFetched = limit * 10;
@@ -501,8 +504,7 @@ export class ScopedStack implements StackClient {
     // is carried into the next operation.
     const groupRoles = new Map<string, GroupRole | null>();
 
-    const resumeAt =
-      query.cursor === undefined ? null : await (await this.cursorSeal()).open(query.cursor);
+    const resumeAt = query.cursor === undefined ? null : await seal.open(query.cursor, context);
     let page: QueryResult = { records: [], cursor: resumeAt };
     do {
       page = await this.stack.query({ ...query, cursor: page.cursor ?? undefined });
@@ -517,7 +519,7 @@ export class ScopedStack implements StackClient {
       }
     } while (records.length < limit && page.cursor && totalFetched < maxFetched);
 
-    const cursor = page.cursor && (await (await this.cursorSeal()).seal(page.cursor));
+    const cursor = page.cursor && (await seal.seal(page.cursor, context));
     return { records, cursor };
   }
 

@@ -278,11 +278,10 @@ export class ElementSetMovedError extends Error {
 }
 
 /**
- * A scoped view asked to observe a stack that relays a remote feed. A
- * relayed frame was scoped by the authority that opened the feed, and a
- * narrower scope cannot re-derive that — a purge leaves nothing to check —
- * so it refuses rather than leak frames or silently drop remote changes.
- * See docs/spec/events.md § Permission scoping.
+ * A scoped view asked to narrow what a remote stack's session already
+ * scoped: to observe its relayed feed, or to query where its `_config`,
+ * and so the cursor key, is unreadable. See docs/spec/events.md
+ * § Permission scoping and docs/spec/disclosure.md § Scoped cursors are sealed.
  */
 export class RelayScopeError extends Error {
   constructor(message: string) {

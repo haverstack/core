@@ -38,6 +38,7 @@ import type {
 import { SYSTEM_TYPES } from './types/index.js';
 import { applyMergePatch } from './merge.js';
 import { fileRefFields } from './schema.js';
+import { generateCursorKey } from './stack/cursor-seal.js';
 import { compareSortEntries, constantSortEntry, contentSortEntry } from './adapter/sort.js';
 import type { SortEntry } from './adapter/sort.js';
 
@@ -118,7 +119,7 @@ export class MemoryAdapter implements StackAdapter {
     return adapter;
   }
 
-  /** The singleton `_config@1` record every stack holds, as the SQLite engines write it. */
+  /** The singleton `_config@1` record every stack holds, cursor key included, as the SQLite engines write it. */
   protected async insertConfig(): Promise<void> {
     const now = new Date();
     await this.createRecord({
@@ -126,7 +127,11 @@ export class MemoryAdapter implements StackAdapter {
       typeId: `${SYSTEM_TYPES.CONFIG}@1`,
       createdAt: now,
       updatedAt: now,
-      content: { entityId: this.ownerEntityId, timezone: this.timezone },
+      content: {
+        entityId: this.ownerEntityId,
+        timezone: this.timezone,
+        cursorKey: generateCursorKey(),
+      },
       version: 1,
     });
   }

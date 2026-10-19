@@ -105,7 +105,7 @@ import { SseDecoder } from './sse.js';
 import type { SseFrame } from './sse.js';
 import {
   isLoopbackUrl,
-  isPlaintextUrl,
+  serverUrlScheme,
   pathSegment,
   fetchOrThrow,
   authHeaders,
@@ -242,7 +242,11 @@ export class APIAdapter implements StackAdapter {
     // Before the credential is spent and before anything is sent, for the
     // same reason the owner check comes early: a signature made over a
     // plaintext connection is already compromised by the time it fails.
-    if (isPlaintextUrl(baseUrl) && !opts.allowInsecure && !isLoopbackUrl(baseUrl)) {
+    const scheme = serverUrlScheme(baseUrl);
+    if (scheme === null) {
+      throw new APIAdapterError(`Not an http(s) URL: "${baseUrl}"`);
+    }
+    if (scheme === 'http' && !opts.allowInsecure && !isLoopbackUrl(baseUrl)) {
       throw new APIAdapterInsecureUrlError(baseUrl);
     }
     // Refused rather than resolved by precedence: one of the two would be

@@ -110,12 +110,9 @@ function isWorldRead(association: AuthorityAssociation): boolean {
 }
 
 /**
- * Whether a grantee reaches `entityId` — the one reading both layers give
- * a `Grantee`, record-level permission and type-level grant alike. Read as
- * data: an unknown `kind`, an empty `entityId` or `groupId`, or a group arm
- * with no `member`/`admin` role confers nothing. `role: 'member'` is the
- * wider set — an admin satisfies it — and `role: 'admin'` the narrower.
- * See docs/spec/access-control.md § Refused at the write, and again at evaluation.
+ * Whether a grantee reaches `entityId`, for both layers alike. Read as data,
+ * so an arm the write would refuse confers nothing; `member` is the wider
+ * role. See docs/spec/access-control.md § Refused at the write, and again at evaluation.
  */
 export async function granteeReaches(
   grantee: unknown,

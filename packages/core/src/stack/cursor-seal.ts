@@ -12,9 +12,12 @@
  * So ScopedStack never returns an adapter cursor: it seals each one under
  * a key only the stack holds (AES-GCM, authenticated, so a forged or
  * altered cursor is refused rather than resumed), and opens only cursors
- * it sealed. The key is `_config.cursorKey`, minted on first use and
- * persisted, so a cursor outlives the process that minted it and resumes
- * on any instance serving the same stack.
+ * it sealed. The seal is bound to the requester and the query's filter
+ * and sort, so a cursor resumes only the query that produced it: carried
+ * into a broader one, a position on a withheld record could be compared
+ * against values the requester chose. The key is `_config.cursorKey`,
+ * written when `_config` is, so a cursor outlives the process that minted
+ * it and resumes on any instance serving the same stack.
  *
  * See docs/spec/disclosure.md § Scoped cursors are sealed.
  */
@@ -28,6 +31,23 @@ const KEY_BYTES = 32;
 const IV_BYTES = 12;
 /** The authentication tag AES-GCM appends to every ciphertext. */
 const TAG_BYTES = 16;
+
+/**
+ * What a sealed cursor is bound to: who asked, and which records in which
+ * order. Keys are sorted, so the same query spelled in another key order
+ * binds alike; `limit` is left out, since a caller may page at any size.
+ */
+export const cursorContext = (
+  requester: { principalId: string | null; subjectId: string | null },
+  query: { filter?: unknown; sort?: unknown },
+): string => canonicalJson({ requester, filter: query.filter ?? null, sort: query.sort ?? null });
+
+const canonicalJson = (value: unknown): string =>
+  JSON.stringify(value, (_key, v: unknown) =>
+    v && typeof v === 'object' && !Array.isArray(v)
+      ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+      : v,
+  );
 
 /** A fresh `_config.cursorKey`. */
 export const generateCursorKey = (): string =>
@@ -59,11 +79,11 @@ export class CursorSeal {
     return new CursorSeal(key);
   }
 
-  async seal(cursor: string): Promise<string> {
+  async seal(cursor: string, context: string): Promise<string> {
     const iv = crypto.getRandomValues(new Uint8Array(IV_BYTES));
     const sealed = new Uint8Array(
       await crypto.subtle.encrypt(
-        { name: 'AES-GCM', iv },
+        { name: 'AES-GCM', iv, additionalData: new TextEncoder().encode(context) },
         this.key,
         new TextEncoder().encode(cursor),
       ),
@@ -76,10 +96,10 @@ export class CursorSeal {
 
   /**
    * The adapter cursor inside a sealed one. Anything this stack did not
-   * seal is malformed, the same 400 an adapter gives a cursor it cannot
-   * decode.
+   * seal for `context` is malformed, the same 400 an adapter gives a
+   * cursor it cannot decode.
    */
-  async open(sealed: string): Promise<string> {
+  async open(sealed: string, context: string): Promise<string> {
     const malformed = () => new StackBadRequestError(`Invalid cursor: malformed "${sealed}"`);
     let bytes: Uint8Array;
     try {
@@ -90,7 +110,11 @@ export class CursorSeal {
     if (bytes.length < IV_BYTES + TAG_BYTES) throw malformed();
     try {
       const plain = await crypto.subtle.decrypt(
-        { name: 'AES-GCM', iv: bytes.slice(0, IV_BYTES) },
+        {
+          name: 'AES-GCM',
+          iv: bytes.slice(0, IV_BYTES),
+          additionalData: new TextEncoder().encode(context),
+        },
         this.key,
         bytes.slice(IV_BYTES),
       );
