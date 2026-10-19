@@ -229,9 +229,12 @@ describe('a stack whose adapter does not relay', () => {
 });
 
 describe('a scoped view of a stack that relays', () => {
-  test('refuses to subscribe rather than narrow a feed it cannot re-scope', async () => {
-    const scoped = stack.asEntity(REMOTE_EDITOR);
-    await expect(scoped.subscribe(() => {})).rejects.toBeInstanceOf(ScopeUnavailableError);
+  // A relayed frame was scoped by the session that opened the feed, so no
+  // narrower scope can be kept over it. See docs/spec/access-control.md
+  // § Enforcement: Stack.asEntity().
+  test('is refused up front, for every requester', () => {
+    expect(() => stack.asEntity(REMOTE_EDITOR)).toThrow(ScopeUnavailableError);
+    expect(() => stack.asEntity(OWNER)).toThrow(ScopeUnavailableError);
   });
 
   test('subscribes normally when the adapter relays nothing', async () => {

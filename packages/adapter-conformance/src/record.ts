@@ -30,7 +30,7 @@ import type {
   StackRecord,
 } from '@haverstack/core';
 import { ElementSetMovedError, inReach } from '@haverstack/core/adapter';
-import type { ReadReach, StackRecordAdapter } from '@haverstack/core/adapter';
+import type { Reach, StackRecordAdapter } from '@haverstack/core/adapter';
 
 type PermissionElement = Extract<AuthorityAssociation, { kind: 'permission' }>;
 import { expectStackErrorCode } from './errors.js';
@@ -987,7 +987,7 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
     // -----------------------------------------------------------------
     // Querying within a reach — optional, so each test asks whether the
     // adapter has queryReadable() at all. The reference reading is core's
-    // inReach(); see docs/spec/adapters.md § Querying within a reach.
+    // inReach(); see docs/spec/access-control.md § Reach.
     // -----------------------------------------------------------------
     describe('querying within a reach', () => {
       const OTHER_TYPE_ID = 'org.haverstack.conformance/other@1';
@@ -1025,12 +1025,15 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
           makeRecord({ permissions: [toMembers] }),
           makeRecord({ permissions: [toAdmins] }),
           makeRecord({ permissions: [toAlice, toMembers] }),
+          makeRecord({ permissions: [toAlice, { ...toAlice, label: 'write' }] }),
+          makeRecord({ permissions: [anyone, { ...toAlice, label: 'write' }] }),
+          makeRecord({ permissions: [toMembers, toAdmins] }),
         ];
         for (const record of records) await adapter.createRecord(record);
         return records;
       };
 
-      const reaches: [string, ReadReach][] = [
+      const reaches: [string, Reach][] = [
         ['nothing constrained', {}],
         ['every Record of a Type', { within: { types: [OTHER_TYPE_ID], permissions: [] } }],
         [
@@ -1043,14 +1046,14 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
             },
           },
         ],
-        ['Records carrying `anyone`', { within: { types: [], permissions: [anyone] } }],
+        ['Records carrying `anyone`', { within: { types: [], permissions: [[anyone]] } }],
         [
           'Records carrying a read naming an entity',
-          { within: { types: [], permissions: [toAlice] } },
+          { within: { types: [], permissions: [[toAlice]] } },
         ],
         [
           'Records carrying a read naming a group at one role',
-          { within: { types: [], permissions: [toAdmins] } },
+          { within: { types: [], permissions: [[toAdmins]] } },
         ],
         [
           'every arm at once',
@@ -1058,7 +1061,7 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
             within: {
               types: [OTHER_TYPE_ID],
               authored: { subjectId: ALICE, types: [CONFORMANCE_TYPE_ID] },
-              permissions: [anyone, toMembers],
+              permissions: [[anyone], [toMembers]],
             },
           },
         ],
@@ -1070,15 +1073,32 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
             within: {
               types: [OTHER_TYPE_ID],
               authored: { subjectId: ALICE, types: [CONFORMANCE_TYPE_ID, OTHER_TYPE_ID] },
-              permissions: [anyone],
+              permissions: [[anyone]],
             },
           },
         ],
         [
           'an empty fence',
-          { fence: [], within: { types: [CONFORMANCE_TYPE_ID], permissions: [anyone] } },
+          { fence: [], within: { types: [CONFORMANCE_TYPE_ID], permissions: [[anyone]] } },
         ],
         ['no arm at all', { within: { types: [], permissions: [] } }],
+        [
+          'Records carrying every element of a set',
+          { within: { types: [], permissions: [[toAlice, { ...toAlice, label: 'write' }]] } },
+        ],
+        [
+          'Records carrying one whole set of several',
+          {
+            within: {
+              types: [],
+              permissions: [
+                [{ ...toAlice, label: 'write' }, anyone],
+                [toMembers, toAdmins],
+              ],
+            },
+          },
+        ],
+        ['an empty set, which every Record carries', { within: { types: [], permissions: [[]] } }],
       ];
 
       test.each(reaches)('returns exactly the Records in reach: %s', async (_name, reach) => {
@@ -1100,7 +1120,7 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
 
         const result = await adapter.queryReadable(
           { filter: { tags: ['pinned'] } },
-          { within: { types: [], permissions: [anyone] } },
+          { within: { types: [], permissions: [[anyone]] } },
         );
         expect(result.records.map((r) => r.id)).toEqual([tagged.id]);
       });
@@ -1110,7 +1130,7 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
       // many Records outside the reach remain.
       const pagesWithin = async (sort: StackQuery['sort']): Promise<void> => {
         if (!adapter.queryReadable) return;
-        const reach: ReadReach = { within: { types: [], permissions: [anyone] } };
+        const reach: Reach = { within: { types: [], permissions: [[anyone]] } };
         const inside: string[] = [];
         for (let i = 0; i < 9; i++) {
           const visible = i % 3 === 1;

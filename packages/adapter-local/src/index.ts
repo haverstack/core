@@ -40,7 +40,7 @@ import type {
   ElementWriteOptions,
   JournalOptions,
   MutateOptions,
-  ReadReach,
+  Reach,
 } from '@haverstack/core/adapter';
 import type { TokenSession, TokenInfo } from '@haverstack/core/wire';
 import {
@@ -177,7 +177,7 @@ export class LocalAdapter implements StackAdapter {
     return this.record.queryRecords(query);
   }
 
-  async queryReadable(query: StackQuery, reach: ReadReach): Promise<QueryResult> {
+  async queryReadable(query: StackQuery, reach: Reach): Promise<QueryResult> {
     return this.record.queryReadable(query, reach);
   }
 

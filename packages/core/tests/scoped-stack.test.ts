@@ -2050,7 +2050,7 @@ describe('ScopedStack — group-targeted grants', () => {
     expect((await stack.asEntity(MEMBER).get(record.id))?.content.text).toBe('secret');
   });
 
-  // Roster resolution is memoized for one operation, not for the life of
+  // Rosters are read once per operation, not for the life of
   // the ScopedStack: asEntity() returns an object a caller may hold, and a
   // cache outliving the operation would let removal from a group go
   // unnoticed — the direction that must never go stale.

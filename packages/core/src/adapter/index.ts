@@ -19,12 +19,13 @@ export type {
   MutateOptions,
   AspectWriteOptions,
   ElementWriteOptions,
-  ReadReach,
+  Reach,
 } from '../types/index.js';
 export { sameAssociationSet } from '../associations/identity.js';
 export { ElementSetMovedError, OwnerMismatchError, softDeletedRefusal } from '../errors.js';
 export { combineAdapters } from './combine.js';
 export { inReach } from './reach.js';
+export type { ReachedRecord } from './reach.js';
 export {
   assertQueryCapabilities,
   assertSortCapability,

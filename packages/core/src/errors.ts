@@ -278,12 +278,9 @@ export class ElementSetMovedError extends Error {
 }
 
 /**
- * A scoped view asked for something its stack cannot answer within the
- * scope: a query over an adapter that cannot query within a reach, or a
- * feed relayed from elsewhere, whose frames were scoped by the session that
- * opened it and which a purge leaves nothing to re-check. Refused rather
- * than leak or silently drop. Both arise only over a server-backed stack,
- * which is scoped by opening it with the session meant.
+ * A scoped view asked of a stack that does not own its storage. A server
+ * scopes every request to the session that opened it, so such a stack is
+ * scoped by opening it with the session meant.
  * See docs/spec/access-control.md § Enforcement: Stack.asEntity().
  */
 export class ScopeUnavailableError extends Error {

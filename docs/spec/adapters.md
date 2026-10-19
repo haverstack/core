@@ -30,7 +30,7 @@ type StackAdapter = StackRecordAdapter &
   };
 ```
 
-**Optional capabilities** follow one pattern throughout: an optional interface method, checked for truthiness at the call site, with a described fallback when absent. `StackRecordAdapter.deleteUnreferencedAttachmentRecords()` (atomic reference check — see [Attachments](./attachments.md#deleting-attachments)), `StackRecordAdapter.queryReadable()` (a query among the Records one requester may read; a scoped `query()` is refused without it — see [below](#querying-within-a-reach)), `StackBlobAdapter.listBlobs()` (blob enumeration, used by [garbage collection](./attachments.md#garbage-collection) to find bare-bytes orphans), `StackRecordAdapter.subscribeChanges()` (relaying a feed that originates elsewhere — see [Change events § Where events come from](./events.md#where-events-come-from)), and `StackAdapter.putAttachmentWithMetadata()` (atomic upload, below) are all this shape — no boolean flag in `capabilities`, just an optional method a caller checks for before using. `combineAdapters()` (below) preserves this: it forwards an optional method only when the underlying part actually implements it, never as a wrapper around a missing one.
+**Optional capabilities** follow one pattern throughout: an optional interface method, checked for truthiness at the call site, with a described fallback when absent. `StackRecordAdapter.deleteUnreferencedAttachmentRecords()` (atomic reference check — see [Attachments](./attachments.md#deleting-attachments)), `StackRecordAdapter.queryReadable()` (a query among the Records one requester may read; a stack is not scoped without it — see [below](#querying-within-a-reach)), `StackBlobAdapter.listBlobs()` (blob enumeration, used by [garbage collection](./attachments.md#garbage-collection) to find bare-bytes orphans), `StackRecordAdapter.subscribeChanges()` (relaying a feed that originates elsewhere — see [Change events § Where events come from](./events.md#where-events-come-from)), and `StackAdapter.putAttachmentWithMetadata()` (atomic upload, below) are all this shape — no boolean flag in `capabilities`, just an optional method a caller checks for before using. `combineAdapters()` (below) preserves this: it forwards an optional method only when the underlying part actually implements it, never as a wrapper around a missing one.
 
 `StackAdapter.putAttachmentWithMetadata(data, { mimeType, filename?, appId? })` stores bytes and creates the accompanying `_attachment@1` record as **one atomic operation**, returning the created record. It is declared on the composed `StackAdapter` type rather than on either half, because neither half can ever have it: "bytes + record in one operation" is a property only a whole adapter can offer. Exactly one adapter does: the API adapter, backed by a single `POST /attachments` request the server fulfills atomically. Local storage adapters don't implement it, and `combineAdapters()` never synthesizes it from parts (a record backend and a blob backend glued together have no shared transaction). `Stack.putAttachment()` checks for it — present means delegate the whole operation and trust the returned record as backend-authoritative; absent means the bytes-then-`create()` fallback sequence. See [Wire format § Attachments](./wire-format.md#attachments) for why the atomic form is a correctness requirement, not an efficiency optimization.
 
@@ -54,37 +54,22 @@ Every adapter stores a record's associations under the [identity](./data-model.m
 
 ## Querying within a reach
 
-`StackRecordAdapter.queryReadable(query, reach)` answers `queryRecords(query)` among the Records a `ReadReach` names, and nothing else. It is how a [permission-scoped](./access-control.md#enforcement-stackasentity) `query()` reads: `ScopedStack` hands the adapter the requester's reach, so the page, its cursor and whether a cursor comes back are decided among Records the requester may read — see [Refusals and disclosure § What a query reveals](./disclosure.md#what-a-query-reveals) for why that matters.
+`StackRecordAdapter.queryReadable(query, reach)` answers `queryRecords(query)` among the Records a `Reach` names, and nothing else. It is how a [permission-scoped](./access-control.md#enforcement-stackasentity) `query()` reads: `ScopedStack` hands the adapter the requester's `read` [reach](./access-control.md#reach), so the page, its cursor and whether a cursor comes back are decided among Records the requester may read — see [Refusals and disclosure § What a query reveals](./disclosure.md#what-a-query-reveals) for why that matters.
 
 ```ts
-type ReadReach = {
-  fence?: TypeId[]; // only Records at these Types
+type Reach = {
+  fence?: TypeId[];
   within?: {
-    // Records meeting one of these
-    types: TypeId[]; // every Record at these Types
-    authored?: { subjectId: EntityId; types: TypeId[] }; // Records this subject authored at these Types
-    permissions: AuthorityAssociation[]; // Records carrying one of these elements
+    types: TypeId[];
+    authored?: { subjectId: EntityId; types: TypeId[] };
+    permissions: AuthorityAssociation[][];
   };
 };
 ```
 
-A Record is in reach when its `typeId` is inside `fence` and it is inside `within`: its `typeId` is in `types`; or its `typeId` is in `authored.types` and its `createdBy.subjectId` is `authored.subjectId`; or its `permissions` hold an element equal, by [association identity](#associations-are-keyed-by-identity), to one in `permissions`. An absent part constrains nothing and an empty list matches nothing, as in a `filter`. The reach is one more condition of the query, beside its own `filter`, so it narrows and never widens. `inReach()` in `@haverstack/core/adapter` is the reference reading, and the [conformance suite](#conformance) holds an adapter to it.
+The shape and its reading are [Access control § Reach](./access-control.md#reach)'s, over TypeIds where that section's are over families: `Stack` resolves each family to its registered versions before the call, the resolution [`filter.baseId`](./data-model.md#filter) gets, so an adapter needs no family concept. The reach is one more condition of the query, beside its own `filter`, so it narrows and never widens. Every rule behind it is resolved before the adapter sees it, so the adapter applies none of access control: it matches a description, the way it matches a `filter`. `inReach()` in `@haverstack/core/adapter` is the reference reading, and the [conformance suite](#conformance) holds an adapter to it.
 
-**The reach is the read rules, stated once.** `ScopedStack` builds it from the requester's grants and rosters, and answers every read question from it — `get()` asks it of one Record, `query()` hands it to the adapter, the [feed](./events.md#permission-scoping) asks it of each change — so no two of them can disagree about what a requester sees. The adapter applies none of [Access control](./access-control.md): every rule behind the reach is resolved before the adapter sees it.
-
-| Part          | What it holds                                                                                                                                                                                                    |
-| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `fence`       | The principal's half of a [delegated](./access-control.md#delegation-principal-and-subject) request: the families a grant naming the principal directly lets it read. Absent where no grant bounds the principal |
-| `within`      | The subject's half. Absent for an owner subject, who passes every record-level check                                                                                                                             |
-| `types`       | The families a `read-any` grant reaching the subject covers — every tier, groups and the `authenticated` default included                                                                                        |
-| `authored`    | The families a `read-own` grant reaching the subject covers                                                                                                                                                      |
-| `permissions` | `anyone`, a `read` naming the subject, and a `read` naming each roster that holds the subject, at each role it holds there                                                                                       |
-
-So the owner acting alone has the reach `{}`, which constrains nothing, and an owner subject acting through an app has `{ fence }`. Every element in `permissions` is a `read`: a `write` beside one [confers nothing of its own](./access-control.md#write-implies-read), so no rule reads one as reach.
-
-**`ScopedStack` states a reach over type families; an adapter receives TypeIds.** `Stack` resolves each family to its registered versions before the call, the resolution [`filter.baseId`](./data-model.md#filter) gets, so an adapter needs no family concept, and the reach `get()` asks of a single Record needs no list of Types at all.
-
-**Every local adapter implements it.** It is optional only so `APIAdapter` can leave it out: a server scopes each query to the session that sent it, so a server-backed stack is scoped by opening it with the session meant. A scoped `query()` over an adapter without it is refused with `ScopeUnavailableError`, as a scoped `subscribe()` over a stack that relays changes is — a view that cannot keep its scope refuses rather than answer outside it. A SQLite adapter matches the `permissions` arm through an index on the element's identity ending in `record_id`, the same semi-join shape as the association filters.
+**Every local adapter implements it.** It is optional only so `APIAdapter` can leave it out: a stack whose adapter lacks it [cannot be scoped at all](./access-control.md#enforcement-stackasentity), which a server-backed stack never needs. A SQLite adapter matches each permission element through an index on the element's identity ending in `record_id`, the same semi-join shape as the association filters.
 
 ## Package naming convention
 

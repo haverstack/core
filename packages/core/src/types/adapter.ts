@@ -81,15 +81,14 @@ export type ElementWriteOptions<E extends Association> = AspectWriteOptions & {
 };
 
 /**
- * The Records one scoped request may read, as data an adapter matches
- * rather than rules it applies. A Record is in reach when it is inside
- * `fence` and inside `within`; an absent part constrains nothing, and an
- * empty list matches nothing, as in a `filter`. `ScopedStack` states the
- * reach over type families, and `Stack` resolves each to its registered
- * TypeIds before an adapter sees it, as for `filter.baseId`.
- * See docs/spec/adapters.md § Querying within a reach.
+ * The Records one scoped request may act on with one verb, as data matched
+ * rather than rules applied. A Record is in reach when it is inside `fence`
+ * and inside `within`; an absent part constrains nothing, and an empty list
+ * matches nothing, as in a `filter`. `ScopedStack` states a reach over type
+ * families; `Stack` resolves each to its registered TypeIds before an
+ * adapter sees one. See docs/spec/access-control.md § Reach.
  */
-export type ReadReach<Type extends string = TypeId> = {
+export type Reach<Type extends string = TypeId> = {
   /** Only Records at these Types are in reach. */
   fence?: Type[];
   /** Records meeting one of these are in reach. */
@@ -98,8 +97,8 @@ export type ReadReach<Type extends string = TypeId> = {
     types: Type[];
     /** Records this subject authored at these Types. */
     authored?: { subjectId: EntityId; types: Type[] };
-    /** Records carrying one of these elements, by association identity. */
-    permissions: AuthorityAssociation[];
+    /** Records carrying every element of one of these sets, by association identity. */
+    permissions: AuthorityAssociation[][];
   };
 };
 
@@ -167,11 +166,11 @@ export interface StackRecordAdapter {
   /**
    * queryRecords() over the Records in `reach` alone: the reach is one
    * more condition of the query, so the page, its cursor and whether one
-   * comes back are decided among those Records only. Optional — without
-   * it, ScopedStack.query() refuses, as a server already scopes each query
-   * to its session. See docs/spec/adapters.md § Querying within a reach.
+   * comes back are decided among those Records only. Optional — a stack
+   * whose adapter lacks it cannot be scoped, as a server-backed one never
+   * needs to be. See docs/spec/adapters.md § Querying within a reach.
    */
-  queryReadable?(query: StackQuery, reach: ReadReach): Promise<QueryResult>;
+  queryReadable?(query: StackQuery, reach: Reach): Promise<QueryResult>;
 
   // Aspects that never bump `version`
   //

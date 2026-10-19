@@ -196,9 +196,3 @@ export async function loadRosterRoles(
   }
   return roles;
 }
-
-/** `load` run on first call and its answer shared after — one operation's worth of a read. */
-export function once<T>(load: () => Promise<T>): () => Promise<T> {
-  let loaded: Promise<T> | undefined;
-  return () => (loaded ??= load());
-}

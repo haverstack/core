@@ -34,7 +34,7 @@ import type {
   StackCapabilities,
   BlobInfo,
   QuerySort,
-  ReadReach,
+  Reach,
 } from './types/index.js';
 import { SYSTEM_TYPES } from './types/index.js';
 import { applyMergePatch } from './merge.js';
@@ -311,11 +311,11 @@ export class MemoryAdapter implements StackAdapter {
     return this.select(query);
   }
 
-  async queryReadable(query: StackQuery, reach: ReadReach): Promise<QueryResult> {
+  async queryReadable(query: StackQuery, reach: Reach): Promise<QueryResult> {
     return this.select(query, reach);
   }
 
-  private select(query: StackQuery, reach?: ReadReach): QueryResult {
+  private select(query: StackQuery, reach?: Reach): QueryResult {
     const f = query.filter ?? {};
     let results = this.order.map((id) => this.records.get(id)!);
     if (reach) results = results.filter((r) => inReach(r, reach));

@@ -2,11 +2,10 @@
  * Stack — Permission Resolution
  * -------------------------------------------------------
  * The record-level permission rules, with no dependency on a transport
- * layer or storage backend: whether a Record's `write` elements reach an
- * entity, how a grantee reaches one, the write-implies-read invariant, and
- * the `_group` roster rules both layers resolve against, plus the
- * owner-acting-alone tier. What a requester may *read* is a reach, which
- * scoped-stack/authority.ts builds from these.
+ * layer or storage backend: how a grantee reaches an entity, the
+ * write-implies-read invariant, and the `_group` roster rules both layers
+ * resolve against, plus the owner-acting-alone tier. What a requester may
+ * do is a reach per verb, which scoped-stack/authority.ts builds from these.
  *
  * A permission set is read as data throughout, never as the type: it can
  * arrive from an import or a foreign server, where no compiler has seen
@@ -41,37 +40,6 @@ export type RecordResolver = (id: RecordId) => Promise<StackRecord | null>;
  * stale. See loadRosterRoles().
  */
 export type RosterRoles = () => Promise<ReadonlyMap<RecordId, GroupRole>>;
-
-/**
- * Whether the record's own `write` elements let an entity mutate it. The
- * entity is the **subject**: record-level permissions are written about who
- * data is for, never the software carrying the request, whose authority is
- * asked of the principal. Reading is the scoped reach's question, not this
- * one's. See docs/spec/access-control.md § Delegation: principal and subject.
- */
-export async function permitsWrite(
-  record: StackRecord,
-  subjectEntityId: EntityId | null,
-  ownerEntityId: EntityId | null,
-  roles: RosterRoles,
-): Promise<boolean> {
-  if (subjectEntityId && subjectEntityId === ownerEntityId) return true;
-  if (!subjectEntityId) return false;
-
-  // No permissions = private.
-  const perms = record.permissions ?? [];
-  for (const p of perms) {
-    if (p?.kind !== 'permission' || !p.grantee || p.label !== 'write') continue;
-    // The write bit is inert without read alongside it: the mutate surface
-    // hands back the record it wrote and opens its whole history, so a
-    // write element standing alone would withhold nothing. Refused at the
-    // write by validatePermissions() and again here.
-    // See docs/spec/access-control.md § Write implies read.
-    if (!holdsRead(perms, p.grantee)) continue;
-    if (await granteeReaches(p.grantee, subjectEntityId, { roles })) return true;
-  }
-  return false;
-}
 
 /**
  * Whether the set conveys read to this grantee — a `read` of its own, or

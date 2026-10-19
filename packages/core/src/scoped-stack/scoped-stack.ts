@@ -43,9 +43,8 @@ import type {
   DataAssociation,
   EntityId,
   FileId,
-  GrantAction,
   QueryResult,
-  ReadReach,
+  Reach,
   RecordChange,
   RecordId,
   RecordVersion,
@@ -65,7 +64,6 @@ import {
   StackConflictError,
   StackNotFoundError,
   StackPermissionError,
-  ScopeUnavailableError,
   StackValidationError,
 } from '../errors.js';
 import { assertAssociationEdits } from '../associations/validation.js';
@@ -105,7 +103,7 @@ import type { Stack } from '../stack/stack.js';
 import { ScopeAuthority } from './authority.js';
 import { familyPolicy, ownerFieldRefusal } from './family-policy.js';
 import { ScopedSubscription } from './subscription.js';
-import type { AuthorityReads } from './authority-reads.js';
+import type { ReachVerb } from './authority-snapshot.js';
 import type {
   BackdatableCreateRecordOptions,
   CollectAttachmentGarbageOptions,
@@ -138,15 +136,10 @@ export type ScopedStackInit = {
   /** The stack's own unfiltered stream, which subscribe() narrows. */
   changes: ChangeEmitter;
   assertOpen: () => void;
-  /** Whether changes reach the stack from elsewhere — see subscribe(). */
-  relaysChanges: boolean;
   /** The app's migrations, which collection() migrates records through. */
   migrations: MigrationRegistry;
-  /**
-   * Stack.query() within a reach over type families, present when the
-   * adapter implements queryReadable() — see query().
-   */
-  queryReadable?: (query: StackQuery, reach: ReadReach<BaseId>) => Promise<QueryResult>;
+  /** Stack.query() within a reach over type families — see query(). */
+  queryReadable: (query: StackQuery, reach: Reach<BaseId>) => Promise<QueryResult>;
 };
 
 /**
@@ -162,7 +155,6 @@ export class ScopedStack implements StackClient {
   private readonly adapter: StackAdapter;
   private readonly changes: ChangeEmitter;
   private readonly assertStackOpen: () => void;
-  private readonly relaysChanges: boolean;
   private readonly migrations: MigrationRegistry;
   private readonly queryReadable: ScopedStackInit['queryReadable'];
 
@@ -177,7 +169,6 @@ export class ScopedStack implements StackClient {
     this.adapter = init.adapter;
     this.changes = init.changes;
     this.assertStackOpen = init.assertOpen;
-    this.relaysChanges = init.relaysChanges;
     this.migrations = init.migrations;
     this.queryReadable = init.queryReadable;
   }
@@ -214,9 +205,9 @@ export class ScopedStack implements StackClient {
     return { actor: this.#authority.requester };
   }
 
-  /** Refuse a create this request holds no grant for — see ScopeAuthority.checkCreateGrant(). */
+  /** Refuse a create outside this request's reach — see ScopeAuthority.canCreate(). */
   private async requireCreateGrant(typeId: TypeId): Promise<void> {
-    if (!(await this.#authority.checkCreateGrant(typeId))) {
+    if (!(await this.#authority.canCreate(typeId))) {
       throw new StackPermissionError(`No create grant for type "${typeId}"`);
     }
   }
@@ -238,7 +229,7 @@ export class ScopedStack implements StackClient {
   ): Promise<StackRecord> {
     // The `_grant` write fence applies to mutating callers only: reading a
     // grant Record's history is not the escalation that fence exists to stop.
-    return this.requireVerb(id, ['update-own', 'update-any'], {
+    return this.requireVerb(id, 'update', {
       fenceGrantRecord: opts.mutating ?? true,
       expect: opts.expect,
     });
@@ -253,7 +244,7 @@ export class ScopedStack implements StackClient {
    */
   private async requireVerb(
     id: string,
-    actions: GrantAction[],
+    verb: ReachVerb,
     opts: { fenceGrantRecord: boolean; expect?: ExpectationOptions },
   ): Promise<StackRecord> {
     const record = await this.stack.get(id, { includeDeleted: true });
@@ -261,14 +252,14 @@ export class ScopedStack implements StackClient {
     // Ahead of the gate, so another family's record is not found whatever
     // this requester may do to it — the answer a collection's get() gives.
     checkFamily(record, opts.expect);
-    await this.gateVerb(record, actions, opts.fenceGrantRecord);
+    await this.gateVerb(record, verb, opts.fenceGrantRecord);
     return record;
   }
 
   /** requireVerb()'s gate, asked of a record already found in its family. */
   private async gateVerb(
     record: StackRecord,
-    actions: GrantAction[],
+    verb: ReachVerb,
     fenceGrantRecord: boolean,
   ): Promise<void> {
     const { id } = record;
@@ -285,22 +276,16 @@ export class ScopedStack implements StackClient {
       }
       return;
     }
-    const reads = this.#authority.reads();
-    const subjectReaches =
-      (await this.#authority.permitsWrite(record, reads)) ||
-      (await this.#authority.subjectAllows(record.typeId, actions, { record, reads }));
-    const principalHolds = await this.#authority.principalAllows(record.typeId, actions, reads);
-    if (!subjectReaches || !principalHolds) {
-      const verb = actions[0]!.split('-')[0]!;
-      const what = `Cannot ${verb} "${id}" (${record.typeId})`;
-      throw await this.#authority.denialFor(
-        record,
-        subjectReaches
-          ? `${what}: the app acting for this entity holds no ${verb} grant`
-          : `${what}: requires ${actions.join(' or ')}`,
-        reads,
-      );
-    }
+    const snapshot = this.#authority.snapshot();
+    if (await this.#authority.may(verb, record, snapshot)) return;
+    const what = `Cannot ${verb} "${id}" (${record.typeId})`;
+    throw await this.#authority.denialFor(
+      record,
+      (await this.#authority.subjectMay(verb, record, snapshot))
+        ? `${what}: the app acting for this entity holds no ${verb} grant`
+        : `${what}: requires ${verb}-own or ${verb}-any`,
+      snapshot,
+    );
   }
 
   /**
@@ -310,7 +295,7 @@ export class ScopedStack implements StackClient {
   private requireDeletable(id: string, expect?: ExpectationOptions): Promise<StackRecord> {
     // No soft-delete refusal: undelete() shares this gate, and a tombstone
     // is exactly what it addresses.
-    return this.requireVerb(id, ['delete-own', 'delete-any'], { fenceGrantRecord: true, expect });
+    return this.requireVerb(id, 'delete', { fenceGrantRecord: true, expect });
   }
 
   /**
@@ -474,11 +459,9 @@ export class ScopedStack implements StackClient {
 
   /**
    * Query records, among those this request can read: the adapter matches
-   * the request's reach as one more condition of the query, so a page, its
-   * cursor and whether one comes back are decided among readable Records
-   * alone. Refused over an adapter that cannot, which a server-backed stack
-   * never needs — its server scopes each query to its session.
-   * See docs/spec/disclosure.md § What a query reveals.
+   * the request's read reach as one more condition of the query, so a page,
+   * its cursor and whether one comes back are decided among readable
+   * Records alone. See docs/spec/disclosure.md § What a query reveals.
    */
   async query(query: StackQuery = {}): Promise<QueryResult> {
     assertValidSort(query.sort);
@@ -488,13 +471,8 @@ export class ScopedStack implements StackClient {
     if (query.filter?.includeUnlisted && !this.#authority.ownerActingAlone) {
       throw new StackPermissionError('includeUnlisted is owner-only');
     }
-    if (!this.queryReadable) {
-      throw new ScopeUnavailableError(
-        'This stack cannot query within a scope: its adapter does not implement queryReadable(). ' +
-          'Query a server-backed stack through the session you mean instead.',
-      );
-    }
-    const page = await this.queryReadable(query, await this.#authority.readReach());
+    const reach = await this.#authority.snapshot().reach('read');
+    const page = await this.queryReadable(query, reach);
     // Projected here as well as in get(), or `includeDeleted` would be a
     // strictly better read channel than the fetch-by-ID it is supposed to
     // match.
@@ -613,7 +591,7 @@ export class ScopedStack implements StackClient {
    * so a retried write is gated on the set it lands on.
    */
   private async gateAssociationWrite(record: StackRecord, added: Association[]): Promise<void> {
-    await this.gateVerb(record, ['update-own', 'update-any'], true);
+    await this.gateVerb(record, 'update', true);
     for (const association of added) {
       if ((record.associations ?? []).some((a) => associationEqual(a, association))) continue;
       await this.requireAssociationAccess(record.typeId, association);
@@ -948,15 +926,8 @@ export class ScopedStack implements StackClient {
     opts: SubscribeOptions = {},
   ): Promise<Unsubscribe> {
     this.assertStackOpen();
-    if (this.relaysChanges) {
-      throw new ScopeUnavailableError(
-        'This stack relays changes from elsewhere, and a scoped view cannot narrow that feed: ' +
-          'a relayed frame was already scoped by the session that opened it, and a purge leaves ' +
-          'no record to re-check. Subscribe with a session-scoped stack instead.',
-      );
-    }
-    // A relaying stack was already refused above, so relaysChanges is
-    // always false here — `since` never has a cursor to mean anything by.
+    // A scoped view exists only over a stack that relays nothing, so
+    // `since` never has a cursor to mean anything by.
     assertSinceUsable(opts.since, false);
     assertValidBaseIdFilter(opts.filter);
     if (opts.includeUnlisted && !this.#authority.ownerActingAlone) {
@@ -964,20 +935,11 @@ export class ScopedStack implements StackClient {
     }
     return this.changes.add(
       new ScopedSubscription(
-        this.#authority.reads(),
-        (record, reads) => this.canReadHeld(record, reads),
+        this.#authority.snapshot(),
+        (record, snapshot) => this.#authority.canRead(record, snapshot),
         handler,
         opts,
       ),
     );
-  }
-
-  /**
-   * canRead for one event, through the authority the subscription holds:
-   * re-read only after an event that changes it, rather than per event,
-   * which would be a `_grant` scan for every change the stack makes.
-   */
-  private async canReadHeld(record: StackRecord, reads: AuthorityReads): Promise<boolean> {
-    return this.#authority.canRead(record, await this.#authority.readReach(reads));
   }
 }

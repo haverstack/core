@@ -44,7 +44,7 @@ import type {
   JournalEntryInput,
   JournalOptions,
   MutateOptions,
-  ReadReach,
+  Reach,
 } from '@haverstack/core/adapter';
 import type { SqlExecutor } from './executor.js';
 import { isForeignKeyViolation, isUniqueConstraintViolation } from './executor.js';
@@ -495,8 +495,16 @@ export class SharedSqlRecordLogic {
     this.contentIndex.sync(id, typeId, content);
   }
 
+  queryRecords(query: StackQuery): Promise<QueryResult> {
+    return this.page(query);
+  }
+
+  queryReadable(query: StackQuery, reach: Reach): Promise<QueryResult> {
+    return this.page(query, reach);
+  }
+
   /** `reach`, when given, is one more condition of every statement in the plan. */
-  async queryRecords(query: StackQuery, reach?: ReadReach): Promise<QueryResult> {
+  private async page(query: StackQuery, reach?: Reach): Promise<QueryResult> {
     const limit = query.limit ?? 50;
     // One extra row, to learn whether a further page follows.
     const fetch = limit + 1;

@@ -53,7 +53,7 @@ import type {
   StackQuery,
   RecordFilter,
   QueryResult,
-  ReadReach,
+  Reach,
   AssociationEdit,
   AuthorityAssociation,
   DataAssociation,
@@ -87,6 +87,7 @@ import type {
 import {
   ElementSetMovedError,
   UseAfterCloseError,
+  ScopeUnavailableError,
   InvalidAdapterError,
   StackConflictError,
   StackMigrationError,
@@ -383,8 +384,21 @@ export class Stack implements StackClient {
     return this.scope(principalId, subjectId);
   }
 
+  /**
+   * A scoped view needs a stack that owns its storage: one whose adapter
+   * queries within a reach and relays no changes from elsewhere. A
+   * server-backed stack is scoped by the session that opened it instead.
+   * See docs/spec/access-control.md § Enforcement: Stack.asEntity().
+   */
   private scope(principalId: EntityId | null, subjectId: EntityId | null): ScopedStack {
     this.assertOpen();
+    const queryReadable = this.adapter.queryReadable?.bind(this.adapter);
+    if (!queryReadable || this.relaysChanges) {
+      throw new ScopeUnavailableError(
+        'This stack cannot be scoped: its storage is reached through a server, which scopes ' +
+          'every request to the session that opened it. Open it with the session you mean.',
+      );
+    }
     return new ScopedStack(scopeToken, {
       stack: this,
       principalId,
@@ -393,14 +407,11 @@ export class Stack implements StackClient {
       adapter: this.adapter,
       changes: this.changes,
       assertOpen: () => this.assertOpen(),
-      relaysChanges: this.relaysChanges,
       migrations: this.migrations,
-      ...(this.adapter.queryReadable && {
-        queryReadable: (query: StackQuery, reach: ReadReach<BaseId>) =>
-          this.dispatchQuery(query, async (resolved) =>
-            this.adapter.queryReadable!(resolved, await this.resolveReach(reach)),
-          ),
-      }),
+      queryReadable: (query: StackQuery, reach: Reach<BaseId>) =>
+        this.dispatchQuery(query, async (resolved) =>
+          queryReadable(resolved, await this.resolveReach(reach)),
+        ),
     });
   }
 
@@ -1253,22 +1264,21 @@ export class Stack implements StackClient {
    * resolution filter.baseId gets. See docs/spec/adapters.md § Querying
    * within a reach.
    */
-  private async resolveReach(reach: ReadReach<BaseId>): Promise<ReadReach> {
+  private async resolveReach(reach: Reach<BaseId>): Promise<Reach> {
     const { fence, within } = reach;
-    // A reach naming no family — the owner acting alone — needs no Types.
+    // A reach naming no family needs no Types.
     if (!fence && !within) return {};
     const types = await this.adapter.listTypes();
-    const typeIdsOf = (baseIds: readonly BaseId[]): TypeId[] =>
-      types.filter((t) => baseIds.includes(t.baseId)).map((t) => t.id);
+    const resolve = (baseIds: readonly BaseId[]) => typeIdsOfFamilies(types, baseIds);
     return {
-      ...(fence && { fence: typeIdsOf(fence) }),
+      ...(fence && { fence: resolve(fence) }),
       ...(within && {
         within: {
-          types: typeIdsOf(within.types),
+          types: resolve(within.types),
           ...(within.authored && {
             authored: {
               subjectId: within.authored.subjectId,
-              types: typeIdsOf(within.authored.types),
+              types: resolve(within.authored.types),
             },
           }),
           permissions: within.permissions,
@@ -1282,8 +1292,7 @@ export class Stack implements StackClient {
    * resolved here because an adapter has no baseId concept of its own.
    */
   private async familyTypeIds(baseIds: readonly string[]): Promise<TypeId[]> {
-    const types = await this.adapter.listTypes();
-    return types.filter((t) => baseIds.includes(t.baseId)).map((t) => t.id);
+    return typeIdsOfFamilies(await this.adapter.listTypes(), baseIds);
   }
 
   // -------------------------------------------------------
@@ -1840,4 +1849,9 @@ export class Stack implements StackClient {
       ...(record.updatedBy && { updatedBy: record.updatedBy }),
     };
   }
+}
+
+/** Every registered version of the named families, as concrete TypeIds. */
+function typeIdsOfFamilies(types: readonly StackType[], baseIds: readonly string[]): TypeId[] {
+  return types.filter((t) => baseIds.includes(t.baseId)).map((t) => t.id);
 }

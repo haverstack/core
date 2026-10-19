@@ -37,7 +37,7 @@ import type {
   ElementWriteOptions,
   JournalOptions,
   MutateOptions,
-  ReadReach,
+  Reach,
 } from '@haverstack/core/adapter';
 import type { SqlExecutor } from './executor.js';
 import type { StackConfig } from './config.js';
@@ -139,8 +139,8 @@ export abstract class SharedSqlRecordAdapter implements StackRecordAdapter {
     return this.record.queryRecords(query);
   }
 
-  queryReadable(query: StackQuery, reach: ReadReach): Promise<QueryResult> {
-    return this.record.queryRecords(query, reach);
+  queryReadable(query: StackQuery, reach: Reach): Promise<QueryResult> {
+    return this.record.queryReadable(query, reach);
   }
 
   deleteUnreferencedAttachmentRecords(

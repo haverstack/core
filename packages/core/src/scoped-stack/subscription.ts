@@ -2,8 +2,8 @@
  * The scoped change feed
  * -------------------------------------------------------
  * How a ScopedStack narrows the stack's change stream to what one
- * requester may read: canRead per event, decided in order, from authority
- * reads held for the life of the subscription.
+ * requester may read: canRead per event, decided in order, from an
+ * authority snapshot held for the life of the subscription.
  * See docs/spec/events.md § Permission scoping.
  */
 
@@ -12,21 +12,24 @@ import { Subscription, matchesFilter, passesUnlistedBoundary } from '../stack/ch
 import type { EmittedChange } from '../stack/changes.js';
 import { presentDeleted } from '../record-changes.js';
 import type { RecordChange, StackRecord, SubscribeOptions } from '../types/index.js';
-import type { AuthorityReads } from './authority-reads.js';
+import type { AuthoritySnapshot } from './authority-snapshot.js';
 
 /**
- * A ScopedStack's delivery: canRead per event, from authority reads held for
- * the subscription's life and dropped whenever an event changes them. Deliveries are serialized,
- * since the async decision could otherwise reorder changes, and the filter
- * fails closed. See docs/spec/events.md § Permission scoping.
+ * A ScopedStack's delivery: canRead per event, from an authority snapshot
+ * held for the subscription's life and cleared by any event that moves it.
+ * Deliveries are serialized, since the async decision could otherwise
+ * reorder changes, and the filter fails closed. See docs/spec/events.md § Permission scoping.
  */
 export class ScopedSubscription extends Subscription {
   /** Tail of the delivery chain — see the class comment. */
   private queue: Promise<void> = Promise.resolve();
 
   constructor(
-    private readonly reads: AuthorityReads,
-    private readonly canRead: (record: StackRecord, reads: AuthorityReads) => Promise<boolean>,
+    private readonly snapshot: AuthoritySnapshot,
+    private readonly canRead: (
+      record: StackRecord,
+      snapshot: AuthoritySnapshot,
+    ) => Promise<boolean>,
     handler: (change: RecordChange) => void,
     opts: SubscribeOptions,
   ) {
@@ -43,21 +46,20 @@ export class ScopedSubscription extends Subscription {
   }
 
   /**
-   * A held grant set outlives the write that revokes it unless something
-   * drops it. Both writes that can change canRead's answer — a `_grant`
-   * record, or a `_group` roster — arrive here as ordinary events, which
-   * is what makes the cache safe to hold at all. A future authority change
-   * that did not emit would silently strand it.
+   * A held snapshot outlives the write that revokes it unless something
+   * clears it. Both writes that can move it — a `_grant` record, or a
+   * `_group` roster — arrive here as ordinary events, which is what makes
+   * it safe to hold at all; a change that did not emit would strand it.
    */
   private invalidateFor(emission: EmittedChange): void {
-    this.reads.invalidateFor(baseIdOf(emission.change.typeId));
+    this.snapshot.invalidateFor(baseIdOf(emission.change.typeId));
   }
 
   private async filterAndDeliver(emission: EmittedChange): Promise<void> {
     if (this.isClosed) return;
     if (!passesUnlistedBoundary(emission, this.opts.includeUnlisted)) return;
     try {
-      if (!(await this.canRead(emission.record, this.reads))) return;
+      if (!(await this.canRead(emission.record, this.snapshot))) return;
     } catch (err) {
       // Fail closed: an undecided permission question is not a yes.
       this.reportError(err);

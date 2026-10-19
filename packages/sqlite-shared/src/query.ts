@@ -22,7 +22,7 @@ import {
   type StackQuery,
 } from '@haverstack/core';
 import { constantSortEntry, contentSortKey, parseContentFilterKey } from '@haverstack/core/adapter';
-import type { ReadReach, SortEntry } from '@haverstack/core/adapter';
+import type { Reach, SortEntry } from '@haverstack/core/adapter';
 import {
   byTypeDescriptor,
   decodeCursor,
@@ -207,24 +207,33 @@ const inList = (column: string, values: readonly string[], params: unknown[]): s
 };
 
 /**
- * Whether the record carries one of `elements`, matched on the permissions
- * table's key — the identity editAccess() removes by. A semi-join, like the
- * association filters, read through idx_permissions_element.
+ * Whether the record carries every element of one of `sets`, matched on the
+ * permissions table's key — the identity editAccess() removes by. Each
+ * element is a semi-join read through idx_permissions_element, and the
+ * one-element sets share one.
  */
-const carriesPermission = (elements: AuthorityAssociation[], params: unknown[]): string => {
-  if (elements.length === 0) return '0';
-  const match = elements.map((p) => {
-    params.push(p.kind, p.label, ...permissionKeyColumns(p));
-    return '(p.kind = ? AND p.label = ? AND p.grantee_kind = ? AND p.grantee_id = ? AND p.role = ?)';
-  });
-  return `r.id IN (SELECT p.record_id FROM permissions p WHERE ${match.join(' OR ')})`;
+const carriesPermissions = (sets: AuthorityAssociation[][], params: unknown[]): string => {
+  const carries = (elements: AuthorityAssociation[]): string => {
+    const match = elements.map((p) => {
+      params.push(p.kind, p.label, ...permissionKeyColumns(p));
+      return '(p.kind = ? AND p.label = ? AND p.grantee_kind = ? AND p.grantee_id = ? AND p.role = ?)';
+    });
+    return `r.id IN (SELECT p.record_id FROM permissions p WHERE ${match.join(' OR ')})`;
+  };
+  const singles = sets.filter((set) => set.length === 1).map(([element]) => element!);
+  const arms = singles.length > 0 ? [carries(singles)] : [];
+  for (const set of sets) {
+    if (set.length === 1) continue;
+    arms.push(set.length === 0 ? '1' : `(${set.map((e) => carries([e])).join(' AND ')})`);
+  }
+  return arms.length > 0 ? `(${arms.join(' OR ')})` : '0';
 };
 
 /**
  * The reach as conditions on `r`: inside the fence, and inside `within` by
- * one of its arms. See docs/spec/adapters.md § Querying within a reach.
+ * one of its arms. See docs/spec/access-control.md § Reach.
  */
-const reachConditions = (reach: ReadReach, params: unknown[]): string[] => {
+const reachConditions = (reach: Reach, params: unknown[]): string[] => {
   const conditions: string[] = [];
   if (reach.fence) conditions.push(inList('r.type_id', reach.fence, params));
   const within = reach.within;
@@ -234,7 +243,7 @@ const reachConditions = (reach: ReadReach, params: unknown[]): string[] => {
       params.push(within.authored.subjectId);
       arms.push(`(r.entity_id = ? AND ${inList('r.type_id', within.authored.types, params)})`);
     }
-    arms.push(carriesPermission(within.permissions, params));
+    arms.push(carriesPermissions(within.permissions, params));
     conditions.push(`(${arms.join(' OR ')})`);
   }
   return conditions;
@@ -247,7 +256,7 @@ const reachConditions = (reach: ReadReach, params: unknown[]): string[] => {
  */
 const recordConditions = (
   query: StackQuery,
-  reach: ReadReach | undefined,
+  reach: Reach | undefined,
 ): { conditions: string[]; params: unknown[] } => {
   const conditions: string[] = ["r.id != '_config'"];
   const params: unknown[] = [];
@@ -466,7 +475,7 @@ const statement = (
  * so the second is never run for a page that doesn't reach it. Each still
  * needs the row budget its `LIMIT ?` binds — see atBudget.
  */
-export const buildQueryPlan = (query: StackQuery, reach?: ReadReach): QueryStatement[] => {
+export const buildQueryPlan = (query: StackQuery, reach?: Reach): QueryStatement[] => {
   const dir = sqlDirection(query);
   const op = dir === 'ASC' ? '>' : '<';
   const decoded = query.cursor ? decodeCursor(query.cursor) : null;
@@ -542,7 +551,7 @@ export const buildQueryPlan = (query: StackQuery, reach?: ReadReach): QueryState
  */
 const byTypePlan = (
   query: StackQuery,
-  reach: ReadReach | undefined,
+  reach: Reach | undefined,
   byType: Record<string, ContentSortKey>,
   dir: 'ASC' | 'DESC',
   op: '>' | '<',

@@ -8,7 +8,7 @@ import type {
   Actor,
   AuthorityAssociation,
   QueryResult,
-  ReadReach,
+  Reach,
   StackQuery,
   StackRecord,
 } from '../src/types/index.js';
@@ -250,7 +250,7 @@ describe('the reach a scoped query runs within', () => {
 
     const spy = vi.spyOn(adapter, 'queryReadable');
     const result = await stack.asActor({ principalId: APP, subjectId: ALICE }).query();
-    const reach = spy.mock.calls[0]![1] as ReadReach;
+    const reach = spy.mock.calls[0]![1] as Reach;
     spy.mockRestore();
 
     expect(result.records.map((r) => r.id)).toEqual([note.id]);
@@ -278,11 +278,12 @@ describe('the reach a scoped query runs within', () => {
   });
 });
 
-describe('a scoped query over an adapter without queryReadable()', () => {
-  test('is refused rather than answered by scanning', async () => {
+describe('a stack whose adapter cannot query within a reach', () => {
+  test('cannot be scoped at all', async () => {
     Object.assign(adapter, { queryReadable: undefined });
-    const scoped = (await Stack.open(adapter)).asEntity(null);
-    await expect(scoped.query()).rejects.toBeInstanceOf(ScopeUnavailableError);
+    const unscopable = await Stack.open(adapter);
+    expect(() => unscopable.asEntity(null)).toThrow(ScopeUnavailableError);
+    expect(() => unscopable.asEntity(OWNER)).toThrow(ScopeUnavailableError);
   });
 });
 

@@ -7,7 +7,7 @@
  */
 
 import type {
-  ReadReach,
+  Reach,
   RecordChange,
   StackAdapter,
   StackRecordAdapter,
@@ -72,7 +72,7 @@ export function combineAdapters(parts: {
         parts.record.deleteUnreferencedAttachmentRecords!(fileId, metadataTypeIds),
     }),
     ...(parts.record.queryReadable && {
-      queryReadable: (q: StackQuery, reach: ReadReach) => parts.record.queryReadable!(q, reach),
+      queryReadable: (q: StackQuery, reach: Reach) => parts.record.queryReadable!(q, reach),
     }),
 
     // Forwarded on the same terms, and it decides more than it looks:

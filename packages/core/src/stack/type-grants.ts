@@ -15,7 +15,8 @@ import {
   validateGrantTarget,
 } from '../grants.js';
 import { assertFamilyId } from '../query-validation.js';
-import { loadGrantRecords, loadRosterRoles, once } from './reads.js';
+import { loadGrantRecords, loadRosterRoles } from './reads.js';
+import { Lazy } from '../lazy.js';
 import { SYSTEM_TYPES } from '../types/index.js';
 import type { GrantQuery } from '../grants.js';
 import type { BaseId, GrantContent, StackRecord, TypeGrant } from '../types/index.js';
@@ -50,13 +51,13 @@ export async function listTypeGrants(
   // the entity belongs to also currently applies to them. Shares
   // grantCoversGrantee() with the access checks, so a listing can't
   // disagree with them about who a grant covers.
-  const roles = once(() => loadRosterRoles((q) => stack.query(q), query.entityId));
+  const rosters = new Lazy(() => loadRosterRoles((q) => stack.query(q), query.entityId));
   const result: (StackRecord & { content: GrantContent })[] = [];
   for (const r of all) {
     const covers = await grantCoversGrantee(r.content, query.entityId, {
       allowDefault: true,
       allowGroup: true,
-      roles,
+      roles: () => rosters.get(),
     });
     if (covers) result.push(r);
   }
