@@ -9,7 +9,12 @@
  * subject.
  */
 
-import { groupRoleFromAssociations, isOwnerActingAlone, roleSatisfies } from '../access.js';
+import {
+  groupRoleFromAssociations,
+  isOwnerActingAlone,
+  readCompanions,
+  roleSatisfies,
+} from '../access.js';
 import { inReach } from '../adapter/reach.js';
 import type { ReachedRecord } from '../adapter/reach.js';
 import { StackError, StackNotFoundError, StackPermissionError } from '../errors.js';
@@ -198,11 +203,11 @@ export class ScopeAuthority {
   }
 
   /**
-   * What this request may do with `verb`, over type families — the one
-   * statement of that verb's rules. The principal's own grants fence it,
-   * `-own` and `-any` alike; within the fence the subject reaches what its
-   * grants and the Records' own permissions give it, and an owner subject
-   * reaches everything. See docs/spec/access-control.md § Reach.
+   * What this request may do with `verb` — that verb's rules, built whole
+   * even where a Record's own permissions would settle it, since every gate
+   * asks one value at a flat cost. The principal's grants fence it; within,
+   * the subject reaches what grants and permissions give it, an owner
+   * subject everything. See docs/spec/access-control.md § Reach.
    */
   private async buildReach(verb: ReachVerb, snapshot: AuthoritySnapshot): Promise<Reach<BaseId>> {
     const { any, own, bit } = VERBS[verb];
@@ -233,8 +238,7 @@ export class ScopeAuthority {
   /**
    * The permission elements carrying `bit` to the subject, as the sets a
    * Record must hold whole. A `read` stands alone, as does `anyone`; a
-   * `write` needs the same grantee's `read`, or `anyone`, beside it — see
-   * docs/spec/access-control.md § Write implies read.
+   * `write` stands beside one of its readCompanions().
    */
   private async elementSets(
     bit: 'read' | 'write',
@@ -256,10 +260,7 @@ export class ScopeAuthority {
       grantee,
     });
     if (bit === 'read') return [[ANYONE], ...grantees.map((g) => [element('read', g)])];
-    return grantees.flatMap((g) => [
-      [element('write', g), element('read', g)],
-      [element('write', g), ANYONE],
-    ]);
+    return grantees.flatMap((g) => readCompanions(g).map((c) => [element('write', g), c]));
   }
 
   /** Whether this request may `verb` the Record: its reach, asked of one Record. */
@@ -409,7 +410,11 @@ export class ScopeAuthority {
    * owner approved, holding `update-any` on each directly.
    * See docs/spec/apps.md § Migrating an installed app's types.
    */
-  async installMayMigrate(record: StackRecord, toTypeId: TypeId): Promise<boolean> {
+  async installMayMigrate(
+    record: StackRecord,
+    toTypeId: TypeId,
+    snapshot: AuthoritySnapshot,
+  ): Promise<boolean> {
     const principal = this.principalId;
     if (!principal || this.delegated) return false;
     const families = new Set([baseIdOf(record.typeId), baseIdOf(toTypeId)]);
@@ -439,12 +444,7 @@ export class ScopeAuthority {
 
     // Grants naming the app itself: an install reaches only families the
     // owner named it to, whoever else holds them.
-    const held = await this.familiesConveying(
-      principal,
-      PRINCIPAL_SIDE,
-      ['update-any'],
-      this.snapshot(),
-    );
+    const held = await this.familiesConveying(principal, PRINCIPAL_SIDE, ['update-any'], snapshot);
     return [...families].every((family) => held.includes(family));
   }
 

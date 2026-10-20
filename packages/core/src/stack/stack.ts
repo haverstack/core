@@ -394,10 +394,17 @@ export class Stack implements StackClient {
   private scope(principalId: EntityId | null, subjectId: EntityId | null): ScopedStack {
     this.assertOpen();
     const queryReadable = this.adapter.queryReadable?.bind(this.adapter);
-    if (!queryReadable || this.relaysChanges) {
+    if (!queryReadable) {
       throw new ScopeUnavailableError(
-        'This stack cannot be scoped: its storage is reached through a server, which scopes ' +
-          'every request to the session that opened it. Open it with the session you mean.',
+        'This stack cannot be scoped: its adapter does not implement queryReadable(), so a ' +
+          "query could not be kept to the requester's reach. Every local adapter must; a " +
+          'server-backed stack is scoped by opening it with the session you mean.',
+      );
+    }
+    if (this.relaysChanges) {
+      throw new ScopeUnavailableError(
+        'This stack cannot be scoped: it relays changes made elsewhere, whose frames were ' +
+          'scoped by the session that opened the feed. Open it with the session you mean.',
       );
     }
     return new ScopedStack(scopeToken, {

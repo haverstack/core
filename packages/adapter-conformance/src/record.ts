@@ -353,6 +353,21 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
     describe('associations', () => {
       const tag = (label: string) => ({ kind: 'tag' as const, label });
 
+      // A tag filter is conjunctive, and its length is the caller's — far
+      // past any statement's parameter cap (100 on Durable Object SQLite).
+      test('a tag filter matches the records carrying every tag named, however many', async () => {
+        const labels = Array.from({ length: 120 }, (_, i) => `tag-${i}`);
+        const all = makeRecord({ associations: labels.map((label) => ({ kind: 'tag', label })) });
+        const allButOne = makeRecord({
+          associations: labels.slice(1).map((label) => ({ kind: 'tag', label })),
+        });
+        await adapter.createRecord(all);
+        await adapter.createRecord(allButOne);
+
+        const result = await adapter.queryRecords({ filter: { tags: [...labels, labels[0]!] } });
+        expect(result.records.map((r) => r.id)).toEqual([all.id]);
+      });
+
       test('an add puts a tag on the record and a remove takes it off; neither bumps version', async () => {
         const record = makeRecord();
         await adapter.createRecord(record);

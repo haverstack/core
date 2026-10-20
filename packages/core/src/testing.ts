@@ -463,15 +463,15 @@ export class MemoryAdapter implements StackAdapter {
     const { d, k } = (parsed ?? {}) as { d?: unknown; k?: unknown };
     // Cursors arrive from the wire uninspected (wire/request.ts copies
     // `?cursor=` verbatim), so this is the only place the key is checked.
-    const native = sort?.contentField === undefined && sort?.contentFieldByType === undefined;
-    if (typeof d !== 'string' || !isOrderKey(k, native)) {
-      throw new StackBadRequestError(`Malformed cursor: "${cursor}"`);
-    }
+    if (typeof d !== 'string') throw new StackBadRequestError(`Malformed cursor: "${cursor}"`);
+    // The sort first: a key is only well-formed or not for the order it names.
     if (d !== this.sortDescriptor(sort)) {
       throw new StackBadRequestError(
         `Cursor was minted under a different sort than this query names.`,
       );
     }
+    const native = sort?.contentField === undefined && sort?.contentFieldByType === undefined;
+    if (!isOrderKey(k, native)) throw new StackBadRequestError(`Malformed cursor: "${cursor}"`);
     return k;
   }
 

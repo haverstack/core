@@ -20,8 +20,8 @@
  * refusals.
  *
  * Also holds the feed side of the same rule: a subscription's deliveries
- * run through the same canRead() a get() answers with, so a feed can never
- * disagree with a read about what a session sees.
+ * ask the same read reach a get() does, so a feed can never disagree with
+ * a read about what a session sees.
  *
  * See docs/spec/access-control.md and docs/spec/events.md § Permission scoping.
  */
@@ -465,9 +465,9 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Runs through this.query(), so canRead() still applies — this answers a
-   * question the caller asks on its own behalf. includeUnlisted is passed
-   * only when the request is the owner acting alone, per
+   * Runs through this.query(), so the read reach still applies — this
+   * answers a question the caller asks on its own behalf. includeUnlisted
+   * is passed only when the request is the owner acting alone, per
    * docs/spec/identity.md § DID bindings.
    */
   async getEntityByDid(did: EntityId): Promise<StackRecord | null> {
@@ -866,12 +866,13 @@ export class ScopedStack implements StackClient {
     opts: IfVersionOptions = {},
   ): Promise<StackRecord> {
     if (!this.#authority.ownerActingAlone) {
-      const record = await this.requireInstallMigration(id, toTypeId);
+      const snapshot = this.#authority.snapshot();
+      const record = await this.requireInstallMigration(id, toTypeId, snapshot);
       this.requireOwnerFields(toTypeId, record.content, content);
       // The new content is a fresh set of file references, so an app is held
       // to the gate create() applies; otherwise a migration could point one
       // of its records at any attachment and read the bytes through it.
-      await this.requireFileRefAccess(toTypeId, content, this.#authority.snapshot());
+      await this.requireFileRefAccess(toTypeId, content, snapshot);
     }
     return this.stack.commitMigration(id, toTypeId, content, { ...opts, ...this.actor });
   }
@@ -883,9 +884,13 @@ export class ScopedStack implements StackClient {
    * owner may migrate a tombstone; an app sees it without content.
    * See docs/spec/apps.md § Migrating an installed app's types.
    */
-  private async requireInstallMigration(id: RecordId, toTypeId: TypeId): Promise<StackRecord> {
+  private async requireInstallMigration(
+    id: RecordId,
+    toTypeId: TypeId,
+    snapshot: AuthoritySnapshot,
+  ): Promise<StackRecord> {
     const record = await this.stack.get(id, { includeDeleted: true });
-    if (!record || !(await this.#authority.installMayMigrate(record, toTypeId))) {
+    if (!record || !(await this.#authority.installMayMigrate(record, toTypeId, snapshot))) {
       throw new StackPermissionError(
         'Only the stack owner, or an installed app within the type families it defines, may commit a migration',
       );
@@ -963,7 +968,7 @@ export class ScopedStack implements StackClient {
 
   /**
    * Observe the changes this request may read, decided per event by the
-   * same canRead() that get() and query() use. An unreadable record yields
+   * same read reach that get() and query() ask. An unreadable record yields
    * no event at all, since a change's existence is itself a disclosure.
    * See docs/spec/events.md § Permission scoping.
    */

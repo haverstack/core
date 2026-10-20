@@ -234,6 +234,7 @@ describe('a scoped view of a stack that relays', () => {
   // § Enforcement: Stack.asEntity().
   test('is refused up front, for every requester', () => {
     expect(() => stack.asEntity(REMOTE_EDITOR)).toThrow(ScopeUnavailableError);
+    expect(() => stack.asEntity(REMOTE_EDITOR)).toThrow(/relays changes made elsewhere/);
     expect(() => stack.asEntity(OWNER)).toThrow(ScopeUnavailableError);
   });
 

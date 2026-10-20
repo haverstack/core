@@ -341,12 +341,16 @@ const recordConditions = (
     clauses.map((c) => ` AND ${c}`).join('') +
     `)`;
 
-  // Conjunctive: a record must carry every tag named.
+  // Conjunctive: a record must carry every tag named, so its matches are
+  // counted against the distinct tags asked for, the list bound as one.
   if (f.tags?.length) {
-    for (const tag of f.tags) {
-      conditions.push(hasAssociation('tag', ['a.label = ?']));
-      params.push(tag);
-    }
+    const tags = [...new Set(f.tags)];
+    const label = inList('a.label', tags, params);
+    conditions.push(
+      `r.id IN (SELECT a.record_id FROM associations a WHERE a.kind = 'tag' AND ${label} ` +
+        `GROUP BY a.record_id HAVING COUNT(DISTINCT a.label) = ?)`,
+    );
+    params.push(tags.length);
   }
 
   // Both halves in one subquery, so they match the same association.
@@ -629,8 +633,8 @@ const byTypePlan = (
       for (const [typeId, field] of fields) params.push(typeId, field);
     }
     if (constants.length > 0) {
-      conditions.push(`r.type_id NOT IN (${constants.map(() => '?').join(',')})`);
-      params.push(...constants.map(([typeId]) => typeId));
+      const typeIds = constants.map(([typeId]) => typeId);
+      conditions.push(`NOT (${inList('r.type_id', typeIds, params)})`);
     }
     if (cursor?.kind === 'absent') {
       conditions.push(`r.id ${op} ?`);

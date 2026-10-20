@@ -588,3 +588,13 @@ test('queryReadable answers a reach far past the parameter cap', async () => {
   );
   expect(result.records.map((r) => r.id)).toEqual([shared.id]);
 });
+
+test('a tag filter far past the parameter cap', async () => {
+  const stub = getStub();
+  const labels = Array.from({ length: 120 }, (_, i) => `tag-${i}`);
+  const tagged = makeRecord({ associations: labels.map((label) => ({ kind: 'tag', label })) });
+  await stub.createRecord(tagged);
+  await stub.createRecord(makeRecord({ associations: [{ kind: 'tag', label: 'tag-0' }] }));
+  const result = await stub.queryRecords({ filter: { tags: labels } });
+  expect(result.records.map((r) => r.id)).toEqual([tagged.id]);
+});

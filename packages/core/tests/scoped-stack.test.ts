@@ -1234,7 +1234,7 @@ describe('ScopedStack.create', () => {
     expect(record.createdBy?.subjectId).toBe(MEMBER);
   });
 
-  // Owner bypasses grants entirely (checkAccess's owner shortcut), so an
+  // An owner subject's reach constrains nothing, grants included, so an
   // owner-authored record carrying no createdBy can never accidentally
   // satisfy a *different* requester's -own grant check — pinning the claim
   // that this normalization doesn't regress -own semantics.

@@ -283,6 +283,7 @@ describe('a stack whose adapter cannot query within a reach', () => {
     Object.assign(adapter, { queryReadable: undefined });
     const unscopable = await Stack.open(adapter);
     expect(() => unscopable.asEntity(null)).toThrow(ScopeUnavailableError);
+    expect(() => unscopable.asEntity(null)).toThrow(/does not implement queryReadable\(\)/);
     expect(() => unscopable.asEntity(OWNER)).toThrow(ScopeUnavailableError);
   });
 });

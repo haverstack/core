@@ -62,6 +62,20 @@ describe('MemoryAdapter cursors', () => {
     expect(second.records.map((r) => r.id)).toEqual(all.slice(after + 1, after + 3));
   });
 
+  test('a cursor replayed under another kind of sort is refused for the sort, not its shape', async () => {
+    const first = await adapter.queryRecords({
+      limit: 2,
+      sort: { field: 'createdAt', direction: 'asc' },
+    });
+    await expect(
+      adapter.queryRecords({
+        limit: 2,
+        cursor: first.cursor!,
+        sort: { contentField: 'priority', direction: 'asc' },
+      }),
+    ).rejects.toThrow(/different sort/);
+  });
+
   test('still refuses a cursor minted under a different sort', async () => {
     const first = await adapter.queryRecords({
       limit: 2,

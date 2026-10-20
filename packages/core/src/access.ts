@@ -26,7 +26,7 @@ import type {
   RelationshipAssociation,
   StackRecord,
 } from './types/index.js';
-import { granteeEqual } from './associations/identity.js';
+import { associationKey } from './associations/identity.js';
 import { baseIdOf } from './schema.js';
 import type { ValidationError } from './validate.js';
 
@@ -42,27 +42,16 @@ export type RecordResolver = (id: RecordId) => Promise<StackRecord | null>;
 export type RosterRoles = () => Promise<ReadonlyMap<RecordId, GroupRole>>;
 
 /**
- * Whether the set conveys read to this grantee — a `read` of its own, or
- * an `anyone` that already reaches everyone. Demanding a second, redundant
- * `read` beside the write would refuse a set that withholds nothing;
- * revoking the `anyone` is what the invariant catches instead.
+ * The elements beside which a `write` naming `grantee` carries its bit: its
+ * own `read`, or an `anyone`, which reaches the grantee already. The one
+ * statement of write-implies-read — validation and every reach ask it.
  * See docs/spec/access-control.md § Write implies read.
  */
-function holdsRead(permissions: AuthorityAssociation[], grantee: Grantee): boolean {
-  return permissions.some((p) =>
-    p?.kind === 'anyone'
-      ? isWorldRead(p)
-      : p?.kind === 'permission' && p.label === 'read' && granteeEqual(p.grantee, grantee),
-  );
-}
-
-/**
- * Whether an `anyone` element reaches the world. `read` is the only bit it
- * can carry, so one labelled otherwise names no reach — refused at the
- * write by validateAssociation() and read as nothing here.
- */
-function isWorldRead(association: AuthorityAssociation): boolean {
-  return association.label === 'read';
+export function readCompanions(grantee: Grantee): AuthorityAssociation[] {
+  return [
+    { kind: 'permission', label: 'read', grantee },
+    { kind: 'anyone', label: 'read' },
+  ];
 }
 
 /**
@@ -92,8 +81,8 @@ export async function granteeReaches(
 }
 
 /**
- * Rejects a permission set where some grantee holds `write` with no `read`
- * beside it — the shape checkAccess() refuses to honor. A cross-element
+ * Rejects a permission set where some `write` stands without a
+ * readCompanions() element, which no reach would honor. A cross-element
  * invariant, so it is asked of the set the write would *produce*, the same
  * way hasGroupAdmin() reads its post-state below.
  * See docs/spec/access-control.md § Write implies read.
@@ -103,10 +92,11 @@ export function validatePermissions(
   path = 'permissions',
 ): ValidationError[] {
   const list = permissions ?? [];
+  const held = new Set(list.map(associationKey));
   const errors: ValidationError[] = [];
   list.forEach((p, i) => {
     if (p?.kind !== 'permission' || p.label !== 'write') return;
-    if (holdsRead(list, p.grantee)) return;
+    if (readCompanions(p.grantee).some((c) => held.has(associationKey(c)))) return;
     errors.push({
       path: `${path}[${i}]`,
       message:
