@@ -290,7 +290,7 @@ describe('a stack whose adapter cannot query within a reach', () => {
 describe('what a scoped get() reads', () => {
   // The record, then each authority set at most once: the grants for an
   // identified requester, the rosters for an identified subject that is not
-  // the owner. See docs/spec/access-control.md § Who a grant reaches.
+  // the owner. See docs/spec/access-control.md § Reach.
   const cases: [string, Actor | null, number][] = [
     ['the owner acting alone', { subjectId: OWNER }, 0],
     ['anonymous', null, 0],
@@ -326,5 +326,39 @@ describe('what a scoped get() reads', () => {
     expect(await view.get(record.id)).not.toBeNull();
     expect(gets).toHaveBeenCalledTimes(1);
     expect(queries).toHaveBeenCalledTimes(authorityReads);
+  });
+});
+
+describe('an operation reads its authority once', () => {
+  // However many gates one operation asks — the create grant, the parent,
+  // every relationship target — it reads the grants and the rosters once.
+  // See docs/spec/access-control.md § Reach.
+  test('a create naming a parent and five relationship targets', async () => {
+    await stack.grantType('com.example.test/note', {
+      actions: ['create', 'read-any'],
+      grantee: { kind: 'entity', entityId: ALICE },
+    });
+    const parent = await adapter.createRecord(makeRecord());
+    const targets = [];
+    for (let i = 0; i < 5; i++) targets.push(await adapter.createRecord(makeRecord()));
+
+    const view = stack.asEntity(ALICE);
+    const queries = vi.spyOn(stack, 'query');
+    await view.create(
+      NOTE,
+      { text: 'linked' },
+      {
+        parentId: parent.id,
+        associations: targets.map((t) => ({
+          kind: 'relationship' as const,
+          label: 'cites',
+          target: { kind: 'record' as const, recordId: t.id },
+        })),
+      },
+    );
+    const authorityReads = queries.mock.calls.filter(
+      ([q]) => q?.filter?.typeId === '_grant@1' || q?.filter?.baseId === '_group',
+    );
+    expect(authorityReads).toHaveLength(2);
   });
 });

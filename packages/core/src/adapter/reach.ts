@@ -7,7 +7,7 @@
  * its own query language. See docs/spec/access-control.md § Reach.
  */
 
-import { associationEqual } from '../associations/identity.js';
+import { associationKey } from '../associations/identity.js';
 import type { Reach, StackRecord } from '../types/index.js';
 
 /** What a reach asks of a Record — all a record yet to be created has to show. */
@@ -35,8 +35,9 @@ export function inReach<Type extends string>(
   ) {
     return true;
   }
-  const held = record.permissions ?? [];
-  return within.permissions.some((set) =>
-    set.every((element) => held.some((h) => associationEqual(element, h))),
+  const held = new Set((record.permissions ?? []).map(associationKey));
+  held.delete(undefined);
+  return within.permissions.some(
+    (set) => set.length > 0 && set.every((element) => held.has(associationKey(element))),
   );
 }

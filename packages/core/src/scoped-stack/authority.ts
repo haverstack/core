@@ -44,7 +44,9 @@ import type {
   GrantContent,
   Grantee,
   InstallContent,
+  QueryResult,
   Reach,
+  StackQuery,
   StackRecord,
   TypeId,
 } from '../types/index.js';
@@ -84,6 +86,11 @@ export class ScopeAuthority {
     readonly principalId: EntityId | null,
     /** Whom this request acts for and attributes writes to — see ScopedStack.subjectId. */
     readonly subjectId: EntityId | null,
+    /** Stack.query() within a reach — see ScopedStack.query(). */
+    private readonly queryReadable: (
+      query: StackQuery,
+      reach: Reach<BaseId>,
+    ) => Promise<QueryResult>,
   ) {}
 
   /**
@@ -256,11 +263,7 @@ export class ScopeAuthority {
   }
 
   /** Whether this request may `verb` the Record: its reach, asked of one Record. */
-  async may(
-    verb: ReachVerb,
-    record: ReachedRecord,
-    snapshot: AuthoritySnapshot = this.snapshot(),
-  ): Promise<boolean> {
+  async may(verb: ReachVerb, record: ReachedRecord, snapshot: AuthoritySnapshot): Promise<boolean> {
     return inReach(record, await snapshot.reach(verb), familyOf);
   }
 
@@ -271,19 +274,19 @@ export class ScopeAuthority {
   async subjectMay(
     verb: ReachVerb,
     record: ReachedRecord,
-    snapshot: AuthoritySnapshot = this.snapshot(),
+    snapshot: AuthoritySnapshot,
   ): Promise<boolean> {
     const { within } = await snapshot.reach(verb);
     return inReach(record, within ? { within } : {}, familyOf);
   }
 
-  canRead(record: StackRecord, snapshot: AuthoritySnapshot = this.snapshot()): Promise<boolean> {
+  canRead(record: StackRecord, snapshot: AuthoritySnapshot): Promise<boolean> {
     return this.may('read', record, snapshot);
   }
 
   /** Whether this request may create a Record of the type, asked of the Record it would make. */
-  canCreate(typeId: TypeId): Promise<boolean> {
-    return this.may('create', { typeId, createdBy: this.requester });
+  canCreate(typeId: TypeId, snapshot: AuthoritySnapshot): Promise<boolean> {
+    return this.may('create', { typeId, createdBy: this.requester }, snapshot);
   }
 
   /**
@@ -295,7 +298,7 @@ export class ScopeAuthority {
   async denialFor(
     record: StackRecord,
     message: string,
-    snapshot: AuthoritySnapshot = this.snapshot(),
+    snapshot: AuthoritySnapshot,
   ): Promise<StackError> {
     if (await this.canRead(record, snapshot)) return new StackPermissionError(message);
     return new StackNotFoundError(`Record not found: "${record.id}"`);
@@ -325,11 +328,11 @@ export class ScopeAuthority {
    * owner acting alone skips the lookup and leaves absence to `Stack`.
    * See docs/spec/access-control.md § Reference-creation gating.
    */
-  async canReadReferent(recordId: string): Promise<boolean> {
+  async canReadReferent(recordId: string, snapshot: AuthoritySnapshot): Promise<boolean> {
     if (this.ownerActingAlone) return true;
     const record = await this.stack.get(recordId, { includeDeleted: true });
     if (!record) return false;
-    return this.canRead(record);
+    return this.canRead(record, snapshot);
   }
 
   /**
@@ -338,18 +341,14 @@ export class ScopeAuthority {
    * unlock unlimited further metadata records for the file.
    * See docs/spec/attachments.md § Creating `_attachment@1` records directly.
    */
-  async hasReadableReference(
-    fileId: string,
-    snapshot: AuthoritySnapshot = this.snapshot(),
-  ): Promise<boolean> {
+  async hasReadableReference(fileId: string, snapshot: AuthoritySnapshot): Promise<boolean> {
     const reach = await snapshot.reach('read');
     const match = await findFirstMatch(
-      (q) => this.stack.query(q),
+      (q) => this.queryReadable(q, reach),
       // Reach, not enumeration: a record readable by ID conveys the file it
       // references. See docs/spec/unlisted.md.
       { filter: { referencesFileId: fileId, includeUnlisted: true } },
-      (record) =>
-        baseIdOf(record.typeId) !== SYSTEM_TYPES.ATTACHMENT && inReach(record, reach, familyOf),
+      (record) => baseIdOf(record.typeId) !== SYSTEM_TYPES.ATTACHMENT,
     );
     return match !== undefined;
   }
@@ -360,13 +359,12 @@ export class ScopeAuthority {
    * indistinguishable (both false), so no confirmation oracle for guessed
    * hashes. See docs/spec/access-control.md § Reference-creation gating.
    */
-  async canAccessFile(fileId: string): Promise<boolean> {
+  async canAccessFile(fileId: string, snapshot: AuthoritySnapshot): Promise<boolean> {
     if (this.ownerActingAlone) return true;
 
     // Reaching a file through a record this request can read is already
     // fully intersected — the reach fences that record's own type, which
     // is the type the reference lives on.
-    const snapshot = this.snapshot();
     if (await this.hasReadableReference(fileId, snapshot)) return true;
 
     if (!this.subjectId) return false;

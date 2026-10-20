@@ -199,34 +199,40 @@ const contentConditions = (
   return conditions;
 };
 
-/** A list of values as the `IN` that matches any of them; an empty list matches nothing. */
+/**
+ * Values as the condition matching any of them. A list binds as one JSON
+ * parameter, since it is caller- or reach-sized and a statement's parameter
+ * count is capped (at 100 on Durable Object SQLite); one value binds as
+ * itself, so an index on the column still yields rows in its order. An
+ * empty list matches nothing.
+ */
 const inList = (column: string, values: readonly string[], params: unknown[]): string => {
-  if (values.length === 0) return '0';
-  params.push(...values);
-  return `${column} IN (${values.map(() => '?').join(',')})`;
+  if (values.length === 1) {
+    params.push(values[0]);
+    return `${column} = ?`;
+  }
+  params.push(JSON.stringify(values));
+  return `${column} IN (SELECT value FROM json_each(?))`;
 };
 
 /**
  * Whether the record carries every element of one of `sets`, matched on the
- * permissions table's key — the identity editAccess() removes by. Each
- * element is a semi-join read through idx_permissions_element, and the
- * one-element sets share one.
+ * permissions table's key — the identity editAccess() removes by — through
+ * idx_permissions_element. The sets travel as one JSON parameter, each row
+ * naming its set and that set's size; an empty set matches nothing.
  */
 const carriesPermissions = (sets: AuthorityAssociation[][], params: unknown[]): string => {
-  const carries = (elements: AuthorityAssociation[]): string => {
-    const match = elements.map((p) => {
-      params.push(p.kind, p.label, ...permissionKeyColumns(p));
-      return '(p.kind = ? AND p.label = ? AND p.grantee_kind = ? AND p.grantee_id = ? AND p.role = ?)';
-    });
-    return `r.id IN (SELECT p.record_id FROM permissions p WHERE ${match.join(' OR ')})`;
-  };
-  const singles = sets.filter((set) => set.length === 1).map(([element]) => element!);
-  const arms = singles.length > 0 ? [carries(singles)] : [];
-  for (const set of sets) {
-    if (set.length === 1) continue;
-    arms.push(set.length === 0 ? '1' : `(${set.map((e) => carries([e])).join(' AND ')})`);
-  }
-  return arms.length > 0 ? `(${arms.join(' OR ')})` : '0';
+  const rows = sets.flatMap((set, i) =>
+    set.map((p) => [i, set.length, p.kind, p.label, ...permissionKeyColumns(p)]),
+  );
+  params.push(JSON.stringify(rows));
+  const at = (i: number) => `json_extract(e.value, '$[${i}]')`;
+  return (
+    `r.id IN (SELECT p.record_id FROM json_each(?) e JOIN permissions p ` +
+    `ON p.kind = ${at(2)} AND p.label = ${at(3)} AND p.grantee_kind = ${at(4)} ` +
+    `AND p.grantee_id = ${at(5)} AND p.role = ${at(6)} ` +
+    `GROUP BY p.record_id, ${at(0)} HAVING COUNT(*) = MAX(${at(1)}))`
+  );
 };
 
 /**
@@ -265,16 +271,14 @@ const recordConditions = (
   const nextContentAlias = () => `cp${aliasSeq++}`;
 
   /**
-   * A filter that accepts one value or a list of them, as the `IN` that
-   * covers both. Written even for a single value rather than as `= ?`,
-   * since SQLite plans a one-element IN identically and one form means one
-   * place for the filter's placeholder count and its bindings to agree.
+   * A filter that accepts one value or a list of them, as the one `IN` that
+   * covers both — see inList().
    */
   const inFilter = (column: string, value: string | readonly string[] | undefined): void => {
     if (value === undefined) return;
-    const values = Array.isArray(value) ? value : [value as string];
-    conditions.push(`r.${column} IN (${values.map(() => '?').join(',')})`);
-    params.push(...values);
+    conditions.push(
+      inList(`r.${column}`, Array.isArray(value) ? value : [value as string], params),
+    );
   };
 
   /** One side of a date range, as the open-ended comparison it is. */

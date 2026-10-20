@@ -82,11 +82,8 @@ export type ElementWriteOptions<E extends Association> = AspectWriteOptions & {
 
 /**
  * The Records one scoped request may act on with one verb, as data matched
- * rather than rules applied. A Record is in reach when it is inside `fence`
- * and inside `within`; an absent part constrains nothing, and an empty list
- * matches nothing, as in a `filter`. `ScopedStack` states a reach over type
- * families; `Stack` resolves each to its registered TypeIds before an
- * adapter sees one. See docs/spec/access-control.md § Reach.
+ * rather than rules applied: inside `fence` and inside `within`, where an
+ * absent part constrains nothing. See docs/spec/access-control.md § Reach.
  */
 export type Reach<Type extends string = TypeId> = {
   /** Only Records at these Types are in reach. */

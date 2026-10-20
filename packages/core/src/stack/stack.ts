@@ -141,6 +141,7 @@ import {
   assertUnlistedArgument,
 } from './arguments.js';
 import { ScopedStack, scopeToken } from '../scoped-stack/scoped-stack.js';
+import { Lazy } from '../lazy.js';
 import { MigrationRegistry } from './migrations.js';
 import * as apps from './install-app.js';
 import * as typeGrants from './type-grants.js';
@@ -409,8 +410,8 @@ export class Stack implements StackClient {
       assertOpen: () => this.assertOpen(),
       migrations: this.migrations,
       queryReadable: (query: StackQuery, reach: Reach<BaseId>) =>
-        this.dispatchQuery(query, async (resolved) =>
-          queryReadable(resolved, await this.resolveReach(reach)),
+        this.dispatchQuery(query, async (resolved, types) =>
+          queryReadable(resolved, await this.resolveReach(reach, types)),
         ),
     });
   }
@@ -1205,7 +1206,7 @@ export class Stack implements StackClient {
    */
   private async dispatchQuery(
     query: StackQuery,
-    read: (resolved: StackQuery) => Promise<QueryResult>,
+    read: (resolved: StackQuery, types: Lazy<StackType[]>) => Promise<QueryResult>,
   ): Promise<QueryResult> {
     this.assertOpen();
     const { presentAt, filter, limit: rawLimit, ...rest } = query;
@@ -1217,17 +1218,22 @@ export class Stack implements StackClient {
     assertValidBaseIdFilter(filter);
     const limit = rawLimit !== undefined ? Math.min(rawLimit, MAX_QUERY_LIMIT) : undefined;
 
-    const resolvedFilter = await this.resolveBaseIdFilter(filter);
+    // Read once whether the filter, the reach or both resolve families.
+    const types = new Lazy(() => this.adapter.listTypes());
+    const resolvedFilter = await this.resolveBaseIdFilter(filter, types);
     if (resolvedFilter === EMPTY_FAMILY) {
       return { records: [], cursor: null };
     }
 
-    const result = await read({
-      ...rest,
-      ...(query.sort && { sort: normalizeSort(query.sort) }),
-      ...(resolvedFilter !== undefined && { filter: resolvedFilter }),
-      ...(limit !== undefined && { limit }),
-    });
+    const result = await read(
+      {
+        ...rest,
+        ...(query.sort && { sort: normalizeSort(query.sort) }),
+        ...(resolvedFilter !== undefined && { filter: resolvedFilter }),
+        ...(limit !== undefined && { limit }),
+      },
+      types,
+    );
 
     if (presentAt !== 'latest') return result;
     return { ...result, records: result.records.map((r) => this.migrations.presentAtLatest(r)) };
@@ -1241,12 +1247,13 @@ export class Stack implements StackClient {
    */
   private async resolveBaseIdFilter(
     filter: RecordFilter | undefined,
+    types: Lazy<StackType[]>,
   ): Promise<RecordFilter | undefined | typeof EMPTY_FAMILY> {
     if (filter?.baseId === undefined) return filter;
 
     const { baseId, typeId, ...rest } = filter;
     const requestedBaseIds = Array.isArray(baseId) ? baseId : [baseId];
-    const familyTypeIds = await this.familyTypeIds(requestedBaseIds);
+    const familyTypeIds = typeIdsOfFamilies(await types.get(), requestedBaseIds);
 
     const resolvedTypeIds =
       typeId === undefined
@@ -1264,12 +1271,12 @@ export class Stack implements StackClient {
    * resolution filter.baseId gets. See docs/spec/adapters.md § Querying
    * within a reach.
    */
-  private async resolveReach(reach: Reach<BaseId>): Promise<Reach> {
+  private async resolveReach(reach: Reach<BaseId>, types: Lazy<StackType[]>): Promise<Reach> {
     const { fence, within } = reach;
     // A reach naming no family needs no Types.
     if (!fence && !within) return {};
-    const types = await this.adapter.listTypes();
-    const resolve = (baseIds: readonly BaseId[]) => typeIdsOfFamilies(types, baseIds);
+    const registered = await types.get();
+    const resolve = (baseIds: readonly BaseId[]) => typeIdsOfFamilies(registered, baseIds);
     return {
       ...(fence && { fence: resolve(fence) }),
       ...(within && {

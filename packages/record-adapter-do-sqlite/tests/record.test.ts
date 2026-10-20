@@ -23,6 +23,7 @@ import type {
   StackType,
   StackCapabilities,
 } from '@haverstack/core';
+import type { Reach } from '@haverstack/core/adapter';
 
 /**
  * A Durable Object is a separate JS realm from the test file's own — even
@@ -65,6 +66,7 @@ type TestStub = {
     opts?: { purge?: boolean } & Record<string, unknown>,
   ): Promise<StackRecord | null>;
   queryRecords(query: StackQuery): Promise<QueryResult>;
+  queryReadable(query: StackQuery, reach: Reach): Promise<QueryResult>;
   getVersions(id: string): Promise<RecordVersion[]>;
   editAssociations(
     id: string,
@@ -546,4 +548,43 @@ describe('commitMigration', () => {
     expect(migrated.content).toEqual({ text: 'Hello world', pinned: false });
     expect(migrated.version).toBe(2);
   });
+});
+
+// A reach is sized by the requester's grants and rosters, and this engine
+// caps a statement at 100 bound parameters, so a reach binds each of its
+// lists as one. See docs/spec/adapters.md § Querying within a reach.
+test('queryReadable answers a reach far past the parameter cap', async () => {
+  const stub = getStub();
+  const shared = makeRecord({
+    permissions: [
+      {
+        kind: 'permission',
+        label: 'read',
+        grantee: { kind: 'group', groupId: 'g42', role: 'member' },
+      },
+    ],
+  });
+  await stub.createRecord(shared);
+  await stub.createRecord(makeRecord());
+
+  const groups = Array.from({ length: 60 }, (_, i) => `g${i}`);
+  const result = await stub.queryReadable(
+    {},
+    {
+      fence: Array.from({ length: 150 }, (_, i) =>
+        i === 0 ? NOTE_TYPE_V1 : `com.example/t${i}@1`,
+      ),
+      within: {
+        types: [],
+        permissions: groups.map((groupId) => [
+          {
+            kind: 'permission',
+            label: 'read',
+            grantee: { kind: 'group', groupId, role: 'member' },
+          },
+        ]),
+      },
+    },
+  );
+  expect(result.records.map((r) => r.id)).toEqual([shared.id]);
 });

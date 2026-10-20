@@ -958,6 +958,22 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         for (const id of ids) expect(seen.has(id)).toBe(true);
       });
 
+      // A cursor names the last record its page held, so the next page
+      // starts after that record wherever it now falls in the order.
+      test('a page resumes after its cursor whatever was inserted ahead of it', async () => {
+        for (let i = 0; i < 5; i++) {
+          await adapter.createRecord(makeRecord({ createdAt: new Date(1_000 + i) }));
+        }
+        const sort = { field: 'createdAt', direction: 'asc' } as const;
+        const first = await adapter.queryRecords({ limit: 2, sort });
+        await adapter.createRecord(makeRecord({ createdAt: new Date(1) }));
+        const second = await adapter.queryRecords({ limit: 2, cursor: first.cursor!, sort });
+
+        const all = (await adapter.queryRecords({ limit: 100, sort })).records.map((r) => r.id);
+        const after = all.indexOf(first.records[1]!.id);
+        expect(second.records.map((r) => r.id)).toEqual(all.slice(after + 1, after + 3));
+      });
+
       test('a malformed cursor is refused rather than misread', async () => {
         await expectStackErrorCode(
           adapter.queryRecords({ cursor: 'not-a-real-cursor' }),
@@ -1033,6 +1049,9 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         return records;
       };
 
+      // Far past any statement's parameter cap — 100 on Durable Object SQLite.
+      const manyTypes = Array.from({ length: 150 }, (_, i) => `org.haverstack.conformance/t${i}@1`);
+      const manyGroups = Array.from({ length: 60 }, (_, i) => `conformance-group-${i}`);
       const reaches: [string, Reach][] = [
         ['nothing constrained', {}],
         ['every Record of a Type', { within: { types: [OTHER_TYPE_ID], permissions: [] } }],
@@ -1098,7 +1117,31 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
             },
           },
         ],
-        ['an empty set, which every Record carries', { within: { types: [], permissions: [[]] } }],
+        ['an empty set, which no Record carries', { within: { types: [], permissions: [[]] } }],
+        [
+          'a reach of any size',
+          {
+            fence: [CONFORMANCE_TYPE_ID, ...manyTypes],
+            within: {
+              types: manyTypes,
+              authored: { subjectId: ALICE, types: [CONFORMANCE_TYPE_ID, ...manyTypes] },
+              permissions: [
+                ...manyGroups.flatMap((groupId) => [
+                  [{ ...toMembers, grantee: { ...toMembers.grantee, groupId } }],
+                  [
+                    {
+                      ...toAdmins,
+                      label: 'write' as const,
+                      grantee: { ...toAdmins.grantee, groupId },
+                    },
+                    anyone,
+                  ],
+                ]),
+                [toAlice],
+              ],
+            },
+          },
+        ],
       ];
 
       test.each(reaches)('returns exactly the Records in reach: %s', async (_name, reach) => {
