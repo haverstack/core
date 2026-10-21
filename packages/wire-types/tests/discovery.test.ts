@@ -82,8 +82,8 @@ describe('normalizeCapabilities', () => {
     ).toEqual([...NATIVE_SORT_FIELDS]);
   });
 
-  it('reads a per-Type cap that is not a positive integer as 0', () => {
-    for (const cap of [-1, 2.5, '16', true, null, Number.POSITIVE_INFINITY]) {
+  it('reads a per-Type cap that is not a positive integer or null as 0', () => {
+    for (const cap of [-1, 2.5, '16', true, undefined, Number.POSITIVE_INFINITY]) {
       const read = normalizeCapabilities({
         filter: { content: 'path', contentByType: cap as number },
         sort: { contentFieldByType: cap as number },
@@ -92,14 +92,24 @@ describe('normalizeCapabilities', () => {
     }
   });
 
+  it('reads a stated null per-Type cap as no limit', () => {
+    const read = normalizeCapabilities({
+      filter: { content: 'path', contentByType: null },
+      sort: { contentFieldByType: null },
+    });
+    expect([read.filter.contentByType, read.sort.contentFieldByType]).toEqual([null, null]);
+  });
+
   // Both travel in the POST /records/query body, which a server reaching no
   // content does not serve, so a cap it declares is one it cannot honor.
   it('reads a per-Type cap as 0 beside a reach of none', () => {
-    const read = normalizeCapabilities({
-      filter: { content: 'none', contentByType: 16 },
-      sort: { contentFieldByType: 16 },
-    });
-    expect([read.filter.contentByType, read.sort.contentFieldByType]).toEqual([0, 0]);
+    for (const cap of [16, null]) {
+      const read = normalizeCapabilities({
+        filter: { content: 'none', contentByType: cap },
+        sort: { contentFieldByType: cap },
+      });
+      expect([read.filter.contentByType, read.sort.contentFieldByType]).toEqual([0, 0]);
+    }
   });
 
   it('reads an absent capabilities object as declaring nothing', () => {

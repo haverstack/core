@@ -39,8 +39,13 @@ export type DiscoveryResponse = {
  * checks rather than casts. See docs/spec/wire-format.md § Discovery.
  */
 export type DiscoveryCapabilities = {
-  filter?: { content?: string; contentPresent?: boolean; contentByType?: number; search?: boolean };
-  sort?: { fields?: string[]; contentField?: boolean; contentFieldByType?: number };
+  filter?: {
+    content?: string;
+    contentPresent?: boolean;
+    contentByType?: number | null;
+    search?: boolean;
+  };
+  sort?: { fields?: string[]; contentField?: boolean; contentFieldByType?: number | null };
   limits?: { attachmentBytes?: number | null; contentBytes?: number | null };
 };
 
@@ -50,8 +55,9 @@ const SORT_FIELDS: ReadonlySet<string> = new Set(NATIVE_SORT_FIELDS);
 /**
  * Resolves anything absent, malformed or unrecognized to the least capable
  * value it could stand for — one rule, applied once, rather than a default
- * per key at each call site. A `null` limit is the one permissive reading,
- * since the server's own ceiling still answers 413. See
+ * per key at each call site. `null` is the permissive reading, and only
+ * where it is stated: a limit the client cannot pre-check, whose server
+ * still answers 413, or a cap with no limit. See
  * docs/spec/adapters.md § Adapter capabilities.
  */
 export function normalizeCapabilities(
@@ -65,7 +71,7 @@ export function normalizeCapabilities(
     : 'none';
   // The per-Type shapes travel in the POST /records/query body, which a
   // server reaching no content does not serve.
-  const cap = (value: unknown): number => (reach === 'none' ? 0 : capOrZero(value));
+  const cap = (value: unknown): number | null => (reach === 'none' ? 0 : capOrZero(value));
   return {
     filter: {
       content: reach,
@@ -85,9 +91,14 @@ export function normalizeCapabilities(
   };
 }
 
-/** A cap on keys, or 0 — declined — for anything but a non-negative integer. */
-const capOrZero = (value: unknown): number =>
-  typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : 0;
+/**
+ * A cap on keys, `null` — no limit — where the server says so, or 0 —
+ * declined — for anything else that isn't a non-negative integer.
+ */
+const capOrZero = (value: unknown): number | null => {
+  if (value === null) return null;
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : 0;
+};
 
 /** A ceiling this client can compare against, or null for "cannot pre-check". */
 const finiteOrNull = (value: unknown): number | null =>

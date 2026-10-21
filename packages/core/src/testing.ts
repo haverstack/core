@@ -83,13 +83,13 @@ export class MemoryAdapter implements StackAdapter {
     filter: {
       content: 'path',
       contentPresent: true,
-      contentByType: 64,
+      contentByType: null,
       search: false,
     },
     sort: {
       fields: ['createdAt', 'updatedAt', 'version'],
       contentField: true,
-      contentFieldByType: 64,
+      contentFieldByType: null,
     },
     limits: {
       attachmentBytes: null,

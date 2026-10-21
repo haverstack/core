@@ -72,7 +72,7 @@ export function assertQueryCapabilities(
       'filter.content',
     );
   }
-  if (arms.length > contentByType) {
+  if (contentByType !== null && arms.length > contentByType) {
     throw new StackBadRequestError(
       contentByType === 0
         ? 'Query uses filter.contentByType, but this adapter does not declare the ' +
@@ -329,7 +329,7 @@ export function assertSortCapability(
   if (sort.contentFieldByType !== undefined) {
     const keys = Object.keys(sort.contentFieldByType).length;
     const cap = capabilities.sort.contentFieldByType;
-    if (keys > cap) {
+    if (cap !== null && keys > cap) {
       throw new StackBadRequestError(
         cap === 0
           ? 'Query uses sort.contentFieldByType, but this adapter does not declare the ' +

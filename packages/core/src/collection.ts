@@ -499,8 +499,9 @@ export const createCollection = <S extends ReadonlyTypeSchema>(
         ? Infinity
         : capabilities.filter.content === 'none'
           ? 0
-          : capabilities.filter.contentByType;
-    const sortCap = sortField === undefined ? Infinity : capabilities.sort.contentFieldByType;
+          : (capabilities.filter.contentByType ?? Infinity);
+    const sortCap =
+      sortField === undefined ? Infinity : (capabilities.sort.contentFieldByType ?? Infinity);
     const cap = Math.min(filterCap, sortCap);
     const sortKind = (() => {
       const def = sortField === undefined ? undefined : handle.schema[sortField];

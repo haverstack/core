@@ -113,13 +113,13 @@ describe('construction', () => {
       filter: {
         content: 'path',
         contentPresent: true,
-        contentByType: 64,
+        contentByType: null,
         search: true,
       },
       sort: {
         fields: ['createdAt', 'updatedAt', 'version'],
         contentField: true,
-        contentFieldByType: 64,
+        contentFieldByType: null,
       },
       limits: {
         attachmentBytes: null,
@@ -598,19 +598,20 @@ test('a tag filter far past the parameter cap', async () => {
   expect(result.records.map((r) => r.id)).toEqual([tagged.id]);
 });
 
-// The caps are the shared SQLite declaration, so they have to hold on the
-// engine with the tightest statement limits, at full size.
-describe('per-Type keys at the declared cap', () => {
-  const typeIds = (cap: number) =>
-    Array.from({ length: cap }, (_, i) => (i === 0 ? NOTE_TYPE_V1 : `com.example/t${i}@1`));
+// The shared SQLite declaration sets no per-Type cap, so it has to hold on
+// the engine with the tightest statement limits, far past any count a
+// statement could have afforded. See docs/spec/adapters.md § Statement size.
+describe('per-Type keys with no declared cap', () => {
+  const KEYS = 200;
+  const typeIds = (count: number) =>
+    Array.from({ length: count }, (_, i) => (i === 0 ? NOTE_TYPE_V1 : `com.example/t${i}@1`));
 
   test('filter.contentByType', async () => {
     const stub = getStub();
-    const cap = (await stub.getCapabilities()).filter.contentByType;
     await stub.createRecord(makeRecord({ id: 'r1', content: { text: 'a', meta: { n: 1 } } }));
     await stub.createRecord(makeRecord({ id: 'r2', content: { text: 'b', meta: { n: 2 } } }));
     const contentByType = Object.fromEntries(
-      typeIds(cap).map((typeId) => [
+      typeIds(KEYS).map((typeId) => [
         typeId,
         { content: { 'meta.n': 1, 'meta.missing': null }, contentPresent: ['text'] },
       ]),
@@ -621,7 +622,6 @@ describe('per-Type keys at the declared cap', () => {
 
   test('sort.contentFieldByType', async () => {
     const stub = getStub();
-    const cap = (await stub.getCapabilities()).sort.contentFieldByType;
     const other = 'com.example/t1@1';
     await stub.saveType({
       id: NOTE_TYPE_V1,
@@ -637,7 +637,7 @@ describe('per-Type keys at the declared cap', () => {
     await stub.createRecord(makeRecord({ id: 'r3', typeId: other, content: { text: 'c' } }));
     await stub.createRecord(makeRecord({ id: 'r4', content: { text: 'd' } }));
     const contentFieldByType = Object.fromEntries(
-      typeIds(cap).map((typeId, i) => [typeId, i % 2 === 0 ? { field: 'n' } : { value: 2 }]),
+      typeIds(KEYS).map((typeId, i) => [typeId, i % 2 === 0 ? { field: 'n' } : { value: 2 }]),
     );
     const result = await stub.queryRecords({
       sort: { contentFieldByType, direction: 'asc' },

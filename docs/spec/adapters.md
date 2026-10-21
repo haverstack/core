@@ -192,13 +192,13 @@ type StackCapabilities = {
   filter: {
     content: 'none' | 'field' | 'path'; // how far a content filter key may reach
     contentPresent: boolean; // filter.contentPresent is honored
-    contentByType: number; // most arms filter.contentByType may hold; 0 = not honored
+    contentByType: number | null; // most arms filter.contentByType may hold; null = no limit, 0 = not honored
     search: boolean; // filter.search is honored
   };
   sort: {
     fields: ('createdAt' | 'updatedAt' | 'version')[]; // native columns this adapter can order by
     contentField: boolean; // sort.contentField is honored
-    contentFieldByType: number; // most keys sort.contentFieldByType may hold; 0 = not honored
+    contentFieldByType: number | null; // most keys sort.contentFieldByType may hold; null = no limit, 0 = not honored
   };
   limits: {
     attachmentBytes: number | null; // upload size ceiling, or null = client can't pre-check
@@ -219,7 +219,7 @@ One type, `StackCapabilities`, names both sides: an adapter declares it as `capa
 
 **`filter.contentPresent` sits beside the ladder rather than on it.** It gates `filter.contentPresent`, and is required `true` for local adapters on the same reasoning: asking whether a path holds a value is the same walk with a weaker predicate. It is not a rung because a server promising to match a content value has not thereby promised to answer whether one is there at all. It is meaningful only above `'none'` — presence travels in the `POST /records/query` body, which a server reaching no content does not expose — and a presence path is itself gated by the rung, so a multi-segment one needs `'path'`.
 
-**`filter.contentByType` and `sort.contentFieldByType` are caps, not flags.** Each is the most keys the [per-Type shape](./data-model.md#content-by-type) may hold, and `0` declines it. A local adapter must honor both, on the reasoning that makes `'path'` required: an arm is the content filter it already runs, scoped to one `typeId`. The first-party ones declare `64`, far above any family's version count; a per-Type key costs a SQLite adapter no statement text or parameter of its own (see [Statement size](#statement-size)), so the cap is the same on every engine. A server may declare any cap, `0` included, and a collection then narrows the versions it cannot reach rather than failing the query — see [Data model § Content queries across versions](./data-model.md#content-queries-across-versions). Both are meaningful only above `filter.content: 'none'`, since they travel in the `POST /records/query` body.
+**`filter.contentByType` and `sort.contentFieldByType` are caps, not flags.** Each is the most keys the [per-Type shape](./data-model.md#content-by-type) may hold: `null` states no limit, and `0` declines the shape. **A cap states a real limit or none at all.** A local adapter declares `null` for both, on the reasoning that makes `'path'` required: an arm is the content filter it already runs, scoped to one `typeId`, and costs a SQLite adapter no statement text or parameter of its own (see [Statement size](#statement-size)), so nothing bounds the count. A cap is for a server, which bounds what a request may cost it — see [Wire format § Bounding query cost](./wire-format.md#bounding-query-cost). A server may declare any cap, `0` and `null` included, and a collection narrows the versions past it rather than failing the query — see [Data model § Content queries across versions](./data-model.md#content-queries-across-versions). Both are meaningful only above `filter.content: 'none'`, since they travel in the `POST /records/query` body.
 
 **`filter.search` has no local-required rule.** A full-text index is a different mechanism from field matching, and neither implies the other, so a local adapter may legitimately decline it (see the JSON adapter note below).
 
@@ -227,7 +227,7 @@ One type, `StackCapabilities`, names both sides: an adapter declares it as `capa
 
 **Absent, malformed or unrecognized reads as the least capable value it could stand for.** One rule, for every entry: `'none'` for the reach, `false` for a flag, `0` for a cap, nothing for `sort.fields`, `null` for a limit. A discovery response that omits a group, omits `capabilities` entirely, or names a reach this client has never heard of describes a server this client will not send that query to — silence is never a claim, in either direction, and an unrecognized rung places nowhere on a ladder so it can only be read as its bottom. `normalizeCapabilities()` in `@haverstack/wire-types` applies the rule, so a client reads a foreign discovery response through one function rather than defaulting keys at each use.
 
-Two things this does not refuse. A query naming no sort asks for the server's own default order rather than a stated one, so it claims nothing that has to be declared and runs against an empty `sort.fields`. And a `null` limit is permissive by design: it says this client cannot pre-check, not that nothing is enforced — the server's own ceiling still answers with a `413`.
+Two things this does not refuse. A query naming no sort asks for the server's own default order rather than a stated one, so it claims nothing that has to be declared and runs against an empty `sort.fields`. And `null` is permissive where a server states it: a `null` limit says this client cannot pre-check, not that nothing is enforced — the server's own ceiling still answers with a `413` — and a `null` cap says the server takes any number of keys. Only a stated `null` reads this way; an absent cap is still `0`.
 
 **Per-adapter notes:**
 

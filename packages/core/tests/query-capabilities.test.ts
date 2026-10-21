@@ -161,6 +161,20 @@ describe('a refused query names the capability it needed', () => {
     ).not.toThrow();
   });
 
+  test('a null per-Type cap admits any number of keys', () => {
+    const typeIds = Array.from({ length: 500 }, (_, i) => `com.example/x@${i + 1}`);
+    const filter = { contentByType: Object.fromEntries(typeIds.map((id) => [id, {}])) };
+    const sort = {
+      contentFieldByType: Object.fromEntries(typeIds.map((id) => [id, { field: 'a' }])),
+    };
+    const unbounded = without({
+      filter: { contentByType: null },
+      sort: { contentFieldByType: null },
+    });
+    expect(() => assertQueryCapabilities(filter, unbounded)).not.toThrow();
+    expect(() => assertSortCapability(sort, unbounded)).not.toThrow();
+  });
+
   test('sort.fields', () => {
     expect(
       refusalFor(() =>

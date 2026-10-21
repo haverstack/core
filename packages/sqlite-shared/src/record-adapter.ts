@@ -54,15 +54,14 @@ export const SQLITE_RECORD_CAPABILITIES: StackCapabilities = {
     content: 'path',
     contentPresent: true,
     // A per-Type key costs no statement text or parameter of its own, so
-    // every engine honors the same cap; see docs/spec/adapters.md § Statement
-    // size.
-    contentByType: 64,
+    // nothing bounds it; see docs/spec/adapters.md § Statement size.
+    contentByType: null,
     search: true,
   },
   sort: {
     fields: ['createdAt', 'updatedAt', 'version'],
     contentField: true,
-    contentFieldByType: 64,
+    contentFieldByType: null,
   },
   limits: {
     attachmentBytes: null,
