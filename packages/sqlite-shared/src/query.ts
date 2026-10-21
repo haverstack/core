@@ -119,34 +119,36 @@ const rows = (s: Statement, columns: readonly string[], tuples: unknown[][]): st
 };
 
 /** The columns of a content condition; see contentRows(). */
-const CONDITION_COLUMNS = ['scope', 'path', 'depth', 'op', 'val', 'kind'];
+const CONDITION_COLUMNS = ['scope', 'path', 'op', 'val', 'kind'];
 
 /**
  * A JSON value's type as json_each reports it, with integer and real as one
  * number: what an `equals` condition compares besides the value itself, as
- * `===` does, so `true` never matches `1` and `'1'` never matches either.
+ * `===` does. valueKind() reads a filter value the same way.
  */
 const kindOf = (type: string): string =>
   `CASE ${type} WHEN 'integer' THEN 'number' WHEN 'real' THEN 'number' ELSE ${type} END`;
 
 /**
- * Whether the condition row `c` holds for the record row `r`. The path is
- * walked as data, a recursive CTE matching one segment per step against
- * json_each's `key`, so no key is read as syntax and the text is the same
- * for any path; one walk gathers what every op asks of the values it
- * reaches. Each op is element-wise, so a path reaching a null and a value
- * meets both `isNull` and `present`. See docs/spec/data-model.md § Filter.
+ * Whether condition row `c` holds for record row `r`: one walk of the path
+ * as data, a segment matched against json_each's `key` per step, gathering
+ * what each op asks of the values it reaches. See docs/spec/adapters.md
+ * § Statement size and docs/spec/data-model.md § Filter.
  */
-const holds = (c: string, r: string): string =>
-  `(WITH RECURSIVE w(d, v, t) AS (SELECT 0, ${r}.content, 'object' UNION ALL ` +
-  `SELECT w.d + 1, e.value, e.type FROM w JOIN json_each(${members('w')}) m ` +
-  `JOIN json_each(${spread('m')}) e ` +
-  `WHERE w.d < ${c}.depth AND m.key = json_extract(${c}.path, '$[' || w.d || ']')) ` +
-  `SELECT CASE ${c}.op ` +
-  `WHEN 'equals' THEN IFNULL(MAX(${kindOf('w.t')} = ${c}.kind AND w.v = ${c}.val), 0) ` +
-  "WHEN 'present' THEN IFNULL(MAX(w.t != 'null'), 0) " +
-  "ELSE IFNULL(MAX(w.t = 'null'), 0) OR NOT IFNULL(MAX(w.t != 'null'), 0) END " +
-  `FROM w WHERE w.d = ${c}.depth)`;
+const holds = (c: string, r: string): string => {
+  const depth = `json_array_length(${c}.path)`;
+  return (
+    `(WITH RECURSIVE w(d, v, t) AS (SELECT 0, ${r}.content, 'object' UNION ALL ` +
+    `SELECT w.d + 1, e.value, e.type FROM w JOIN json_each(${members('w')}) m ` +
+    `JOIN json_each(${spread('m')}) e ` +
+    `WHERE w.d < ${depth} AND m.key = json_extract(${c}.path, '$[' || w.d || ']')) ` +
+    `SELECT CASE ${c}.op ` +
+    `WHEN 'equals' THEN IFNULL(MAX(${kindOf('w.t')} = ${c}.kind AND w.v = ${c}.val), 0) ` +
+    "WHEN 'present' THEN IFNULL(MAX(w.t != 'null'), 0) " +
+    "WHEN 'isNull' THEN IFNULL(MAX(w.t = 'null'), 0) OR NOT IFNULL(MAX(w.t != 'null'), 0) " +
+    `END FROM w WHERE w.d = ${depth})`
+  );
+};
 
 /** The join alias the content index is read through. */
 const SORT_ALIAS = 'cs';
@@ -173,7 +175,7 @@ const contentCursor = (cursor: DecodedCursor, field: string) => {
   return cursor;
 };
 
-/** A filter value's kindOf(), or null for one no stored scalar can equal. */
+/** A filter value's kindOf(), which it mirrors, or null for one nothing equals. */
 const valueKind = (value: unknown): string | null => {
   if (typeof value === 'boolean') return `${value}`;
   if (typeof value === 'number') return 'number';
@@ -182,15 +184,14 @@ const valueKind = (value: unknown): string | null => {
 
 /**
  * A `content` and `contentPresent` predicate as condition rows scoped to
- * `scope`: path segments, their count, the op, and for `equals` the value
- * and its kindOf() (none for an object or array, which `===` never
- * matches). A `null` value means "no value at the path, or a value that is
- * null" (docs/spec/data-model.md § Filter).
+ * `scope`: path segments, the op, and for `equals` the value and its
+ * valueKind(). A `null` value means "no value at the path, or a value that
+ * is null" (docs/spec/data-model.md § Filter).
  */
 const contentRows = (scope: string | null, predicate: ContentArm): unknown[][] => {
   const row = (key: string, op: string, value: unknown = null) => {
     const path = parseContentFilterKey(key);
-    return [scope, path, path.length, op, value, valueKind(value)];
+    return [scope, path, op, value, valueKind(value)];
   };
   return [
     ...Object.entries(predicate.content ?? {}).map(([key, value]) =>

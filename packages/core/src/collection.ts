@@ -17,7 +17,7 @@
 
 import { StackBadRequestError, StackMigrationError, StackPermissionError } from './errors.js';
 import { baseIdOf, parseTypeId } from './schema.js';
-import { admitsKeys, perTypeCap } from './query-validation.js';
+import { admitsKeys } from './query-validation.js';
 import { StoredVersionError, WRITE_EXPECTATION } from './stack/write-expectation.js';
 import type { ExpectingClient, WriteExpectation } from './stack/write-expectation.js';
 import type { MigrationRegistry } from './stack/migrations.js';
@@ -495,11 +495,9 @@ export const createCollection = <S extends ReadonlyTypeSchema>(
     const { capabilities } = client;
     // A version past the adapter's cap is narrowed, newest kept first:
     // the older a version, the fewer apps still write it.
-    const filterCap =
-      predicate === undefined ? null : perTypeCap(capabilities, 'filter.contentByType');
-    const sortCap =
-      sortField === undefined ? null : perTypeCap(capabilities, 'sort.contentFieldByType');
-    const admits = (keys: number) => admitsKeys(filterCap, keys) && admitsKeys(sortCap, keys);
+    const admits = (keys: number) =>
+      (predicate === undefined || admitsKeys(capabilities.filter.contentByType, keys)) &&
+      (sortField === undefined || admitsKeys(capabilities.sort.contentFieldByType, keys));
     const sortKind = (() => {
       const def = sortField === undefined ? undefined : handle.schema[sortField];
       return def && def.kind !== 'array' && def.kind !== 'object' ? def.kind : undefined;

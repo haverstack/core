@@ -15,7 +15,6 @@ import {
   assertSortCapability,
   assertValidContentByType,
   assertValidSort,
-  perTypeCap,
 } from '../src/query-validation.js';
 import { StackBadRequestError } from '../src/errors.js';
 import type {
@@ -160,22 +159,6 @@ describe('a refused query names the capability it needed', () => {
     expect(() =>
       assertSortCapability(sort, without({ sort: { contentFieldByType: 1 } })),
     ).not.toThrow();
-  });
-
-  // Both shapes travel in the POST /records/query body, which a reach of
-  // 'none' does not serve, so a cap declared beside it admits nothing.
-  test('a per-Type cap admits nothing beside a reach of none', () => {
-    const none = without({
-      filter: { content: 'none', contentByType: null },
-      sort: { contentFieldByType: 16 },
-    });
-    expect(perTypeCap(none, 'filter.contentByType')).toBe(0);
-    expect(perTypeCap(none, 'sort.contentFieldByType')).toBe(0);
-    expect(
-      refusalFor(() =>
-        assertSortCapability({ contentFieldByType: { 'com.example/x@1': { field: 'a' } } }, none),
-      ),
-    ).toBe('sort.contentFieldByType');
   });
 
   test('a null per-Type cap admits any number of keys', () => {

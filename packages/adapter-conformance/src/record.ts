@@ -29,7 +29,7 @@ import type {
   StackQuery,
   StackRecord,
 } from '@haverstack/core';
-import { ElementSetMovedError, admitsKeys, inReach, perTypeCap } from '@haverstack/core/adapter';
+import { ElementSetMovedError, admitsKeys, inReach } from '@haverstack/core/adapter';
 import type { Reach, StackRecordAdapter } from '@haverstack/core/adapter';
 
 type PermissionElement = Extract<AuthorityAssociation, { kind: 'permission' }>;
@@ -1363,7 +1363,7 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
     // -----------------------------------------------------------------
     // Content by type — capability-gated on filter.contentByType
     // -----------------------------------------------------------------
-    if (admitsKeys(perTypeCap(capabilities, 'filter.contentByType'), 2)) {
+    if (admitsKeys(capabilities.filter.contentByType, 2)) {
       describe('content by type', () => {
         const OTHER = 'org.haverstack.conformance/other@1';
         const THIRD = 'org.haverstack.conformance/third@1';
@@ -1442,7 +1442,7 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
     // -----------------------------------------------------------------
     // Sort by content field per type — gated on sort.contentFieldByType
     // -----------------------------------------------------------------
-    if (admitsKeys(perTypeCap(capabilities, 'sort.contentFieldByType'), 3)) {
+    if (admitsKeys(capabilities.sort.contentFieldByType, 3)) {
       describe('sort by content field per type', () => {
         const OTHER = 'org.haverstack.conformance/other@1';
         const THIRD = 'org.haverstack.conformance/third@1';

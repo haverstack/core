@@ -100,15 +100,19 @@ describe('normalizeCapabilities', () => {
     expect([read.filter.contentByType, read.sort.contentFieldByType]).toEqual([null, null]);
   });
 
-  // The reach is applied where a cap is used, by perTypeCap() in core, so
-  // reading stays one rule per entry.
-  it('reads a per-Type cap as stated beside a reach of none', () => {
+  // These travel in the POST /records/query body, which a server reaching
+  // no content does not serve, so what it declares for them is unhonorable.
+  it('reads what depends on the content reach as declined beside a reach of none', () => {
     for (const cap of [16, null]) {
       const read = normalizeCapabilities({
-        filter: { content: 'none', contentByType: cap },
+        filter: { content: 'none', contentPresent: true, contentByType: cap },
         sort: { contentFieldByType: cap },
       });
-      expect([read.filter.contentByType, read.sort.contentFieldByType]).toEqual([cap, cap]);
+      expect([
+        read.filter.contentPresent,
+        read.filter.contentByType,
+        read.sort.contentFieldByType,
+      ]).toEqual([false, 0, 0]);
     }
   });
 

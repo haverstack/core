@@ -36,9 +36,7 @@ export {
   assertValidVersionsQuery,
   filtersContent,
   parseContentFilterKey,
-  perTypeCap,
 } from '../query-validation.js';
-export type { PerTypeShape } from '../query-validation.js';
 export {
   contentSortEntry,
   contentSortKey,

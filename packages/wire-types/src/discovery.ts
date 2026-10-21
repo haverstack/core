@@ -54,12 +54,9 @@ const SORT_FIELDS: ReadonlySet<string> = new Set(NATIVE_SORT_FIELDS);
 
 /**
  * Resolves anything absent, malformed or unrecognized to the least capable
- * value it could stand for — one rule, applied once, rather than a default
- * per key at each call site. A cap or limit of `null` states no limit,
- * and an absent one reads as the least it could stand for: `0` for a cap,
- * which declines a shape, and `null` for a limit, which gates nothing. A
- * cap is read as stated whatever the reach; perTypeCap() in core applies
- * the reach. See docs/spec/adapters.md § Adapter capabilities.
+ * value it could stand for, and what depends on the content reach to
+ * nothing below `'none'` — applied once, where capabilities enter, so no
+ * reader re-derives either. See docs/spec/adapters.md § Adapter capabilities.
  */
 export function normalizeCapabilities(
   capabilities: DiscoveryCapabilities | undefined,
@@ -70,17 +67,20 @@ export function normalizeCapabilities(
   const reach = CONTENT_FILTER_REACHES.has(filter?.content as string)
     ? (filter?.content as ContentFilterReach)
     : 'none';
+  // These travel in the POST /records/query body, which a server reaching
+  // no content does not serve.
+  const reaches = reach !== 'none';
   return {
     filter: {
       content: reach,
-      contentPresent: filter?.contentPresent === true,
-      contentByType: readCap(filter?.contentByType),
+      contentPresent: reaches && filter?.contentPresent === true,
+      contentByType: reaches ? readCap(filter?.contentByType) : 0,
       search: filter?.search === true,
     },
     sort: {
       fields: (sort?.fields ?? []).filter((f): f is NativeSortField => SORT_FIELDS.has(f)),
       contentField: sort?.contentField === true,
-      contentFieldByType: readCap(sort?.contentFieldByType),
+      contentFieldByType: reaches ? readCap(sort?.contentFieldByType) : 0,
     },
     limits: {
       attachmentBytes: readLimit(limits?.attachmentBytes),
