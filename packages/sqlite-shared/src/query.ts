@@ -66,12 +66,14 @@ const sqlDirection = (query: StackQuery): 'ASC' | 'DESC' => {
 /**
  * Normalize a json_each row's value so one array element and one bare
  * value are walked by the same clause: an array stands for its elements,
- * anything else for itself. See docs/spec/data-model.md § Nested content
- * paths.
+ * anything else for itself. A boolean is rewrapped from its type, since
+ * json_each's `value` reads it as 0 or 1. See docs/spec/data-model.md
+ * § Nested content paths.
  */
 const spread = (alias: string): string =>
-  `CASE WHEN ${alias}.type = 'array' THEN ${alias}.value ` +
-  `WHEN ${alias}.type = 'object' THEN json_array(json(${alias}.value)) ` +
+  `CASE ${alias}.type WHEN 'array' THEN ${alias}.value ` +
+  `WHEN 'object' THEN json_array(json(${alias}.value)) ` +
+  `WHEN 'true' THEN '[true]' WHEN 'false' THEN '[false]' ` +
   `ELSE json_array(${alias}.value) END`;
 
 /**
@@ -83,39 +85,46 @@ const members = (alias: string): string =>
   `CASE WHEN ${alias}.t = 'object' THEN ${alias}.v ELSE '{}' END`;
 
 /**
- * The content conditions a statement tests, one row each: the Type it is
- * scoped to (`null` for every record), its path segments, its op and value.
- * They bind as one parameter, materialized once ahead of the statement so a
- * walk reads columns rather than re-parsing the list per record.
+ * Tuples as a table with `columns`, named in tuple order: the one shape a
+ * caller-sized part of a query takes, bound as a single JSON parameter so
+ * the statement never grows with it. See docs/spec/adapters.md § Statement
+ * size.
  */
-const CONTENT_CONDITIONS =
-  "WITH cond AS MATERIALIZED (SELECT json_extract(value, '$[0]') AS scope, " +
-  "json_extract(value, '$[1]') AS path, json_array_length(value, '$[1]') AS depth, " +
-  "json_extract(value, '$[2]') AS op, json_extract(value, '$[3]') AS val FROM json_each(?)) ";
+const rows = (columns: readonly string[], tuples: unknown[][], params: unknown[]): string => {
+  params.push(JSON.stringify(tuples));
+  const named = columns.map((column, i) => `json_extract(value, '$[${i}]') AS ${column}`);
+  return `(SELECT ${named.join(', ')} FROM json_each(?))`;
+};
+
+/** The columns of a `cond` row; see contentRows(). */
+const CONDITION_COLUMNS = ['scope', 'path', 'depth', 'op', 'val', 'kind'];
 
 /**
- * Whether the walk of the `cond` row `c`'s path through `r` reaches a value
- * satisfying `leaf`. The walk is data, a recursive CTE matching one segment
- * per step against json_each's `key`, so no key is read as syntax and the
- * statement's text is the same for any path.
+ * A JSON value's type as json_each reports it, with integer and real as one
+ * number: what an `equals` condition compares besides the value itself, as
+ * `===` does, so `true` never matches `1` and `'1'` never matches either.
  */
-const reaches = (leaf: string): string =>
-  "EXISTS (WITH RECURSIVE w(d, v, t) AS (SELECT 0, r.content, 'object' UNION ALL " +
+const kindOf = (type: string): string =>
+  `CASE ${type} WHEN 'integer' THEN 'number' WHEN 'real' THEN 'number' ELSE ${type} END`;
+
+/**
+ * Whether the `cond` row `c` holds for `r`. The path is walked as data, a
+ * recursive CTE matching one segment per step against json_each's `key`, so
+ * no key is read as syntax and the text is the same for any path; one walk
+ * gathers what every op asks of the values it reaches. Each op is
+ * element-wise, so a path reaching a null and a value meets both `isNull`
+ * and `present`. See docs/spec/data-model.md § Filter.
+ */
+const HOLDS =
+  "(WITH RECURSIVE w(d, v, t) AS (SELECT 0, r.content, 'object' UNION ALL " +
   `SELECT w.d + 1, e.value, e.type FROM w JOIN json_each(${members('w')}) m ` +
   `JOIN json_each(${spread('m')}) e ` +
   "WHERE w.d < c.depth AND m.key = json_extract(c.path, '$[' || w.d || ']')) " +
-  `SELECT 1 FROM w WHERE w.d = c.depth AND ${leaf})`;
-
-/**
- * Whether the `cond` row `c` holds for `r`. Each op is element-wise, so a
- * path reaching a null and a value meets both `'null'` and `'present'`; an
- * `'eq'` value never matches an object or array, which json_each exposes as
- * JSON text. See docs/spec/data-model.md § Filter.
- */
-const LEAF =
-  "CASE c.op WHEN 'eq' THEN w.t NOT IN ('object', 'array') AND w.v = c.val " +
-  "WHEN 'present' THEN w.v IS NOT NULL ELSE w.t = 'null' END";
-const HOLDS = `(${reaches(LEAF)} OR (c.op = 'null' AND NOT ${reaches('w.v IS NOT NULL')}))`;
+  'SELECT CASE c.op ' +
+  `WHEN 'equals' THEN IFNULL(MAX(${kindOf('w.t')} = c.kind AND w.v = c.val), 0) ` +
+  "WHEN 'present' THEN IFNULL(MAX(w.t != 'null'), 0) " +
+  "ELSE IFNULL(MAX(w.t = 'null'), 0) OR NOT IFNULL(MAX(w.t != 'null'), 0) END " +
+  'FROM w WHERE w.d = c.depth)';
 
 /** The join alias the content index is read through. */
 const SORT_ALIAS = 'cs';
@@ -142,56 +151,70 @@ const contentCursor = (cursor: DecodedCursor, field: string) => {
   return cursor;
 };
 
-/**
- * A `content` and `contentPresent` predicate as `cond` rows scoped to
- * `scope`. A `null` value means "no value at the path, or a value that is
- * null" (docs/spec/data-model.md § Filter). Presence is the question an
- * exact-match value cannot ask.
- */
-const contentRows = (scope: string | null, predicate: ContentArm): unknown[][] => [
-  ...Object.entries(predicate.content ?? {}).map(([key, value]) =>
-    // undefined is the same absence null names — JSON drops it on the way
-    // over the wire, so treating it as a value would make an in-process
-    // query and its wire equivalent disagree.
-    value === null || value === undefined
-      ? [scope, parseContentFilterKey(key), 'null']
-      : [scope, parseContentFilterKey(key), 'eq', value],
-  ),
-  ...(predicate.contentPresent ?? []).map((key) => [scope, parseContentFilterKey(key), 'present']),
-];
+/** A filter value's kindOf(), or null for one no stored scalar can equal. */
+const valueKind = (value: unknown): string | null => {
+  if (typeof value === 'boolean') return `${value}`;
+  if (typeof value === 'number') return 'number';
+  return typeof value === 'string' ? 'text' : null;
+};
 
 /**
- * Values as the condition matching any of them. A list binds as one JSON
- * parameter (docs/spec/adapters.md § Statement size); one value binds as
- * itself, so an index on the column still yields rows in its order. An
- * empty list matches nothing.
+ * A `content` and `contentPresent` predicate as `cond` rows scoped to
+ * `scope`: path segments, their count, the op, and for `equals` the value
+ * and its kindOf() (none for an object or array, which `===` never
+ * matches). A `null` value means "no value at the path, or a value that is
+ * null" (docs/spec/data-model.md § Filter).
+ */
+const contentRows = (scope: string | null, predicate: ContentArm): unknown[][] => {
+  const row = (key: string, op: string, value: unknown = null) => {
+    const path = parseContentFilterKey(key);
+    return [scope, path, path.length, op, value, valueKind(value)];
+  };
+  return [
+    ...Object.entries(predicate.content ?? {}).map(([key, value]) =>
+      // undefined is the same absence null names — JSON drops it on the way
+      // over the wire, so treating it as a value would make an in-process
+      // query and its wire equivalent disagree.
+      value === null || value === undefined ? row(key, 'isNull') : row(key, 'equals', value),
+    ),
+    ...(predicate.contentPresent ?? []).map((key) => row(key, 'present')),
+  ];
+};
+
+/**
+ * Values as the condition matching any of them: rows() of one column, or
+ * one value bound as itself, so an index on the column still yields rows in
+ * its order. An empty list matches nothing.
  */
 const inList = (column: string, values: readonly string[], params: unknown[]): string => {
   if (values.length === 1) {
     params.push(values[0]);
     return `${column} = ?`;
   }
-  params.push(JSON.stringify(values));
-  return `${column} IN (SELECT value FROM json_each(?))`;
+  const tuples = values.map((value) => [value]);
+  const table = rows(['value'], tuples, params);
+  return `${column} IN (SELECT value FROM ${table})`;
 };
 
 /**
  * Whether the record carries every element of one of `sets`, matched on the
  * permissions table's key — the identity editAccess() removes by — through
- * idx_permissions_element. The sets travel as one JSON parameter, each row
- * naming its set and that set's size; an empty set matches nothing.
+ * idx_permissions_element. Each element is a row naming its set and that
+ * set's size; an empty set matches nothing.
  */
 const carriesPermissions = (sets: AuthorityAssociation[][], params: unknown[]): string => {
-  const rows = sets.flatMap((set, i) =>
-    set.map((p) => [i, set.length, p.kind, p.label, ...permissionKeyColumns(p)]),
+  const elements = rows(
+    ['set_index', 'set_size', 'kind', 'label', 'grantee_kind', 'grantee_id', 'role'],
+    sets.flatMap((set, i) =>
+      set.map((p) => [i, set.length, p.kind, p.label, ...permissionKeyColumns(p)]),
+    ),
+    params,
   );
-  params.push(JSON.stringify(rows));
-  const at = (i: number) => `json_extract(e.value, '$[${i}]')`;
   return (
-    `r.id IN (SELECT p.record_id FROM json_each(?) e JOIN permissions p ` +
-    `ON p.kind = ${at(2)} AND p.label = ${at(3)} AND p.grantee_kind = ${at(4)} ` +
-    `AND p.grantee_id = ${at(5)} AND p.role = ${at(6)} ` +
-    `GROUP BY p.record_id, ${at(0)} HAVING COUNT(*) = MAX(${at(1)}))`
+    `r.id IN (SELECT p.record_id FROM ${elements} e JOIN permissions p ` +
+    'ON p.kind = e.kind AND p.label = e.label AND p.grantee_kind = e.grantee_kind ' +
+    'AND p.grantee_id = e.grantee_id AND p.role = e.role ' +
+    'GROUP BY p.record_id, e.set_index HAVING COUNT(*) = MAX(e.set_size))'
   );
 };
 
@@ -430,7 +453,9 @@ const presentCursorCondition = (
 
 /**
  * One statement reading `r` from `from`, whose own parameters bind ahead of
- * the conditions', with the `cond` table first when it tests content.
+ * the conditions'. When it tests content, the `cond` rows come first,
+ * materialized once so a walk reads columns rather than re-parsing JSON
+ * per record.
  */
 const statement = (
   from: string,
@@ -440,9 +465,11 @@ const statement = (
 ): QueryStatement => {
   const select = `SELECT r.* FROM ${from} WHERE ${conditions.join(' AND ')}${tail}`;
   if (content.length === 0) return { sql: select, params: [...fromParams, ...params] };
+  const head: unknown[] = [];
+  const cond = rows(CONDITION_COLUMNS, content, head);
   return {
-    sql: CONTENT_CONDITIONS + select,
-    params: [JSON.stringify(content), ...fromParams, ...params],
+    sql: `WITH cond AS MATERIALIZED ${cond} ${select}`,
+    params: [...head, ...fromParams, ...params],
   };
 };
 
@@ -515,9 +542,8 @@ export const buildQueryPlan = (query: StackQuery, reach?: Reach): QueryStatement
 /**
  * A sort naming its value per Type, read through a derived table in place
  * of the index: each Type's own index rows, and its constant in the index's
- * columns, so one cursor condition and one ORDER BY serve both. Each kind
- * of entry is a list of rows, bound as one parameter like any other list.
- * See docs/spec/data-model.md § Sorting by a content field.
+ * columns, so one cursor condition and one ORDER BY serve both. Fields and
+ * constants are each rows(). See docs/spec/data-model.md § Sorting by a content field.
  */
 const byTypePlan = (
   query: StackQuery,
@@ -539,34 +565,33 @@ const byTypePlan = (
     if (entry) constants.push([typeId, entry]);
   }
   const pages: QueryStatement[] = [];
-  const at = (i: number) => `json_extract(e.value, '$[${i}]')`;
 
   if (cursor?.kind !== 'absent' && fields.length + constants.length > 0) {
     const sources: string[] = [];
     const sourceParams: unknown[] = [];
     if (fields.length > 0) {
+      const byField = rows(['type_id', 'field'], fields, sourceParams);
       sources.push(
-        'SELECT c.record_id AS record_id, c.value_rank AS value_rank, c.num_value AS num_value, ' +
-          'c.text_key AS text_key, c.text_value AS text_value ' +
-          `FROM json_each(?) e JOIN content_index c ON c.field = ${at(1)} ` +
-          `JOIN records t ON t.id = c.record_id AND t.type_id = ${at(0)}`,
+        'SELECT ci.record_id AS record_id, ci.value_rank AS value_rank, ' +
+          'ci.num_value AS num_value, ci.text_key AS text_key, ci.text_value AS text_value ' +
+          `FROM ${byField} f JOIN content_index ci ON ci.field = f.field ` +
+          'JOIN records t ON t.id = ci.record_id AND t.type_id = f.type_id',
       );
-      sourceParams.push(JSON.stringify(fields));
     }
     if (constants.length > 0) {
-      sources.push(
-        `SELECT t.id AS record_id, ${at(1)} AS value_rank, ${at(2)} AS num_value, ` +
-          `${at(3)} AS text_key, ${at(4)} AS text_value ` +
-          `FROM json_each(?) e JOIN records t ON t.type_id = ${at(0)}`,
-      );
-      sourceParams.push(
-        JSON.stringify(
-          constants.map(([typeId, entry]) =>
-            entry.kind === 'num'
-              ? [typeId, 0, entry.num, null, null]
-              : [typeId, 1, null, entry.key, entry.text],
-          ),
+      const byConstant = rows(
+        ['type_id', 'value_rank', 'num_value', 'text_key', 'text_value'],
+        constants.map(([typeId, entry]) =>
+          entry.kind === 'num'
+            ? [typeId, 0, entry.num, null, null]
+            : [typeId, 1, null, entry.key, entry.text],
         ),
+        sourceParams,
+      );
+      sources.push(
+        'SELECT t.id AS record_id, k.value_rank AS value_rank, k.num_value AS num_value, ' +
+          'k.text_key AS text_key, k.text_value AS text_value ' +
+          `FROM ${byConstant} k JOIN records t ON t.type_id = k.type_id`,
       );
     }
     const where = recordConditions(query, reach);
@@ -586,12 +611,12 @@ const byTypePlan = (
   {
     const where = recordConditions(query, reach);
     if (fields.length > 0) {
+      const byField = rows(['type_id', 'field'], fields, where.params);
       where.conditions.push(
-        `NOT EXISTS (SELECT 1 FROM json_each(?) e JOIN content_index ${SORT_ALIAS} ` +
-          `ON ${SORT_ALIAS}.record_id = r.id AND ${SORT_ALIAS}.field = ${at(1)} ` +
-          `WHERE ${at(0)} = r.type_id)`,
+        `NOT EXISTS (SELECT 1 FROM ${byField} f JOIN content_index ${SORT_ALIAS} ` +
+          `ON ${SORT_ALIAS}.record_id = r.id AND ${SORT_ALIAS}.field = f.field ` +
+          'WHERE f.type_id = r.type_id)',
       );
-      where.params.push(JSON.stringify(fields));
     }
     if (constants.length > 0) {
       const typeIds = constants.map(([typeId]) => typeId);

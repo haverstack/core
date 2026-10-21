@@ -338,14 +338,14 @@ describe('records — queries', () => {
   test('a path at the segment cap executes; one past it is refused', async () => {
     const stub = getStub();
     await stub.createRecord(makeRecord({ id: 'r1', content: { text: 'shallow' } }));
-    const deepest = Array.from({ length: 32 }, (_, i) => `s${i}`).join('.');
+    const deepest = Array.from({ length: 33 }, (_, i) => `s${i}`).join('.');
 
     const miss = await stub.queryRecords({ filter: { content: { [deepest]: 'x' } } });
     expect(miss.records).toEqual([]);
     const absent = await stub.queryRecords({ filter: { content: { [deepest]: null } } });
     expect(absent.records.map((r) => r.id)).toEqual(['r1']);
     const err = await stub
-      .queryRecords({ filter: { content: { [`${deepest}.s32`]: 'x' } } })
+      .queryRecords({ filter: { content: { [`${deepest}.s33`]: 'x' } } })
       .catch((e: unknown) => e);
     expect((err as { code?: string }).code).toBe('bad_request');
   });
@@ -659,7 +659,7 @@ test('content conditions far past the statement limits execute', async () => {
   const stub = getStub();
   await stub.createRecord(makeRecord({ id: 'r1', content: { text: 'a', n: 1 } }));
   await stub.createRecord(makeRecord({ id: 'r2', content: { text: 'b', n: 2 } }));
-  const prefix = Array.from({ length: 31 }, (_, i) => `s${i}`).join('.');
+  const prefix = Array.from({ length: 32 }, (_, i) => `s${i}`).join('.');
   const content = Object.fromEntries(
     Array.from({ length: 8 }, (_, i) => [`${prefix}.k${i}`, null] as [string, unknown]),
   );

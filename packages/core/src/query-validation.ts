@@ -19,9 +19,9 @@
 import { ARGUMENTS_INVALID, StackBadRequestError, StackValidationError } from './errors.js';
 import { familyIdProblem, parseTypeId } from './schema.js';
 import { targetErrors } from './associations/validation.js';
-import { MAX_VALIDATION_DEPTH } from './validate.js';
 import {
   CONTENT_SEGMENT_METACHARACTERS,
+  MAX_VALIDATION_DEPTH,
   SEGMENT_METACHARACTER_RE,
   isPlainObject,
 } from './validate.js';
@@ -169,6 +169,14 @@ export function filtersContent(features: Pick<StackCapabilities, 'filter'>): boo
 }
 
 /**
+ * The longest path that can reach a stored value: a top-level field sits at
+ * depth 0 and each segment descends one level, so a path past this reaches
+ * nothing a write accepts. See docs/spec/data-model.md § Nested content
+ * paths.
+ */
+const MAX_CONTENT_PATH_SEGMENTS = MAX_VALIDATION_DEPTH + 1;
+
+/**
  * Split a content filter key into path segments. Write-time validation
  * keeps stored field names free of the path metacharacters, but a filter
  * arrives from a request body and has made no such promise, so the same
@@ -176,12 +184,9 @@ export function filtersContent(features: Pick<StackCapabilities, 'filter'>): boo
  */
 export function parseContentFilterKey(key: string): string[] {
   const segments = key.split('.');
-  // Each segment descends one level of content, so a path deeper than
-  // content may nest could reach no stored value. See
-  // docs/spec/data-model.md § Nested content paths.
-  if (segments.length > MAX_VALIDATION_DEPTH) {
+  if (segments.length > MAX_CONTENT_PATH_SEGMENTS) {
     throw new StackBadRequestError(
-      `Invalid content filter path "${key}": at most ${MAX_VALIDATION_DEPTH} segments.`,
+      `Invalid content filter path "${key}": at most ${MAX_CONTENT_PATH_SEGMENTS} segments.`,
     );
   }
   for (const segment of segments) {

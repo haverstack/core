@@ -1284,6 +1284,24 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
           });
         }
 
+        // A value matches as `===` compares it: its JSON type as well as
+        // its value. See docs/spec/data-model.md § Filter.
+        test('a content filter value matches its own JSON type only', async () => {
+          const bool = makeRecord({ content: { title: 'b', flag: true } });
+          const num = makeRecord({ content: { title: 'n', flag: 1 } });
+          const text = makeRecord({ content: { title: 't', flag: '1' } });
+          for (const record of [bool, num, text]) await adapter.createRecord(record);
+
+          for (const [value, record] of [
+            [true, bool],
+            [1, num],
+            ['1', text],
+          ] as const) {
+            const result = await adapter.queryRecords({ filter: { content: { flag: value } } });
+            expect(result.records.map((r) => r.id)).toEqual([record.id]);
+          }
+        });
+
         if (capabilities.filter.contentPresent && capabilities.filter.content === 'path') {
           // Both are element-wise, so a path reaching a null and a value
           // satisfies each. See docs/spec/data-model.md § Filter.
