@@ -80,6 +80,25 @@ export type ElementWriteOptions<E extends Association> = AspectWriteOptions & {
   expectSet?: readonly E[];
 };
 
+/**
+ * The Records one scoped request may act on with one verb, as data matched
+ * rather than rules applied: inside `fence` and inside `within`, where an
+ * absent part constrains nothing. See docs/spec/access-control.md § Reach.
+ */
+export type Reach<Type extends string = TypeId> = {
+  /** Only Records at these Types are in reach. */
+  fence?: Type[];
+  /** Records meeting one of these are in reach. */
+  within?: {
+    /** Every Record at these Types. */
+    types: Type[];
+    /** Records this subject authored at these Types. */
+    authored?: { subjectId: EntityId; types: Type[] };
+    /** Records carrying every element of one of these sets, by association identity. */
+    permissions: AuthorityAssociation[][];
+  };
+};
+
 /** The metadata an upload's `_attachment@1` record carries beside its bytes. */
 export type PutAttachmentOptions = {
   mimeType: string;
@@ -141,6 +160,14 @@ export interface StackRecordAdapter {
    * resolves the defaults before any adapter sees the query.
    */
   queryRecords(query: StackQuery): Promise<QueryResult>;
+  /**
+   * queryRecords() over the Records in `reach` alone: the reach is one
+   * more condition of the query, so the page, its cursor and whether one
+   * comes back are decided among those Records only. Optional — a stack
+   * whose adapter lacks it cannot be scoped, as a server-backed one never
+   * needs to be. See docs/spec/adapters.md § Querying within a reach.
+   */
+  queryReadable?(query: StackQuery, reach: Reach): Promise<QueryResult>;
 
   // Aspects that never bump `version`
   //

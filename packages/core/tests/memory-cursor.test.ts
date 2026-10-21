@@ -2,9 +2,9 @@
  * MemoryAdapter's pagination cursor is the reference double adapter
  * authors read to understand the contract, so its codec has to hold the
  * same edges the real ones do: a sort field that isn't Latin-1 must
- * survive the round trip, and an offset that arrives from the wire must
- * be rejected when it is out of range rather than silently re-slicing
- * the result set from the other end.
+ * survive the round trip, a key that arrives from the wire must be
+ * well-formed for the order it claims, and a page resumes after the record
+ * its cursor names however the matched set moved in between.
  */
 import { describe, test, expect, beforeEach } from 'vitest';
 import { MemoryAdapter } from '../src/testing.js';
@@ -40,15 +40,40 @@ describe('MemoryAdapter cursors', () => {
     expect(second.records.map((r) => r.id)).not.toEqual(first.records.map((r) => r.id));
   });
 
-  test('refuses a cursor carrying a negative offset', async () => {
-    const forged = btoa(JSON.stringify({ d: JSON.stringify([null, 'createdAt', 'desc']), o: -3 }));
-
-    // Left unchecked this slices from the tail and returns the last
-    // records as "page 2"; cursors reach the adapter straight off the
-    // wire, so nothing upstream would have caught it.
+  test('refuses a cursor whose key does not fit the order it names', async () => {
+    const forged = btoa(
+      JSON.stringify({
+        d: JSON.stringify([null, 'createdAt', 'desc']),
+        k: { value: { kind: 'text', text: 'x', key: 'x' }, id: 'r1' },
+      }),
+    );
     await expect(adapter.queryRecords({ limit: 3, cursor: forged })).rejects.toThrow(
       StackBadRequestError,
     );
+  });
+
+  test('resumes after the record the cursor names, whatever was inserted ahead of it', async () => {
+    const sort = { field: 'createdAt', direction: 'asc' } as const;
+    const first = await adapter.queryRecords({ limit: 2, sort });
+    await adapter.createRecord({ ...makeRecord('r-early', 9), createdAt: new Date(0) });
+    const second = await adapter.queryRecords({ limit: 2, cursor: first.cursor!, sort });
+    const all = (await adapter.queryRecords({ limit: 100, sort })).records.map((r) => r.id);
+    const after = all.indexOf(first.records[1]!.id);
+    expect(second.records.map((r) => r.id)).toEqual(all.slice(after + 1, after + 3));
+  });
+
+  test('a cursor replayed under another kind of sort is refused for the sort, not its shape', async () => {
+    const first = await adapter.queryRecords({
+      limit: 2,
+      sort: { field: 'createdAt', direction: 'asc' },
+    });
+    await expect(
+      adapter.queryRecords({
+        limit: 2,
+        cursor: first.cursor!,
+        sort: { contentField: 'priority', direction: 'asc' },
+      }),
+    ).rejects.toThrow(/different sort/);
   });
 
   test('still refuses a cursor minted under a different sort', async () => {

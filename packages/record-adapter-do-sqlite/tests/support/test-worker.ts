@@ -7,7 +7,7 @@
  * each StackRecordAdapter method needs its own exposed method here.
  */
 import { DurableObject } from 'cloudflare:workers';
-import type { ElementWriteOptions, OwnerMismatchError } from '@haverstack/core/adapter';
+import type { ElementWriteOptions, OwnerMismatchError, Reach } from '@haverstack/core/adapter';
 import { DoSQLiteRecordAdapter } from '../../src/index.js';
 import type {
   StackRecord,
@@ -127,6 +127,11 @@ export class TestRecordAdapterDO extends DurableObject {
   async queryRecords(query: StackQuery) {
     await this.ready;
     return this.adapter.queryRecords(query);
+  }
+
+  async queryReadable(query: StackQuery, reach: Reach) {
+    await this.ready;
+    return this.adapter.queryReadable(query, reach);
   }
 
   async deleteUnreferencedAttachmentRecords(fileId: FileId, metadataTypeIds: TypeId[]) {

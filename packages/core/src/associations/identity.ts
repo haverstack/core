@@ -25,44 +25,54 @@ import type {
  * is outside; a group grantee's `role` names a different set of people, so
  * it is inside. See docs/spec/data-model.md § Associations.
  */
-export function associationEqual(a: Association, b: Association): boolean {
-  // Never "the same one": naming a malformed association is
+export function associationKey(a: Association): string | undefined {
+  // No key, so never "the same one": naming a malformed association is
   // validateAssociation()'s job, which this must reach without throwing.
-  if (!a || !b) return false;
-  if (a.kind !== b.kind || a.label !== b.label) return false;
-  if (a.kind === 'attachment' && b.kind === 'attachment') return a.fileId === b.fileId;
-  if (a.kind === 'relationship' && b.kind === 'relationship') {
-    return targetEqual(a.target, b.target);
-  }
-  if (a.kind === 'permission' && b.kind === 'permission') {
-    return granteeEqual(a.grantee, b.grantee);
-  }
-  return true;
+  if (!a) return undefined;
+  const arm =
+    a.kind === 'attachment'
+      ? [a.fileId]
+      : a.kind === 'relationship'
+        ? targetParts(a.target)
+        : a.kind === 'permission'
+          ? granteeParts(a.grantee)
+          : [];
+  return arm && JSON.stringify([a.kind, a.label, ...arm]);
+}
+
+/** Whether two associations are the same one — see associationKey(). */
+export function associationEqual(a: Association, b: Association): boolean {
+  const key = associationKey(a);
+  return key !== undefined && key === associationKey(b);
 }
 
 /**
- * Structural equality per grantee arm. `role` is required, so there is no
+ * A grantee's identity, per arm. `role` is required, so there is no
  * absent-means-any spelling to normalize.
  */
+function granteeParts(g: Grantee): unknown[] | undefined {
+  if (g?.kind === 'entity') return [g.kind, g.entityId];
+  if (g?.kind === 'group') return [g.kind, g.groupId, g.role];
+  return undefined;
+}
+
 export function granteeEqual(a: Grantee, b: Grantee): boolean {
-  if (!a || !b) return false;
-  if (a.kind !== b.kind) return false;
-  if (a.kind === 'entity' && b.kind === 'entity') return a.entityId === b.entityId;
-  if (a.kind === 'group' && b.kind === 'group') {
-    return a.groupId === b.groupId && a.role === b.role;
-  }
-  return false;
+  const parts = granteeParts(a);
+  return parts !== undefined && JSON.stringify(parts) === JSON.stringify(granteeParts(b));
+}
+
+/** A target's identity, per arm — an absent `stackUrl` is this stack, as an empty one is. */
+function targetParts(t: RelationshipTarget): unknown[] | undefined {
+  if (t?.kind === 'record') return [t.kind, t.recordId, t.stackUrl ?? ''];
+  if (t?.kind === 'entity') return [t.kind, t.entityId];
+  if (t?.kind === 'external') return [t.kind, t.ns, t.id];
+  return undefined;
 }
 
 /** Structural equality per target arm — what a remove edit matches on. */
 export function targetEqual(a: RelationshipTarget, b: RelationshipTarget): boolean {
-  if (a.kind !== b.kind) return false;
-  if (a.kind === 'record' && b.kind === 'record') {
-    return a.recordId === b.recordId && (a.stackUrl ?? '') === (b.stackUrl ?? '');
-  }
-  if (a.kind === 'entity' && b.kind === 'entity') return a.entityId === b.entityId;
-  if (a.kind === 'external' && b.kind === 'external') return a.ns === b.ns && a.id === b.id;
-  return false;
+  const parts = targetParts(a);
+  return parts !== undefined && JSON.stringify(parts) === JSON.stringify(targetParts(b));
 }
 
 /**

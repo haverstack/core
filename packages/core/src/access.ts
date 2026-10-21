@@ -1,12 +1,11 @@
 /**
  * Stack — Permission Resolution
  * -------------------------------------------------------
- * Implements the Permissions model from the spec: a pure predicate over a
- * Record's `permissions` field, with no dependency on a transport layer or
- * storage backend. Used by ScopedStack (see scoped-stack/scoped-stack.ts) to enforce
- * access control; exported standalone for callers that want the raw
- * predicate. Also the one home of the `_group` roster rules that predicate
- * and the grant path resolve against, and of the owner-acting-alone tier.
+ * The record-level permission rules, with no dependency on a transport
+ * layer or storage backend: how a grantee reaches an entity, the
+ * write-implies-read invariant, and the `_group` roster rules both layers
+ * resolve against, plus the owner-acting-alone tier. What a requester may
+ * do is a reach per verb, which scoped-stack/authority.ts builds from these.
  *
  * A permission set is read as data throughout, never as the type: it can
  * arrive from an import or a foreign server, where no compiler has seen
@@ -27,83 +26,32 @@ import type {
   RelationshipAssociation,
   StackRecord,
 } from './types/index.js';
-import { granteeEqual } from './associations/identity.js';
+import { associationKey } from './associations/identity.js';
 import { baseIdOf } from './schema.js';
 import type { ValidationError } from './validate.js';
 
-export type AccessMode = 'read' | 'write';
-
-/**
- * Resolves a Record by ID. Used to walk a `_group` Record's associations for
- * membership checks without requiring a full StackAdapter.
- */
+/** Resolves a Record by ID, for walks that need no full adapter. */
 export type RecordResolver = (id: RecordId) => Promise<StackRecord | null>;
 
 /**
- * Whether an entity may read or write a Record. The entity is the
- * **subject**: record-level permissions are written about who data is for,
- * never the software carrying the request, whose authority is asked of the
- * principal. See docs/spec/access-control.md § Delegation: principal and subject.
+ * The roles one entity holds on live `_group` rosters, keyed by group id,
+ * loaded on first use and at most once per operation, so no resolved role
+ * outlives the operation that read it — removal from a group must never go
+ * stale. See loadRosterRoles().
  */
-export async function checkAccess(
-  record: StackRecord,
-  subjectEntityId: EntityId | null,
-  ownerEntityId: EntityId | null,
-  mode: AccessMode,
-  resolveRecord: RecordResolver,
-): Promise<boolean> {
-  if (subjectEntityId && subjectEntityId === ownerEntityId) return true;
-
-  const perms = record.permissions;
-
-  // No permissions = private.
-  if (!perms || perms.length === 0) return false;
-
-  // Two elements can name one group (a `member` and an `admin` read), and
-  // the roster answers both the same way within one check.
-  const roles = new Map<string, GroupRole | null>();
-  for (const p of perms) {
-    if (p?.kind === 'anyone') {
-      if (mode === 'read' && isWorldRead(p)) return true;
-      continue;
-    }
-    if (p?.kind !== 'permission' || !p.grantee) continue;
-    if (p.label !== mode) continue;
-    // The write bit is inert without read alongside it: the mutate surface
-    // hands back the record it wrote and opens its whole history, so a
-    // write element standing alone would withhold nothing. Refused at the
-    // write by validatePermissions() and again here.
-    // See docs/spec/access-control.md § Write implies read.
-    if (mode === 'write' && !holdsRead(perms, p.grantee)) continue;
-    if (!subjectEntityId) continue;
-    if (await granteeReaches(p.grantee, subjectEntityId, { resolveRecord, roles })) return true;
-  }
-
-  return false;
-}
+export type RosterRoles = () => Promise<ReadonlyMap<RecordId, GroupRole>>;
 
 /**
- * Whether the set conveys read to this grantee — a `read` of its own, or
- * an `anyone` that already reaches everyone. Demanding a second, redundant
- * `read` beside the write would refuse a set that withholds nothing;
- * revoking the `anyone` is what the invariant catches instead.
+ * The elements beside which a `write` naming `grantee` carries its bit: its
+ * own `read`, or an `anyone`, which reaches the grantee already. The one
+ * statement of write-implies-read — validation and every reach ask it.
  * See docs/spec/access-control.md § Write implies read.
  */
-function holdsRead(permissions: AuthorityAssociation[], grantee: Grantee): boolean {
-  return permissions.some((p) =>
-    p?.kind === 'anyone'
-      ? isWorldRead(p)
-      : p?.kind === 'permission' && p.label === 'read' && granteeEqual(p.grantee, grantee),
-  );
-}
-
-/**
- * Whether an `anyone` element reaches the world. `read` is the only bit it
- * can carry, so one labelled otherwise names no reach — refused at the
- * write by validateAssociation() and read as nothing here.
- */
-function isWorldRead(association: AuthorityAssociation): boolean {
-  return association.label === 'read';
+export function readCompanions(grantee: Grantee): AuthorityAssociation[] {
+  return [
+    { kind: 'permission', label: 'read', grantee },
+    { kind: 'anyone', label: 'read' },
+  ];
 }
 
 /**
@@ -114,11 +62,7 @@ function isWorldRead(association: AuthorityAssociation): boolean {
 export async function granteeReaches(
   grantee: unknown,
   entityId: EntityId,
-  opts: {
-    resolveRecord: RecordResolver;
-    roles: Map<string, GroupRole | null>;
-    allowGroup?: boolean;
-  },
+  opts: { roles: RosterRoles; allowGroup?: boolean },
 ): Promise<boolean> {
   if (!grantee || typeof grantee !== 'object') return false;
   const g = grantee as Partial<{ kind: string; entityId: string; groupId: string; role: string }>;
@@ -128,7 +72,7 @@ export async function granteeReaches(
     case 'group': {
       if (opts.allowGroup === false || !g.groupId) return false;
       if (g.role !== 'member' && g.role !== 'admin') return false;
-      const held = await resolveGroupRole(g.groupId, entityId, opts.resolveRecord, opts.roles);
+      const held = (await opts.roles()).get(g.groupId) ?? null;
       return roleSatisfies(held, g.role);
     }
     default:
@@ -137,8 +81,8 @@ export async function granteeReaches(
 }
 
 /**
- * Rejects a permission set where some grantee holds `write` with no `read`
- * beside it — the shape checkAccess() refuses to honor. A cross-element
+ * Rejects a permission set where some `write` stands without a
+ * readCompanions() element, which no reach would honor. A cross-element
  * invariant, so it is asked of the set the write would *produce*, the same
  * way hasGroupAdmin() reads its post-state below.
  * See docs/spec/access-control.md § Write implies read.
@@ -148,10 +92,11 @@ export function validatePermissions(
   path = 'permissions',
 ): ValidationError[] {
   const list = permissions ?? [];
+  const held = new Set(list.map(associationKey));
   const errors: ValidationError[] = [];
   list.forEach((p, i) => {
     if (p?.kind !== 'permission' || p.label !== 'write') return;
-    if (holdsRead(list, p.grantee)) return;
+    if (readCompanions(p.grantee).some((c) => held.has(associationKey(c)))) return;
     errors.push({
       path: `${path}[${i}]`,
       message:
@@ -159,27 +104,6 @@ export function validatePermissions(
     });
   });
   return errors;
-}
-
-/**
- * An entity's role on the `_group` roster `groupId` names. `memo`, when
- * given, is built per operation, so no resolved role outlives the operation
- * that resolved it — removal from a group must never go stale.
- */
-export async function resolveGroupRole(
-  groupId: RecordId,
-  entityId: EntityId,
-  resolveRecord: RecordResolver,
-  memo?: Map<string, GroupRole | null>,
-): Promise<GroupRole | null> {
-  const key = `${groupId}:${entityId}`;
-  const cached = memo?.get(key);
-  if (cached !== undefined) return cached;
-  const group = await resolveRecord(groupId);
-  const role =
-    group && carriesRoster(group) ? groupRoleFromAssociations(group.associations, entityId) : null;
-  memo?.set(key, role);
-  return role;
 }
 
 /** Whether a held role meets a grantee's: an admin is also a member. */
@@ -196,19 +120,9 @@ export function isGroupRecord(record: StackRecord): boolean {
 }
 
 /**
- * Whether a Record is a roster anything may resolve against: a `_group`,
- * or an app's own `member` links would turn records into ACLs, and not
- * deleted, since deleting a Group withdraws it. Shared with the grant path
- * so the two cannot disagree. See docs/spec/identity.md § Group.
- */
-export function carriesRoster(record: StackRecord): boolean {
-  return isGroupRecord(record) && !record.deletedAt;
-}
-
-/**
  * An entity's role on a `_group` roster; a matching `admin` wins regardless
  * of order. Reads associations alone and cannot tell whose they are, so
- * callers pass carriesRoster() first.
+ * callers ask it of a live `_group` only — see loadRosterRoles().
  */
 export function groupRoleFromAssociations(
   associations: DataAssociation[] | undefined,

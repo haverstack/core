@@ -15,13 +15,14 @@
 
 import {
   StackBadRequestError,
+  type AuthorityAssociation,
   type ContentArm,
   type ContentSortKey,
   type NativeSortField,
   type StackQuery,
 } from '@haverstack/core';
 import { constantSortEntry, contentSortKey, parseContentFilterKey } from '@haverstack/core/adapter';
-import type { SortEntry } from '@haverstack/core/adapter';
+import type { Reach, SortEntry } from '@haverstack/core/adapter';
 import {
   byTypeDescriptor,
   decodeCursor,
@@ -30,6 +31,7 @@ import {
   type DecodedCursor,
 } from './cursor.js';
 import { sanitizeFts5Query } from './fts5.js';
+import { permissionKeyColumns } from './mappers.js';
 
 /** One statement plus the parameters it binds, in textual order. */
 export type QueryStatement = { sql: string; params: unknown[] };
@@ -198,11 +200,70 @@ const contentConditions = (
 };
 
 /**
+ * Values as the condition matching any of them. A list binds as one JSON
+ * parameter, since it is caller- or reach-sized and a statement's parameter
+ * count is capped (at 100 on Durable Object SQLite); one value binds as
+ * itself, so an index on the column still yields rows in its order. An
+ * empty list matches nothing.
+ */
+const inList = (column: string, values: readonly string[], params: unknown[]): string => {
+  if (values.length === 1) {
+    params.push(values[0]);
+    return `${column} = ?`;
+  }
+  params.push(JSON.stringify(values));
+  return `${column} IN (SELECT value FROM json_each(?))`;
+};
+
+/**
+ * Whether the record carries every element of one of `sets`, matched on the
+ * permissions table's key — the identity editAccess() removes by — through
+ * idx_permissions_element. The sets travel as one JSON parameter, each row
+ * naming its set and that set's size; an empty set matches nothing.
+ */
+const carriesPermissions = (sets: AuthorityAssociation[][], params: unknown[]): string => {
+  const rows = sets.flatMap((set, i) =>
+    set.map((p) => [i, set.length, p.kind, p.label, ...permissionKeyColumns(p)]),
+  );
+  params.push(JSON.stringify(rows));
+  const at = (i: number) => `json_extract(e.value, '$[${i}]')`;
+  return (
+    `r.id IN (SELECT p.record_id FROM json_each(?) e JOIN permissions p ` +
+    `ON p.kind = ${at(2)} AND p.label = ${at(3)} AND p.grantee_kind = ${at(4)} ` +
+    `AND p.grantee_id = ${at(5)} AND p.role = ${at(6)} ` +
+    `GROUP BY p.record_id, ${at(0)} HAVING COUNT(*) = MAX(${at(1)}))`
+  );
+};
+
+/**
+ * The reach as conditions on `r`: inside the fence, and inside `within` by
+ * one of its arms. See docs/spec/access-control.md § Reach.
+ */
+const reachConditions = (reach: Reach, params: unknown[]): string[] => {
+  const conditions: string[] = [];
+  if (reach.fence) conditions.push(inList('r.type_id', reach.fence, params));
+  const within = reach.within;
+  if (within) {
+    const arms = [inList('r.type_id', within.types, params)];
+    if (within.authored) {
+      params.push(within.authored.subjectId);
+      arms.push(`(r.entity_id = ? AND ${inList('r.type_id', within.authored.types, params)})`);
+    }
+    arms.push(carriesPermissions(within.permissions, params));
+    conditions.push(`(${arms.join(' OR ')})`);
+  }
+  return conditions;
+};
+
+/**
  * Every condition on the records row itself — everything a query asks
  * except where in the ordering to resume, which is per-partition and gets
  * appended by the caller.
  */
-const recordConditions = (query: StackQuery): { conditions: string[]; params: unknown[] } => {
+const recordConditions = (
+  query: StackQuery,
+  reach: Reach | undefined,
+): { conditions: string[]; params: unknown[] } => {
   const conditions: string[] = ["r.id != '_config'"];
   const params: unknown[] = [];
   const f = query.filter ?? {};
@@ -210,16 +271,14 @@ const recordConditions = (query: StackQuery): { conditions: string[]; params: un
   const nextContentAlias = () => `cp${aliasSeq++}`;
 
   /**
-   * A filter that accepts one value or a list of them, as the `IN` that
-   * covers both. Written even for a single value rather than as `= ?`,
-   * since SQLite plans a one-element IN identically and one form means one
-   * place for the filter's placeholder count and its bindings to agree.
+   * A filter that accepts one value or a list of them, as the one `IN` that
+   * covers both — see inList().
    */
   const inFilter = (column: string, value: string | readonly string[] | undefined): void => {
     if (value === undefined) return;
-    const values = Array.isArray(value) ? value : [value as string];
-    conditions.push(`r.${column} IN (${values.map(() => '?').join(',')})`);
-    params.push(...values);
+    conditions.push(
+      inList(`r.${column}`, Array.isArray(value) ? value : [value as string], params),
+    );
   };
 
   /** One side of a date range, as the open-ended comparison it is. */
@@ -244,6 +303,8 @@ const recordConditions = (query: StackQuery): { conditions: string[]; params: un
   if (!f.includeUnlisted) {
     conditions.push('r.unlisted_at IS NULL');
   }
+
+  if (reach) conditions.push(...reachConditions(reach, params));
 
   inFilter('type_id', f.typeId);
 
@@ -280,12 +341,16 @@ const recordConditions = (query: StackQuery): { conditions: string[]; params: un
     clauses.map((c) => ` AND ${c}`).join('') +
     `)`;
 
-  // Conjunctive: a record must carry every tag named.
+  // Conjunctive: a record must carry every tag named, so its matches are
+  // counted against the distinct tags asked for, the list bound as one.
   if (f.tags?.length) {
-    for (const tag of f.tags) {
-      conditions.push(hasAssociation('tag', ['a.label = ?']));
-      params.push(tag);
-    }
+    const tags = [...new Set(f.tags)];
+    const label = inList('a.label', tags, params);
+    conditions.push(
+      `r.id IN (SELECT a.record_id FROM associations a WHERE a.kind = 'tag' AND ${label} ` +
+        `GROUP BY a.record_id HAVING COUNT(DISTINCT a.label) = ?)`,
+    );
+    params.push(tags.length);
   }
 
   // Both halves in one subquery, so they match the same association.
@@ -418,17 +483,17 @@ const statement = (
  * so the second is never run for a page that doesn't reach it. Each still
  * needs the row budget its `LIMIT ?` binds — see atBudget.
  */
-export const buildQueryPlan = (query: StackQuery): QueryStatement[] => {
+export const buildQueryPlan = (query: StackQuery, reach?: Reach): QueryStatement[] => {
   const dir = sqlDirection(query);
   const op = dir === 'ASC' ? '>' : '<';
   const decoded = query.cursor ? decodeCursor(query.cursor) : null;
   if (query.sort?.contentFieldByType) {
-    return byTypePlan(query, query.sort.contentFieldByType, dir, op, decoded);
+    return byTypePlan(query, reach, query.sort.contentFieldByType, dir, op, decoded);
   }
   const contentField = query.sort?.contentField;
 
   if (contentField === undefined) {
-    const { conditions, params } = recordConditions(query);
+    const { conditions, params } = recordConditions(query, reach);
     const field = getSortField(query);
     const col = getSortColumn(field);
     if (decoded) {
@@ -453,7 +518,7 @@ export const buildQueryPlan = (query: StackQuery): QueryStatement[] => {
   // Records holding a value at the field, in that value's order. A cursor
   // sitting in the absent partition has already passed every one of them.
   if (cursor?.kind !== 'absent') {
-    const { conditions, params } = recordConditions(query);
+    const { conditions, params } = recordConditions(query, reach);
     const from = `content_index ${SORT_ALIAS} JOIN records r ON r.id = ${SORT_ALIAS}.record_id`;
     conditions.push(`${SORT_ALIAS}.field = ?`);
     params.push(contentField);
@@ -470,7 +535,7 @@ export const buildQueryPlan = (query: StackQuery): QueryStatement[] => {
   // Records holding nothing there, which trail the others whichever way
   // the sort runs (docs/spec/data-model.md § Sorting by a content field).
   {
-    const { conditions, params } = recordConditions(query);
+    const { conditions, params } = recordConditions(query, reach);
     conditions.push(
       `NOT EXISTS (SELECT 1 FROM content_index ${SORT_ALIAS} ` +
         `WHERE ${SORT_ALIAS}.record_id = r.id AND ${SORT_ALIAS}.field = ?)`,
@@ -494,6 +559,7 @@ export const buildQueryPlan = (query: StackQuery): QueryStatement[] => {
  */
 const byTypePlan = (
   query: StackQuery,
+  reach: Reach | undefined,
   byType: Record<string, ContentSortKey>,
   dir: 'ASC' | 'DESC',
   op: '>' | '<',
@@ -535,7 +601,7 @@ const byTypePlan = (
         typeId,
       );
     }
-    const { conditions, params } = recordConditions(query);
+    const { conditions, params } = recordConditions(query, reach);
     if (cursor) conditions.push(presentCursorCondition(cursor, op, params));
     const from =
       `(${sources.join(' UNION ALL ')}) ${SORT_ALIAS} ` +
@@ -558,7 +624,7 @@ const byTypePlan = (
   // Records holding nothing to order by: a Type's field with no value, a
   // `null` constant, or a Type the map does not name.
   {
-    const { conditions, params } = recordConditions(query);
+    const { conditions, params } = recordConditions(query, reach);
     if (fields.length > 0) {
       conditions.push(
         `NOT EXISTS (SELECT 1 FROM content_index ${SORT_ALIAS} ` +
@@ -567,8 +633,8 @@ const byTypePlan = (
       for (const [typeId, field] of fields) params.push(typeId, field);
     }
     if (constants.length > 0) {
-      conditions.push(`r.type_id NOT IN (${constants.map(() => '?').join(',')})`);
-      params.push(...constants.map(([typeId]) => typeId));
+      const typeIds = constants.map(([typeId]) => typeId);
+      conditions.push(`NOT (${inList('r.type_id', typeIds, params)})`);
     }
     if (cursor?.kind === 'absent') {
       conditions.push(`r.id ${op} ?`);

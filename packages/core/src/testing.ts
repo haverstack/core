@@ -34,12 +34,14 @@ import type {
   StackCapabilities,
   BlobInfo,
   QuerySort,
+  Reach,
 } from './types/index.js';
 import { SYSTEM_TYPES } from './types/index.js';
 import { applyMergePatch } from './merge.js';
 import { fileRefFields } from './schema.js';
 import { compareSortEntries, constantSortEntry, contentSortEntry } from './adapter/sort.js';
 import type { SortEntry } from './adapter/sort.js';
+import { inReach } from './adapter/reach.js';
 
 import {
   ElementSetMovedError,
@@ -70,7 +72,7 @@ const withoutUndefined = (content: Record<string, unknown>): Record<string, unkn
 export type MemoryAdapterOpenOptions = { ownerEntityId: string; timezone?: string };
 
 /**
- * In-memory StackAdapter with offset-based cursor pagination. Implements
+ * In-memory StackAdapter with keyed cursor pagination. Implements
  * the full RecordFilter shape (mirroring sqlite-shared's recordConditions)
  * so permission logic under test exercises real predicates. Declares
  * `filter.content: 'path'`, as every local adapter must; tests needing
@@ -304,10 +306,19 @@ export class MemoryAdapter implements StackAdapter {
     return updated;
   }
 
-  /** Cursor is a stringified offset into insertion order. */
+  /** The cursor names the last record a page held, by its place in the order. */
   async queryRecords(query: StackQuery): Promise<QueryResult> {
+    return this.select(query);
+  }
+
+  async queryReadable(query: StackQuery, reach: Reach): Promise<QueryResult> {
+    return this.select(query, reach);
+  }
+
+  private select(query: StackQuery, reach?: Reach): QueryResult {
     const f = query.filter ?? {};
     let results = this.order.map((id) => this.records.get(id)!);
+    if (reach) results = results.filter((r) => inReach(r, reach));
     // _config is addressable only by ID (getRecord), never returned by a
     // generic query — mirroring the real SQL adapters' WHERE exclusion.
     results = results.filter((r) => r.id !== SYSTEM_TYPES.CONFIG);
@@ -386,10 +397,22 @@ export class MemoryAdapter implements StackAdapter {
     results = this.sortRecords(results, query.sort);
 
     const limit = query.limit ?? 50;
-    const start = query.cursor ? this.decodeCursor(query.cursor, query.sort) : 0;
+    // Resume after the record the cursor names, wherever it now falls: a
+    // change between pages moves no boundary, as with the real adapters'
+    // keyed cursors.
+    const after = query.cursor ? this.decodeCursor(query.cursor, query.sort) : null;
+    const resume = after
+      ? results.findIndex(
+          (r) => this.compareKeys(this.orderKey(r, query.sort), after, query.sort) > 0,
+        )
+      : 0;
+    const start = resume === -1 ? results.length : resume;
     const page = results.slice(start, start + limit);
-    const nextStart = start + limit;
-    const cursor = nextStart < results.length ? this.encodeCursor(query.sort, nextStart) : null;
+    const last = page[page.length - 1];
+    const cursor =
+      last && start + limit < results.length
+        ? this.encodeCursor(query.sort, this.orderKey(last, query.sort))
+        : null;
 
     return { records: page, cursor };
   }
@@ -405,12 +428,12 @@ export class MemoryAdapter implements StackAdapter {
   }
 
   /**
-   * Stringified offset into insertion order, paired with the sort it was
-   * minted under — mirroring the real adapters' cursor stability guarantee.
+   * The last record's place in the order, paired with the sort it was
+   * minted under — mirroring the real adapters' keyed cursors.
    * See docs/spec/data-model.md § Sorting and pagination.
    */
-  private encodeCursor(sort: QuerySort | undefined, offset: number): string {
-    const json = JSON.stringify({ d: this.sortDescriptor(sort), o: offset });
+  private encodeCursor(sort: QuerySort | undefined, key: OrderKey): string {
+    const json = JSON.stringify({ d: this.sortDescriptor(sort), k: key });
     // Explicit UTF-8 step before btoa, matching sqlite-shared's codec: the
     // descriptor embeds `sort.contentField` verbatim, and a non-Latin-1
     // field name would otherwise make btoa throw an InvalidCharacterError
@@ -427,7 +450,7 @@ export class MemoryAdapter implements StackAdapter {
    * cursor replayed under a changed sort gets from the real adapters,
    * rather than silently paging through the wrong order.
    */
-  private decodeCursor(cursor: string, sort: QuerySort | undefined): number {
+  private decodeCursor(cursor: string, sort: QuerySort | undefined): OrderKey {
     let parsed: unknown;
     try {
       const binary = atob(cursor);
@@ -437,21 +460,19 @@ export class MemoryAdapter implements StackAdapter {
     } catch {
       throw new StackBadRequestError(`Malformed cursor: "${cursor}"`);
     }
-    const { d, o } = (parsed ?? {}) as { d?: unknown; o?: unknown };
-    // `o >= 0` is part of being well-formed, not a nicety: a crafted
-    // negative offset would reach `results.slice(-3, ...)` and hand back
-    // the tail of the result set as "the next page". Cursors arrive from
-    // the wire uninspected (wire/request.ts copies `?cursor=` verbatim), so
-    // this is the only place the offset is checked at all.
-    if (typeof d !== 'string' || typeof o !== 'number' || !Number.isInteger(o) || o < 0) {
-      throw new StackBadRequestError(`Malformed cursor: "${cursor}"`);
-    }
+    const { d, k } = (parsed ?? {}) as { d?: unknown; k?: unknown };
+    // Cursors arrive from the wire uninspected (wire/request.ts copies
+    // `?cursor=` verbatim), so this is the only place the key is checked.
+    if (typeof d !== 'string') throw new StackBadRequestError(`Malformed cursor: "${cursor}"`);
+    // The sort first: a key is only well-formed or not for the order it names.
     if (d !== this.sortDescriptor(sort)) {
       throw new StackBadRequestError(
         `Cursor was minted under a different sort than this query names.`,
       );
     }
-    return o;
+    const native = sort?.contentField === undefined && sort?.contentFieldByType === undefined;
+    if (!isOrderKey(k, native)) throw new StackBadRequestError(`Malformed cursor: "${cursor}"`);
+    return k;
   }
 
   /**
@@ -462,23 +483,31 @@ export class MemoryAdapter implements StackAdapter {
    * (docs/spec/data-model.md § Sorting by a content field).
    */
   private sortRecords(records: StackRecord[], sort: QuerySort | undefined): StackRecord[] {
-    const direction = sort ? requireDirection(sort) : 'desc';
-    const sign = direction === 'asc' ? 1 : -1;
-    const byId = (a: StackRecord, b: StackRecord) => (a.id < b.id ? -sign : a.id > b.id ? sign : 0);
+    const keys = new Map(records.map((r) => [r.id, this.orderKey(r, sort)]));
+    return [...records].sort((a, b) => this.compareKeys(keys.get(a.id)!, keys.get(b.id)!, sort));
+  }
 
+  /** Where a record falls in the order `sort` names: its value there, then its id. */
+  private orderKey(record: StackRecord, sort: QuerySort | undefined): OrderKey {
     if (sort?.contentField === undefined && sort?.contentFieldByType === undefined) {
       const field = sort?.field ?? 'createdAt';
-      const value = (r: StackRecord) =>
+      const value =
         field === 'version'
-          ? r.version
-          : (field === 'updatedAt' ? r.updatedAt : r.createdAt).getTime();
-      return [...records].sort((a, b) => sign * (value(a) - value(b)) || byId(a, b));
+          ? record.version
+          : (field === 'updatedAt' ? record.updatedAt : record.createdAt).getTime();
+      return { value, id: record.id };
     }
+    return { value: this.sortEntry(record, sort), id: record.id };
+  }
 
-    const entries = new Map(records.map((r) => [r.id, this.sortEntry(r, sort)]));
-    return [...records].sort(
-      (a, b) => compareSortEntries(entries.get(a.id)!, entries.get(b.id)!, direction) || byId(a, b),
-    );
+  private compareKeys(a: OrderKey, b: OrderKey, sort: QuerySort | undefined): number {
+    const direction = sort ? requireDirection(sort) : 'desc';
+    const sign = direction === 'asc' ? 1 : -1;
+    const byValue =
+      typeof a.value === 'number' && typeof b.value === 'number'
+        ? sign * (a.value - b.value)
+        : compareSortEntries(a.value as SortEntry | null, b.value as SortEntry | null, direction);
+    return byValue || (a.id < b.id ? -sign : a.id > b.id ? sign : 0);
   }
 
   /**
@@ -713,6 +742,23 @@ export class IncapableMemoryAdapter extends MemoryAdapter {
   static override async open(opts: MemoryAdapterOpenOptions): Promise<IncapableMemoryAdapter> {
     return new IncapableMemoryAdapter(opts);
   }
+}
+
+/** A record's place in an order: a native column's value, or a content sort's entry. */
+type OrderKey = { value: number | SortEntry | null; id: string };
+
+/** Whether `k` is a key of the order a native (`native`) or content sort names. */
+function isOrderKey(k: unknown, native: boolean): k is OrderKey {
+  if (!k || typeof k !== 'object') return false;
+  const { value, id } = k as { value?: unknown; id?: unknown };
+  if (typeof id !== 'string') return false;
+  if (native) return typeof value === 'number' && Number.isFinite(value);
+  if (value === null) return true;
+  const e = value as Partial<{ kind: string; num: unknown; text: unknown; key: unknown }>;
+  return (
+    (e?.kind === 'num' && typeof e.num === 'number') ||
+    (e?.kind === 'text' && typeof e.text === 'string' && typeof e.key === 'string')
+  );
 }
 
 /** One aspect's set replaced; an empty set is omitted, as the SQL adapters' rowToRecord does. */

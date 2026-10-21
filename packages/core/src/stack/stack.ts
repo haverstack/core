@@ -53,6 +53,7 @@ import type {
   StackQuery,
   RecordFilter,
   QueryResult,
+  Reach,
   AssociationEdit,
   AuthorityAssociation,
   DataAssociation,
@@ -86,6 +87,7 @@ import type {
 import {
   ElementSetMovedError,
   UseAfterCloseError,
+  ScopeUnavailableError,
   InvalidAdapterError,
   StackConflictError,
   StackMigrationError,
@@ -139,6 +141,7 @@ import {
   assertUnlistedArgument,
 } from './arguments.js';
 import { ScopedStack, scopeToken } from '../scoped-stack/scoped-stack.js';
+import { Lazy } from '../lazy.js';
 import { MigrationRegistry } from './migrations.js';
 import * as apps from './install-app.js';
 import * as typeGrants from './type-grants.js';
@@ -382,8 +385,28 @@ export class Stack implements StackClient {
     return this.scope(principalId, subjectId);
   }
 
+  /**
+   * A scoped view needs a stack that owns its storage: one whose adapter
+   * queries within a reach and relays no changes from elsewhere. A
+   * server-backed stack is scoped by the session that opened it instead.
+   * See docs/spec/access-control.md § Enforcement: Stack.asEntity().
+   */
   private scope(principalId: EntityId | null, subjectId: EntityId | null): ScopedStack {
     this.assertOpen();
+    const queryReadable = this.adapter.queryReadable?.bind(this.adapter);
+    if (!queryReadable) {
+      throw new ScopeUnavailableError(
+        'This stack cannot be scoped: its adapter does not implement queryReadable(), so a ' +
+          "query could not be kept to the requester's reach. Every local adapter must; a " +
+          'server-backed stack is scoped by opening it with the session you mean.',
+      );
+    }
+    if (this.relaysChanges) {
+      throw new ScopeUnavailableError(
+        'This stack cannot be scoped: it relays changes made elsewhere, whose frames were ' +
+          'scoped by the session that opened the feed. Open it with the session you mean.',
+      );
+    }
     return new ScopedStack(scopeToken, {
       stack: this,
       principalId,
@@ -392,8 +415,11 @@ export class Stack implements StackClient {
       adapter: this.adapter,
       changes: this.changes,
       assertOpen: () => this.assertOpen(),
-      relaysChanges: this.relaysChanges,
       migrations: this.migrations,
+      queryReadable: (query: StackQuery, reach: Reach<BaseId>) =>
+        this.dispatchQuery(query, async (resolved, types) =>
+          queryReadable(resolved, await this.resolveReach(reach, types)),
+        ),
     });
   }
 
@@ -1177,6 +1203,18 @@ export class Stack implements StackClient {
    * docs/spec/data-model.md § Queries.
    */
   async query(query: StackQuery = {}): Promise<QueryResult> {
+    return this.dispatchQuery(query, (resolved) => this.adapter.queryRecords(resolved));
+  }
+
+  /**
+   * Everything query() does around the adapter call: the checks, the
+   * family resolution, the migration on the way out. `read` is the call,
+   * so a scoped query within a reach gets the same treatment as any other.
+   */
+  private async dispatchQuery(
+    query: StackQuery,
+    read: (resolved: StackQuery, types: Lazy<StackType[]>) => Promise<QueryResult>,
+  ): Promise<QueryResult> {
     this.assertOpen();
     const { presentAt, filter, limit: rawLimit, ...rest } = query;
     assertValidContentByType(filter);
@@ -1187,17 +1225,22 @@ export class Stack implements StackClient {
     assertValidBaseIdFilter(filter);
     const limit = rawLimit !== undefined ? Math.min(rawLimit, MAX_QUERY_LIMIT) : undefined;
 
-    const resolvedFilter = await this.resolveBaseIdFilter(filter);
+    // Read once whether the filter, the reach or both resolve families.
+    const types = new Lazy(() => this.adapter.listTypes());
+    const resolvedFilter = await this.resolveBaseIdFilter(filter, types);
     if (resolvedFilter === EMPTY_FAMILY) {
       return { records: [], cursor: null };
     }
 
-    const result = await this.adapter.queryRecords({
-      ...rest,
-      ...(query.sort && { sort: normalizeSort(query.sort) }),
-      ...(resolvedFilter !== undefined && { filter: resolvedFilter }),
-      ...(limit !== undefined && { limit }),
-    });
+    const result = await read(
+      {
+        ...rest,
+        ...(query.sort && { sort: normalizeSort(query.sort) }),
+        ...(resolvedFilter !== undefined && { filter: resolvedFilter }),
+        ...(limit !== undefined && { limit }),
+      },
+      types,
+    );
 
     if (presentAt !== 'latest') return result;
     return { ...result, records: result.records.map((r) => this.migrations.presentAtLatest(r)) };
@@ -1211,12 +1254,13 @@ export class Stack implements StackClient {
    */
   private async resolveBaseIdFilter(
     filter: RecordFilter | undefined,
+    types: Lazy<StackType[]>,
   ): Promise<RecordFilter | undefined | typeof EMPTY_FAMILY> {
     if (filter?.baseId === undefined) return filter;
 
     const { baseId, typeId, ...rest } = filter;
     const requestedBaseIds = Array.isArray(baseId) ? baseId : [baseId];
-    const familyTypeIds = await this.familyTypeIds(requestedBaseIds);
+    const familyTypeIds = typeIdsOfFamilies(await types.get(), requestedBaseIds);
 
     const resolvedTypeIds =
       typeId === undefined
@@ -1230,12 +1274,39 @@ export class Stack implements StackClient {
   }
 
   /**
+   * A reach over families, as the TypeIds an adapter matches — the same
+   * resolution filter.baseId gets. See docs/spec/adapters.md § Querying
+   * within a reach.
+   */
+  private async resolveReach(reach: Reach<BaseId>, types: Lazy<StackType[]>): Promise<Reach> {
+    const { fence, within } = reach;
+    // A reach naming no family needs no Types.
+    if (!fence && !within) return {};
+    const registered = await types.get();
+    const resolve = (baseIds: readonly BaseId[]) => typeIdsOfFamilies(registered, baseIds);
+    return {
+      ...(fence && { fence: resolve(fence) }),
+      ...(within && {
+        within: {
+          types: resolve(within.types),
+          ...(within.authored && {
+            authored: {
+              subjectId: within.authored.subjectId,
+              types: resolve(within.authored.types),
+            },
+          }),
+          permissions: within.permissions,
+        },
+      }),
+    };
+  }
+
+  /**
    * Every registered version of the named families, as concrete typeIds —
    * resolved here because an adapter has no baseId concept of its own.
    */
   private async familyTypeIds(baseIds: readonly string[]): Promise<TypeId[]> {
-    const types = await this.adapter.listTypes();
-    return types.filter((t) => baseIds.includes(t.baseId)).map((t) => t.id);
+    return typeIdsOfFamilies(await this.adapter.listTypes(), baseIds);
   }
 
   // -------------------------------------------------------
@@ -1792,4 +1863,9 @@ export class Stack implements StackClient {
       ...(record.updatedBy && { updatedBy: record.updatedBy }),
     };
   }
+}
+
+/** Every registered version of the named families, as concrete TypeIds. */
+function typeIdsOfFamilies(types: readonly StackType[], baseIds: readonly string[]): TypeId[] {
+  return types.filter((t) => baseIds.includes(t.baseId)).map((t) => t.id);
 }

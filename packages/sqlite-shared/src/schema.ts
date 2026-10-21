@@ -164,6 +164,11 @@ export const RECORD_SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS idx_assoc_related      ON associations(kind, related_scope, related_ns, related_id, record_id);
   CREATE INDEX IF NOT EXISTS idx_types_base_id      ON types(base_id, version);
 
+  -- The permissions key with record_id moved last, so a scoped query reads
+  -- the records carrying an element straight out of the index.
+  CREATE INDEX IF NOT EXISTS idx_permissions_element
+    ON permissions(kind, label, grantee_kind, grantee_id, role, record_id);
+
   -- The whole content ordering, in index order, for one field at a time:
   -- a content-sorted page is an ordered walk of a slice of this index.
   CREATE INDEX IF NOT EXISTS idx_content_index_sort

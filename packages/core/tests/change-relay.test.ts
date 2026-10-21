@@ -6,7 +6,7 @@
  */
 import { describe, test, expect, beforeEach, vi } from 'vitest';
 import { Stack } from '../src/stack/stack.js';
-import { StackBadRequestError, RelayScopeError } from '../src/errors.js';
+import { StackBadRequestError, ScopeUnavailableError } from '../src/errors.js';
 import { MemoryAdapter, type MemoryAdapterOpenOptions } from '../src/testing.js';
 import type { RecordChange, SubscribeOptions } from '../src/types/index.js';
 
@@ -229,9 +229,13 @@ describe('a stack whose adapter does not relay', () => {
 });
 
 describe('a scoped view of a stack that relays', () => {
-  test('refuses to subscribe rather than narrow a feed it cannot re-scope', async () => {
-    const scoped = stack.asEntity(REMOTE_EDITOR);
-    await expect(scoped.subscribe(() => {})).rejects.toBeInstanceOf(RelayScopeError);
+  // A relayed frame was scoped by the session that opened the feed, so no
+  // narrower scope can be kept over it. See docs/spec/access-control.md
+  // § Enforcement: Stack.asEntity().
+  test('is refused up front, for every requester', () => {
+    expect(() => stack.asEntity(REMOTE_EDITOR)).toThrow(ScopeUnavailableError);
+    expect(() => stack.asEntity(REMOTE_EDITOR)).toThrow(/relays changes made elsewhere/);
+    expect(() => stack.asEntity(OWNER)).toThrow(ScopeUnavailableError);
   });
 
   test('subscribes normally when the adapter relays nothing', async () => {

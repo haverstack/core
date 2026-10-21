@@ -7,7 +7,7 @@
  * subclass carries its wire discriminator as an instance `code`.
  *
  * Several errors sit deliberately outside that root (UseAfterCloseError,
- * InvalidAdapterError, OwnerMismatchError, ElementSetMovedError, RelayScopeError, and — in their own
+ * InvalidAdapterError, OwnerMismatchError, ElementSetMovedError, ScopeUnavailableError, and — in their own
  * modules — IdGenerationError, InvalidDidError, InvalidAuthChallengeError,
  * StoredVersionError and MisfitError): they report a local programming error, malformed
  * local input or an assembled topology, not a state a request can be in, so
@@ -278,15 +278,14 @@ export class ElementSetMovedError extends Error {
 }
 
 /**
- * A scoped view asked to observe a stack that relays a remote feed. A
- * relayed frame was scoped by the authority that opened the feed, and a
- * narrower scope cannot re-derive that — a purge leaves nothing to check —
- * so it refuses rather than leak frames or silently drop remote changes.
- * See docs/spec/events.md § Permission scoping.
+ * A scoped view asked of a stack that does not own its storage. A server
+ * scopes every request to the session that opened it, so such a stack is
+ * scoped by opening it with the session meant.
+ * See docs/spec/access-control.md § Enforcement: Stack.asEntity().
  */
-export class RelayScopeError extends Error {
+export class ScopeUnavailableError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = 'RelayScopeError';
+    this.name = 'ScopeUnavailableError';
   }
 }

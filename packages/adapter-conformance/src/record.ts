@@ -22,9 +22,17 @@
 
 import { describe, test, expect, beforeEach, afterEach } from 'vitest';
 import { SYSTEM_TYPES } from '@haverstack/core';
-import type { AuthorityAssociation, DataAssociation, StackCapabilities } from '@haverstack/core';
-import { ElementSetMovedError } from '@haverstack/core/adapter';
-import type { StackRecordAdapter } from '@haverstack/core/adapter';
+import type {
+  AuthorityAssociation,
+  DataAssociation,
+  StackCapabilities,
+  StackQuery,
+  StackRecord,
+} from '@haverstack/core';
+import { ElementSetMovedError, inReach } from '@haverstack/core/adapter';
+import type { Reach, StackRecordAdapter } from '@haverstack/core/adapter';
+
+type PermissionElement = Extract<AuthorityAssociation, { kind: 'permission' }>;
 import { expectStackErrorCode } from './errors.js';
 import { CONFORMANCE_TYPE_ID, conformanceType, makeRecord, uniqueId } from './helpers.js';
 
@@ -344,6 +352,21 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
     // -----------------------------------------------------------------
     describe('associations', () => {
       const tag = (label: string) => ({ kind: 'tag' as const, label });
+
+      // A tag filter is conjunctive, and its length is the caller's — far
+      // past any statement's parameter cap (100 on Durable Object SQLite).
+      test('a tag filter matches the records carrying every tag named, however many', async () => {
+        const labels = Array.from({ length: 120 }, (_, i) => `tag-${i}`);
+        const all = makeRecord({ associations: labels.map((label) => ({ kind: 'tag', label })) });
+        const allButOne = makeRecord({
+          associations: labels.slice(1).map((label) => ({ kind: 'tag', label })),
+        });
+        await adapter.createRecord(all);
+        await adapter.createRecord(allButOne);
+
+        const result = await adapter.queryRecords({ filter: { tags: [...labels, labels[0]!] } });
+        expect(result.records.map((r) => r.id)).toEqual([all.id]);
+      });
 
       test('an add puts a tag on the record and a remove takes it off; neither bumps version', async () => {
         const record = makeRecord();
@@ -950,6 +973,22 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         for (const id of ids) expect(seen.has(id)).toBe(true);
       });
 
+      // A cursor names the last record its page held, so the next page
+      // starts after that record wherever it now falls in the order.
+      test('a page resumes after its cursor whatever was inserted ahead of it', async () => {
+        for (let i = 0; i < 5; i++) {
+          await adapter.createRecord(makeRecord({ createdAt: new Date(1_000 + i) }));
+        }
+        const sort = { field: 'createdAt', direction: 'asc' } as const;
+        const first = await adapter.queryRecords({ limit: 2, sort });
+        await adapter.createRecord(makeRecord({ createdAt: new Date(1) }));
+        const second = await adapter.queryRecords({ limit: 2, cursor: first.cursor!, sort });
+
+        const all = (await adapter.queryRecords({ limit: 100, sort })).records.map((r) => r.id);
+        const after = all.indexOf(first.records[1]!.id);
+        expect(second.records.map((r) => r.id)).toEqual(all.slice(after + 1, after + 3));
+      });
+
       test('a malformed cursor is refused rather than misread', async () => {
         await expectStackErrorCode(
           adapter.queryRecords({ cursor: 'not-a-real-cursor' }),
@@ -974,6 +1013,213 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
           'bad_request',
         );
       });
+    });
+
+    // -----------------------------------------------------------------
+    // Querying within a reach — optional, so each test asks whether the
+    // adapter has queryReadable() at all. The reference reading is core's
+    // inReach(); see docs/spec/access-control.md § Reach.
+    // -----------------------------------------------------------------
+    describe('querying within a reach', () => {
+      const OTHER_TYPE_ID = 'org.haverstack.conformance/other@1';
+      const ALICE = 'did:key:conformance-alice';
+      const BOB = 'did:key:conformance-bob';
+      const anyone: AuthorityAssociation = { kind: 'anyone', label: 'read' };
+      const toAlice: PermissionElement = {
+        kind: 'permission',
+        label: 'read',
+        grantee: { kind: 'entity', entityId: ALICE },
+      };
+      const toMembers: PermissionElement = {
+        kind: 'permission',
+        label: 'read',
+        grantee: { kind: 'group', groupId: 'conformance-group', role: 'member' },
+      };
+      const toAdmins: PermissionElement = {
+        kind: 'permission',
+        label: 'read',
+        grantee: { kind: 'group', groupId: 'conformance-group', role: 'admin' },
+      };
+
+      /** One record per route into a reach, and one beside each that misses it. */
+      const populate = async (): Promise<StackRecord[]> => {
+        const records = [
+          makeRecord(),
+          makeRecord({ typeId: OTHER_TYPE_ID }),
+          makeRecord({ createdBy: { subjectId: ALICE } }),
+          makeRecord({ typeId: OTHER_TYPE_ID, createdBy: { subjectId: ALICE } }),
+          makeRecord({ createdBy: { subjectId: BOB, principalId: ALICE } }),
+          makeRecord({ permissions: [anyone] }),
+          makeRecord({ typeId: OTHER_TYPE_ID, permissions: [anyone] }),
+          makeRecord({ permissions: [toAlice] }),
+          makeRecord({ permissions: [{ ...toAlice, label: 'write' }] }),
+          makeRecord({ permissions: [toMembers] }),
+          makeRecord({ permissions: [toAdmins] }),
+          makeRecord({ permissions: [toAlice, toMembers] }),
+          makeRecord({ permissions: [toAlice, { ...toAlice, label: 'write' }] }),
+          makeRecord({ permissions: [anyone, { ...toAlice, label: 'write' }] }),
+          makeRecord({ permissions: [toMembers, toAdmins] }),
+        ];
+        for (const record of records) await adapter.createRecord(record);
+        return records;
+      };
+
+      // Far past any statement's parameter cap — 100 on Durable Object SQLite.
+      const manyTypes = Array.from({ length: 150 }, (_, i) => `org.haverstack.conformance/t${i}@1`);
+      const manyGroups = Array.from({ length: 60 }, (_, i) => `conformance-group-${i}`);
+      const reaches: [string, Reach][] = [
+        ['nothing constrained', {}],
+        ['every Record of a Type', { within: { types: [OTHER_TYPE_ID], permissions: [] } }],
+        [
+          'the Records one subject authored at a Type',
+          {
+            within: {
+              types: [],
+              authored: { subjectId: ALICE, types: [CONFORMANCE_TYPE_ID] },
+              permissions: [],
+            },
+          },
+        ],
+        ['Records carrying `anyone`', { within: { types: [], permissions: [[anyone]] } }],
+        [
+          'Records carrying a read naming an entity',
+          { within: { types: [], permissions: [[toAlice]] } },
+        ],
+        [
+          'Records carrying a read naming a group at one role',
+          { within: { types: [], permissions: [[toAdmins]] } },
+        ],
+        [
+          'every arm at once',
+          {
+            within: {
+              types: [OTHER_TYPE_ID],
+              authored: { subjectId: ALICE, types: [CONFORMANCE_TYPE_ID] },
+              permissions: [[anyone], [toMembers]],
+            },
+          },
+        ],
+        ['a fence alone', { fence: [OTHER_TYPE_ID] }],
+        [
+          'arms inside a fence',
+          {
+            fence: [CONFORMANCE_TYPE_ID],
+            within: {
+              types: [OTHER_TYPE_ID],
+              authored: { subjectId: ALICE, types: [CONFORMANCE_TYPE_ID, OTHER_TYPE_ID] },
+              permissions: [[anyone]],
+            },
+          },
+        ],
+        [
+          'an empty fence',
+          { fence: [], within: { types: [CONFORMANCE_TYPE_ID], permissions: [[anyone]] } },
+        ],
+        ['no arm at all', { within: { types: [], permissions: [] } }],
+        [
+          'Records carrying every element of a set',
+          { within: { types: [], permissions: [[toAlice, { ...toAlice, label: 'write' }]] } },
+        ],
+        [
+          'Records carrying one whole set of several',
+          {
+            within: {
+              types: [],
+              permissions: [
+                [{ ...toAlice, label: 'write' }, anyone],
+                [toMembers, toAdmins],
+              ],
+            },
+          },
+        ],
+        ['an empty set, which no Record carries', { within: { types: [], permissions: [[]] } }],
+        [
+          'a reach of any size',
+          {
+            fence: [CONFORMANCE_TYPE_ID, ...manyTypes],
+            within: {
+              types: manyTypes,
+              authored: { subjectId: ALICE, types: [CONFORMANCE_TYPE_ID, ...manyTypes] },
+              permissions: [
+                ...manyGroups.flatMap((groupId) => [
+                  [{ ...toMembers, grantee: { ...toMembers.grantee, groupId } }],
+                  [
+                    {
+                      ...toAdmins,
+                      label: 'write' as const,
+                      grantee: { ...toAdmins.grantee, groupId },
+                    },
+                    anyone,
+                  ],
+                ]),
+                [toAlice],
+              ],
+            },
+          },
+        ],
+      ];
+
+      test.each(reaches)('returns exactly the Records in reach: %s', async (_name, reach) => {
+        if (!adapter.queryReadable) return;
+        const records = await populate();
+        const result = await adapter.queryReadable({ limit: 100 }, reach);
+        const expected = records.filter((r) => inReach(r, reach)).map((r) => r.id);
+        expect(result.records.map((r) => r.id).sort()).toEqual(expected.sort());
+        expect(result.cursor).toBeNull();
+      });
+
+      test("a reach narrows the query's own filter rather than widening it", async () => {
+        if (!adapter.queryReadable) return;
+        const pinned: DataAssociation = { kind: 'tag', label: 'pinned' };
+        const tagged = makeRecord({ permissions: [anyone], associations: [pinned] });
+        await adapter.createRecord(tagged);
+        await adapter.createRecord(makeRecord({ permissions: [anyone] }));
+        await adapter.createRecord(makeRecord({ associations: [pinned] }));
+
+        const result = await adapter.queryReadable(
+          { filter: { tags: ['pinned'] } },
+          { within: { types: [], permissions: [[anyone]] } },
+        );
+        expect(result.records.map((r) => r.id)).toEqual([tagged.id]);
+      });
+
+      // Paging is decided among the Records in reach alone: every page is
+      // full, and no cursor comes back once they are exhausted, however
+      // many Records outside the reach remain.
+      const pagesWithin = async (sort: StackQuery['sort']): Promise<void> => {
+        if (!adapter.queryReadable) return;
+        const reach: Reach = { within: { types: [], permissions: [[anyone]] } };
+        const inside: string[] = [];
+        for (let i = 0; i < 9; i++) {
+          const visible = i % 3 === 1;
+          const record = makeRecord({
+            content: { title: `t${i}`, priority: i },
+            ...(visible && { permissions: [anyone] }),
+          });
+          await adapter.createRecord(record);
+          if (visible) inside.push(record.id);
+        }
+
+        const seen: string[] = [];
+        let cursor: string | undefined;
+        do {
+          const page = await adapter.queryReadable({ limit: 1, cursor, sort }, reach);
+          expect(page.records).toHaveLength(1);
+          seen.push(page.records[0]!.id);
+          cursor = page.cursor ?? undefined;
+        } while (cursor);
+        expect(seen.sort()).toEqual(inside.sort());
+      };
+
+      test('pages through the Records in reach alone, by a native field', () =>
+        pagesWithin({ field: 'createdAt', direction: 'asc' }));
+
+      if (capabilities.sort.contentField) {
+        test('pages through the Records in reach alone, by a content field', async () => {
+          await adapter.saveType(conformanceType());
+          await pagesWithin({ contentField: 'priority', direction: 'desc' });
+        });
+      }
     });
 
     // -----------------------------------------------------------------

@@ -90,7 +90,7 @@ export {
 } from './errors.js';
 // Local errors outside the taxonomy — no wire representation, and no
 // `Stack` prefix. See docs/spec/wire-format.md § The taxonomy root.
-export { UseAfterCloseError, InvalidAdapterError, RelayScopeError } from './errors.js';
+export { UseAfterCloseError, InvalidAdapterError, ScopeUnavailableError } from './errors.js';
 export type { StackErrorCode } from './errors.js';
 
 // Types

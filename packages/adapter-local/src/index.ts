@@ -40,6 +40,7 @@ import type {
   ElementWriteOptions,
   JournalOptions,
   MutateOptions,
+  Reach,
 } from '@haverstack/core/adapter';
 import type { TokenSession, TokenInfo } from '@haverstack/core/wire';
 import {
@@ -174,6 +175,10 @@ export class LocalAdapter implements StackAdapter {
 
   async queryRecords(query: StackQuery): Promise<QueryResult> {
     return this.record.queryRecords(query);
+  }
+
+  async queryReadable(query: StackQuery, reach: Reach): Promise<QueryResult> {
+    return this.record.queryReadable(query, reach);
   }
 
   async deleteUnreferencedAttachmentRecords(

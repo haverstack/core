@@ -335,7 +335,7 @@ describe('ScopedStack — read access', () => {
   test('group member can read via a group read grant', async () => {
     const group = await adapter.createRecord(
       makeRecord({
-        typeId: '_group',
+        typeId: '_group@1',
         associations: [
           { kind: 'relationship', label: 'member', target: { kind: 'entity', entityId: MEMBER } },
         ],
@@ -361,7 +361,7 @@ describe('ScopedStack — read access', () => {
   test('a record-scoped roster entry does not confer membership', async () => {
     const group = await adapter.createRecord(
       makeRecord({
-        typeId: '_group',
+        typeId: '_group@1',
         associations: [
           { kind: 'relationship', label: 'member', target: { kind: 'record', recordId: MEMBER } },
         ],
@@ -408,6 +408,8 @@ describe('ScopedStack — read access', () => {
   });
 
   test('a group read grant survives a version bump of the _group type', async () => {
+    const v1 = await adapter.getType('_group@1');
+    await adapter.saveType({ ...v1!, id: '_group@2', version: 2 });
     const group = await adapter.createRecord(
       makeRecord({
         typeId: '_group@2',
@@ -433,7 +435,7 @@ describe('ScopedStack — read access', () => {
   test('non-member cannot read via a group read grant', async () => {
     const group = await adapter.createRecord(
       makeRecord({
-        typeId: '_group',
+        typeId: '_group@1',
         associations: [
           { kind: 'relationship', label: 'member', target: { kind: 'entity', entityId: MEMBER } },
         ],
@@ -1148,44 +1150,6 @@ describe('ScopedStack.query', () => {
     expect(result.records.map((r) => r.id)).toEqual([pub.id]);
   });
 
-  test('refills across multiple adapter pages without skipping records, even if the result lands under the requested limit', async () => {
-    // 6 records fetched 2-at-a-time (limit: 2), only the last one is public.
-    // Pages 1 and 2 contain zero visible records, so the loop must refetch
-    // through all 3 pages — stopping only because the cursor is exhausted,
-    // not because it hit the limit — and still find the one visible record.
-    let visibleId = '';
-    for (let i = 0; i < 6; i++) {
-      const isPublic = i === 5;
-      const record = await adapter.createRecord(
-        makeRecord(isPublic ? { permissions: [{ kind: 'anyone', label: 'read' }] } : {}),
-      );
-      if (isPublic) visibleId = record.id;
-    }
-
-    const result = await stack.asEntity(null).query({ limit: 2 });
-    expect(result.records.map((r) => r.id)).toEqual([visibleId]);
-    expect(result.cursor).toBeNull();
-  });
-
-  test('a page may overshoot the requested limit rather than split mid-page', async () => {
-    // priv, priv, priv, pub, pub, pub — fetched 2 at a time with limit: 2,
-    // oldest first so the private ones are read first. Page 1 (priv,priv):
-    // 0 visible. Page 2 (priv,pub): 1 visible, still under limit, so a 3rd
-    // page is fetched. Page 3 (pub,pub): both visible, pushing the total to
-    // 3 — over the requested limit of 2, by design.
-    for (let i = 0; i < 6; i++) {
-      await adapter.createRecord(
-        makeRecord(i >= 3 ? { permissions: [{ kind: 'anyone', label: 'read' }] } : {}),
-      );
-    }
-
-    const result = await stack
-      .asEntity(null)
-      .query({ limit: 2, sort: { field: 'createdAt', direction: 'asc' } });
-    expect(result.records).toHaveLength(3);
-    expect(result.cursor).toBeNull();
-  });
-
   test('clamps an oversized limit to MAX_QUERY_LIMIT (1000)', async () => {
     await adapter.createRecord(makeRecord({ permissions: [{ kind: 'anyone', label: 'read' }] }));
     const result = await stack.asEntity(null).query({ limit: 9_999_999 });
@@ -1270,7 +1234,7 @@ describe('ScopedStack.create', () => {
     expect(record.createdBy?.subjectId).toBe(MEMBER);
   });
 
-  // Owner bypasses grants entirely (checkAccess's owner shortcut), so an
+  // An owner subject's reach constrains nothing, grants included, so an
   // owner-authored record carrying no createdBy can never accidentally
   // satisfy a *different* requester's -own grant check — pinning the claim
   // that this normalization doesn't regress -own semantics.
@@ -1737,7 +1701,7 @@ describe('ScopedStack — group-targeted grants', () => {
   test('group member can create via a group-targeted create grant', async () => {
     const group = await adapter.createRecord(
       makeRecord({
-        typeId: '_group',
+        typeId: '_group@1',
         associations: [
           { kind: 'relationship', label: 'member', target: { kind: 'entity', entityId: MEMBER } },
         ],
@@ -1754,7 +1718,7 @@ describe('ScopedStack — group-targeted grants', () => {
   test('group admin also satisfies a group-targeted grant — no admin-only tier', async () => {
     const group = await adapter.createRecord(
       makeRecord({
-        typeId: '_group',
+        typeId: '_group@1',
         associations: [
           { kind: 'relationship', label: 'admin', target: { kind: 'entity', entityId: MEMBER } },
         ],
@@ -1771,7 +1735,7 @@ describe('ScopedStack — group-targeted grants', () => {
   test('non-member cannot act via a group-targeted grant', async () => {
     const group = await adapter.createRecord(
       makeRecord({
-        typeId: '_group',
+        typeId: '_group@1',
         associations: [
           { kind: 'relationship', label: 'member', target: { kind: 'entity', entityId: MEMBER } },
         ],
@@ -1788,7 +1752,7 @@ describe('ScopedStack — group-targeted grants', () => {
   test('group grant is visible in query() results for a member', async () => {
     const group = await adapter.createRecord(
       makeRecord({
-        typeId: '_group',
+        typeId: '_group@1',
         associations: [
           { kind: 'relationship', label: 'member', target: { kind: 'entity', entityId: MEMBER } },
         ],
@@ -1807,7 +1771,7 @@ describe('ScopedStack — group-targeted grants', () => {
   test('a revoked group grant no longer applies', async () => {
     const group = await adapter.createRecord(
       makeRecord({
-        typeId: '_group',
+        typeId: '_group@1',
         associations: [
           { kind: 'relationship', label: 'member', target: { kind: 'entity', entityId: MEMBER } },
         ],
@@ -1826,14 +1790,13 @@ describe('ScopedStack — group-targeted grants', () => {
     );
   });
 
-  // Resolving a group roster costs a record fetch; memoizing per
-  // ScopedStack instance keeps a query examining many records from
-  // re-walking the same roster once per candidate — see
-  // docs/spec/access-control.md § Type-level grants.
-  test('roster resolution for a group-targeted grant is memoized within one request', async () => {
+  // The subject's rosters are one read per operation, shared by every
+  // grant and every candidate record the operation decides — see
+  // docs/spec/access-control.md § Who a grant reaches.
+  test("the subject's rosters are read once per operation", async () => {
     const group = await adapter.createRecord(
       makeRecord({
-        typeId: '_group',
+        typeId: '_group@1',
         associations: [
           { kind: 'relationship', label: 'member', target: { kind: 'entity', entityId: MEMBER } },
         ],
@@ -1847,12 +1810,14 @@ describe('ScopedStack — group-targeted grants', () => {
       await stack.create(COMMENT, { text: `comment ${i}` });
     }
 
+    const querySpy = vi.spyOn(stack, 'query');
     const getSpy = vi.spyOn(stack, 'get');
     const view = stack.asEntity(MEMBER);
     const result = await view.query({ filter: { typeId: COMMENT } });
     expect(result.records).toHaveLength(5);
-    const groupFetches = getSpy.mock.calls.filter(([id]) => id === group.id);
-    expect(groupFetches).toHaveLength(1);
+    const rosterReads = querySpy.mock.calls.filter(([q]) => q?.filter?.baseId === '_group');
+    expect(rosterReads).toHaveLength(1);
+    expect(getSpy.mock.calls.filter(([id]) => id === group.id)).toHaveLength(0);
   });
 
   // A `_group` roster is editable by any of its admins, not just the stack
@@ -1863,7 +1828,7 @@ describe('ScopedStack — group-targeted grants', () => {
     const APP = 'did:key:z6MkApp';
     const group = await adapter.createRecord(
       makeRecord({
-        typeId: '_group',
+        typeId: '_group@1',
         associations: [
           { kind: 'relationship', label: 'member', target: { kind: 'entity', entityId: APP } },
         ],
@@ -1912,7 +1877,7 @@ describe('ScopedStack — group-targeted grants', () => {
     const APP = 'did:key:z6MkApp';
     const group = await adapter.createRecord(
       makeRecord({
-        typeId: '_group',
+        typeId: '_group@1',
         associations: [
           { kind: 'relationship', label: 'member', target: { kind: 'entity', entityId: MEMBER } },
         ],
@@ -2085,7 +2050,7 @@ describe('ScopedStack — group-targeted grants', () => {
     expect((await stack.asEntity(MEMBER).get(record.id))?.content.text).toBe('secret');
   });
 
-  // Roster resolution is memoized for one operation, not for the life of
+  // Rosters are read once per operation, not for the life of
   // the ScopedStack: asEntity() returns an object a caller may hold, and a
   // cache outliving the operation would let removal from a group go
   // unnoticed — the direction that must never go stale.
@@ -3801,7 +3766,7 @@ describe('Permission — group role restriction', () => {
   test('role: "admin" ACL entry excludes a plain member', async () => {
     const group = await adapter.createRecord(
       makeRecord({
-        typeId: '_group',
+        typeId: '_group@1',
         associations: [
           {
             kind: 'relationship',
@@ -3831,7 +3796,7 @@ describe('Permission — group role restriction', () => {
     const admin = 'group-admin-3';
     const group = await adapter.createRecord(
       makeRecord({
-        typeId: '_group',
+        typeId: '_group@1',
         associations: [
           { kind: 'relationship', label: 'admin', target: { kind: 'entity', entityId: admin } },
           { kind: 'relationship', label: 'member', target: { kind: 'entity', entityId: MEMBER } },

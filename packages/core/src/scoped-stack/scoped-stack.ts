@@ -20,8 +20,8 @@
  * refusals.
  *
  * Also holds the feed side of the same rule: a subscription's deliveries
- * run through the same canRead() a get() answers with, so a feed can never
- * disagree with a read about what a session sees.
+ * ask the same read reach a get() does, so a feed can never disagree with
+ * a read about what a session sees.
  *
  * See docs/spec/access-control.md and docs/spec/events.md § Permission scoping.
  */
@@ -34,6 +34,7 @@ import type {
   ActorOptions,
   AppContent,
   AppId,
+  BaseId,
   PutAttachmentOptions,
   Association,
   AssociationEdit,
@@ -42,9 +43,8 @@ import type {
   DataAssociation,
   EntityId,
   FileId,
-  GrantAction,
-  GroupRole,
   QueryResult,
+  Reach,
   RecordChange,
   RecordId,
   RecordVersion,
@@ -64,7 +64,6 @@ import {
   StackConflictError,
   StackNotFoundError,
   StackPermissionError,
-  RelayScopeError,
   StackValidationError,
 } from '../errors.js';
 import { assertAssociationEdits } from '../associations/validation.js';
@@ -85,12 +84,7 @@ import type { ExpectationOptions } from '../stack/write-expectation.js';
 import { WRITE_GATE } from '../stack/write-gate.js';
 import { assertAttachmentSize } from '../stack/limits.js';
 import { validateIdTimestampSkew, validateRecordId } from '../stack/record-id.js';
-import {
-  DEFAULT_QUERY_LIMIT,
-  MAX_QUERY_LIMIT,
-  findAppCardByDid,
-  lookupEntityByDid,
-} from '../stack/reads.js';
+import { findAppCardByDid, lookupEntityByDid } from '../stack/reads.js';
 import { presentDeleted, withoutAuthorityChanges } from '../record-changes.js';
 import type { ContentOf, ReadonlyTypeSchema, TypeHandle } from '../type-handle.js';
 import { createCollection } from '../collection.js';
@@ -109,7 +103,7 @@ import type { Stack } from '../stack/stack.js';
 import { ScopeAuthority } from './authority.js';
 import { familyPolicy, ownerFieldRefusal } from './family-policy.js';
 import { ScopedSubscription } from './subscription.js';
-import type { FeedAuthorityCache } from './subscription.js';
+import type { AuthoritySnapshot, ReachVerb } from './authority-snapshot.js';
 import type {
   BackdatableCreateRecordOptions,
   CollectAttachmentGarbageOptions,
@@ -142,10 +136,10 @@ export type ScopedStackInit = {
   /** The stack's own unfiltered stream, which subscribe() narrows. */
   changes: ChangeEmitter;
   assertOpen: () => void;
-  /** Whether changes reach the stack from elsewhere — see subscribe(). */
-  relaysChanges: boolean;
   /** The app's migrations, which collection() migrates records through. */
   migrations: MigrationRegistry;
+  /** Stack.query() within a reach over type families — see query(). */
+  queryReadable: (query: StackQuery, reach: Reach<BaseId>) => Promise<QueryResult>;
 };
 
 /**
@@ -161,8 +155,8 @@ export class ScopedStack implements StackClient {
   private readonly adapter: StackAdapter;
   private readonly changes: ChangeEmitter;
   private readonly assertStackOpen: () => void;
-  private readonly relaysChanges: boolean;
   private readonly migrations: MigrationRegistry;
+  private readonly queryReadable: ScopedStackInit['queryReadable'];
 
   /** Not callable from outside the package — see ScopedStackInit. */
   constructor(token: typeof scopeToken, init: ScopedStackInit) {
@@ -170,13 +164,18 @@ export class ScopedStack implements StackClient {
       throw new TypeError('A ScopedStack is obtained through Stack.asEntity() or Stack.asActor()');
     }
     this.stack = init.stack;
-    this.#authority = new ScopeAuthority(init.stack, init.principalId, init.subjectId);
+    this.#authority = new ScopeAuthority(
+      init.stack,
+      init.principalId,
+      init.subjectId,
+      init.queryReadable,
+    );
     this.idTimestampSkewMs = init.idTimestampSkewMs;
     this.adapter = init.adapter;
     this.changes = init.changes;
     this.assertStackOpen = init.assertOpen;
-    this.relaysChanges = init.relaysChanges;
     this.migrations = init.migrations;
+    this.queryReadable = init.queryReadable;
   }
 
   collection<S extends ReadonlyTypeSchema>(handle: TypeHandle<S>): Collection<ContentOf<S>> {
@@ -211,9 +210,9 @@ export class ScopedStack implements StackClient {
     return { actor: this.#authority.requester };
   }
 
-  /** Refuse a create this request holds no grant for — see ScopeAuthority.checkCreateGrant(). */
-  private async requireCreateGrant(typeId: TypeId): Promise<void> {
-    if (!(await this.#authority.checkCreateGrant(typeId))) {
+  /** Refuse a create outside this request's reach — see ScopeAuthority.canCreate(). */
+  private async requireCreateGrant(typeId: TypeId, snapshot: AuthoritySnapshot): Promise<void> {
+    if (!(await this.#authority.canCreate(typeId, snapshot))) {
       throw new StackPermissionError(`No create grant for type "${typeId}"`);
     }
   }
@@ -231,14 +230,17 @@ export class ScopedStack implements StackClient {
    */
   private async requireUpdatable(
     id: string,
-    opts: { mutating?: boolean; expect?: ExpectationOptions } = {},
+    opts: { mutating?: boolean; expect?: ExpectationOptions },
+    snapshot: AuthoritySnapshot,
   ): Promise<StackRecord> {
     // The `_grant` write fence applies to mutating callers only: reading a
     // grant Record's history is not the escalation that fence exists to stop.
-    return this.requireVerb(id, ['update-own', 'update-any'], {
-      fenceGrantRecord: opts.mutating ?? true,
-      expect: opts.expect,
-    });
+    return this.requireVerb(
+      id,
+      'update',
+      { fenceGrantRecord: opts.mutating ?? true, expect: opts.expect },
+      snapshot,
+    );
   }
 
   /**
@@ -250,62 +252,64 @@ export class ScopedStack implements StackClient {
    */
   private async requireVerb(
     id: string,
-    actions: GrantAction[],
+    verb: ReachVerb,
     opts: { fenceGrantRecord: boolean; expect?: ExpectationOptions },
+    snapshot: AuthoritySnapshot,
   ): Promise<StackRecord> {
     const record = await this.stack.get(id, { includeDeleted: true });
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
     // Ahead of the gate, so another family's record is not found whatever
     // this requester may do to it — the answer a collection's get() gives.
     checkFamily(record, opts.expect);
-    await this.gateVerb(record, actions, opts.fenceGrantRecord);
+    await this.gateVerb(record, verb, opts.fenceGrantRecord, snapshot);
     return record;
   }
 
   /** requireVerb()'s gate, asked of a record already found in its family. */
   private async gateVerb(
     record: StackRecord,
-    actions: GrantAction[],
+    verb: ReachVerb,
     fenceGrantRecord: boolean,
+    snapshot: AuthoritySnapshot,
   ): Promise<void> {
     const { id } = record;
     const { writers } = familyPolicy(record.typeId);
     // The owner-alone fence is on writes only: reading how a grant came to
     // be is not the escalation it exists to stop.
-    if (fenceGrantRecord) await this.requireOwnerAloneWriter(record);
+    if (fenceGrantRecord) await this.requireOwnerAloneWriter(record, snapshot);
     if (writers === 'group-managers') {
       if (!this.#authority.isGroupManager(record)) {
         throw await this.#authority.denialFor(
           record,
           `Cannot change group "${id}": only its admins can manage it`,
+          snapshot,
         );
       }
       return;
     }
-    const subjectReaches =
-      (await this.#authority.recordPermits(record, 'write')) ||
-      (await this.#authority.subjectAllows(record.typeId, actions, { record }));
-    const principalHolds = await this.#authority.principalAllows(record.typeId, actions);
-    if (!subjectReaches || !principalHolds) {
-      const verb = actions[0]!.split('-')[0]!;
-      const what = `Cannot ${verb} "${id}" (${record.typeId})`;
-      throw await this.#authority.denialFor(
-        record,
-        subjectReaches
-          ? `${what}: the app acting for this entity holds no ${verb} grant`
-          : `${what}: requires ${actions.join(' or ')}`,
-      );
-    }
+    if (await this.#authority.may(verb, record, snapshot)) return;
+    const what = `Cannot ${verb} "${id}" (${record.typeId})`;
+    throw await this.#authority.denialFor(
+      record,
+      (await this.#authority.subjectMay(verb, record, snapshot))
+        ? `${what}: the app acting for this entity holds no ${verb} grant`
+        : `${what}: requires ${verb}-own or ${verb}-any`,
+      snapshot,
+    );
   }
 
   /**
    * Fetch a record the subject can reach and the principal holds `delete` on
    * (via permissions or a delete grant), or throw.
    */
-  private requireDeletable(id: string, expect?: ExpectationOptions): Promise<StackRecord> {
+  private requireDeletable(
+    id: string,
+    expect: ExpectationOptions,
+    snapshot: AuthoritySnapshot,
+  ): Promise<StackRecord> {
     // No soft-delete refusal: undelete() shares this gate, and a tombstone
     // is exactly what it addresses.
-    return this.requireVerb(id, ['delete-own', 'delete-any'], { fenceGrantRecord: true, expect });
+    return this.requireVerb(id, 'delete', { fenceGrantRecord: true, expect }, snapshot);
   }
 
   /**
@@ -318,11 +322,12 @@ export class ScopedStack implements StackClient {
   private async requireFileRefAccess(
     typeId: TypeId,
     content: Record<string, unknown | null>,
+    snapshot: AuthoritySnapshot,
   ): Promise<void> {
     for (const field of await this.#authority.fileRefFieldNames(typeId)) {
       const value = content[field];
       if (typeof value !== 'string') continue;
-      if (!(await this.#authority.canAccessFile(value))) {
+      if (!(await this.#authority.canAccessFile(value, snapshot))) {
         throw new StackPermissionError(
           `Cannot reference file "${value}" in field "${field}": it does not exist or you cannot read it`,
         );
@@ -337,9 +342,13 @@ export class ScopedStack implements StackClient {
    * stricter management gate. See docs/spec/access-control.md
    * § Reference-creation gating.
    */
-  private async requireAssociationAccess(typeId: TypeId, association: Association): Promise<void> {
+  private async requireAssociationAccess(
+    typeId: TypeId,
+    association: Association,
+    snapshot: AuthoritySnapshot,
+  ): Promise<void> {
     if (association.kind === 'attachment') {
-      if (!(await this.#authority.canAccessFile(association.fileId))) {
+      if (!(await this.#authority.canAccessFile(association.fileId, snapshot))) {
         throw new StackPermissionError(
           `Cannot reference file "${association.fileId}": it does not exist or you cannot read it`,
         );
@@ -351,7 +360,7 @@ export class ScopedStack implements StackClient {
       // read them as this stack — so a check on presence alone would
       // leave one spelling of a local Record ungated.
       if (target.kind !== 'record' || target.stackUrl) return;
-      if (!(await this.#authority.canReadReferent(target.recordId))) {
+      if (!(await this.#authority.canReadReferent(target.recordId, snapshot))) {
         throw new StackPermissionError(
           `Cannot reference record "${target.recordId}": it does not exist or you cannot read it`,
         );
@@ -385,7 +394,8 @@ export class ScopedStack implements StackClient {
         'createdAt/updatedAt can only be set by the stack owner acting alone; a grantee or delegated create always stamps the current time.',
       );
     }
-    await this.requireCreateGrant(typeId);
+    const snapshot = this.#authority.snapshot();
+    await this.requireCreateGrant(typeId, snapshot);
     // The exemption is the owner's own, so delegation doesn't carry it: an
     // owner principal acting for someone else would otherwise let that
     // subject name any fileId and reach the bytes through the uploader
@@ -393,7 +403,10 @@ export class ScopedStack implements StackClient {
     const namesFile = familyPolicy(typeId).createNamesFile;
     if (!this.#authority.ownerActingAlone && namesFile !== undefined) {
       const fileId = (content as Record<string, unknown>)[namesFile];
-      if (typeof fileId !== 'string' || !(await this.#authority.hasReadableReference(fileId))) {
+      if (
+        typeof fileId !== 'string' ||
+        !(await this.#authority.hasReadableReference(fileId, snapshot))
+      ) {
         throw new StackPermissionError(
           `Cannot reference file "${String(fileId)}": it does not exist or you cannot read it`,
         );
@@ -420,15 +433,18 @@ export class ScopedStack implements StackClient {
         validateIdTimestampSkew(opts.id, this.idTimestampSkewMs, Date.now(), 'the current time');
       }
     }
-    if (opts.parentId !== undefined && !(await this.#authority.canReadReferent(opts.parentId))) {
+    if (
+      opts.parentId !== undefined &&
+      !(await this.#authority.canReadReferent(opts.parentId, snapshot))
+    ) {
       throw new StackPermissionError(
         `Cannot reference record "${opts.parentId}" as parent: it does not exist or you cannot read it`,
       );
     }
     for (const assoc of opts.associations ?? []) {
-      await this.requireAssociationAccess(typeId, assoc);
+      await this.requireAssociationAccess(typeId, assoc, snapshot);
     }
-    await this.requireFileRefAccess(typeId, content);
+    await this.requireFileRefAccess(typeId, content, snapshot);
     return this.stack.create(typeId, content, {
       ...opts,
       createdBy: this.#authority.requester,
@@ -444,14 +460,14 @@ export class ScopedStack implements StackClient {
   async get(id: RecordId, opts: GetRecordOptions = {}): Promise<StackRecord | null> {
     const record = await this.stack.get(id, opts);
     if (!record) return null;
-    if (!(await this.#authority.canRead(record))) return null;
+    if (!(await this.#authority.canRead(record, this.#authority.snapshot()))) return null;
     return presentDeleted(record);
   }
 
   /**
-   * Runs through this.query(), so canRead() still applies — this answers a
-   * question the caller asks on its own behalf. includeUnlisted is passed
-   * only when the request is the owner acting alone, per
+   * Runs through this.query(), so the read reach still applies — this
+   * answers a question the caller asks on its own behalf. includeUnlisted
+   * is passed only when the request is the owner acting alone, per
    * docs/spec/identity.md § DID bindings.
    */
   async getEntityByDid(did: EntityId): Promise<StackRecord | null> {
@@ -468,10 +484,10 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Query records, filtered to those this request can read. Pages are
-   * filtered then refilled, so a page may slightly overshoot `limit` but
-   * never skips a record. Grants are prefetched once, cursor-walked to
-   * exhaustion.
+   * Query records, among those this request can read: the adapter matches
+   * the request's read reach as one more condition of the query, so a page,
+   * its cursor and whether one comes back are decided among readable
+   * Records alone. See docs/spec/disclosure.md § What a query reveals.
    */
   async query(query: StackQuery = {}): Promise<QueryResult> {
     assertValidSort(query.sort);
@@ -481,34 +497,12 @@ export class ScopedStack implements StackClient {
     if (query.filter?.includeUnlisted && !this.#authority.ownerActingAlone) {
       throw new StackPermissionError('includeUnlisted is owner-only');
     }
-    const limit = Math.min(query.limit ?? DEFAULT_QUERY_LIMIT, MAX_QUERY_LIMIT);
-    const records: StackRecord[] = [];
-    const maxFetched = limit * 10;
-    let totalFetched = 0;
-
-    const prefetchedGrants = this.#authority.identified
-      ? await this.#authority.loadGrants()
-      : undefined;
-    // Scoped to this query, like prefetchedGrants beside it: every
-    // candidate Record shares one roster resolution per group, and nothing
-    // is carried into the next operation.
-    const groupRoles = new Map<string, GroupRole | null>();
-
-    let page: QueryResult = { records: [], cursor: query.cursor ?? null };
-    do {
-      page = await this.stack.query({ ...query, cursor: page.cursor ?? undefined });
-      totalFetched += page.records.length;
-      for (const record of page.records) {
-        // Projected here as well as in get(), or `includeDeleted` would be
-        // a strictly better read channel than the fetch-by-ID it is
-        // supposed to match.
-        if (await this.#authority.canRead(record, prefetchedGrants, groupRoles)) {
-          records.push(presentDeleted(record));
-        }
-      }
-    } while (records.length < limit && page.cursor && totalFetched < maxFetched);
-
-    return { records, cursor: page.cursor };
+    const reach = await this.#authority.snapshot().reach('read');
+    const page = await this.queryReadable(query, reach);
+    // Projected here as well as in get(), or `includeDeleted` would be a
+    // strictly better read channel than the fetch-by-ID it is supposed to
+    // match.
+    return { records: page.records.map(presentDeleted), cursor: page.cursor };
   }
 
   /**
@@ -526,7 +520,8 @@ export class ScopedStack implements StackClient {
     assertContentPatch(patch);
     const patchErrors = validatePatchValues(patch);
     if (patchErrors.length > 0) throw new StackValidationError(patchErrors);
-    const record = await this.requireUpdatable(id, { expect: opts });
+    const snapshot = this.#authority.snapshot();
+    const record = await this.requireUpdatable(id, { expect: opts }, snapshot);
 
     // A patch for another version is refused by `Stack`, which owes the
     // tombstone and `ifVersion` refusals first; the content gates would read
@@ -540,7 +535,7 @@ export class ScopedStack implements StackClient {
       // permission.
       const content = record.content as Record<string, unknown>;
       this.requireOwnerFields(record.typeId, content, { ...content, ...patch });
-      await this.requireFileRefAccess(record.typeId, patch);
+      await this.requireFileRefAccess(record.typeId, patch, snapshot);
     }
 
     const ifVersion = mismatched ? (opts.ifVersion ?? record.version) : opts.ifVersion;
@@ -557,11 +552,12 @@ export class ScopedStack implements StackClient {
     opts: IfVersionOptions & ExpectationOptions = {},
   ): Promise<StackRecord> {
     assertParentArgument(parentId);
-    const record = await this.requireUpdatable(id, { expect: opts });
+    const snapshot = this.#authority.snapshot();
+    const record = await this.requireUpdatable(id, { expect: opts }, snapshot);
     if (
       typeof parentId === 'string' &&
       parentId !== (record.parentId ?? null) &&
-      !(await this.#authority.canReadReferent(parentId))
+      !(await this.#authority.canReadReferent(parentId, snapshot))
     ) {
       throw new StackPermissionError(
         `Cannot reference record "${parentId}" as parent: it does not exist or you cannot read it`,
@@ -580,7 +576,7 @@ export class ScopedStack implements StackClient {
     opts: IfVersionOptions & ExpectationOptions = {},
   ): Promise<StackRecord> {
     assertUnlistedArgument(unlisted);
-    await this.requireReshareable(id, opts);
+    await this.requireReshareable(id, opts, this.#authority.snapshot());
     return this.stack.setUnlisted(id, unlisted, { ...opts, ...this.actor });
   }
 
@@ -595,10 +591,11 @@ export class ScopedStack implements StackClient {
     opts: IfVersionOptions & ExpectationOptions = {},
   ): Promise<StackRecord> {
     assertAssociationEdits(edits, 'editAssociations()', 'data');
+    const snapshot = this.#authority.snapshot();
     return this.stack.editAssociations(id, edits, {
       ...opts,
       ...this.actor,
-      [WRITE_GATE]: (record) => this.gateAssociationWrite(record, addsOf(edits)),
+      [WRITE_GATE]: (record) => this.gateAssociationWrite(record, addsOf(edits), snapshot),
     });
   }
 
@@ -609,10 +606,11 @@ export class ScopedStack implements StackClient {
     opts: IfVersionOptions & ExpectationOptions = {},
   ): Promise<StackRecord> {
     assertAssociationSet(associations, 'associations');
+    const snapshot = this.#authority.snapshot();
     return this.stack.setAssociations(id, associations, {
       ...opts,
       ...this.actor,
-      [WRITE_GATE]: (record) => this.gateAssociationWrite(record, associations),
+      [WRITE_GATE]: (record) => this.gateAssociationWrite(record, associations, snapshot),
     });
   }
 
@@ -622,11 +620,15 @@ export class ScopedStack implements StackClient {
    * carries is not re-gated. `Stack` asks it of each read it writes from,
    * so a retried write is gated on the set it lands on.
    */
-  private async gateAssociationWrite(record: StackRecord, added: Association[]): Promise<void> {
-    await this.gateVerb(record, ['update-own', 'update-any'], true);
+  private async gateAssociationWrite(
+    record: StackRecord,
+    added: Association[],
+    snapshot: AuthoritySnapshot,
+  ): Promise<void> {
+    await this.gateVerb(record, 'update', true, snapshot);
     for (const association of added) {
       if ((record.associations ?? []).some((a) => associationEqual(a, association))) continue;
-      await this.requireAssociationAccess(record.typeId, association);
+      await this.requireAssociationAccess(record.typeId, association, snapshot);
     }
   }
 
@@ -641,10 +643,11 @@ export class ScopedStack implements StackClient {
     opts: IfVersionOptions & ExpectationOptions = {},
   ): Promise<StackRecord> {
     assertAssociationEdits(edits, 'editAccess()', 'authority');
+    const snapshot = this.#authority.snapshot();
     return this.stack.editAccess(id, edits, {
       ...opts,
       ...this.actor,
-      [WRITE_GATE]: this.gateReshare,
+      [WRITE_GATE]: (record) => this.gateReshare(record, snapshot),
     });
   }
 
@@ -655,10 +658,11 @@ export class ScopedStack implements StackClient {
     opts: IfVersionOptions & ExpectationOptions = {},
   ): Promise<StackRecord> {
     assertAssociationSet(permissions, 'permissions');
+    const snapshot = this.#authority.snapshot();
     return this.stack.setAccess(id, permissions, {
       ...opts,
       ...this.actor,
-      [WRITE_GATE]: this.gateReshare,
+      [WRITE_GATE]: (record) => this.gateReshare(record, snapshot),
     });
   }
 
@@ -668,24 +672,29 @@ export class ScopedStack implements StackClient {
    * delegation, or a Group's admin rule for a `_group`. The gate the access
    * and listing verbs carry, which the write bit deliberately does not confer.
    */
-  private async requireReshareable(id: string, expect?: ExpectationOptions): Promise<StackRecord> {
+  private async requireReshareable(
+    id: string,
+    expect: ExpectationOptions,
+    snapshot: AuthoritySnapshot,
+  ): Promise<StackRecord> {
     const record = await this.stack.get(id, { includeDeleted: true });
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
     checkFamily(record, expect);
-    await this.gateReshare(record);
+    await this.gateReshare(record, snapshot);
     return record;
   }
 
   /** requireReshareable()'s gate, asked of a record already found in its family. */
-  private readonly gateReshare = async (record: StackRecord): Promise<void> => {
-    await this.requireOwnerAloneWriter(record);
+  private async gateReshare(record: StackRecord, snapshot: AuthoritySnapshot): Promise<void> {
+    await this.requireOwnerAloneWriter(record, snapshot);
     if (!this.#authority.canReshare(record)) {
       throw await this.#authority.denialFor(
         record,
         `Cannot change permissions on "${record.id}": only its author or the stack owner can reshare it`,
+        snapshot,
       );
     }
-  };
+  }
 
   /**
    * Refuse a write moving content its family reserves to the owner acting
@@ -725,12 +734,16 @@ export class ScopedStack implements StackClient {
    * refusal an unreadable Record answers with. Any other family passes.
    * See docs/spec/access-control.md § What a grant covers.
    */
-  private async requireOwnerAloneWriter(record: StackRecord): Promise<void> {
+  private async requireOwnerAloneWriter(
+    record: StackRecord,
+    snapshot: AuthoritySnapshot,
+  ): Promise<void> {
     if (familyPolicy(record.typeId).writers !== 'owner-alone') return;
     if (this.#authority.ownerActingAlone) return;
     throw await this.#authority.denialFor(
       record,
       `Only the stack owner may write a ${baseIdOf(record.typeId)} record`,
+      snapshot,
     );
   }
 
@@ -744,7 +757,7 @@ export class ScopedStack implements StackClient {
     id: RecordId,
     opts: DeleteRecordOptions & ExpectationOptions = {},
   ): Promise<DeleteResult> {
-    const record = await this.requireDeletable(id, opts);
+    const record = await this.requireDeletable(id, opts, this.#authority.snapshot());
     if (opts.purge && !this.#authority.ownerActingAlone) {
       throw new StackPermissionError('Purge is owner-only');
     }
@@ -773,7 +786,7 @@ export class ScopedStack implements StackClient {
     id: RecordId,
     opts: IfVersionOptions & ExpectationOptions = {},
   ): Promise<StackRecord> {
-    await this.requireDeletable(id, opts);
+    await this.requireDeletable(id, opts, this.#authority.snapshot());
     return this.stack.undelete(id, { ...opts, ...this.actor });
   }
 
@@ -785,7 +798,7 @@ export class ScopedStack implements StackClient {
    * stop. See docs/spec/versioning.md § History access.
    */
   async getVersions(id: RecordId, query: VersionsQuery = {}): Promise<RecordVersion[]> {
-    await this.requireUpdatable(id, { mutating: false });
+    await this.requireUpdatable(id, { mutating: false }, this.#authority.snapshot());
     return this.stack.getVersions(id, query);
   }
 
@@ -795,14 +808,14 @@ export class ScopedStack implements StackClient {
    * See docs/spec/journal.md § Reading it.
    */
   async getJournal(id: RecordId, query: JournalQuery = {}): Promise<RecordJournalEntry[]> {
-    const record = await this.requireUpdatable(id, { mutating: false });
+    const record = await this.requireUpdatable(id, { mutating: false }, this.#authority.snapshot());
     const entries = await this.stack.getJournal(id, query);
     return this.#authority.canReshare(record) ? entries : entries.map(withoutAuthorityChanges);
   }
 
   /** See getVersions() — the same mutate-surface gate. */
   async getVersion(id: RecordId, version: number): Promise<RecordVersion | null> {
-    await this.requireUpdatable(id, { mutating: false });
+    await this.requireUpdatable(id, { mutating: false }, this.#authority.snapshot());
     return this.stack.getVersion(id, version);
   }
 
@@ -818,7 +831,8 @@ export class ScopedStack implements StackClient {
     version: number,
     opts: IfVersionOptions & ExpectationOptions = {},
   ): Promise<StackRecord> {
-    const record = await this.requireUpdatable(id, { expect: opts });
+    const snapshot = this.#authority.snapshot();
+    const record = await this.requireUpdatable(id, { expect: opts }, snapshot);
     if (!this.#authority.ownerActingAlone) {
       const target = await this.stack.getVersion(id, version);
       if (target) {
@@ -829,7 +843,7 @@ export class ScopedStack implements StackClient {
           record.content as Record<string, unknown>,
           target.content as Record<string, unknown>,
         );
-        await this.requireFileRefAccess(target.typeId, target.content);
+        await this.requireFileRefAccess(target.typeId, target.content, snapshot);
         // Content's file refs are the only reference a restore can put
         // back: containment and associations are not on a snapshot at all,
         // so a restore never introduces either — see
@@ -852,12 +866,13 @@ export class ScopedStack implements StackClient {
     opts: IfVersionOptions = {},
   ): Promise<StackRecord> {
     if (!this.#authority.ownerActingAlone) {
-      const record = await this.requireInstallMigration(id, toTypeId);
+      const snapshot = this.#authority.snapshot();
+      const record = await this.requireInstallMigration(id, toTypeId, snapshot);
       this.requireOwnerFields(toTypeId, record.content, content);
       // The new content is a fresh set of file references, so an app is held
       // to the gate create() applies; otherwise a migration could point one
       // of its records at any attachment and read the bytes through it.
-      await this.requireFileRefAccess(toTypeId, content);
+      await this.requireFileRefAccess(toTypeId, content, snapshot);
     }
     return this.stack.commitMigration(id, toTypeId, content, { ...opts, ...this.actor });
   }
@@ -869,9 +884,13 @@ export class ScopedStack implements StackClient {
    * owner may migrate a tombstone; an app sees it without content.
    * See docs/spec/apps.md § Migrating an installed app's types.
    */
-  private async requireInstallMigration(id: RecordId, toTypeId: TypeId): Promise<StackRecord> {
+  private async requireInstallMigration(
+    id: RecordId,
+    toTypeId: TypeId,
+    snapshot: AuthoritySnapshot,
+  ): Promise<StackRecord> {
     const record = await this.stack.get(id, { includeDeleted: true });
-    if (!record || !(await this.#authority.installMayMigrate(record, toTypeId))) {
+    if (!record || !(await this.#authority.installMayMigrate(record, toTypeId, snapshot))) {
       throw new StackPermissionError(
         'Only the stack owner, or an installed app within the type families it defines, may commit a migration',
       );
@@ -902,7 +921,7 @@ export class ScopedStack implements StackClient {
     if (!principal) {
       throw new StackPermissionError('Anonymous requesters cannot upload attachments');
     }
-    await this.requireCreateGrant(`${SYSTEM_TYPES.ATTACHMENT}@1`);
+    await this.requireCreateGrant(`${SYSTEM_TYPES.ATTACHMENT}@1`, this.#authority.snapshot());
     await this.requireAppIdMatchesPrincipal(appId);
     assertAttachmentSize(data.byteLength, this.capabilities.limits.attachmentBytes);
     const fileId = await this.adapter.putBlob(data);
@@ -919,7 +938,7 @@ export class ScopedStack implements StackClient {
    * predicate as the reference-creation gate (canAccessFile).
    */
   async getAttachment(fileId: FileId): Promise<Uint8Array> {
-    if (!(await this.#authority.canAccessFile(fileId))) {
+    if (!(await this.#authority.canAccessFile(fileId, this.#authority.snapshot()))) {
       throw new StackPermissionError(
         `Cannot read file "${fileId}": it does not exist or you cannot read it`,
       );
@@ -949,7 +968,7 @@ export class ScopedStack implements StackClient {
 
   /**
    * Observe the changes this request may read, decided per event by the
-   * same canRead() that get() and query() use. An unreadable record yields
+   * same read reach that get() and query() ask. An unreadable record yields
    * no event at all, since a change's existence is itself a disclosure.
    * See docs/spec/events.md § Permission scoping.
    */
@@ -958,35 +977,20 @@ export class ScopedStack implements StackClient {
     opts: SubscribeOptions = {},
   ): Promise<Unsubscribe> {
     this.assertStackOpen();
-    if (this.relaysChanges) {
-      throw new RelayScopeError(
-        'This stack relays changes from elsewhere, and a scoped view cannot narrow that feed: ' +
-          'a relayed frame was already scoped by the session that opened it, and a purge leaves ' +
-          'no record to re-check. Subscribe with a session-scoped stack instead.',
-      );
-    }
-    // A relaying stack was already refused above, so relaysChanges is
-    // always false here — `since` never has a cursor to mean anything by.
+    // A scoped view exists only over a stack that relays nothing, so
+    // `since` never has a cursor to mean anything by.
     assertSinceUsable(opts.since, false);
     assertValidBaseIdFilter(opts.filter);
     if (opts.includeUnlisted && !this.#authority.ownerActingAlone) {
       throw new StackPermissionError('includeUnlisted is owner-only');
     }
     return this.changes.add(
-      new ScopedSubscription((record, cache) => this.canReadCached(record, cache), handler, opts),
+      new ScopedSubscription(
+        this.#authority.snapshot(),
+        (record, snapshot) => this.#authority.canRead(record, snapshot),
+        handler,
+        opts,
+      ),
     );
-  }
-
-  /**
-   * canRead for one event, through the subscription's own cache. Grants
-   * are prefetched once and refilled after an invalidation rather than
-   * re-queried per event, which would be a `_grant` scan for every change
-   * the stack makes.
-   */
-  private async canReadCached(record: StackRecord, cache: FeedAuthorityCache): Promise<boolean> {
-    const grants = this.#authority.identified
-      ? await cache.grants(() => this.#authority.loadGrants())
-      : undefined;
-    return this.#authority.canRead(record, grants, cache.roles);
   }
 }
