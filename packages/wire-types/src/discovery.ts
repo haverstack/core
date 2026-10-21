@@ -55,11 +55,11 @@ const SORT_FIELDS: ReadonlySet<string> = new Set(NATIVE_SORT_FIELDS);
 /**
  * Resolves anything absent, malformed or unrecognized to the least capable
  * value it could stand for — one rule, applied once, rather than a default
- * per key at each call site. `null` reads permissively for both: a limit
- * the client cannot pre-check, absent or stated, since a limit gates
- * nothing and its server still answers 413; and a cap with no limit, only
- * where stated, since an absent cap gates a shape and reads as 0. See
- * docs/spec/adapters.md § Adapter capabilities.
+ * per key at each call site. A cap or limit of `null` states no limit,
+ * and an absent one reads as the least it could stand for: `0` for a cap,
+ * which declines a shape, and `null` for a limit, which gates nothing. A
+ * cap is read as stated whatever the reach; perTypeCap() in core applies
+ * the reach. See docs/spec/adapters.md § Adapter capabilities.
  */
 export function normalizeCapabilities(
   capabilities: DiscoveryCapabilities | undefined,
@@ -70,20 +70,17 @@ export function normalizeCapabilities(
   const reach = CONTENT_FILTER_REACHES.has(filter?.content as string)
     ? (filter?.content as ContentFilterReach)
     : 'none';
-  // The per-Type shapes travel in the POST /records/query body, which a
-  // server reaching no content does not serve.
-  const cap = (value: unknown): number | null => (reach === 'none' ? 0 : readCap(value));
   return {
     filter: {
       content: reach,
       contentPresent: filter?.contentPresent === true,
-      contentByType: cap(filter?.contentByType),
+      contentByType: readCap(filter?.contentByType),
       search: filter?.search === true,
     },
     sort: {
       fields: (sort?.fields ?? []).filter((f): f is NativeSortField => SORT_FIELDS.has(f)),
       contentField: sort?.contentField === true,
-      contentFieldByType: cap(sort?.contentFieldByType),
+      contentFieldByType: readCap(sort?.contentFieldByType),
     },
     limits: {
       attachmentBytes: readLimit(limits?.attachmentBytes),
@@ -93,15 +90,15 @@ export function normalizeCapabilities(
 }
 
 /**
- * A cap on keys: a positive integer as stated, `null` — no limit — where
- * the server says so, and 0 — declined — for anything else.
+ * A cap on keys: a positive integer or `null` — no limit — as stated, and
+ * 0 — declined — for anything else.
  */
 const readCap = (value: unknown): number | null => {
   if (value === null) return null;
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : 0;
 };
 
-/** A ceiling this client can compare against, or null for "cannot pre-check". */
+/** A ceiling as stated, and `null` — no limit stated — for anything else. */
 const readLimit = (value: unknown): number | null =>
   typeof value === 'number' && Number.isFinite(value) ? value : null;
 

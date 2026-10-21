@@ -43,9 +43,9 @@ import type {
  */
 export function assertQueryCapabilities(
   filter: RecordFilter | undefined,
-  capabilities: Pick<StackCapabilities, 'filter'>,
+  capabilities: StackCapabilities,
 ): void {
-  const { content: reach, contentPresent, contentByType, search } = capabilities.filter;
+  const { content: reach, contentPresent, search } = capabilities.filter;
   if (filter?.search && !search) {
     throw new StackBadRequestError(
       'Query uses filter.search, but this adapter does not declare the filter.search capability.',
@@ -72,16 +72,7 @@ export function assertQueryCapabilities(
       'filter.content',
     );
   }
-  if (!admitsKeys(contentByType, arms.length)) {
-    throw new StackBadRequestError(
-      contentByType === 0
-        ? 'Query uses filter.contentByType, but this adapter does not declare the ' +
-            'filter.contentByType capability.'
-        : `Query uses ${arms.length} filter.contentByType arms, but this adapter takes at ` +
-            `most ${contentByType}.`,
-      'filter.contentByType',
-    );
-  }
+  if (arms.length > 0) assertAdmitted(capabilities, 'filter.contentByType', arms.length, 'arms');
   if (present.length > 0 && !contentPresent) {
     throw new StackBadRequestError(
       'Query uses filter.contentPresent, but this adapter does not declare the ' +
@@ -168,13 +159,42 @@ export function filtersContent(features: Pick<StackCapabilities, 'filter'>): boo
   return features.filter.content !== 'none';
 }
 
+/** The query shapes a per-Type cap governs, each named for its capability. */
+export type PerTypeShape = 'filter.contentByType' | 'sort.contentFieldByType';
+
 /**
- * Whether a per-Type cap admits a shape of `keys` keys: `null` states no
- * limit, and `0` admits none. See docs/spec/adapters.md § Adapter
- * capabilities.
+ * The cap an adapter holds a per-Type shape to: as declared, except `0`
+ * below `filter.content: 'none'`, since both shapes travel in the
+ * POST /records/query body a server reaching no content does not serve.
+ * See docs/spec/adapters.md § Adapter capabilities.
  */
+export function perTypeCap(capabilities: StackCapabilities, shape: PerTypeShape): number | null {
+  if (!filtersContent(capabilities)) return 0;
+  return shape === 'filter.contentByType'
+    ? capabilities.filter.contentByType
+    : capabilities.sort.contentFieldByType;
+}
+
+/** Whether `cap`, a perTypeCap(), admits `keys` keys: `null` states no limit. */
 export function admitsKeys(cap: number | null, keys: number): boolean {
   return cap === null || keys <= cap;
+}
+
+/** Refuses a per-Type shape of `keys` keys its perTypeCap() does not admit. */
+function assertAdmitted(
+  capabilities: StackCapabilities,
+  shape: PerTypeShape,
+  keys: number,
+  unit: 'arms' | 'keys',
+): void {
+  const cap = perTypeCap(capabilities, shape);
+  if (admitsKeys(cap, keys)) return;
+  throw new StackBadRequestError(
+    cap === 0
+      ? `Query uses ${shape}, but this adapter does not declare the ${shape} capability.`
+      : `Query uses ${keys} ${shape} ${unit}, but this adapter takes at most ${cap}.`,
+    shape,
+  );
 }
 
 /**
@@ -332,21 +352,12 @@ export function normalizeSort(
  */
 export function assertSortCapability(
   sort: QuerySort | undefined,
-  capabilities: Pick<StackCapabilities, 'sort'>,
+  capabilities: StackCapabilities,
 ): void {
   if (!sort) return;
   if (sort.contentFieldByType !== undefined) {
     const keys = Object.keys(sort.contentFieldByType).length;
-    const cap = capabilities.sort.contentFieldByType;
-    if (!admitsKeys(cap, keys)) {
-      throw new StackBadRequestError(
-        cap === 0
-          ? 'Query uses sort.contentFieldByType, but this adapter does not declare the ' +
-              'sort.contentFieldByType capability.'
-          : `Query uses ${keys} sort.contentFieldByType keys, but this adapter takes at most ${cap}.`,
-        'sort.contentFieldByType',
-      );
-    }
+    assertAdmitted(capabilities, 'sort.contentFieldByType', keys, 'keys');
     return;
   }
   if (sort.contentField !== undefined) {

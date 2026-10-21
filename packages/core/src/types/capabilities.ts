@@ -70,9 +70,9 @@ export type StackCapabilities = {
   };
   /**
    * Ceilings a client can check before spending a request; the server's
-   * own limit stays authoritative. `null` means this client cannot
-   * pre-check, not that nothing is enforced — local adapters declare it.
-   * See docs/spec/adapters.md § Adapter capabilities.
+   * own limit stays authoritative. `null` states no limit, as on a cap —
+   * nothing to pre-check, not nothing enforced — and local adapters
+   * declare it. See docs/spec/adapters.md § Adapter capabilities.
    */
   limits: {
     /** Maximum attachment upload size in bytes. */
