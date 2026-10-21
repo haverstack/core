@@ -12,7 +12,8 @@
 
 import type { TypeSchema, FieldDef, ScalarFieldKind } from './types/index.js';
 
-const MAX_VALIDATION_DEPTH = 32;
+/** How deep content may nest; a content filter path is capped by it too. */
+export const MAX_VALIDATION_DEPTH = 32;
 
 /** fileId format: SHA-256 hex, lowercase — matches blob-adapter-disk's assertFileId(). */
 const FILE_ID_RE = /^[0-9a-f]{64}$/;

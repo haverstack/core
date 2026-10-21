@@ -1284,6 +1284,24 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
           });
         }
 
+        if (capabilities.filter.contentPresent && capabilities.filter.content === 'path') {
+          // Both are element-wise, so a path reaching a null and a value
+          // satisfies each. See docs/spec/data-model.md § Filter.
+          test('a multi-valued path satisfies both contentPresent and a null filter', async () => {
+            const mixed = makeRecord({
+              content: { title: 'x', tags: [null, 'a'], emails: [{ value: null }, { value: 1 }] },
+            });
+            await adapter.createRecord(mixed);
+
+            for (const path of ['tags', 'emails.value']) {
+              const present = await adapter.queryRecords({ filter: { contentPresent: [path] } });
+              expect(present.records.map((r) => r.id)).toEqual([mixed.id]);
+              const nulls = await adapter.queryRecords({ filter: { content: { [path]: null } } });
+              expect(nulls.records.map((r) => r.id)).toEqual([mixed.id]);
+            }
+          });
+        }
+
         if (capabilities.filter.content === 'path') {
           test('an array is spread element-wise when filtering a nested path', async () => {
             const match = makeRecord({

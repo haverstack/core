@@ -94,21 +94,28 @@ const CONTENT_CONDITIONS =
   "json_extract(value, '$[2]') AS op, json_extract(value, '$[3]') AS val FROM json_each(?)) ";
 
 /**
- * Whether the `cond` row `c` holds for `r`, walked as data by a recursive
- * CTE: each step matches one segment against json_each's `key`, so no key
- * is read as syntax and the statement's text is the same for any path.
- * `'absent'` holds where `'present'` does not; an `'eq'` value never
- * matches an object or array, which json_each exposes as JSON text. See
- * docs/spec/data-model.md § Filter.
+ * Whether the walk of the `cond` row `c`'s path through `r` reaches a value
+ * satisfying `leaf`. The walk is data, a recursive CTE matching one segment
+ * per step against json_each's `key`, so no key is read as syntax and the
+ * statement's text is the same for any path.
  */
-const HOLDS =
-  "((c.op = 'absent') != EXISTS (WITH RECURSIVE w(d, v, t) AS (" +
-  "SELECT 0, r.content, 'object' UNION ALL " +
+const reaches = (leaf: string): string =>
+  "EXISTS (WITH RECURSIVE w(d, v, t) AS (SELECT 0, r.content, 'object' UNION ALL " +
   `SELECT w.d + 1, e.value, e.type FROM w JOIN json_each(${members('w')}) m ` +
   `JOIN json_each(${spread('m')}) e ` +
   "WHERE w.d < c.depth AND m.key = json_extract(c.path, '$[' || w.d || ']')) " +
-  "SELECT 1 FROM w WHERE w.d = c.depth AND CASE c.op WHEN 'eq' THEN " +
-  "w.t NOT IN ('object', 'array') AND w.v = c.val ELSE w.v IS NOT NULL END))";
+  `SELECT 1 FROM w WHERE w.d = c.depth AND ${leaf})`;
+
+/**
+ * Whether the `cond` row `c` holds for `r`. Each op is element-wise, so a
+ * path reaching a null and a value meets both `'null'` and `'present'`; an
+ * `'eq'` value never matches an object or array, which json_each exposes as
+ * JSON text. See docs/spec/data-model.md § Filter.
+ */
+const LEAF =
+  "CASE c.op WHEN 'eq' THEN w.t NOT IN ('object', 'array') AND w.v = c.val " +
+  "WHEN 'present' THEN w.v IS NOT NULL ELSE w.t = 'null' END";
+const HOLDS = `(${reaches(LEAF)} OR (c.op = 'null' AND NOT ${reaches('w.v IS NOT NULL')}))`;
 
 /** The join alias the content index is read through. */
 const SORT_ALIAS = 'cs';
@@ -138,8 +145,8 @@ const contentCursor = (cursor: DecodedCursor, field: string) => {
 /**
  * A `content` and `contentPresent` predicate as `cond` rows scoped to
  * `scope`. A `null` value means "no value at the path, or a value that is
- * null" (docs/spec/data-model.md § Filter): the path holds no non-null
- * value. Presence is the question an exact-match value cannot ask.
+ * null" (docs/spec/data-model.md § Filter). Presence is the question an
+ * exact-match value cannot ask.
  */
 const contentRows = (scope: string | null, predicate: ContentArm): unknown[][] => [
   ...Object.entries(predicate.content ?? {}).map(([key, value]) =>
@@ -147,7 +154,7 @@ const contentRows = (scope: string | null, predicate: ContentArm): unknown[][] =
     // over the wire, so treating it as a value would make an in-process
     // query and its wire equivalent disagree.
     value === null || value === undefined
-      ? [scope, parseContentFilterKey(key), 'absent']
+      ? [scope, parseContentFilterKey(key), 'null']
       : [scope, parseContentFilterKey(key), 'eq', value],
   ),
   ...(predicate.contentPresent ?? []).map((key) => [scope, parseContentFilterKey(key), 'present']),
