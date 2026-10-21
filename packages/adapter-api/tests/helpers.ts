@@ -23,11 +23,11 @@ export const OWNER = 'entity-owner-123';
  * limit and not the other is the case the null default exists for.
  */
 export const FULL_CAPABILITIES = {
-  filter: { content: 'path', contentPresent: true, contentByType: 64, search: true },
+  filter: { content: 'path', contentPresent: true, contentByType: true, search: true },
   sort: {
     fields: ['createdAt', 'updatedAt', 'version'],
     contentField: true,
-    contentFieldByType: 64,
+    contentFieldByType: true,
   },
   limits: { attachmentBytes: 52428800 },
 } satisfies DiscoveryCapabilities;

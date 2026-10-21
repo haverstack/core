@@ -17,7 +17,6 @@
 
 import { StackBadRequestError, StackMigrationError, StackPermissionError } from './errors.js';
 import { baseIdOf, parseTypeId } from './schema.js';
-import { admitsKeys } from './query-validation.js';
 import { StoredVersionError, WRITE_EXPECTATION } from './stack/write-expectation.js';
 import type { ExpectingClient, WriteExpectation } from './stack/write-expectation.js';
 import type { MigrationRegistry } from './stack/migrations.js';
@@ -493,11 +492,11 @@ export const createCollection = <S extends ReadonlyTypeSchema>(
     const predicate = contentPredicate(filter);
     const sortField = sort?.contentField;
     const { capabilities } = client;
-    // A version past the adapter's cap is narrowed, newest kept first:
-    // the older a version, the fewer apps still write it.
-    const admits = (keys: number) =>
-      (predicate === undefined || admitsKeys(capabilities.filter.contentByType, keys)) &&
-      (sortField === undefined || admitsKeys(capabilities.sort.contentFieldByType, keys));
+    // Spanning versions takes the per-Type shape of each content key the
+    // query carries; an adapter without one gets the handle's version alone.
+    const spans =
+      (predicate === undefined || capabilities.filter.contentByType) &&
+      (sortField === undefined || capabilities.sort.contentFieldByType);
     const sortKind = (() => {
       const def = sortField === undefined ? undefined : handle.schema[sortField];
       return def && def.kind !== 'array' && def.kind !== 'object' ? def.kind : undefined;
@@ -535,11 +534,7 @@ export const createCollection = <S extends ReadonlyTypeSchema>(
           : origins
             ? translateSortKey(origins, sortField, sortKind)
             : UNTRANSLATABLE;
-      if (
-        translated === UNTRANSLATABLE ||
-        key === UNTRANSLATABLE ||
-        !admits(Object.keys(arms).length + 1)
-      ) {
+      if (translated === UNTRANSLATABLE || key === UNTRANSLATABLE || !spans) {
         narrowed.push(type.id);
         continue;
       }

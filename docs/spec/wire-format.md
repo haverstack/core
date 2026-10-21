@@ -16,11 +16,11 @@ GET /.well-known/stack
   "entityId": "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
   "timezone": "America/New_York",
   "capabilities": {
-    "filter": { "content": "path", "contentPresent": true, "contentByType": 16, "search": true },
+    "filter": { "content": "path", "contentPresent": true, "contentByType": true, "search": true },
     "sort": {
       "fields": ["createdAt", "updatedAt", "version"],
       "contentField": true,
-      "contentFieldByType": 16
+      "contentFieldByType": true
     },
     "limits": { "attachmentBytes": 52428800, "contentBytes": 1048576 }
   },
@@ -330,7 +330,7 @@ This is what lets a client report a mutation's outcome without a second read, an
 
 **`filter.contentPresent` travels in the `POST /records/query` body only**, like `filter.content` itself — there is no `GET /records` spelling, since a server exposing that endpoint alone declares `filter.content: "none"` and offers neither. A server declaring `filter.contentPresent: false` MUST refuse the filter with `400` rather than answer without it.
 
-**`filter.contentByType` and `sort.contentFieldByType` travel in the `POST /records/query` body only**, for the reason `filter.contentPresent` does. A server declaring `0` for either MUST refuse it with `400`, and one receiving more keys than it declares MUST refuse the request with `400` rather than answer some of the arms. An empty map, an arm carrying anything but `content` and `contentPresent`, a `contentByType` beside a top-level `content` or `contentPresent`, and a sort key that is neither `{ "field": string }` nor `{ "value": string | number | null }` are `400` as well. See [Data model § Content by type](./data-model.md#content-by-type).
+**`filter.contentByType` and `sort.contentFieldByType` travel in the `POST /records/query` body only**, for the reason `filter.contentPresent` does. A server declaring `false` for either MUST refuse it with `400`. An empty map, an arm carrying anything but `content` and `contentPresent`, a `contentByType` beside a top-level `content` or `contentPresent`, and a sort key that is neither `{ "field": string }` nor `{ "value": string | number | null }` are `400` as well. See [Data model § Content by type](./data-model.md#content-by-type).
 
 **A sort names a native column or a content field, and the parameter it arrives in says which** — the same shape the relationship filter uses above, and the only way to keep a content field named `version` distinct from the native column on a raw query string. A request carrying both `sort` and `sortContent` MUST be rejected with `400` rather than resolved in one direction; in a `POST /records/query` body the same two spellings are `sort.field` and `sort.contentField`, and `sort.contentFieldByType` is a third that no request may combine with either. A server declaring `sort.contentField: false` refuses `sortContent` with `400`. What the ordering itself must be — absent values last, numbers before text, and the [folded text key](./data-model.md#text-ordering) a server MUST reproduce — is in [Data model § Sorting by a content field](./data-model.md#sorting-by-a-content-field).
 
@@ -413,7 +413,7 @@ The record adapters sanitize a `search` string's _complexity_ — wildcards stri
 
 The mitigation therefore lives where the engine is driven, not in the sanitizers: run record-adapter queries off the request thread (a worker per connection, or a worker pool), so a slow query can be interrupted — `sqlite3_interrupt`, or terminating the worker — and apply the per-request deadline at that boundary. A server that does none of this is conforming but will serve exactly as well as its slowest query.
 
-A [`filter.contentByType`](./data-model.md#content-by-type) of _n_ arms costs what _n_ content queries would, so it adds nothing to bound but a count, which a server sets by declaring its cap.
+A [`filter.contentByType`](./data-model.md#content-by-type) of _n_ arms costs what _n_ content queries would, and is bounded the same way: by this deadline, not by a count of arms.
 
 `timeout` is a distinct code because a client acts on it differently from every other failure in the table: nothing was applied, and the same request may well succeed if narrowed or retried. Reusing `bad_request` would say the opposite. See [Data model § Capability-gated filters](./data-model.md#capability-gated-filters).
 

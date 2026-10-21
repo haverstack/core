@@ -27,7 +27,6 @@ export { combineAdapters } from './combine.js';
 export { inReach } from './reach.js';
 export type { ReachedRecord } from './reach.js';
 export {
-  admitsKeys,
   assertQueryCapabilities,
   assertSortCapability,
   assertValidSort,

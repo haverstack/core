@@ -1106,6 +1106,24 @@ describe('query — content filter null semantics', () => {
     );
   });
 
+  // The path cap and the content depth cap are one limit read from either
+  // side. See docs/spec/data-model.md § Nested content paths.
+  test('the longest legal path reaches the deepest value a write accepts', async () => {
+    const chain = (n: number): Record<string, unknown> =>
+      n === 1 ? { n: 'x' } : { n: chain(n - 1) };
+    const path = (n: number) => Array(n).fill('n').join('.');
+
+    const deepest = await stack.create(NOTE_V1, { text: 'deep', ...chain(33) });
+    const found = await stack.query({ filter: { content: { [path(33)]: 'x' } } });
+    expect(found.records.map((r) => r.id)).toEqual([deepest.id]);
+    await expect(stack.create(NOTE_V1, { text: 'deeper', ...chain(34) })).rejects.toThrow(
+      /Content nesting exceeds maximum depth of 32/,
+    );
+    await expect(stack.query({ filter: { content: { [path(34)]: 'x' } } })).rejects.toThrow(
+      StackBadRequestError,
+    );
+  });
+
   // A dotted key is a path, and a field literally named `a.b` is refused
   // at write time, so the two readings can never both be available.
   test('a dotted key is a path, and the colliding field name is unwritable', async () => {
@@ -4167,7 +4185,7 @@ describe('grantType', () => {
     const bare = await MemoryAdapter.open({ ownerEntityId: 'owner-123', timezone: 'UTC' });
     (bare as { capabilities: StackAdapter['capabilities'] }).capabilities = {
       ...bare.capabilities,
-      sort: { fields: [], contentField: false, contentFieldByType: 0 },
+      sort: { fields: [], contentField: false, contentFieldByType: false },
     };
     const bareStack = await Stack.open(bare);
     expect(await bareStack.listTypeGrants()).toEqual([]);
@@ -6000,13 +6018,13 @@ describe('nested content paths', () => {
           filter: {
             content: 'field',
             contentPresent: false,
-            contentByType: 0,
+            contentByType: false,
             search: false,
           },
           sort: {
             fields: ['createdAt', 'updatedAt', 'version'],
             contentField: false,
-            contentFieldByType: 0,
+            contentFieldByType: false,
           },
           limits: {
             attachmentBytes: null,
@@ -6037,11 +6055,11 @@ describe('limits.contentBytes pre-check', () => {
   const withContentCeiling = async (contentBytes: number): Promise<StackAdapter> =>
     Object.assign(await MemoryAdapter.open({ ownerEntityId: 'owner-123', timezone: 'UTC' }), {
       capabilities: {
-        filter: { content: 'path', contentPresent: true, contentByType: 64, search: false },
+        filter: { content: 'path', contentPresent: true, contentByType: true, search: false },
         sort: {
           fields: ['createdAt', 'updatedAt', 'version'],
           contentField: true,
-          contentFieldByType: 64,
+          contentFieldByType: true,
         },
         limits: { attachmentBytes: null, contentBytes },
       },
@@ -6095,11 +6113,11 @@ describe('putAttachment — limits.attachmentBytes pre-check', () => {
   const withCeiling = async (attachmentBytes: number): Promise<StackAdapter> =>
     Object.assign(await MemoryAdapter.open({ ownerEntityId: 'owner-123', timezone: 'UTC' }), {
       capabilities: {
-        filter: { content: 'none', contentPresent: false, contentByType: 0, search: false },
+        filter: { content: 'none', contentPresent: false, contentByType: false, search: false },
         sort: {
           fields: ['createdAt', 'updatedAt', 'version'],
           contentField: false,
-          contentFieldByType: 0,
+          contentFieldByType: false,
         },
         limits: { attachmentBytes, contentBytes: null },
       },

@@ -42,10 +42,10 @@ export type DiscoveryCapabilities = {
   filter?: {
     content?: string;
     contentPresent?: boolean;
-    contentByType?: number | null;
+    contentByType?: boolean;
     search?: boolean;
   };
-  sort?: { fields?: string[]; contentField?: boolean; contentFieldByType?: number | null };
+  sort?: { fields?: string[]; contentField?: boolean; contentFieldByType?: boolean };
   limits?: { attachmentBytes?: number | null; contentBytes?: number | null };
 };
 
@@ -54,9 +54,9 @@ const SORT_FIELDS: ReadonlySet<string> = new Set(NATIVE_SORT_FIELDS);
 
 /**
  * Resolves anything absent, malformed or unrecognized to the least capable
- * value it could stand for, and what depends on the content reach to
- * nothing below `'none'` — applied once, where capabilities enter, so no
- * reader re-derives either. See docs/spec/adapters.md § Adapter capabilities.
+ * value it could stand for, and what depends on the content reach to false
+ * below `'none'` — applied once, where capabilities enter. A `null` limit is
+ * the one permissive reading. See docs/spec/adapters.md § Adapter capabilities.
  */
 export function normalizeCapabilities(
   capabilities: DiscoveryCapabilities | undefined,
@@ -74,32 +74,23 @@ export function normalizeCapabilities(
     filter: {
       content: reach,
       contentPresent: reaches && filter?.contentPresent === true,
-      contentByType: reaches ? readCap(filter?.contentByType) : 0,
+      contentByType: reaches && filter?.contentByType === true,
       search: filter?.search === true,
     },
     sort: {
       fields: (sort?.fields ?? []).filter((f): f is NativeSortField => SORT_FIELDS.has(f)),
       contentField: sort?.contentField === true,
-      contentFieldByType: reaches ? readCap(sort?.contentFieldByType) : 0,
+      contentFieldByType: reaches && sort?.contentFieldByType === true,
     },
     limits: {
-      attachmentBytes: readLimit(limits?.attachmentBytes),
-      contentBytes: readLimit(limits?.contentBytes),
+      attachmentBytes: finiteOrNull(limits?.attachmentBytes),
+      contentBytes: finiteOrNull(limits?.contentBytes),
     },
   };
 }
 
-/**
- * A cap on keys: a positive integer or `null` — no limit — as stated, and
- * 0 — declined — for anything else.
- */
-const readCap = (value: unknown): number | null => {
-  if (value === null) return null;
-  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : 0;
-};
-
-/** A ceiling as stated, and `null` — no limit stated — for anything else. */
-const readLimit = (value: unknown): number | null =>
+/** A ceiling this client can compare against, or null for "cannot pre-check". */
+const finiteOrNull = (value: unknown): number | null =>
   typeof value === 'number' && Number.isFinite(value) ? value : null;
 
 /** Splits a MAJOR.MINOR protocol version. Returns null if it isn't one. */

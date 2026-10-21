@@ -72,7 +72,13 @@ export function assertQueryCapabilities(
       'filter.content',
     );
   }
-  assertAdmitted(capabilities.filter.contentByType, 'filter.contentByType', arms.length, 'arms');
+  if (arms.length > 0 && !capabilities.filter.contentByType) {
+    throw new StackBadRequestError(
+      'Query uses filter.contentByType, but this adapter does not declare the ' +
+        'filter.contentByType capability.',
+      'filter.contentByType',
+    );
+  }
   if (present.length > 0 && !contentPresent) {
     throw new StackBadRequestError(
       'Query uses filter.contentPresent, but this adapter does not declare the ' +
@@ -157,31 +163,6 @@ export function assertValidContentByType(filter: RecordFilter | undefined): void
  */
 export function filtersContent(features: Pick<StackCapabilities, 'filter'>): boolean {
   return features.filter.content !== 'none';
-}
-
-/**
- * Whether a per-Type cap admits a shape of `keys` keys: `null` states no
- * limit, and `0` admits none. See docs/spec/adapters.md § Adapter
- * capabilities.
- */
-export function admitsKeys(cap: number | null, keys: number): boolean {
-  return cap === null || keys <= cap;
-}
-
-/** Refuses a per-Type shape of `keys` keys that `cap` does not admit. */
-function assertAdmitted(
-  cap: number | null,
-  shape: 'filter.contentByType' | 'sort.contentFieldByType',
-  keys: number,
-  unit: 'arms' | 'keys',
-): void {
-  if (admitsKeys(cap, keys)) return;
-  throw new StackBadRequestError(
-    cap === 0
-      ? `Query uses ${shape}, but this adapter does not declare the ${shape} capability.`
-      : `Query uses ${keys} ${shape} ${unit}, but this adapter takes at most ${cap}.`,
-    shape,
-  );
 }
 
 /**
@@ -343,8 +324,13 @@ export function assertSortCapability(
 ): void {
   if (!sort) return;
   if (sort.contentFieldByType !== undefined) {
-    const keys = Object.keys(sort.contentFieldByType).length;
-    assertAdmitted(capabilities.sort.contentFieldByType, 'sort.contentFieldByType', keys, 'keys');
+    if (!capabilities.sort.contentFieldByType) {
+      throw new StackBadRequestError(
+        'Query uses sort.contentFieldByType, but this adapter does not declare the ' +
+          'sort.contentFieldByType capability.',
+        'sort.contentFieldByType',
+      );
+    }
     return;
   }
   if (sort.contentField !== undefined) {

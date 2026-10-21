@@ -40,12 +40,12 @@ export type StackCapabilities = {
      */
     contentPresent: boolean;
     /**
-     * The most arms `filter.contentByType` may hold: `null` for no limit,
-     * `0` to decline it. A collection narrows the versions past a limit
-     * rather than failing. Local adapters declare `null`. See
+     * Whether `filter.contentByType` is honored. Local adapters must; a
+     * collection facing `false` queries its handle's version alone rather
+     * than failing. Meaningful only where `content` is not `'none'`. See
      * docs/spec/adapters.md § Adapter capabilities.
      */
-    contentByType: number | null;
+    contentByType: boolean;
     /**
      * Whether `filter.search` is honored. Not a rung on the ladder: a
      * full-text index is a different mechanism from field matching, and
@@ -62,17 +62,14 @@ export type StackCapabilities = {
      * scalar. Independent of `filter.content`.
      */
     contentField: boolean;
-    /**
-     * The most keys `sort.contentFieldByType` may hold: `null` for no limit,
-     * `0` to decline it, as `filter.contentByType`.
-     */
-    contentFieldByType: number | null;
+    /** Whether `sort.contentFieldByType` is honored, as `filter.contentByType`. */
+    contentFieldByType: boolean;
   };
   /**
    * Ceilings a client can check before spending a request; the server's
-   * own limit stays authoritative. `null` states no limit, as on a cap —
-   * nothing to pre-check, not nothing enforced — and local adapters
-   * declare it. See docs/spec/adapters.md § Adapter capabilities.
+   * own limit stays authoritative. `null` means this client cannot
+   * pre-check, not that nothing is enforced — local adapters declare it.
+   * See docs/spec/adapters.md § Adapter capabilities.
    */
   limits: {
     /** Maximum attachment upload size in bytes. */

@@ -83,13 +83,13 @@ export class MemoryAdapter implements StackAdapter {
     filter: {
       content: 'path',
       contentPresent: true,
-      contentByType: null,
+      contentByType: true,
       search: false,
     },
     sort: {
       fields: ['createdAt', 'updatedAt', 'version'],
       contentField: true,
-      contentFieldByType: null,
+      contentFieldByType: true,
     },
     limits: {
       attachmentBytes: null,
@@ -725,13 +725,13 @@ export class IncapableMemoryAdapter extends MemoryAdapter {
     filter: {
       content: 'none',
       contentPresent: false,
-      contentByType: 0,
+      contentByType: false,
       search: false,
     },
     sort: {
       fields: ['createdAt', 'updatedAt', 'version'],
       contentField: false,
-      contentFieldByType: 0,
+      contentFieldByType: false,
     },
     limits: {
       attachmentBytes: null,

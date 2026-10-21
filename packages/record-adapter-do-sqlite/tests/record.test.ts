@@ -113,13 +113,13 @@ describe('construction', () => {
       filter: {
         content: 'path',
         contentPresent: true,
-        contentByType: null,
+        contentByType: true,
         search: true,
       },
       sort: {
         fields: ['createdAt', 'updatedAt', 'version'],
         contentField: true,
-        contentFieldByType: null,
+        contentFieldByType: true,
       },
       limits: {
         attachmentBytes: null,
@@ -598,10 +598,10 @@ test('a tag filter far past the parameter cap', async () => {
   expect(result.records.map((r) => r.id)).toEqual([tagged.id]);
 });
 
-// The shared SQLite declaration sets no per-Type cap, so it has to hold on
-// the engine with the tightest statement limits, far past any count a
-// statement could have afforded. See docs/spec/adapters.md § Statement size.
-describe('per-Type keys with no declared cap', () => {
+// A per-Type shape carries no count, so it has to hold on the engine with
+// the tightest statement limits, far past any count a statement could have
+// afforded. See docs/spec/adapters.md § Statement size.
+describe('per-Type keys far past the statement limits', () => {
   const KEYS = 200;
   const typeIds = (count: number) =>
     Array.from({ length: count }, (_, i) => (i === 0 ? NOTE_TYPE_V1 : `com.example/t${i}@1`));

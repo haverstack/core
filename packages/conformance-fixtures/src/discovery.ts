@@ -21,42 +21,18 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
         filter: {
           content: 'path',
           contentPresent: true,
-          contentByType: 16,
+          contentByType: true,
           search: true,
         },
         sort: {
           fields: ['createdAt', 'updatedAt', 'version'],
           contentField: true,
-          contentFieldByType: 16,
+          contentFieldByType: true,
         },
         limits: {
           attachmentBytes: 52428800,
           contentBytes: 1048576,
         },
-      },
-    },
-  },
-  {
-    name: 'discovery-declares-per-type-shapes-without-a-limit',
-    description:
-      'A per-Type cap of null states no limit: the server takes filter.contentByType and ' +
-      'sort.contentFieldByType with any number of keys, and a client sends them unrefused. ' +
-      'Only a stated null reads this way — an absent cap declines the shape, as 0 does. See ' +
-      'docs/spec/adapters.md § Adapter capabilities.',
-    method: 'GET',
-    path: '/.well-known/stack',
-    responseStatus: 200,
-    responseBody: {
-      version: WIRE_PROTOCOL_VERSION,
-      entityId: 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK',
-      capabilities: {
-        filter: { content: 'path', contentPresent: true, contentByType: null, search: true },
-        sort: {
-          fields: ['createdAt', 'updatedAt', 'version'],
-          contentField: true,
-          contentFieldByType: null,
-        },
-        limits: { attachmentBytes: null, contentBytes: null },
       },
     },
   },
@@ -73,11 +49,11 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
       version: WIRE_PROTOCOL_VERSION,
       entityId: 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK',
       capabilities: {
-        filter: { content: 'none', contentPresent: false, contentByType: 0, search: false },
+        filter: { content: 'none', contentPresent: false, contentByType: false, search: false },
         sort: {
           fields: ['createdAt', 'updatedAt', 'version'],
           contentField: false,
-          contentFieldByType: 0,
+          contentFieldByType: false,
         },
         limits: { attachmentBytes: null, contentBytes: null },
       },
@@ -100,13 +76,13 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
         filter: {
           content: 'none',
           contentPresent: false,
-          contentByType: 0,
+          contentByType: false,
           search: false,
         },
         sort: {
           fields: ['createdAt'],
           contentField: false,
-          contentFieldByType: 0,
+          contentFieldByType: false,
         },
         limits: {
           attachmentBytes: null,
@@ -134,13 +110,13 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
         filter: {
           content: 'path',
           contentPresent: true,
-          contentByType: 16,
+          contentByType: true,
           search: true,
         },
         sort: {
           fields: ['createdAt', 'updatedAt', 'version'],
           contentField: true,
-          contentFieldByType: 16,
+          contentFieldByType: true,
         },
         limits: {
           attachmentBytes: 52428800,
@@ -168,13 +144,13 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
         filter: {
           content: 'path',
           contentPresent: true,
-          contentByType: 16,
+          contentByType: true,
           search: true,
         },
         sort: {
           fields: ['createdAt', 'updatedAt', 'version'],
           contentField: true,
-          contentFieldByType: 16,
+          contentFieldByType: true,
         },
         limits: {
           attachmentBytes: 52428800,
@@ -202,13 +178,13 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
         filter: {
           content: 'none',
           contentPresent: false,
-          contentByType: 0,
+          contentByType: false,
           search: false,
         },
         sort: {
           fields: ['createdAt'],
           contentField: false,
-          contentFieldByType: 0,
+          contentFieldByType: false,
         },
         limits: {
           attachmentBytes: null,

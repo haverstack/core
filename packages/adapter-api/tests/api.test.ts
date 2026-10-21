@@ -1226,8 +1226,8 @@ describe('queryRecords', () => {
     const adapter = await openAdapter(discovery);
 
     expect(adapter.capabilities).toEqual({
-      filter: { content: 'none', contentPresent: false, contentByType: 0, search: false },
-      sort: { fields: [], contentField: false, contentFieldByType: 0 },
+      filter: { content: 'none', contentPresent: false, contentByType: false, search: false },
+      sort: { fields: [], contentField: false, contentFieldByType: false },
       limits: { attachmentBytes: null, contentBytes: null },
     });
 
@@ -1295,7 +1295,7 @@ describe('queryRecords', () => {
     ],
   ] as const)('refuses %s locally where the server declines it', async (capability, query) => {
     const adapter = await openAdapter(
-      discoveryWith({ filter: { contentByType: 0 }, sort: { contentFieldByType: 0 } }),
+      discoveryWith({ filter: { contentByType: false }, sort: { contentFieldByType: false } }),
     );
     await expect(adapter.queryRecords(query)).rejects.toMatchObject({ capability });
     expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent

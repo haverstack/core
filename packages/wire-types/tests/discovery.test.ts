@@ -53,8 +53,8 @@ describe('isProtocolCompatible', () => {
 // -------------------------------------------------------
 
 const NONE: StackCapabilities = {
-  filter: { content: 'none', contentPresent: false, contentByType: 0, search: false },
-  sort: { fields: [], contentField: false, contentFieldByType: 0 },
+  filter: { content: 'none', contentPresent: false, contentByType: false, search: false },
+  sort: { fields: [], contentField: false, contentFieldByType: false },
   limits: { attachmentBytes: null, contentBytes: null },
 };
 
@@ -62,13 +62,13 @@ describe('normalizeCapabilities', () => {
   it('reads what a server declares', () => {
     expect(
       normalizeCapabilities({
-        filter: { content: 'path', contentPresent: true, contentByType: 64, search: true },
-        sort: { fields: ['createdAt', 'version'], contentField: true, contentFieldByType: 64 },
+        filter: { content: 'path', contentPresent: true, contentByType: true, search: true },
+        sort: { fields: ['createdAt', 'version'], contentField: true, contentFieldByType: true },
         limits: { attachmentBytes: 52428800, contentBytes: 1048576 },
       }),
     ).toEqual({
-      filter: { content: 'path', contentPresent: true, contentByType: 64, search: true },
-      sort: { fields: ['createdAt', 'version'], contentField: true, contentFieldByType: 64 },
+      filter: { content: 'path', contentPresent: true, contentByType: true, search: true },
+      sort: { fields: ['createdAt', 'version'], contentField: true, contentFieldByType: true },
       limits: { attachmentBytes: 52428800, contentBytes: 1048576 },
     });
   });
@@ -82,38 +82,28 @@ describe('normalizeCapabilities', () => {
     ).toEqual([...NATIVE_SORT_FIELDS]);
   });
 
-  it('reads a per-Type cap that is not a positive integer or null as 0', () => {
-    for (const cap of [-1, 2.5, '16', true, undefined, Number.POSITIVE_INFINITY]) {
+  it('reads a per-Type flag that is not true as false', () => {
+    for (const flag of [1, 'true', null, undefined]) {
       const read = normalizeCapabilities({
-        filter: { content: 'path', contentByType: cap as number },
-        sort: { contentFieldByType: cap as number },
+        filter: { content: 'path', contentByType: flag as unknown as boolean },
+        sort: { contentFieldByType: flag as unknown as boolean },
       });
-      expect([read.filter.contentByType, read.sort.contentFieldByType]).toEqual([0, 0]);
+      expect([read.filter.contentByType, read.sort.contentFieldByType]).toEqual([false, false]);
     }
-  });
-
-  it('reads a stated null per-Type cap as no limit', () => {
-    const read = normalizeCapabilities({
-      filter: { content: 'path', contentByType: null },
-      sort: { contentFieldByType: null },
-    });
-    expect([read.filter.contentByType, read.sort.contentFieldByType]).toEqual([null, null]);
   });
 
   // These travel in the POST /records/query body, which a server reaching
   // no content does not serve, so what it declares for them is unhonorable.
-  it('reads what depends on the content reach as declined beside a reach of none', () => {
-    for (const cap of [16, null]) {
-      const read = normalizeCapabilities({
-        filter: { content: 'none', contentPresent: true, contentByType: cap },
-        sort: { contentFieldByType: cap },
-      });
-      expect([
-        read.filter.contentPresent,
-        read.filter.contentByType,
-        read.sort.contentFieldByType,
-      ]).toEqual([false, 0, 0]);
-    }
+  it('reads what depends on the content reach as false beside a reach of none', () => {
+    const read = normalizeCapabilities({
+      filter: { content: 'none', contentPresent: true, contentByType: true },
+      sort: { contentFieldByType: true },
+    });
+    expect([
+      read.filter.contentPresent,
+      read.filter.contentByType,
+      read.sort.contentFieldByType,
+    ]).toEqual([false, false, false]);
   });
 
   it('reads an absent capabilities object as declaring nothing', () => {
@@ -124,7 +114,7 @@ describe('normalizeCapabilities', () => {
   it('reads an absent group as declaring nothing, not as inheriting its siblings', () => {
     expect(normalizeCapabilities({ filter: { content: 'path' } })).toEqual({
       ...NONE,
-      filter: { content: 'path', contentPresent: false, contentByType: 0, search: false },
+      filter: { content: 'path', contentPresent: false, contentByType: false, search: false },
     });
   });
 

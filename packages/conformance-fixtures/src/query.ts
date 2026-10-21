@@ -176,7 +176,7 @@ export const queryRecordsFixtures: ConformanceFixture<
       'filter across the versions of a family whose migrations renamed a field — here `by` at ' +
       '@1 and `owner` at @2. Types partition Records, so the arms split the query rather than ' +
       'widening it, and every other filter key applies to each arm. A server declaring ' +
-      'filter.contentByType: 0 MUST refuse it with 400. See docs/spec/data-model.md § Content ' +
+      'filter.contentByType: false MUST refuse it with 400. See docs/spec/data-model.md § Content ' +
       'by type.',
     method: 'POST',
     path: '/records/query',
@@ -219,7 +219,7 @@ export const queryRecordsFixtures: ConformanceFixture<
       'that Type declares it, or a constant already reduced to a number or text — here 5 for ' +
       'every @1 Record, which predates the field. A Record whose typeId is not a key, or whose ' +
       'value is null, holds no value and sorts last in either direction. A server declaring ' +
-      'sort.contentFieldByType: 0 MUST refuse it with 400. See docs/spec/data-model.md ' +
+      'sort.contentFieldByType: false MUST refuse it with 400. See docs/spec/data-model.md ' +
       '§ Sorting by a content field.',
     method: 'POST',
     path: '/records/query',

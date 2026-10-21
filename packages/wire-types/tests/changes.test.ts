@@ -42,13 +42,13 @@ const discovery = (overrides: Partial<DiscoveryResponse> = {}): DiscoveryRespons
     filter: {
       content: 'path',
       contentPresent: true,
-      contentByType: 64,
+      contentByType: true,
       search: true,
     },
     sort: {
       fields: ['createdAt'],
       contentField: true,
-      contentFieldByType: 64,
+      contentFieldByType: true,
     },
     limits: {
       attachmentBytes: null,
