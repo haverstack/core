@@ -55,9 +55,10 @@ const SORT_FIELDS: ReadonlySet<string> = new Set(NATIVE_SORT_FIELDS);
 /**
  * Resolves anything absent, malformed or unrecognized to the least capable
  * value it could stand for — one rule, applied once, rather than a default
- * per key at each call site. `null` is the permissive reading, and only
- * where it is stated: a limit the client cannot pre-check, whose server
- * still answers 413, or a cap with no limit. See
+ * per key at each call site. `null` reads permissively for both: a limit
+ * the client cannot pre-check, absent or stated, since a limit gates
+ * nothing and its server still answers 413; and a cap with no limit, only
+ * where stated, since an absent cap gates a shape and reads as 0. See
  * docs/spec/adapters.md § Adapter capabilities.
  */
 export function normalizeCapabilities(
@@ -71,7 +72,7 @@ export function normalizeCapabilities(
     : 'none';
   // The per-Type shapes travel in the POST /records/query body, which a
   // server reaching no content does not serve.
-  const cap = (value: unknown): number | null => (reach === 'none' ? 0 : capOrZero(value));
+  const cap = (value: unknown): number | null => (reach === 'none' ? 0 : readCap(value));
   return {
     filter: {
       content: reach,
@@ -85,23 +86,23 @@ export function normalizeCapabilities(
       contentFieldByType: cap(sort?.contentFieldByType),
     },
     limits: {
-      attachmentBytes: finiteOrNull(limits?.attachmentBytes),
-      contentBytes: finiteOrNull(limits?.contentBytes),
+      attachmentBytes: readLimit(limits?.attachmentBytes),
+      contentBytes: readLimit(limits?.contentBytes),
     },
   };
 }
 
 /**
- * A cap on keys, `null` — no limit — where the server says so, or 0 —
- * declined — for anything else that isn't a non-negative integer.
+ * A cap on keys: a positive integer as stated, `null` — no limit — where
+ * the server says so, and 0 — declined — for anything else.
  */
-const capOrZero = (value: unknown): number | null => {
+const readCap = (value: unknown): number | null => {
   if (value === null) return null;
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : 0;
 };
 
 /** A ceiling this client can compare against, or null for "cannot pre-check". */
-const finiteOrNull = (value: unknown): number | null =>
+const readLimit = (value: unknown): number | null =>
   typeof value === 'number' && Number.isFinite(value) ? value : null;
 
 /** Splits a MAJOR.MINOR protocol version. Returns null if it isn't one. */

@@ -72,7 +72,7 @@ export function assertQueryCapabilities(
       'filter.content',
     );
   }
-  if (contentByType !== null && arms.length > contentByType) {
+  if (!admitsKeys(contentByType, arms.length)) {
     throw new StackBadRequestError(
       contentByType === 0
         ? 'Query uses filter.contentByType, but this adapter does not declare the ' +
@@ -166,6 +166,15 @@ export function assertValidContentByType(filter: RecordFilter | undefined): void
  */
 export function filtersContent(features: Pick<StackCapabilities, 'filter'>): boolean {
   return features.filter.content !== 'none';
+}
+
+/**
+ * Whether a per-Type cap admits a shape of `keys` keys: `null` states no
+ * limit, and `0` admits none. See docs/spec/adapters.md § Adapter
+ * capabilities.
+ */
+export function admitsKeys(cap: number | null, keys: number): boolean {
+  return cap === null || keys <= cap;
 }
 
 /**
@@ -329,7 +338,7 @@ export function assertSortCapability(
   if (sort.contentFieldByType !== undefined) {
     const keys = Object.keys(sort.contentFieldByType).length;
     const cap = capabilities.sort.contentFieldByType;
-    if (cap !== null && keys > cap) {
+    if (!admitsKeys(cap, keys)) {
       throw new StackBadRequestError(
         cap === 0
           ? 'Query uses sort.contentFieldByType, but this adapter does not declare the ' +

@@ -17,6 +17,7 @@
 
 import { StackBadRequestError, StackMigrationError, StackPermissionError } from './errors.js';
 import { baseIdOf, parseTypeId } from './schema.js';
+import { admitsKeys, filtersContent } from './query-validation.js';
 import { StoredVersionError, WRITE_EXPECTATION } from './stack/write-expectation.js';
 import type { ExpectingClient, WriteExpectation } from './stack/write-expectation.js';
 import type { MigrationRegistry } from './stack/migrations.js';
@@ -496,13 +497,12 @@ export const createCollection = <S extends ReadonlyTypeSchema>(
     // the older a version, the fewer apps still write it.
     const filterCap =
       predicate === undefined
-        ? Infinity
-        : capabilities.filter.content === 'none'
-          ? 0
-          : (capabilities.filter.contentByType ?? Infinity);
-    const sortCap =
-      sortField === undefined ? Infinity : (capabilities.sort.contentFieldByType ?? Infinity);
-    const cap = Math.min(filterCap, sortCap);
+        ? null
+        : filtersContent(capabilities)
+          ? capabilities.filter.contentByType
+          : 0;
+    const sortCap = sortField === undefined ? null : capabilities.sort.contentFieldByType;
+    const admits = (keys: number) => admitsKeys(filterCap, keys) && admitsKeys(sortCap, keys);
     const sortKind = (() => {
       const def = sortField === undefined ? undefined : handle.schema[sortField];
       return def && def.kind !== 'array' && def.kind !== 'object' ? def.kind : undefined;
@@ -543,7 +543,7 @@ export const createCollection = <S extends ReadonlyTypeSchema>(
       if (
         translated === UNTRANSLATABLE ||
         key === UNTRANSLATABLE ||
-        Object.keys(arms).length >= cap
+        !admits(Object.keys(arms).length + 1)
       ) {
         narrowed.push(type.id);
         continue;

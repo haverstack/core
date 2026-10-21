@@ -4,10 +4,11 @@
 '@haverstack/adapter-conformance': minor
 '@haverstack/core': minor
 '@haverstack/wire-types': minor
+'@haverstack/conformance-fixtures': minor
 ---
 
 A SQLite statement's text and bound parameters no longer grow with a query's size. Every caller-sized part of a query binds as one table of rows: lists, permission sets, `sort.contentFieldByType`'s entries, and the content conditions — every `filter.content` and `filter.contentPresent` key and every `filter.contentByType` arm — whose paths one recursive walk per condition resolves. Durable Object SQLite no longer fails a query with `too many SQL variables` or `statement too long`, however many per-Type keys or content conditions it carries.
 
-The per-Type caps `filter.contentByType` and `sort.contentFieldByType` are now `number | null`, `null` stating no limit. `MemoryAdapter` and the SQLite adapters declare `null`, since nothing bounds the count locally; a cap is for a server bounding its own cost. `normalizeCapabilities()` reads a stated `null` as no limit, and an absent or malformed cap as `0`, as before.
+The per-Type caps `filter.contentByType` and `sort.contentFieldByType` are now `number | null`, `null` stating no limit. `MemoryAdapter` and the SQLite adapters declare `null`, since nothing bounds the count locally; a cap is for a server bounding its own cost. `normalizeCapabilities()` reads a stated `null` as no limit, and an absent or malformed cap as `0`, as before; a discovery fixture pins the stated `null`. `admitsKeys(cap, keys)` in `@haverstack/core/adapter` is the one reading of a cap.
 
 A content filter value now matches only a value of its own JSON type in the SQLite adapters, as `===` does: `true` no longer matches `1`. A content filter path may be 33 segments, the depth that reaches the deepest value a write accepts. The conformance suite holds every adapter to both, and to a multi-valued path satisfying both `contentPresent` and a `null` filter.

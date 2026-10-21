@@ -29,7 +29,7 @@ import type {
   StackQuery,
   StackRecord,
 } from '@haverstack/core';
-import { ElementSetMovedError, inReach } from '@haverstack/core/adapter';
+import { ElementSetMovedError, admitsKeys, inReach } from '@haverstack/core/adapter';
 import type { Reach, StackRecordAdapter } from '@haverstack/core/adapter';
 
 type PermissionElement = Extract<AuthorityAssociation, { kind: 'permission' }>;
@@ -51,9 +51,6 @@ export interface RecordAdapterConformanceOptions {
    */
   capabilities: StackCapabilities;
 }
-
-/** Whether a per-Type cap admits `keys` keys; `null` admits any number. */
-const takes = (cap: number | null, keys: number): boolean => cap === null || cap >= keys;
 
 export function runRecordAdapterConformance(options: RecordAdapterConformanceOptions): void {
   const { name, open, close, capabilities } = options;
@@ -1366,7 +1363,7 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
     // -----------------------------------------------------------------
     // Content by type — capability-gated on filter.contentByType
     // -----------------------------------------------------------------
-    if (takes(capabilities.filter.contentByType, 2)) {
+    if (admitsKeys(capabilities.filter.contentByType, 2)) {
       describe('content by type', () => {
         const OTHER = 'org.haverstack.conformance/other@1';
         const THIRD = 'org.haverstack.conformance/third@1';
@@ -1445,7 +1442,7 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
     // -----------------------------------------------------------------
     // Sort by content field per type — gated on sort.contentFieldByType
     // -----------------------------------------------------------------
-    if (takes(capabilities.sort.contentFieldByType, 3)) {
+    if (admitsKeys(capabilities.sort.contentFieldByType, 3)) {
       describe('sort by content field per type', () => {
         const OTHER = 'org.haverstack.conformance/other@1';
         const THIRD = 'org.haverstack.conformance/third@1';

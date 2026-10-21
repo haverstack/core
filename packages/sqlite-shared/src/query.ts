@@ -394,6 +394,8 @@ const recordConditions = (query: StackQuery, reach: Reach | undefined): Conditio
   const content = contentRows(null, f);
   if (f.contentByType) {
     const arms = Object.entries(f.contentByType);
+    // The Types themselves bound the result too: an empty arm adds no
+    // condition row, yet still admits only its own Type.
     const typeIds = arms.map(([typeId]) => typeId);
     conditions.push(inList('r.type_id', typeIds, params));
     for (const [typeId, arm] of arms) content.push(...contentRows(typeId, arm));
