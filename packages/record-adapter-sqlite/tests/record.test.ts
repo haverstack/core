@@ -1049,9 +1049,8 @@ describe('records — queries', () => {
     }
   });
 
-  // The segment cap is what keeps the generated join list inside SQLite's
-  // 64-table limit, so the longest legal path has to be executable, not
-  // merely accepted. See docs/spec/data-model.md § Nested content paths.
+  // The longest legal path has to be executable, not merely accepted. See
+  // docs/spec/data-model.md § Nested content paths.
   test('a path at the segment cap executes; one past it is refused', async () => {
     const adapter = await initAdapter();
     const deepest = Array.from({ length: 32 }, (_, i) => `s${i}`).join('.');

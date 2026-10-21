@@ -333,9 +333,8 @@ describe('records — queries', () => {
     expect(result.records.map((r) => r.id)).toEqual(['r1']);
   });
 
-  // The segment cap is sized against SQLite's join limit, and this build
-  // is where a difference in that limit would surface. The longest legal
-  // path has to execute, not merely be accepted.
+  // This build is where a difference in SQLite's limits would surface. The
+  // longest legal path has to execute, not merely be accepted.
   test('a path at the segment cap executes; one past it is refused', async () => {
     const stub = getStub();
     await stub.createRecord(makeRecord({ id: 'r1', content: { text: 'shallow' } }));
@@ -552,7 +551,7 @@ describe('commitMigration', () => {
 
 // A reach is sized by the requester's grants and rosters, and this engine
 // caps a statement at 100 bound parameters, so a reach binds each of its
-// lists as one. See docs/spec/adapters.md § Querying within a reach.
+// lists as one. See docs/spec/adapters.md § Statement size.
 test('queryReadable answers a reach far past the parameter cap', async () => {
   const stub = getStub();
   const shared = makeRecord({
@@ -597,4 +596,74 @@ test('a tag filter far past the parameter cap', async () => {
   await stub.createRecord(makeRecord({ associations: [{ kind: 'tag', label: 'tag-0' }] }));
   const result = await stub.queryRecords({ filter: { tags: labels } });
   expect(result.records.map((r) => r.id)).toEqual([tagged.id]);
+});
+
+// The caps are the shared SQLite declaration, so they have to hold on the
+// engine with the tightest statement limits, at full size.
+describe('per-Type keys at the declared cap', () => {
+  const typeIds = (cap: number) =>
+    Array.from({ length: cap }, (_, i) => (i === 0 ? NOTE_TYPE_V1 : `com.example/t${i}@1`));
+
+  test('filter.contentByType', async () => {
+    const stub = getStub();
+    const cap = (await stub.getCapabilities()).filter.contentByType;
+    await stub.createRecord(makeRecord({ id: 'r1', content: { text: 'a', meta: { n: 1 } } }));
+    await stub.createRecord(makeRecord({ id: 'r2', content: { text: 'b', meta: { n: 2 } } }));
+    const contentByType = Object.fromEntries(
+      typeIds(cap).map((typeId) => [
+        typeId,
+        { content: { 'meta.n': 1, 'meta.missing': null }, contentPresent: ['text'] },
+      ]),
+    );
+    const result = await stub.queryRecords({ filter: { contentByType } });
+    expect(result.records.map((r) => r.id)).toEqual(['r1']);
+  });
+
+  test('sort.contentFieldByType', async () => {
+    const stub = getStub();
+    const cap = (await stub.getCapabilities()).sort.contentFieldByType;
+    const other = 'com.example/t1@1';
+    await stub.saveType({
+      id: NOTE_TYPE_V1,
+      baseId: 'com.example.test/note',
+      version: 1,
+      name: 'Note',
+      schema: { text: { kind: 'string' }, n: { kind: 'number' } },
+      schemaHash: 'note-hash',
+      createdAt: new Date(),
+    });
+    await stub.createRecord(makeRecord({ id: 'r1', content: { text: 'a', n: 3 } }));
+    await stub.createRecord(makeRecord({ id: 'r2', content: { text: 'b', n: 1 } }));
+    await stub.createRecord(makeRecord({ id: 'r3', typeId: other, content: { text: 'c' } }));
+    await stub.createRecord(makeRecord({ id: 'r4', content: { text: 'd' } }));
+    const contentFieldByType = Object.fromEntries(
+      typeIds(cap).map((typeId, i) => [typeId, i % 2 === 0 ? { field: 'n' } : { value: 2 }]),
+    );
+    const result = await stub.queryRecords({
+      sort: { contentFieldByType, direction: 'asc' },
+      limit: 2,
+    });
+    expect(result.records.map((r) => r.id)).toEqual(['r2', 'r3']);
+    const rest = await stub.queryRecords({
+      sort: { contentFieldByType, direction: 'asc' },
+      cursor: result.cursor!,
+    });
+    expect(rest.records.map((r) => r.id)).toEqual(['r1', 'r4']);
+  });
+});
+
+// Nothing caps how many keys filter.content holds, so neither they nor their
+// paths can cost statement text or a parameter each. See
+// docs/spec/adapters.md § Statement size.
+test('content conditions far past the statement limits execute', async () => {
+  const stub = getStub();
+  await stub.createRecord(makeRecord({ id: 'r1', content: { text: 'a', n: 1 } }));
+  await stub.createRecord(makeRecord({ id: 'r2', content: { text: 'b', n: 2 } }));
+  const prefix = Array.from({ length: 31 }, (_, i) => `s${i}`).join('.');
+  const content = Object.fromEntries(
+    Array.from({ length: 8 }, (_, i) => [`${prefix}.k${i}`, null] as [string, unknown]),
+  );
+  content.n = 1;
+  const result = await stub.queryRecords({ filter: { content } });
+  expect(result.records.map((r) => r.id)).toEqual(['r1']);
 });

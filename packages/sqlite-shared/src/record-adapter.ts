@@ -53,8 +53,9 @@ export const SQLITE_RECORD_CAPABILITIES: StackCapabilities = {
   filter: {
     content: 'path',
     contentPresent: true,
-    // Inside SQLite's limits on expression depth and compound selects; see
-    // docs/spec/adapters.md § Adapter capabilities.
+    // A per-Type key costs no statement text or parameter of its own, so
+    // every engine honors the same cap; see docs/spec/adapters.md § Statement
+    // size.
     contentByType: 64,
     search: true,
   },

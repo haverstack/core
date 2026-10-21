@@ -167,7 +167,7 @@ export function filtersContent(features: Pick<StackCapabilities, 'filter'>): boo
   return features.filter.content !== 'none';
 }
 
-/** The longest path both SQLite engines can execute — see the spec link below. */
+/** The deepest content a write accepts — see the spec link below. */
 const MAX_CONTENT_PATH_SEGMENTS = 32;
 
 /**
@@ -178,9 +178,9 @@ const MAX_CONTENT_PATH_SEGMENTS = 32;
  */
 export function parseContentFilterKey(key: string): string[] {
   const segments = key.split('.');
-  // A SQLite adapter spends two json_each joins per segment against a
-  // 64-table join limit, so a path past the cap is one the engine could
-  // not execute. See docs/spec/data-model.md § Nested content paths.
+  // Each segment descends one level of content nested at most 32 deep, so
+  // a longer path could reach no stored value. See docs/spec/data-model.md
+  // § Nested content paths.
   if (segments.length > MAX_CONTENT_PATH_SEGMENTS) {
     throw new StackBadRequestError(
       `Invalid content filter path "${key}": at most ${MAX_CONTENT_PATH_SEGMENTS} segments.`,
