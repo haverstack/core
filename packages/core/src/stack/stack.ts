@@ -1598,7 +1598,6 @@ export class Stack implements StackClient {
         ...(opts.filter !== undefined && { filter: opts.filter }),
         ...(opts.since !== undefined && { since: opts.since }),
         ...(opts.includeRecords !== undefined && { includeRecords: opts.includeRecords }),
-        ...(opts.includeUnlisted !== undefined && { includeUnlisted: opts.includeUnlisted }),
         ...(opts.onError !== undefined && { onError: opts.onError }),
         ...(opts.onReset !== undefined && { onReset: opts.onReset }),
       },

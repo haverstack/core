@@ -232,7 +232,7 @@ export class RelayDelivery {
 class UnscopedSubscription extends Subscription {
   accept(emission: EmittedChange): void {
     if (!matchesFilter(emission, this.opts.filter)) return;
-    if (!passesUnlistedBoundary(emission, this.opts.includeUnlisted)) return;
+    if (!passesUnlistedBoundary(emission, this.opts.filter?.includeUnlisted)) return;
     this.deliver(emission);
   }
 }

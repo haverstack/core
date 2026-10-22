@@ -279,18 +279,20 @@ describe('GET /changes round trip', () => {
     ['entityId', { filter: { createdBy: { subjectId: 'did:key:zAlice' } } }],
     ['kinds', { filter: { kinds: ['created', 'removed'] } }],
     ['includeRecords', { includeRecords: true }],
-    ['includeUnlisted', { includeUnlisted: true }],
+    ['baseId', { filter: { baseId: ['com.example/note', 'com.example/memo'] } }],
+    ['includeUnlisted', { filter: { includeUnlisted: true } }],
     [
       'everything at once',
       {
         filter: {
           typeId: 'com.example/note@1',
+          baseId: 'com.example/note',
           parentId: null,
           createdBy: { subjectId: 'did:key:zAlice' },
           kinds: ['created', 'changed', 'removed', 'purged'],
+          includeUnlisted: true,
         },
         includeRecords: true,
-        includeUnlisted: true,
       },
     ],
   ];
@@ -299,7 +301,6 @@ describe('GET /changes round trip', () => {
     expect(await roundTripChanges(opts)).toEqual({
       filter: opts.filter ?? {},
       includeRecords: opts.includeRecords ?? false,
-      includeUnlisted: opts.includeUnlisted ?? false,
     });
   });
 });

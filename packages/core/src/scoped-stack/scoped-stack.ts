@@ -978,7 +978,7 @@ export class ScopedStack implements StackClient {
     // `since` never has a cursor to mean anything by.
     assertSinceUsable(opts.since, false);
     assertValidBaseIdFilter(opts.filter);
-    if (opts.includeUnlisted && !this.#authority.ownerActingAlone) {
+    if (opts.filter?.includeUnlisted && !this.#authority.ownerActingAlone) {
       throw new StackPermissionError('includeUnlisted is owner-only');
     }
     return this.changes.add(

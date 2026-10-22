@@ -357,7 +357,7 @@ describe('a revocation takes effect on the next event, not the next subscription
 describe('the feed excludes unlisted records like an equivalent query() would', () => {
   test('includeUnlisted is refused to a non-owner at subscribe() time', async () => {
     await expect(
-      stack.asEntity(READER).subscribe(() => {}, { includeUnlisted: true }),
+      stack.asEntity(READER).subscribe(() => {}, { filter: { includeUnlisted: true } }),
     ).rejects.toThrow('includeUnlisted is owner-only');
   });
 
@@ -408,7 +408,7 @@ describe('the feed excludes unlisted records like an equivalent query() would', 
     const owner = collector();
     await stack
       .asEntity(OWNER)
-      .subscribe(owner.handler, { filter: { typeId: NOTE }, includeUnlisted: true });
+      .subscribe(owner.handler, { filter: { typeId: NOTE, includeUnlisted: true } });
 
     const note = await stack.create(NOTE, { text: 'draft' }, { unlisted: true });
     await stack.patchContent(note.id, { text: 'still unlisted' });

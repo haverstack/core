@@ -367,11 +367,10 @@ describe('presentAt never travels', () => {
 // -------------------------------------------------------
 
 describe('parseChangeParams', () => {
-  test('no params yields an empty filter with both flags off', () => {
+  test('no params yields an empty filter and no records', () => {
     expect(parseChangeParams(changes(''))).toEqual({
       filter: {},
       includeRecords: false,
-      includeUnlisted: false,
     });
   });
 
@@ -402,9 +401,11 @@ describe('parseChangeParams', () => {
     expect(() => parseChangeParams(changes('?include=everything'))).toThrow(StackBadRequestError);
   });
 
-  test('includeUnlisted takes only "true" or "false"', () => {
-    expect(parseChangeParams(changes('?includeUnlisted=true')).includeUnlisted).toBe(true);
-    expect(parseChangeParams(changes('?includeUnlisted=false')).includeUnlisted).toBe(false);
+  test('includeUnlisted takes only "true" or "false", as on GET /records', () => {
+    expect(parseChangeParams(changes('?includeUnlisted=true')).filter.includeUnlisted).toBe(true);
+    expect(
+      parseChangeParams(changes('?includeUnlisted=false')).filter.includeUnlisted,
+    ).toBeUndefined();
     expect(() => parseChangeParams(changes('?includeUnlisted=1'))).toThrow(StackBadRequestError);
   });
 

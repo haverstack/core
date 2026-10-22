@@ -57,7 +57,7 @@ export class ScopedSubscription extends Subscription {
 
   private async filterAndDeliver(emission: EmittedChange): Promise<void> {
     if (this.isClosed) return;
-    if (!passesUnlistedBoundary(emission, this.opts.includeUnlisted)) return;
+    if (!passesUnlistedBoundary(emission, this.opts.filter?.includeUnlisted)) return;
     try {
       if (!(await this.canRead(emission.record, this.snapshot))) return;
     } catch (err) {

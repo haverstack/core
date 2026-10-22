@@ -678,15 +678,14 @@ export function parseQueryBody(raw: unknown): PlainQuery {
 // -------------------------------------------------------
 
 /**
- * What `GET /changes`' query params carry. One object rather than three
- * exports because `includeUnlisted` sits on `SubscribeOptions` rather than
- * `ChangeFilter`, and a server needs it before the stream opens to answer
- * the owner-only 403. See docs/spec/change-feed.md.
+ * What `GET /changes`' query params carry: the filter, and `includeRecords`,
+ * which sits on `SubscribeOptions` beside it. A server reads
+ * `filter.includeUnlisted` before the stream opens to answer the
+ * owner-only 403. See docs/spec/change-feed.md.
  */
 export type ParsedChangeParams = {
   filter: ChangeFilter;
   includeRecords: boolean;
-  includeUnlisted: boolean;
 };
 
 /**
@@ -710,6 +709,8 @@ export function parseChangeParams(url: URL): ParsedChangeParams {
   const createdBy = parseCreatedByParams(url);
   if (createdBy) filter.createdBy = createdBy;
 
+  if (booleanParam(url, 'includeUnlisted')) filter.includeUnlisted = true;
+
   const kinds = url.searchParams.getAll('kind');
   if (kinds.length) {
     for (const kind of kinds) {
@@ -726,7 +727,6 @@ export function parseChangeParams(url: URL): ParsedChangeParams {
   return {
     filter,
     includeRecords: include === 'record',
-    includeUnlisted: booleanParam(url, 'includeUnlisted'),
   };
 }
 

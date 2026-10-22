@@ -8382,7 +8382,7 @@ describe('Stack — each write verb moves one aspect', () => {
 
   test('an unlist is kind removed', async () => {
     const seen: RecordChange[] = [];
-    await stack.subscribe((c) => seen.push(c), { includeUnlisted: true });
+    await stack.subscribe((c) => seen.push(c), { filter: { includeUnlisted: true } });
     await stack.setUnlisted(note.id, true);
 
     expect(seen[0]!.kind).toBe('removed');

@@ -129,7 +129,10 @@ export type RecordChange = {
  * can drive both `query()` and `subscribe()`. See docs/spec/events.md
  * § Subscribing.
  */
-export type ChangeFilter = Pick<RecordFilter, 'typeId' | 'baseId' | 'parentId' | 'createdBy'> & {
+export type ChangeFilter = Pick<
+  RecordFilter,
+  'typeId' | 'baseId' | 'parentId' | 'createdBy' | 'includeUnlisted'
+> & {
   kinds?: ChangeKind[];
 };
 
@@ -145,12 +148,6 @@ export type SubscribeOptions = {
   filter?: ChangeFilter;
   /** Ask the emitter to include `record`. Honored when it can; never assume it. */
   includeRecords?: boolean;
-  /**
-   * Receive events for unlisted records too. Owner-only under
-   * `ScopedStack`, same authority as `RecordFilter.includeUnlisted`.
-   * See docs/spec/unlisted.md.
-   */
-  includeUnlisted?: boolean;
   /**
    * Resume from this cursor — the last `cursor` that was *present* on a
    * delivered `RecordChange`. Refused with `StackBadRequestError` on a

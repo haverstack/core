@@ -204,14 +204,16 @@ type Unsubscribe = () => void;
 type SubscribeOptions = {
   filter?: ChangeFilter;
   includeRecords?: boolean;
-  includeUnlisted?: boolean; // owner-only under ScopedStack — see Unlisted records
   since?: string; // resume cursor — the last `cursor` present on a delivered RecordChange
   onError?: (err: unknown) => void;
   onReset?: () => void;
 };
 
 // Every key means what it means on RecordFilter
-type ChangeFilter = Pick<RecordFilter, 'typeId' | 'baseId' | 'parentId' | 'createdBy'> & {
+type ChangeFilter = Pick<
+  RecordFilter,
+  'typeId' | 'baseId' | 'parentId' | 'createdBy' | 'includeUnlisted' // owner-only under ScopedStack — see Unlisted records
+> & {
   kinds?: ChangeKind[];
 };
 
@@ -259,7 +261,7 @@ An unlisted record that emits a change event to a default subscriber is not unli
 | Unlisted → listed (`list`)   |            **Yes**             | The publish moment                                                  |
 | Purge while unlisted         |               No               | Same reasoning as row 1 — nothing was ever announced to un-announce |
 
-Only the second row needs special-casing. Every other row falls out of checking the record's **current** `unlistedAt` against the subscriber's `includeUnlisted`, the same check `query()`'s default filter makes: a just-created or still-unlisted record's current state already excludes it, with no need to know which ops produced the event. The `unlist` transition is the one case where that check would give the wrong answer, because the record's post-change state is exactly what it is announcing — so the exclusion is asked of the **pre**-change state there, which is why `unlist` gets a dedicated op (mapped to `kind: 'removed'`, per [The event shape](#the-event-shape)) rather than reusing `reshare`'s pattern of one op for both directions.
+Only the second row needs special-casing. Every other row falls out of checking the record's **current** `unlistedAt` against the subscriber's `filter.includeUnlisted`, the same check `query()`'s default filter makes: a just-created or still-unlisted record's current state already excludes it, with no need to know which ops produced the event. The `unlist` transition is the one case where that check would give the wrong answer, because the record's post-change state is exactly what it is announcing — so the exclusion is asked of the **pre**-change state there, which is why `unlist` gets a dedicated op (mapped to `kind: 'removed'`, per [The event shape](#the-event-shape)) rather than reusing `reshare`'s pattern of one op for both directions.
 
 **`list` needs no new semantics.** Kind `changed` is already an upsert a subscriber may never have seen before — the same case [gaining access](#known-limitations) already covers — so a record created silently, edited silently any number of times while unlisted, and finally relisted reaches a default subscriber as a single `changed` event it upserts as if seeing the record for the first time.
 

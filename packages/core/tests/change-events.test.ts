@@ -292,7 +292,7 @@ describe('an unlisted record is invisible to a default subscriber, even unscoped
 
   test('includeUnlisted: true — even on an unscoped Stack — opts back in', async () => {
     const { seen, handler } = collector();
-    await stack.subscribe(handler, { filter: { typeId: NOTE }, includeUnlisted: true });
+    await stack.subscribe(handler, { filter: { typeId: NOTE, includeUnlisted: true } });
 
     await stack.create(NOTE, { text: 'draft' }, { unlisted: true });
 

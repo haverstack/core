@@ -59,7 +59,7 @@ Enumeration standing rests on nothing but ownership. A grant conveys reach over 
 
 ## The feed matches `query()`
 
-An unlisted Record that emits a change event to a default subscriber is not unlisted — so `subscribe()`'s default exclusion and `includeUnlisted` opt-in mirror `query()`'s exactly, including the owner-only gate on the opt-in. Which transitions still have to reach a default subscriber, and why, is [Change events § The unlisted transition](./events.md#the-unlisted-transition).
+An unlisted Record that emits a change event to a default subscriber is not unlisted — so `subscribe()`'s default exclusion and `filter.includeUnlisted` opt-in mirror `query()`'s exactly, in the same place, including the owner-only gate on the opt-in. Which transitions still have to reach a default subscriber, and why, is [Change events § The unlisted transition](./events.md#the-unlisted-transition).
 
 ## What this is not
 

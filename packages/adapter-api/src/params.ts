@@ -97,7 +97,7 @@ export const buildChangeParams = (opts: SubscribeOptions): URLSearchParams => {
   appendCreatedBy(p, f.createdBy);
   if (f.kinds !== undefined) for (const kind of f.kinds) p.append('kind', kind);
   if (opts.includeRecords) p.set('include', 'record');
-  if (opts.includeUnlisted) p.set('includeUnlisted', 'true');
+  if (f.includeUnlisted) p.set('includeUnlisted', 'true');
 
   return p;
 };
