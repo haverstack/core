@@ -76,6 +76,7 @@ import {
 } from '@haverstack/core/wire';
 import { generateDidKeypair } from '@haverstack/core/did';
 import { resolveQuery } from '@haverstack/core/adapter';
+import type { AdapterQuery } from '@haverstack/core/adapter';
 
 useFetchMock();
 
@@ -885,7 +886,12 @@ describe('error response fixtures', () => {
           });
         }
         if (fixture.method === 'POST' && fixture.path === '/records/query') {
-          return adapter.queryRecords(resolveQuery(fixture.requestBody as never));
+          // Malformed on purpose, so it skips resolveQuery()'s shape checks
+          // to reach the server whose refusal this fixture pins.
+          return adapter.queryRecords({
+            ...resolveQuery({}),
+            ...(fixture.requestBody as Partial<AdapterQuery>),
+          });
         }
         if (fixture.method === 'POST' && fixture.path === '/types') {
           const { createdAt, ...rest } = fixture.requestBody as Record<string, unknown>;

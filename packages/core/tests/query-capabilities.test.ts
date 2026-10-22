@@ -12,7 +12,7 @@
 import { describe, test, expect } from 'vitest';
 import {
   assertQueryCapabilities,
-  assertSortCapability,
+  resolveQuery,
   assertValidContentByType,
   assertValidSort,
 } from '../src/query-validation.js';
@@ -58,7 +58,10 @@ describe('a refused query names the capability it needed', () => {
   test('filter.search', () => {
     expect(
       refusalFor(() =>
-        assertQueryCapabilities({ search: 'hello' }, without({ filter: { search: false } })),
+        assertQueryCapabilities(
+          resolveQuery({ filter: { search: 'hello' } }),
+          without({ filter: { search: false } }),
+        ),
       ),
     ).toBe('filter.search');
   });
@@ -70,7 +73,9 @@ describe('a refused query names the capability it needed', () => {
     ['filter.contentPresent', { contentPresent: ['slug'] }],
   ] as [string, RecordFilter][])("reach 'none', asked for by %s", (_label, filter) => {
     expect(
-      refusalFor(() => assertQueryCapabilities(filter, without({ filter: { content: 'none' } }))),
+      refusalFor(() =>
+        assertQueryCapabilities(resolveQuery({ filter }), without({ filter: { content: 'none' } })),
+      ),
     ).toBe('filter.content');
   });
 
@@ -78,7 +83,7 @@ describe('a refused query names the capability it needed', () => {
     expect(
       refusalFor(() =>
         assertQueryCapabilities(
-          { contentPresent: ['slug'] },
+          resolveQuery({ filter: { contentPresent: ['slug'] } }),
           without({ filter: { contentPresent: false } }),
         ),
       ),
@@ -89,7 +94,7 @@ describe('a refused query names the capability it needed', () => {
     expect(
       refusalFor(() =>
         assertQueryCapabilities(
-          { content: { 'emails.value': 'a@b.c' } },
+          resolveQuery({ filter: { content: { 'emails.value': 'a@b.c' } } }),
           without({ filter: { content: 'field' } }),
         ),
       ),
@@ -99,8 +104,8 @@ describe('a refused query names the capability it needed', () => {
   test('sort.contentField', () => {
     expect(
       refusalFor(() =>
-        assertSortCapability(
-          { contentField: 'slug', direction: 'asc' },
+        assertQueryCapabilities(
+          resolveQuery({ sort: { contentField: 'slug', direction: 'asc' } }),
           without({ sort: { contentField: false } }),
         ),
       ),
@@ -114,14 +119,22 @@ describe('a refused query names the capability it needed', () => {
   test('filter.contentByType declined', () => {
     expect(
       refusalFor(() =>
-        assertQueryCapabilities(ARMS, without({ filter: { contentByType: false } })),
+        assertQueryCapabilities(
+          resolveQuery({ filter: ARMS }),
+          without({ filter: { contentByType: false } }),
+        ),
       ),
     ).toBe('filter.contentByType');
   });
 
   test("filter.contentByType against reach 'none'", () => {
     expect(
-      refusalFor(() => assertQueryCapabilities(ARMS, without({ filter: { content: 'none' } }))),
+      refusalFor(() =>
+        assertQueryCapabilities(
+          resolveQuery({ filter: ARMS }),
+          without({ filter: { content: 'none' } }),
+        ),
+      ),
     ).toBe('filter.content');
   });
 
@@ -132,7 +145,7 @@ describe('a refused query names the capability it needed', () => {
     expect(
       refusalFor(() =>
         assertQueryCapabilities(
-          arm({ content: { 'a.b': 1 } }),
+          resolveQuery({ filter: arm({ content: { 'a.b': 1 } }) }),
           without({ filter: { content: 'field' } }),
         ),
       ),
@@ -140,7 +153,7 @@ describe('a refused query names the capability it needed', () => {
     expect(
       refusalFor(() =>
         assertQueryCapabilities(
-          arm({ contentPresent: ['a'] }),
+          resolveQuery({ filter: arm({ contentPresent: ['a'] }) }),
           without({ filter: { contentPresent: false } }),
         ),
       ),
@@ -154,7 +167,10 @@ describe('a refused query names the capability it needed', () => {
     };
     expect(
       refusalFor(() =>
-        assertSortCapability(sort, without({ sort: { contentFieldByType: false } })),
+        assertQueryCapabilities(
+          resolveQuery({ sort: sort }),
+          without({ sort: { contentFieldByType: false } }),
+        ),
       ),
     ).toBe('sort.contentFieldByType');
   });
@@ -166,15 +182,15 @@ describe('a refused query names the capability it needed', () => {
       contentFieldByType: Object.fromEntries(typeIds.map((id) => [id, { field: 'a' }])),
       direction: 'asc' as const,
     };
-    expect(() => assertQueryCapabilities(filter, ALL)).not.toThrow();
-    expect(() => assertSortCapability(sort, ALL)).not.toThrow();
+    expect(() => assertQueryCapabilities(resolveQuery({ filter }), ALL)).not.toThrow();
+    expect(() => assertQueryCapabilities(resolveQuery({ sort: sort }), ALL)).not.toThrow();
   });
 
   test('sort.fields', () => {
     expect(
       refusalFor(() =>
-        assertSortCapability(
-          { field: 'version', direction: 'asc' },
+        assertQueryCapabilities(
+          resolveQuery({ sort: { field: 'version', direction: 'asc' } }),
           without({ sort: { fields: [] } }),
         ),
       ),
@@ -189,7 +205,10 @@ describe('a query refused for its own shape names no capability', () => {
   ] as const)('a malformed content path at %s', (_label, content) => {
     expect(
       refusalFor(() =>
-        assertQueryCapabilities({ content: { 'a..b': 1 } }, without({ filter: { content } })),
+        assertQueryCapabilities(
+          resolveQuery({ filter: { content: { 'a..b': 1 } } }),
+          without({ filter: { content } }),
+        ),
       ),
     ).toBeUndefined();
   });

@@ -27,7 +27,6 @@
 
 import { StackBadRequestError } from '../errors.js';
 import { TARGET_KEYS } from '../associations/validation.js';
-import { assertWindowInteger } from '../query-validation.js';
 import { NATIVE_SORT_FIELDS } from '../types/index.js';
 import type {
   DataAssociation,
@@ -57,7 +56,7 @@ export function parseDate(val: unknown): Date | undefined {
   return isNaN(d.getTime()) ? undefined : d;
 }
 
-const POSITIVE_INTEGER = /^\d+$/;
+const UNSIGNED_INTEGER = /^\d+$/;
 const SORT_FIELDS: ReadonlySet<NativeSortField> = new Set(NATIVE_SORT_FIELDS);
 const SORT_DIRECTIONS: ReadonlySet<NonNullable<QuerySort['direction']>> = new Set(['asc', 'desc']);
 const CHANGE_KINDS: ReadonlySet<ChangeKind> = new Set(['created', 'changed', 'removed', 'purged']);
@@ -131,12 +130,13 @@ const CHANGE_PARAMS = [
 ] as const;
 
 /**
- * Strict positive-integer parse for a URL param — rejects "1abc", "2.7",
- * "-5". Also serves the `:version` path params, which share this
- * "malformed, don't silently coerce" requirement.
+ * Strict digits-only parse for a URL param — rejects "1abc", "2.7", "-5".
+ * Shape only: whether 0 is in range is `Stack`'s to judge. Also serves the
+ * `:version` path params, which share this "malformed, don't silently
+ * coerce" requirement.
  */
-export function parsePositiveInt(raw: string, label: string): number {
-  if (!POSITIVE_INTEGER.test(raw)) throw new StackBadRequestError(`Invalid ${label}: "${raw}"`);
+export function parseUnsignedInt(raw: string, label: string): number {
+  if (!UNSIGNED_INTEGER.test(raw)) throw new StackBadRequestError(`Invalid ${label}: "${raw}"`);
   return parseInt(raw, 10);
 }
 
@@ -167,12 +167,13 @@ function buildSort(
   const named = [field, contentField, contentFieldByType].filter(
     (member) => member !== undefined && member !== null,
   );
-  if (named.length > 1)
-    throw new StackBadRequestError(
-      'A sort names one of a native field, a content field or a content field per type.',
-    );
   const dir =
     direction === undefined || direction === null ? undefined : requireSortDirection(direction);
+  // A direction alone names no sort: decoding it would drop the direction.
+  if (named.length > 1 || (named.length === 0 && dir !== undefined))
+    throw new StackBadRequestError(
+      'A sort names exactly one of a native field, a content field or a content field per type.',
+    );
   if (contentFieldByType !== undefined && contentFieldByType !== null) {
     return {
       contentFieldByType: parseSortByTypeBody(contentFieldByType),
@@ -531,7 +532,7 @@ export function parseQueryParams(url: URL): StackQuery {
   if (sort) query.sort = sort;
 
   const limit = url.searchParams.get('limit');
-  if (limit) query.limit = parsePositiveInt(limit, 'limit');
+  if (limit) query.limit = parseUnsignedInt(limit, 'limit');
 
   const cursor = url.searchParams.get('cursor');
   if (cursor) query.cursor = cursor;
@@ -543,11 +544,10 @@ export function parseQueryParams(url: URL): StackQuery {
 // POST /records/query
 // -------------------------------------------------------
 
-/** Validate a limit that already arrived as a JSON number. */
+/** A limit's shape in a JSON body: a number. Its range is `Stack`'s to judge. */
 function parseLimitValue(raw: unknown): number {
   if (typeof raw !== 'number')
     throw new StackBadRequestError(`Invalid limit: ${JSON.stringify(raw)}`);
-  assertWindowInteger(raw, 'limit', 1);
   return raw;
 }
 
@@ -739,9 +739,9 @@ export function parseJournalParams(url: URL): JournalQuery {
   requireKnownParams(url, ['afterSeq', 'limit']);
   const query: JournalQuery = {};
   const afterSeq = url.searchParams.get('afterSeq');
-  if (afterSeq !== null) query.afterSeq = parsePositiveInt(afterSeq, 'afterSeq');
+  if (afterSeq !== null) query.afterSeq = parseUnsignedInt(afterSeq, 'afterSeq');
   const limit = url.searchParams.get('limit');
-  if (limit !== null) query.limit = parsePositiveInt(limit, 'limit');
+  if (limit !== null) query.limit = parseUnsignedInt(limit, 'limit');
   return query;
 }
 
@@ -755,10 +755,10 @@ export function parseVersionsParams(url: URL): VersionsQuery {
   const query: VersionsQuery = {};
   const beforeVersion = url.searchParams.get('beforeVersion');
   if (beforeVersion !== null) {
-    query.beforeVersion = parsePositiveInt(beforeVersion, 'beforeVersion');
+    query.beforeVersion = parseUnsignedInt(beforeVersion, 'beforeVersion');
   }
   const limit = url.searchParams.get('limit');
-  if (limit !== null) query.limit = parsePositiveInt(limit, 'limit');
+  if (limit !== null) query.limit = parseUnsignedInt(limit, 'limit');
   return query;
 }
 
@@ -853,7 +853,7 @@ export function parseIfMatch(header: string | undefined): number | undefined {
   if (header === undefined) return undefined;
   const trimmed = header.trim();
   const unquoted = /^"(.*)"$/.exec(trimmed)?.[1] ?? trimmed;
-  return parsePositiveInt(unquoted, 'If-Match');
+  return parseUnsignedInt(unquoted, 'If-Match');
 }
 
 /**

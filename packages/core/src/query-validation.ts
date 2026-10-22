@@ -38,13 +38,22 @@ import type {
 } from './types/index.js';
 
 /**
- * Fail loud rather than silently widen: a filter the adapter can't honor
- * would otherwise be dropped, returning an unfiltered superset presented
- * as the filtered result. Shared by Stack.query() and
- * APIAdapter.queryRecords(). See docs/spec/data-model.md
- * § Capability-gated filters.
+ * Fail loud rather than silently widen or reorder: a filter or sort the
+ * adapter can't honor would otherwise be dropped, answering with some
+ * other result, which a caller reading one bounded page cannot detect.
+ * Every refusal names the capability. The companion to resolveQuery(),
+ * which refuses the query's own shape; every entry point runs both. See
+ * docs/spec/data-model.md § Capability-gated filters.
  */
 export function assertQueryCapabilities(
+  query: AdapterQuery,
+  capabilities: Pick<StackCapabilities, 'filter' | 'sort'>,
+): void {
+  assertFilterCapability(query.filter, capabilities);
+  assertSortCapability(query.sort, capabilities);
+}
+
+function assertFilterCapability(
   filter: RecordFilter | undefined,
   capabilities: Pick<StackCapabilities, 'filter'>,
 ): void {
@@ -227,9 +236,9 @@ export function assertValidSort(sort: QuerySort | undefined): void {
   const named = [sort.field, sort.contentField, sort.contentFieldByType].filter(
     (member) => member !== undefined,
   );
-  if (named.length > 1) {
+  if (named.length !== 1) {
     throw new StackBadRequestError(
-      'A sort names one of a native field, a content field or a content field per type.',
+      'A sort names exactly one of a native field, a content field or a content field per type.',
     );
   }
   if (sort.field !== undefined && !VALID_SORT_FIELDS.has(sort.field)) {
@@ -305,15 +314,20 @@ export const DEFAULT_QUERY_LIMIT = 50;
 export const MAX_QUERY_LIMIT = 1000;
 
 /**
- * The query an adapter receives, with every default resolved so no
- * adapter carries one: a named sort runs ascending, no sort is
- * `createdAt` newest first, and the page is DEFAULT_QUERY_LIMIT up to
- * MAX_QUERY_LIMIT. See docs/spec/data-model.md § Sorting and pagination.
+ * The query an adapter receives: its shape checked, and every default
+ * resolved so no adapter carries one — a named sort runs ascending, no
+ * sort is `createdAt` newest first, and the page is DEFAULT_QUERY_LIMIT
+ * up to MAX_QUERY_LIMIT. Shape refusals name no capability; see
+ * assertQueryCapabilities() for those that do. See docs/spec/data-model.md
+ * § Sorting and pagination.
  */
 export function resolveQuery(query: StackQuery): AdapterQuery {
-  const { presentAt: _presentAt, sort, limit, ...rest } = query;
+  const { sort, limit, ...rest } = query;
+  assertValidContentByType(query.filter);
   assertValidSort(sort);
   assertWindowInteger(limit, 'limit', 1);
+  assertValidAssociationFilters(query.filter);
+  assertValidBaseIdFilter(query.filter);
   return {
     ...rest,
     sort: sort
@@ -338,14 +352,7 @@ export function assertWindowInteger(value: number | undefined, label: string, mi
   }
 }
 
-/**
- * Fail loud rather than silently reorder: an adapter that can't honor the
- * requested sort would otherwise answer in some other order, which a
- * caller paging a bounded window has no way to notice. The companion to
- * assertQueryCapabilities(), split from it because a sort is not a filter
- * — see docs/spec/data-model.md § Capability-gated filters.
- */
-export function assertSortCapability(
+function assertSortCapability(
   sort: AdapterSort,
   capabilities: Pick<StackCapabilities, 'sort'>,
 ): void {

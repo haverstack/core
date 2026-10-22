@@ -42,18 +42,12 @@ export const atBudget = (page: QueryStatement, rows: number): QueryStatement => 
 });
 
 /**
- * Reduce `sort.direction` to a keyword safe to interpolate. The type and
- * core's resolveQuery() already promise one of the two, but this is
- * where the value becomes SQL text, so it is checked here too: an
- * unchecked value would be an injection sink, not merely a wrong order.
+ * The direction as SQL text. Mapped from a fixed pair rather than
+ * interpolated, as getSortColumn() maps the field, so no value reaches
+ * the statement but `ASC` or `DESC`.
  */
-const sqlDirection = (query: AdapterQuery): 'ASC' | 'DESC' => {
-  const dir = query.sort.direction;
-  if (dir !== 'asc' && dir !== 'desc') {
-    throw new StackBadRequestError(`Invalid sort direction "${dir}": expected "asc" or "desc".`);
-  }
-  return dir === 'asc' ? 'ASC' : 'DESC';
-};
+const sqlDirection = (query: AdapterQuery): 'ASC' | 'DESC' =>
+  query.sort.direction === 'asc' ? 'ASC' : 'DESC';
 
 /**
  * Normalize a json_each row's value so one array element and one bare

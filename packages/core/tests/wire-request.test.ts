@@ -10,7 +10,7 @@ import {
   parseAssociationParams,
   parseIfMatch,
   parseUploadFilename,
-  parsePositiveInt,
+  parseUnsignedInt,
   parseDate,
   assertQueryTravels,
 } from '../src/wire/index.js';
@@ -64,6 +64,10 @@ describe('parseQueryParams', () => {
 
   test('a malformed date bound is refused rather than dropped', () => {
     expect(() => parseQueryParams(url('?createdBefore=not-a-date'))).toThrow(StackBadRequestError);
+  });
+
+  test('a direction naming no sort is refused, not dropped', () => {
+    expect(() => parseQueryParams(url('?direction=asc'))).toThrow(StackBadRequestError);
   });
 
   test('an unrecognized sort field or direction is refused', () => {
@@ -208,10 +212,14 @@ describe('parseQueryBody', () => {
     expect(() => parseQueryBody({ filter: [] })).toThrow(StackBadRequestError);
   });
 
-  test('a non-integer limit is refused rather than coerced', () => {
-    expect(() => parseQueryBody({ limit: 2.7 })).toThrow(StackBadRequestError);
-    expect(() => parseQueryBody({ limit: 0 })).toThrow(StackBadRequestError);
+  test('a limit that is not a number is refused rather than coerced', () => {
     expect(() => parseQueryBody({ limit: '10' })).toThrow(StackBadRequestError);
+  });
+
+  // Range is Stack's to judge, so the wire and in-process callers get one answer.
+  test('a numeric limit is decoded as asked, whatever its range', () => {
+    expect(parseQueryBody({ limit: 2.7 }).limit).toBe(2.7);
+    expect(parseQueryBody({ limit: 0 }).limit).toBe(0);
   });
 
   test('a large limit is reported as requested, not clamped', () => {
@@ -477,12 +485,12 @@ describe('parseUploadFilename', () => {
 // Shared primitives
 // -------------------------------------------------------
 
-describe('parsePositiveInt', () => {
-  test('accepts a bare positive integer and refuses anything else', () => {
-    expect(parsePositiveInt('7', 'version')).toBe(7);
-    expect(parsePositiveInt('0', 'version')).toBe(0);
+describe('parseUnsignedInt', () => {
+  test('accepts digits alone and refuses anything else', () => {
+    expect(parseUnsignedInt('7', 'version')).toBe(7);
+    expect(parseUnsignedInt('0', 'version')).toBe(0);
     for (const bad of ['-1', '1.5', '1abc', '', ' 1', '1e3']) {
-      expect(() => parsePositiveInt(bad, 'version')).toThrow(StackBadRequestError);
+      expect(() => parseUnsignedInt(bad, 'version')).toThrow(StackBadRequestError);
     }
   });
 });

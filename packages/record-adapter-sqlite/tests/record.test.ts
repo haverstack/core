@@ -785,20 +785,18 @@ describe('records — queries', () => {
     expect(included.records.some((r) => r.id === record.id)).toBe(true);
   });
 
-  // The order clause and the cursor comparison interpolate sort.direction
-  // straight into SQL. Core's assertValidSort() is the primary guard, but
-  // the builder re-checks so a caller reaching the adapter directly cannot
-  // inject through a raw direction string.
-  test('a sort direction outside asc/desc is refused at the SQL boundary', async () => {
+  // The order clause maps the direction from a fixed pair, so even a raw
+  // string from a caller reaching the adapter directly runs as SQL text
+  // the builder wrote.
+  test('a sort direction outside asc/desc never reaches SQL text', async () => {
     const adapter = await initAdapter();
     await adapter.createRecord(makeRecord({ id: 'r1' }));
-    await expect(
-      adapter.queryRecords({
-        limit: 50,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        sort: { field: 'createdAt', direction: 'ASC, (SELECT 1)' as any },
-      }),
-    ).rejects.toThrow(StackBadRequestError);
+    const { records } = await adapter.queryRecords({
+      limit: 50,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      sort: { field: 'createdAt', direction: 'ASC, (SELECT 1)' as any },
+    });
+    expect(records.map((r) => r.id)).toEqual(['r1']);
   });
 
   test('filters by typeId', async () => {

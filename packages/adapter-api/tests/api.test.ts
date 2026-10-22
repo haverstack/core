@@ -1152,7 +1152,7 @@ describe('queryRecords', () => {
   test('refuses a relatedTo naming neither a label nor a target without sending', async () => {
     const adapter = await openAdapter();
     await expect(
-      adapter.queryRecords(resolveQuery({ filter: { relatedTo: {} as never } })),
+      adapter.queryRecords({ ...resolveQuery({}), filter: { relatedTo: {} as never } }),
     ).rejects.toThrow(StackBadRequestError);
     expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent
   });
@@ -1160,11 +1160,10 @@ describe('queryRecords', () => {
   test('refuses an empty stackUrl rather than encoding relatedToStack=', async () => {
     const adapter = await openAdapter();
     await expect(
-      adapter.queryRecords(
-        resolveQuery({
-          filter: { relatedTo: { target: { kind: 'record', recordId: 'rec-1', stackUrl: '' } } },
-        }),
-      ),
+      adapter.queryRecords({
+        ...resolveQuery({}),
+        filter: { relatedTo: { target: { kind: 'record', recordId: 'rec-1', stackUrl: '' } } },
+      }),
     ).rejects.toThrow(StackBadRequestError);
     expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent
   });
@@ -1190,9 +1189,9 @@ describe('queryRecords', () => {
     ["at reach 'none', which queries by search params", 'none'],
   ] as const)('refuses presentAt without sending %s', async (_label, reach) => {
     const adapter = await openAdapter(discoveryWith({ filter: { content: reach } }));
-    await expect(
-      adapter.queryRecords({ ...resolveQuery({}), presentAt: 'latest' }),
-    ).rejects.toThrow(StackBadRequestError);
+    await expect(adapter.queryRecords(resolveQuery({ presentAt: 'latest' }))).rejects.toThrow(
+      StackBadRequestError,
+    );
     expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent
   });
 

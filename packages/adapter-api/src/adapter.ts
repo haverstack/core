@@ -51,7 +51,6 @@ import type {
 import {
   OwnerMismatchError,
   assertQueryCapabilities,
-  assertSortCapability,
   assertValidAssociationFilters,
   filtersContent,
 } from '@haverstack/core/adapter';
@@ -592,8 +591,7 @@ export class APIAdapter implements StackAdapter {
     // assertQueryCapabilities so the wire and local paths enforce one rule
     // — re-thrown as APIAdapterCapabilityError for this adapter's callers.
     try {
-      assertQueryCapabilities(query.filter, this.capabilities);
-      assertSortCapability(query.sort, this.capabilities);
+      assertQueryCapabilities(query, this.capabilities);
     } catch (err) {
       // The refusal names the capability it was refused for. A
       // StackBadRequestError carrying none is about the query's own shape — a

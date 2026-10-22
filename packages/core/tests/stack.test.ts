@@ -8522,6 +8522,12 @@ describe('query — sort direction defaults', () => {
     expect(spy.mock.calls.map(([q]) => q.limit)).toEqual([50, 5, 1000]);
   });
 
+  test('refuses a sort that names a direction alone', async () => {
+    await expect(stack.query({ sort: { direction: 'asc' } as never })).rejects.toThrow(
+      /names exactly one/,
+    );
+  });
+
   test.each([0, -1, 1.5, Number.NaN])('refuses a limit of %s', async (limit) => {
     await expect(stack.query({ limit })).rejects.toThrow(StackBadRequestError);
   });

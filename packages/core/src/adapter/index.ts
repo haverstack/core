@@ -30,7 +30,6 @@ export { inReach } from './reach.js';
 export type { ReachedRecord } from './reach.js';
 export {
   assertQueryCapabilities,
-  assertSortCapability,
   assertValidSort,
   resolveQuery,
   assertValidAssociationFilters,

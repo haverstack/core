@@ -103,9 +103,6 @@ import {
 } from '../errors.js';
 import {
   assertQueryCapabilities,
-  assertValidContentByType,
-  assertSortCapability,
-  assertValidAssociationFilters,
   assertValidBaseIdFilter,
   assertValidJournalQuery,
   assertValidVersionsQuery,
@@ -419,7 +416,7 @@ export class Stack implements StackClient {
       changes: this.changes,
       assertOpen: () => this.assertOpen(),
       migrations: this.migrations,
-      queryReadable: (query: StackQuery, reach: Reach<BaseId>) =>
+      queryReadable: (query: AdapterQuery, reach: Reach<BaseId>) =>
         this.dispatchQuery(query, async (resolved, types) =>
           queryReadable(resolved, await this.resolveReach(reach, types)),
         ),
@@ -1208,26 +1205,24 @@ export class Stack implements StackClient {
    * docs/spec/data-model.md § Queries.
    */
   async query(query: StackQuery = {}): Promise<QueryResult> {
-    return this.dispatchQuery(query, (resolved) => this.adapter.queryRecords(resolved));
+    this.assertOpen();
+    const resolved = resolveQuery(query);
+    assertQueryCapabilities(resolved, this.adapter.capabilities);
+    return this.dispatchQuery(resolved, (q) => this.adapter.queryRecords(q));
   }
 
   /**
-   * Everything query() does around the adapter call: the checks, the
-   * family resolution, the migration on the way out. `read` is the call,
-   * so a scoped query within a reach gets the same treatment as any other.
+   * Everything query() does around the adapter call once the query is
+   * resolved and checked: the family resolution, the migration on the way
+   * out. `read` is the call, so a scoped query within a reach gets the
+   * same treatment as any other.
    */
   private async dispatchQuery(
-    query: StackQuery,
+    query: AdapterQuery,
     read: (resolved: AdapterQuery, types: Lazy<StackType[]>) => Promise<QueryResult>,
   ): Promise<QueryResult> {
     this.assertOpen();
-    const { presentAt, filter } = query;
-    assertValidContentByType(filter);
-    assertQueryCapabilities(filter, this.adapter.capabilities);
-    const resolved = resolveQuery(query);
-    assertSortCapability(resolved.sort, this.adapter.capabilities);
-    assertValidAssociationFilters(filter);
-    assertValidBaseIdFilter(filter);
+    const { presentAt, filter, ...rest } = query;
 
     // Read once whether the filter, the reach or both resolve families.
     const types = new Lazy(() => this.adapter.listTypes());
@@ -1237,7 +1232,7 @@ export class Stack implements StackClient {
     }
 
     const result = await read(
-      { ...resolved, ...(resolvedFilter !== undefined && { filter: resolvedFilter }) },
+      { ...rest, ...(resolvedFilter !== undefined && { filter: resolvedFilter }) },
       types,
     );
 
