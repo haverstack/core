@@ -68,7 +68,7 @@ const baseIdOf = (typeId: string): string => typeId.split('@')[0]!;
  * `createdBy` filters on the author and `purged` frames stay filterable
  * without carrying either.
  */
-export function matchesFilter(
+export function matchesSubscription(
   emitted: EmittedChange,
   { baseId, filter = {} }: Pick<SubscribeOptions, 'baseId' | 'filter'>,
 ): boolean {
@@ -233,7 +233,7 @@ export class RelayDelivery {
  */
 class UnscopedSubscription extends Subscription {
   accept(emission: EmittedChange): void {
-    if (!matchesFilter(emission, this.opts)) return;
+    if (!matchesSubscription(emission, this.opts)) return;
     if (!passesUnlistedBoundary(emission, this.opts.includeUnlisted)) return;
     this.deliver(emission);
   }

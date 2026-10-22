@@ -294,8 +294,9 @@ function optionalBoolean(raw: unknown, label: string): boolean | undefined {
 // -------------------------------------------------------
 
 const BASE_ID_REFUSAL =
-  'baseId is resolved client-side against registered Types and never travels — send the ' +
-  'concrete typeId set it resolves to. See docs/spec/data-model.md § Directives and conditions.';
+  "A query's baseId is resolved client-side against registered Types and has no field on " +
+  '/records — send the concrete typeId set it resolves to. See docs/spec/data-model.md ' +
+  '§ Directives and conditions.';
 
 const PRESENT_AT_REFUSAL =
   'presentAt applies migrations, which are app code rather than server code, so no ' +

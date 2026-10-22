@@ -143,9 +143,10 @@ export type Unsubscribe = () => void;
  */
 export type SubscribeOptions = {
   /**
-   * Every version of these type families, matched against each change's
-   * `typeId` — so a version registered after the subscription opened is
-   * covered too. Refused like `StackQuery.baseId`. See docs/spec/events.md
+   * Every version of these type families. Unlike `StackQuery.baseId` it is
+   * matched against each change's `typeId`, by the emitter or the relay,
+   * so a version registered after the subscription opened is covered too.
+   * A versioned TypeId is refused as there. See docs/spec/events.md
    * § Subscribing.
    */
   baseId?: BaseId | BaseId[];

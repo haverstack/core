@@ -14,7 +14,7 @@ import {
   sameActions,
   validateGrantTarget,
 } from '../grants.js';
-import { assertFamilyId } from '../query-validation.js';
+import { assertFamilyIds } from '../query-validation.js';
 import { loadGrantRecords, loadRosterRoles } from './reads.js';
 import { Lazy } from '../lazy.js';
 import { SYSTEM_TYPES } from '../types/index.js';
@@ -70,7 +70,7 @@ export async function revokeType(
   grant: TypeGrant,
 ): Promise<(StackRecord & { content: GrantContent })[]> {
   validateGrantTarget(grant.grantee);
-  assertFamilyId(baseId, 'revokeType');
+  assertFamilyIds([baseId], 'revokeType');
   const all = await loadGrantRecords((q) => stack.query(q));
   const matches = all.filter((r) => {
     const c = r.content;

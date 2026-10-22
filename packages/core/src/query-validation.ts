@@ -28,6 +28,7 @@ import {
 import { NATIVE_SORT_FIELDS } from './types/index.js';
 import type {
   AdapterQuery,
+  BaseId,
   PlainQuery,
   AdapterSort,
   StackQuery,
@@ -353,7 +354,7 @@ export type SplitQuery = {
  */
 export function splitQuery(query: StackQuery): SplitQuery {
   const { baseId, presentAt, ...plain } = query;
-  assertValidFamilies(baseId);
+  assertFamilyIds(familiesOf(baseId), 'baseId');
   return {
     query: resolveQuery(plain),
     ...(baseId !== undefined && { baseId }),
@@ -438,30 +439,22 @@ export function assertValidAssociationFilters(filter: RecordFilter | undefined):
 }
 
 /**
- * Refuse a `baseId` argument that cannot name a type family, as an
- * argument error prefixed with the `surface` it was passed to. See
- * familyIdProblem().
+ * Refuse every `baseId` that cannot name a type family, in one argument
+ * error prefixed with the `surface` they were passed to. A TypeId there
+ * would name one version while acting on all of them. See
+ * docs/spec/data-model.md § Types.
  */
-export function assertFamilyId(baseId: unknown, surface: string): void {
-  const problem = familyIdProblem(baseId, surface);
-  if (problem) {
-    throw new StackValidationError([{ path: 'baseId', message: problem }], ARGUMENTS_INVALID);
-  }
-}
-
-/**
- * Refuse a `baseId` directive carrying an `@version` suffix. A family
- * resolves against registered families, so a TypeId there would match
- * nothing and say nothing. See docs/spec/data-model.md § Directives and conditions.
- */
-export function assertValidFamilies(baseId: string | string[] | undefined): void {
-  if (baseId === undefined) return;
-  const errors = (Array.isArray(baseId) ? baseId : [baseId])
-    .map((b) => familyIdProblem(b, 'baseId'))
+export function assertFamilyIds(baseIds: readonly unknown[], surface: string): void {
+  const errors = baseIds
+    .map((b) => familyIdProblem(b, surface))
     .filter((m): m is string => m !== null)
     .map((message) => ({ path: 'baseId', message }));
   if (errors.length > 0) throw new StackValidationError(errors, ARGUMENTS_INVALID);
 }
+
+/** A query's or a subscription's `baseId`, one family or many. */
+export const familiesOf = (baseId: BaseId | BaseId[] | undefined): BaseId[] =>
+  baseId === undefined ? [] : Array.isArray(baseId) ? baseId : [baseId];
 
 /**
  * A journal window: `afterSeq` 0 is the start of the log. No ceiling is

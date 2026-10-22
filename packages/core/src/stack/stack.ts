@@ -103,13 +103,13 @@ import {
 } from '../errors.js';
 import {
   assertQueryCapabilities,
-  assertValidFamilies,
+  assertFamilyIds,
+  familiesOf,
   assertValidJournalQuery,
   assertValidVersionsQuery,
   resolveQuery,
   splitQuery,
   filtersContent,
-  assertFamilyId,
 } from '../query-validation.js';
 import type { SplitQuery } from '../query-validation.js';
 import {
@@ -546,7 +546,7 @@ export class Stack implements StackClient {
     opts: MigrateAllOptions = {},
   ): Promise<{ migrated: number; skipped: number }> {
     this.assertOpen();
-    assertFamilyId(baseId, 'migrateAll');
+    assertFamilyIds([baseId], 'migrateAll');
     const familyTypeIds = await this.familyTypeIds([baseId]);
 
     if (familyTypeIds.length === 0) {
@@ -1637,7 +1637,7 @@ export class Stack implements StackClient {
   ): Promise<Unsubscribe> {
     this.assertOpen();
     assertSinceUsable(opts.since, this.relaysChanges);
-    assertValidFamilies(opts.baseId);
+    assertFamilyIds(familiesOf(opts.baseId), 'baseId');
     const unsubscribe = this.changes.subscribe(handler, opts);
     let stopRelay: Unsubscribe | undefined;
     try {

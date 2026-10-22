@@ -8,7 +8,7 @@
  */
 
 import { baseIdOf } from '../schema.js';
-import { Subscription, matchesFilter, passesUnlistedBoundary } from '../stack/changes.js';
+import { Subscription, matchesSubscription, passesUnlistedBoundary } from '../stack/changes.js';
 import type { EmittedChange } from '../stack/changes.js';
 import { presentDeleted } from '../record-changes.js';
 import type { RecordChange, StackRecord, SubscribeOptions } from '../types/index.js';
@@ -41,7 +41,7 @@ export class ScopedSubscription extends Subscription {
     // subscriber may not see: a revocation the subscriber cannot read is
     // exactly the one that must still expire its cache.
     this.invalidateFor(emission);
-    if (!matchesFilter(emission, this.opts)) return;
+    if (!matchesSubscription(emission, this.opts)) return;
     this.queue = this.queue.then(() => this.filterAndDeliver(emission));
   }
 
