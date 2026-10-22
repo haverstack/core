@@ -99,10 +99,4 @@ describe('MemoryAdapter cursors', () => {
     });
     expect(second.records.map((r) => r.id)).not.toEqual(first.records.map((r) => r.id));
   });
-
-  test('refuses a named sort that carries no direction', async () => {
-    await expect(adapter.queryRecords({ sort: { field: 'updatedAt' } })).rejects.toThrow(
-      StackBadRequestError,
-    );
-  });
 });

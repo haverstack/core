@@ -30,6 +30,9 @@ import type {
   StackRecord,
 } from '../types/index.js';
 
+/** The page query() returns when the caller names no `limit`. */
+export const DEFAULT_QUERY_LIMIT = 50;
+
 /** The largest page query() returns, whatever the caller asks for. */
 export const MAX_QUERY_LIMIT = 1000;
 

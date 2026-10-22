@@ -1041,7 +1041,7 @@ describe('queryRecords', () => {
   test('uses POST /records/query when the server reaches content', async () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(jsonResponse(queryEnvelope));
-    await adapter.queryRecords({ filter: { typeId: 'com.example/note@1' } });
+    await adapter.queryRecords({ limit: 100, filter: { typeId: 'com.example/note@1' } });
     expect(mockFetch).toHaveBeenLastCalledWith(
       `${BASE_URL}/records/query`,
       expect.objectContaining({ method: 'POST' }),
@@ -1051,7 +1051,7 @@ describe('queryRecords', () => {
   test('uses GET /records when the server reaches no content', async () => {
     const adapter = await openAdapter(discoveryWith({ filter: { content: 'none' } }));
     mockFetch.mockResolvedValueOnce(jsonResponse(queryEnvelope));
-    await adapter.queryRecords({ filter: { typeId: 'com.example/note@1' } });
+    await adapter.queryRecords({ limit: 100, filter: { typeId: 'com.example/note@1' } });
     const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
     expect(init.method).toBe('GET');
     expect(url).toContain('/records');
@@ -1061,7 +1061,7 @@ describe('queryRecords', () => {
   test('parses records and cursor from response', async () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(jsonResponse({ ...queryEnvelope, cursor: 'page2' }));
-    const result = await adapter.queryRecords({});
+    const result = await adapter.queryRecords({ limit: 100 });
     expect(result.records).toHaveLength(1);
     expect(result.records[0].createdAt).toBeInstanceOf(Date);
     expect(result.cursor).toBe('page2');
@@ -1080,6 +1080,7 @@ describe('queryRecords', () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(jsonResponse(queryEnvelope));
     const query = {
+      limit: 100,
       filter: {
         contentByType: {
           'com.example/note@1': { content: { by: 'Ada' } },
@@ -1103,7 +1104,7 @@ describe('queryRecords', () => {
   test('builds correct GET params — parentId null becomes "null"', async () => {
     const adapter = await openAdapter(discoveryWith({ filter: { content: 'none' } }));
     mockFetch.mockResolvedValueOnce(jsonResponse(queryEnvelope));
-    await adapter.queryRecords({ filter: { parentId: null } });
+    await adapter.queryRecords({ limit: 100, filter: { parentId: null } });
     const [url] = mockFetch.mock.lastCall as [string];
     expect(url).toContain('parentId=null');
   });
@@ -1111,7 +1112,10 @@ describe('queryRecords', () => {
   test('GET params carry a content sort as ?sortContent=, not ?sort=', async () => {
     const adapter = await openAdapter(discoveryWith({ filter: { content: 'none' } }));
     mockFetch.mockResolvedValueOnce(jsonResponse(queryEnvelope));
-    await adapter.queryRecords({ sort: { contentField: 'publishedAt', direction: 'asc' } });
+    await adapter.queryRecords({
+      limit: 100,
+      sort: { contentField: 'publishedAt', direction: 'asc' },
+    });
     const [url] = mockFetch.mock.lastCall as [string];
     expect(url).toContain('sortContent=publishedAt');
     expect(url).toContain('direction=asc');
@@ -1122,6 +1126,7 @@ describe('queryRecords', () => {
     const adapter = await openAdapter(discoveryWith({ filter: { content: 'none' } }));
     mockFetch.mockResolvedValueOnce(jsonResponse(queryEnvelope));
     await adapter.queryRecords({
+      limit: 100,
       filter: { relatedTo: { label: 'author', target: { kind: 'record', recordId: 'rec-1' } } },
     });
     const [url] = mockFetch.mock.lastCall as [string];
@@ -1133,6 +1138,7 @@ describe('queryRecords', () => {
     const adapter = await openAdapter(discoveryWith({ filter: { content: 'none' } }));
     mockFetch.mockResolvedValueOnce(jsonResponse(queryEnvelope));
     await adapter.queryRecords({
+      limit: 100,
       filter: { relatedTo: { target: { kind: 'record', recordId: 'rec-1' } } },
     });
     const [url] = mockFetch.mock.lastCall as [string];
@@ -1145,9 +1151,9 @@ describe('queryRecords', () => {
   // request the server would only have to reject goes out.
   test('refuses a relatedTo naming neither a label nor a target without sending', async () => {
     const adapter = await openAdapter();
-    await expect(adapter.queryRecords({ filter: { relatedTo: {} as never } })).rejects.toThrow(
-      StackBadRequestError,
-    );
+    await expect(
+      adapter.queryRecords({ limit: 100, filter: { relatedTo: {} as never } }),
+    ).rejects.toThrow(StackBadRequestError);
     expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent
   });
 
@@ -1155,6 +1161,7 @@ describe('queryRecords', () => {
     const adapter = await openAdapter();
     await expect(
       adapter.queryRecords({
+        limit: 100,
         filter: { relatedTo: { target: { kind: 'record', recordId: 'rec-1', stackUrl: '' } } },
       }),
     ).rejects.toThrow(StackBadRequestError);
@@ -1171,9 +1178,9 @@ describe('queryRecords', () => {
     ["at reach 'none', which queries by search params", 'none'],
   ] as const)('refuses filter.baseId without sending %s', async (_label, reach) => {
     const adapter = await openAdapter(discoveryWith({ filter: { content: reach } }));
-    await expect(adapter.queryRecords({ filter: { baseId: 'com.example/note' } })).rejects.toThrow(
-      StackBadRequestError,
-    );
+    await expect(
+      adapter.queryRecords({ limit: 100, filter: { baseId: 'com.example/note' } }),
+    ).rejects.toThrow(StackBadRequestError);
     expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent
   });
 
@@ -1182,7 +1189,7 @@ describe('queryRecords', () => {
     ["at reach 'none', which queries by search params", 'none'],
   ] as const)('refuses presentAt without sending %s', async (_label, reach) => {
     const adapter = await openAdapter(discoveryWith({ filter: { content: reach } }));
-    await expect(adapter.queryRecords({ presentAt: 'latest' })).rejects.toThrow(
+    await expect(adapter.queryRecords({ limit: 100, presentAt: 'latest' })).rejects.toThrow(
       StackBadRequestError,
     );
     expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent
@@ -1194,15 +1201,15 @@ describe('queryRecords', () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(jsonResponse(queryEnvelope));
     await expect(
-      adapter.queryRecords({ filter: { baseId: undefined }, presentAt: undefined }),
+      adapter.queryRecords({ limit: 100, filter: { baseId: undefined }, presentAt: undefined }),
     ).resolves.toBeDefined();
   });
 
   test("throws APIAdapterCapabilityError for filter.content against reach 'none'", async () => {
     const adapter = await openAdapter(discoveryWith({ filter: { content: 'none' } }));
-    await expect(adapter.queryRecords({ filter: { content: { slug: 'hello' } } })).rejects.toThrow(
-      APIAdapterCapabilityError,
-    );
+    await expect(
+      adapter.queryRecords({ limit: 100, filter: { content: { slug: 'hello' } } }),
+    ).rejects.toThrow(APIAdapterCapabilityError);
     expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent
   });
 
@@ -1211,10 +1218,10 @@ describe('queryRecords', () => {
     // A single-segment key is still served by the 'field' rung.
     mockFetch.mockResolvedValueOnce(jsonResponse(queryEnvelope));
     await expect(
-      adapter.queryRecords({ filter: { content: { slug: 'hello' } } }),
+      adapter.queryRecords({ limit: 100, filter: { content: { slug: 'hello' } } }),
     ).resolves.toBeDefined();
     await expect(
-      adapter.queryRecords({ filter: { content: { 'emails.value': 'a@b.c' } } }),
+      adapter.queryRecords({ limit: 100, filter: { content: { 'emails.value': 'a@b.c' } } }),
     ).rejects.toThrow(APIAdapterCapabilityError);
   });
 
@@ -1231,13 +1238,13 @@ describe('queryRecords', () => {
       limits: { attachmentBytes: null, contentBytes: null },
     });
 
-    await expect(adapter.queryRecords({ sort: { field: 'createdAt' } })).rejects.toThrow(
-      APIAdapterCapabilityError,
-    );
+    await expect(
+      adapter.queryRecords({ limit: 100, sort: { field: 'createdAt', direction: 'asc' } }),
+    ).rejects.toThrow(APIAdapterCapabilityError);
     // A query naming no sort asks for the server's own default order, so it
     // claims nothing and still runs.
     mockFetch.mockResolvedValueOnce(jsonResponse(queryEnvelope));
-    await expect(adapter.queryRecords({})).resolves.toBeDefined();
+    await expect(adapter.queryRecords({ limit: 100 })).resolves.toBeDefined();
   });
 
   // A rung this client has never heard of places nowhere on the ladder, so
@@ -1251,9 +1258,9 @@ describe('queryRecords', () => {
     });
 
     expect(adapter.capabilities.filter.content).toBe('none');
-    await expect(adapter.queryRecords({ filter: { content: { slug: 'x' } } })).rejects.toThrow(
-      APIAdapterCapabilityError,
-    );
+    await expect(
+      adapter.queryRecords({ limit: 100, filter: { content: { slug: 'x' } } }),
+    ).rejects.toThrow(APIAdapterCapabilityError);
   });
 
   // A malformed path is the caller's error, not the server's missing
@@ -1263,35 +1270,41 @@ describe('queryRecords', () => {
     ["at reach 'field'", 'field'],
   ] as const)('a malformed content path stays a StackBadRequestError %s', async (_label, reach) => {
     const adapter = await openAdapter(discoveryWith({ filter: { content: reach } }));
-    await expect(adapter.queryRecords({ filter: { content: { 'a..b': 1 } } })).rejects.toThrow(
-      StackBadRequestError,
-    );
-    await expect(adapter.queryRecords({ filter: { content: { 'a..b': 1 } } })).rejects.not.toThrow(
-      APIAdapterCapabilityError,
-    );
+    await expect(
+      adapter.queryRecords({ limit: 100, filter: { content: { 'a..b': 1 } } }),
+    ).rejects.toThrow(StackBadRequestError);
+    await expect(
+      adapter.queryRecords({ limit: 100, filter: { content: { 'a..b': 1 } } }),
+    ).rejects.not.toThrow(APIAdapterCapabilityError);
   });
 
   test('throws APIAdapterCapabilityError for contentPresent without the capability', async () => {
     const adapter = await openAdapter(discoveryWith({ filter: { contentPresent: false } }));
     await expect(
-      adapter.queryRecords({ filter: { contentPresent: ['publishedAt'] } }),
+      adapter.queryRecords({ limit: 100, filter: { contentPresent: ['publishedAt'] } }),
     ).rejects.toThrow(APIAdapterCapabilityError);
     expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent
   });
 
   test('throws APIAdapterCapabilityError for a content sort without sort.contentField', async () => {
     const adapter = await openAdapter(discoveryWith({ sort: { contentField: false } }));
-    await expect(adapter.queryRecords({ sort: { contentField: 'publishedAt' } })).rejects.toThrow(
-      APIAdapterCapabilityError,
-    );
+    await expect(
+      adapter.queryRecords({ limit: 100, sort: { contentField: 'publishedAt', direction: 'asc' } }),
+    ).rejects.toThrow(APIAdapterCapabilityError);
     expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent
   });
 
   test.each([
-    ['filter.contentByType', { filter: { contentByType: { 'com.example/note@1': {} } } }],
+    [
+      'filter.contentByType',
+      { limit: 100, filter: { contentByType: { 'com.example/note@1': {} } } },
+    ],
     [
       'sort.contentFieldByType',
-      { sort: { contentFieldByType: { 'com.example/note@1': { field: 'a' } } } },
+      {
+        limit: 100,
+        sort: { contentFieldByType: { 'com.example/note@1': { field: 'a' } }, direction: 'asc' },
+      },
     ],
   ] as const)('refuses %s locally where the server declines it', async (capability, query) => {
     const adapter = await openAdapter(
@@ -1303,9 +1316,9 @@ describe('queryRecords', () => {
 
   test('throws APIAdapterCapabilityError for a native field outside sort.fields', async () => {
     const adapter = await openAdapter(discoveryWith({ sort: { fields: ['createdAt'] } }));
-    await expect(adapter.queryRecords({ sort: { field: 'version' } })).rejects.toThrow(
-      APIAdapterCapabilityError,
-    );
+    await expect(
+      adapter.queryRecords({ limit: 100, sort: { field: 'version', direction: 'asc' } }),
+    ).rejects.toThrow(APIAdapterCapabilityError);
   });
 
   // The reported capability must be the one the query actually asked for.
@@ -1322,14 +1335,16 @@ describe('queryRecords', () => {
       },
     });
     expect(adapter.capabilities.sort.fields).toEqual([]);
-    await expect(adapter.queryRecords({ filter: { search: 'hello' } })).rejects.toMatchObject({
+    await expect(
+      adapter.queryRecords({ limit: 100, filter: { search: 'hello' } }),
+    ).rejects.toMatchObject({
       capability: 'filter.search',
     });
   });
 
   test('throws APIAdapterCapabilityError for filter.search without the capability', async () => {
     const adapter = await openAdapter(discoveryWith({ filter: { search: false } }));
-    await expect(adapter.queryRecords({ filter: { search: 'hello' } })).rejects.toThrow(
+    await expect(adapter.queryRecords({ limit: 100, filter: { search: 'hello' } })).rejects.toThrow(
       APIAdapterCapabilityError,
     );
     expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent
@@ -1339,7 +1354,7 @@ describe('queryRecords', () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(jsonResponse(queryEnvelope));
     await expect(
-      adapter.queryRecords({ filter: { content: { slug: 'hello' } } }),
+      adapter.queryRecords({ limit: 100, filter: { content: { slug: 'hello' } } }),
     ).resolves.toBeDefined();
   });
 });
@@ -1607,7 +1622,7 @@ describe('a mutation answering with no Record body', () => {
 describe('a read answering 200 with an empty body', () => {
   test.each([
     ['getRecord', (a: APIAdapter) => a.getRecord('rec-abc123'), 'GET /records/rec-abc123'],
-    ['queryRecords', (a: APIAdapter) => a.queryRecords({}), 'POST /records/query'],
+    ['queryRecords', (a: APIAdapter) => a.queryRecords({ limit: 100 }), 'POST /records/query'],
     [
       'getVersions',
       (a: APIAdapter) => a.getVersions('rec-abc123'),
@@ -1648,7 +1663,7 @@ describe('a read answering 200 with an empty body', () => {
   // A literal JSON `null` is the same empty answer spelled differently,
   // and the reads with no "absent" case refuse it the same way.
   test.each([
-    ['queryRecords', (a: APIAdapter) => a.queryRecords({})],
+    ['queryRecords', (a: APIAdapter) => a.queryRecords({ limit: 100 })],
     ['getVersions', (a: APIAdapter) => a.getVersions('rec-abc123')],
     ['listTypes', (a: APIAdapter) => a.listTypes()],
   ] as const)('%s refuses a null body', async (_name, call) => {
@@ -1699,7 +1714,7 @@ describe('a 2xx carrying a body that is not JSON', () => {
 
   test.each([
     ['a mutation', (a: APIAdapter) => a.createRecord(record)],
-    ['a query', (a: APIAdapter) => a.queryRecords({})],
+    ['a query', (a: APIAdapter) => a.queryRecords({ limit: 100 })],
   ] as const)('%s reports it too', async (_name, call) => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(nonJsonResponse());
@@ -2249,7 +2264,9 @@ describe('error taxonomy reconstruction', () => {
     mockFetch.mockResolvedValueOnce(
       jsonResponse({ error: { code: 'bad_request', message: 'Invalid cursor' } }, 400),
     );
-    await expect(adapter.queryRecords({ cursor: 'garbage' })).rejects.toThrow(StackBadRequestError);
+    await expect(adapter.queryRecords({ limit: 100, cursor: 'garbage' })).rejects.toThrow(
+      StackBadRequestError,
+    );
   });
 
   test('falls back to status-based reconstruction when the body is not a wire error', async () => {

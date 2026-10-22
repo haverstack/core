@@ -27,6 +27,7 @@ import {
 } from './validate.js';
 import { NATIVE_SORT_FIELDS } from './types/index.js';
 import type {
+  AdapterQuery,
   JournalQuery,
   QuerySort,
   RecordFilter,
@@ -302,13 +303,9 @@ const assertValidSortByType = (byType: unknown): void => {
  * and an explicit sort would be re-checked against the server's declared
  * `sort.fields`. See docs/spec/data-model.md § Sorting and pagination.
  */
-export function normalizeSort(
-  sort: QuerySort | undefined,
-): (QuerySort & { direction: 'asc' | 'desc' }) | undefined {
+export function normalizeSort(sort: QuerySort | undefined): AdapterQuery['sort'] {
   if (!sort) return undefined;
-  return { ...sort, direction: sort.direction ?? 'asc' } as QuerySort & {
-    direction: 'asc' | 'desc';
-  };
+  return { ...sort, direction: sort.direction ?? 'asc' } as AdapterQuery['sort'];
 }
 
 /**

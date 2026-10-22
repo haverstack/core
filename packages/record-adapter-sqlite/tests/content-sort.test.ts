@@ -5,7 +5,8 @@ import { tmpdir } from 'os';
 import { DatabaseSync } from '../src/node-sqlite.js';
 import { NativeSQLiteRecordAdapter } from '../src/index.js';
 import { StackBadRequestError } from '@haverstack/core';
-import type { StackQuery, StackRecord, StackType } from '@haverstack/core';
+import type { StackRecord, StackType } from '@haverstack/core';
+import type { AdapterQuery } from '@haverstack/core/adapter';
 
 // -------------------------------------------------------
 // Test helpers
@@ -42,7 +43,7 @@ const create = async (typeId: string, content: Record<string, unknown>): Promise
   adapter.createRecord(makeRecord(typeId, content));
 
 /** Every record the query matches, followed to the last page. */
-const pagedTitles = async (query: StackQuery): Promise<string[]> => {
+const pagedTitles = async (query: AdapterQuery): Promise<string[]> => {
   const titles: string[] = [];
   let cursor: string | undefined;
   do {
@@ -53,8 +54,10 @@ const pagedTitles = async (query: StackQuery): Promise<string[]> => {
   return titles;
 };
 
-const titles = async (query: StackQuery): Promise<string[]> =>
-  (await adapter.queryRecords(query)).records.map((r) => r.content.title as string);
+const titles = async (query: Omit<AdapterQuery, 'limit'>): Promise<string[]> =>
+  (await adapter.queryRecords({ limit: 100, ...query })).records.map(
+    (r) => r.content.title as string,
+  );
 
 beforeEach(async () => {
   testDir = join(tmpdir(), `sort-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -177,6 +180,7 @@ describe('sorting by a content field', () => {
     for (const title of ['a', 'b', 'c']) await create(ARTICLE, { title, order: 1 });
 
     const result = await adapter.queryRecords({
+      limit: 100,
       sort: { contentField: 'order', direction: 'asc' },
     });
     // All three tie on the sort field, so the id tiebreak orders them.
@@ -234,12 +238,18 @@ describe('paginating a content sort', () => {
     const cursor = page.cursor as string;
 
     await expect(
-      adapter.queryRecords({ sort: { contentField: 'title', direction: 'asc' }, cursor }),
+      adapter.queryRecords({
+        limit: 100,
+        sort: { contentField: 'title', direction: 'asc' },
+        cursor,
+      }),
     ).rejects.toThrow(StackBadRequestError);
     await expect(
-      adapter.queryRecords({ sort: { field: 'createdAt', direction: 'asc' }, cursor }),
+      adapter.queryRecords({ limit: 100, sort: { field: 'createdAt', direction: 'asc' }, cursor }),
     ).rejects.toThrow(StackBadRequestError);
-    await expect(adapter.queryRecords({ cursor })).rejects.toThrow(StackBadRequestError);
+    await expect(adapter.queryRecords({ limit: 100, cursor })).rejects.toThrow(
+      StackBadRequestError,
+    );
   });
 
   test('a native cursor is refused by a content sort', async () => {
@@ -252,6 +262,7 @@ describe('paginating a content sort', () => {
     });
     await expect(
       adapter.queryRecords({
+        limit: 100,
         sort: { contentField: 'title', direction: 'asc' },
         cursor: page.cursor as string,
       }),

@@ -51,6 +51,7 @@ import type {
   BaseId,
   StackAdapter,
   StackQuery,
+  AdapterQuery,
   RecordFilter,
   QueryResult,
   Reach,
@@ -132,7 +133,7 @@ import {
   validateIdTimestampSkew,
   DEFAULT_ID_TIMESTAMP_SKEW_MS,
 } from './record-id.js';
-import { queryAllPages, lookupEntityByDid, MAX_QUERY_LIMIT } from './reads.js';
+import { queryAllPages, lookupEntityByDid, DEFAULT_QUERY_LIMIT, MAX_QUERY_LIMIT } from './reads.js';
 import { contentEqual } from '../record-changes.js';
 import {
   assertAssociationSet,
@@ -1213,17 +1214,17 @@ export class Stack implements StackClient {
    */
   private async dispatchQuery(
     query: StackQuery,
-    read: (resolved: StackQuery, types: Lazy<StackType[]>) => Promise<QueryResult>,
+    read: (resolved: AdapterQuery, types: Lazy<StackType[]>) => Promise<QueryResult>,
   ): Promise<QueryResult> {
     this.assertOpen();
-    const { presentAt, filter, limit: rawLimit, ...rest } = query;
+    const { presentAt, filter, sort, limit: rawLimit, ...rest } = query;
     assertValidContentByType(filter);
     assertQueryCapabilities(filter, this.adapter.capabilities);
-    assertValidSort(query.sort);
-    assertSortCapability(query.sort, this.adapter.capabilities);
+    assertValidSort(sort);
+    assertSortCapability(sort, this.adapter.capabilities);
     assertValidAssociationFilters(filter);
     assertValidBaseIdFilter(filter);
-    const limit = rawLimit !== undefined ? Math.min(rawLimit, MAX_QUERY_LIMIT) : undefined;
+    const limit = Math.min(rawLimit ?? DEFAULT_QUERY_LIMIT, MAX_QUERY_LIMIT);
 
     // Read once whether the filter, the reach or both resolve families.
     const types = new Lazy(() => this.adapter.listTypes());
@@ -1235,9 +1236,9 @@ export class Stack implements StackClient {
     const result = await read(
       {
         ...rest,
-        ...(query.sort && { sort: normalizeSort(query.sort) }),
+        ...(sort && { sort: normalizeSort(sort) }),
         ...(resolvedFilter !== undefined && { filter: resolvedFilter }),
-        ...(limit !== undefined && { limit }),
+        limit,
       },
       types,
     );

@@ -12,7 +12,7 @@ import type {
   StackAdapter,
   StackRecordAdapter,
   StackBlobAdapter,
-  StackQuery,
+  AdapterQuery,
   SubscribeOptions,
 } from '../types/index.js';
 
@@ -72,7 +72,7 @@ export function combineAdapters(parts: {
         parts.record.deleteUnreferencedAttachmentRecords!(fileId, metadataTypeIds),
     }),
     ...(parts.record.queryReadable && {
-      queryReadable: (q: StackQuery, reach: Reach) => parts.record.queryReadable!(q, reach),
+      queryReadable: (q: AdapterQuery, reach: Reach) => parts.record.queryReadable!(q, reach),
     }),
 
     // Forwarded on the same terms, and it decides more than it looks:

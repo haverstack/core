@@ -323,7 +323,10 @@ describe('queryRecords fixtures', () => {
     const adapter = await APIAdapter.open({ url: BASE_URL });
     mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
 
-    await adapter.queryRecords({ sort: { contentField: 'publishedAt', direction: 'asc' } });
+    await adapter.queryRecords({
+      limit: 50,
+      sort: { contentField: 'publishedAt', direction: 'asc' },
+    });
 
     const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
     expect(url).toBe(`${BASE_URL}${fixture.path}`);
@@ -390,7 +393,7 @@ describe('queryRecords fixtures', () => {
       const adapter = await APIAdapter.open({ url: BASE_URL });
       mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
 
-      await adapter.queryRecords({ filter });
+      await adapter.queryRecords({ limit: 50, filter });
 
       const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
       expect(url).toBe(`${BASE_URL}${fixture.path}`);

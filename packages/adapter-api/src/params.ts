@@ -6,7 +6,8 @@
  * content, and `GET /changes`. See docs/spec/wire-format.md § Records.
  */
 
-import type { StackQuery, ChangeFilter, RecordFilter, SubscribeOptions } from '@haverstack/core';
+import type { ChangeFilter, RecordFilter, SubscribeOptions } from '@haverstack/core';
+import type { AdapterQuery } from '@haverstack/core/adapter';
 
 /** A path with its search params attached, or the bare path when there are none. */
 export const withParams = (path: string, params: URLSearchParams): string => {
@@ -37,7 +38,7 @@ const appendCreatedBy = (p: URLSearchParams, createdBy: RecordFilter['createdBy'
     appendEach(p, 'createdByPrincipal', createdBy.principalId);
 };
 
-export const buildQueryParams = (query: StackQuery): URLSearchParams => {
+export const buildQueryParams = (query: AdapterQuery): URLSearchParams => {
   const p = new URLSearchParams();
   const f = query.filter ?? {};
 

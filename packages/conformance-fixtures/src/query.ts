@@ -382,7 +382,7 @@ export const queryRecordsFixtures: ConformanceFixture<
       'distinct from the native column on a raw query string. A server MUST reject a request ' +
       'carrying both with 400. See docs/spec/wire-format.md § Records.',
     method: 'GET',
-    path: '/records?sortContent=publishedAt&direction=asc',
+    path: '/records?sortContent=publishedAt&direction=asc&limit=50',
     responseStatus: 200,
     responseBody: { records: [], cursor: null },
   },
@@ -398,7 +398,7 @@ export const queryRecordsFixtures: ConformanceFixture<
       'whole namespace. ' +
       'See docs/spec/wire-format.md § Records.',
     method: 'GET',
-    path: '/records?relatedTo=1hk153x00001&relatedToLabel=series',
+    path: '/records?relatedTo=1hk153x00001&relatedToLabel=series&limit=50',
     responseStatus: 200,
     responseBody: { records: [], cursor: null },
   },
@@ -410,7 +410,7 @@ export const queryRecordsFixtures: ConformanceFixture<
       'matched one against the other would report group rosters as record references. ' +
       'See docs/spec/wire-format.md § Records.',
     method: 'GET',
-    path: '/records?relatedToEntity=did%3Akey%3Az6MkAlice',
+    path: '/records?relatedToEntity=did%3Akey%3Az6MkAlice&limit=50',
     responseStatus: 200,
     responseBody: { records: [], cursor: null },
   },
@@ -424,7 +424,7 @@ export const queryRecordsFixtures: ConformanceFixture<
       'parameter being present whenever the filter is used — the filter never encodes to ' +
       'nothing. See docs/spec/wire-format.md § Records.',
     method: 'GET',
-    path: '/records?relatedToNs=atproto',
+    path: '/records?relatedToNs=atproto&limit=50',
     responseStatus: 200,
     responseBody: { records: [], cursor: null },
   },
@@ -438,7 +438,7 @@ export const queryRecordsFixtures: ConformanceFixture<
       'content field, which is what referencesFileId asks. ' +
       'See docs/spec/wire-format.md § Records.',
     method: 'GET',
-    path: '/records?attachmentLabel=cover&attachmentFileId=933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d',
+    path: '/records?attachmentLabel=cover&attachmentFileId=933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d&limit=50',
     responseStatus: 200,
     responseBody: { records: [], cursor: null },
   },
@@ -450,7 +450,7 @@ export const queryRecordsFixtures: ConformanceFixture<
       "question deleteAttachment()'s reference check and garbage collection ask. " +
       'See docs/spec/wire-format.md § Records.',
     method: 'GET',
-    path: '/records?referencesFileId=933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d',
+    path: '/records?referencesFileId=933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d&limit=50',
     responseStatus: 200,
     responseBody: { records: [], cursor: null },
   },

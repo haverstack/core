@@ -511,9 +511,15 @@ describe('ifVersion', () => {
       .patchContent(record.id, { text: 'rejected update' }, { ifVersion: 999 })
       .catch(() => {});
 
-    const stillFindsOriginal = await adapter.queryRecords({ filter: { search: 'original' } });
+    const stillFindsOriginal = await adapter.queryRecords({
+      limit: 100,
+      filter: { search: 'original' },
+    });
     expect(stillFindsOriginal.records.map((r) => r.id)).toEqual([record.id]);
-    const doesNotFindRejected = await adapter.queryRecords({ filter: { search: 'rejected' } });
+    const doesNotFindRejected = await adapter.queryRecords({
+      limit: 100,
+      filter: { search: 'rejected' },
+    });
     expect(doesNotFindRejected.records).toEqual([]);
   });
 
@@ -553,7 +559,7 @@ describe('ifVersion', () => {
     expect(untouched?.typeId).toBe(record.typeId);
     expect(untouched?.version).toBe(2);
     // The rejected write must not have disturbed the FTS index either.
-    const stillFindsV2 = await adapter.queryRecords({ filter: { search: 'v2' } });
+    const stillFindsV2 = await adapter.queryRecords({ limit: 100, filter: { search: 'v2' } });
     expect(stillFindsV2.records.map((r) => r.id)).toEqual([record.id]);
 
     const migrated = await adapter.commitMigration(
@@ -753,7 +759,7 @@ describe('records — queries', () => {
     await adapter.createRecord(r2);
     await adapter.createRecord(r3);
     await adapter.deleteRecord(r3.id);
-    const result = await adapter.queryRecords({});
+    const result = await adapter.queryRecords({ limit: 100 });
     expect(result.records.length).toBe(2);
   });
 
@@ -762,7 +768,7 @@ describe('records — queries', () => {
     const record = makeRecord();
     await adapter.createRecord(record);
     await adapter.deleteRecord(record.id);
-    const result = await adapter.queryRecords({ filter: { includeDeleted: true } });
+    const result = await adapter.queryRecords({ limit: 100, filter: { includeDeleted: true } });
     expect(result.records.some((r) => r.id === record.id)).toBe(true);
   });
 
@@ -772,10 +778,10 @@ describe('records — queries', () => {
     await adapter.createRecord(record);
     await adapter.setUnlisted(record.id, true);
 
-    const excluded = await adapter.queryRecords({});
+    const excluded = await adapter.queryRecords({ limit: 100 });
     expect(excluded.records.some((r) => r.id === record.id)).toBe(false);
 
-    const included = await adapter.queryRecords({ filter: { includeUnlisted: true } });
+    const included = await adapter.queryRecords({ limit: 100, filter: { includeUnlisted: true } });
     expect(included.records.some((r) => r.id === record.id)).toBe(true);
   });
 
@@ -788,6 +794,7 @@ describe('records — queries', () => {
     await adapter.createRecord(makeRecord({ id: 'r1' }));
     await expect(
       adapter.queryRecords({
+        limit: 100,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         sort: { field: 'createdAt', direction: 'ASC, (SELECT 1)' as any },
       }),
@@ -800,7 +807,10 @@ describe('records — queries', () => {
     const taskType = makeRecord({ typeId: 'com.example/task@1' });
     await adapter.createRecord(noteType);
     await adapter.createRecord(taskType);
-    const result = await adapter.queryRecords({ filter: { typeId: 'com.example/note@1' } });
+    const result = await adapter.queryRecords({
+      limit: 100,
+      filter: { typeId: 'com.example/note@1' },
+    });
     expect(result.records.every((r) => r.typeId === 'com.example/note@1')).toBe(true);
     expect(result.records.length).toBe(1);
   });
@@ -813,7 +823,7 @@ describe('records — queries', () => {
     await adapter.createRecord(parent);
     await adapter.createRecord(child1);
     await adapter.createRecord(other);
-    const result = await adapter.queryRecords({ filter: { parentId: 'parent' } });
+    const result = await adapter.queryRecords({ limit: 100, filter: { parentId: 'parent' } });
     expect(result.records.length).toBe(1);
     expect(result.records[0].parentId).toBe('parent');
   });
@@ -822,7 +832,7 @@ describe('records — queries', () => {
     const adapter = await initAdapter();
     await adapter.createRecord(makeRecord({ id: 'r1', content: { text: 'alpha', priority: 1 } }));
     await adapter.createRecord(makeRecord({ id: 'r2', content: { text: 'beta', priority: 2 } }));
-    const result = await adapter.queryRecords({ filter: { content: { priority: 1 } } });
+    const result = await adapter.queryRecords({ limit: 100, filter: { content: { priority: 1 } } });
     expect(result.records.length).toBe(1);
     expect(result.records[0].id).toBe('r1');
   });
@@ -834,7 +844,10 @@ describe('records — queries', () => {
     const adapter = await initAdapter();
     await adapter.createRecord(makeRecord({ id: 'r1', content: { text: 'no priority set' } }));
     await adapter.createRecord(makeRecord({ id: 'r2', content: { text: 'has one', priority: 1 } }));
-    const result = await adapter.queryRecords({ filter: { content: { priority: null } } });
+    const result = await adapter.queryRecords({
+      limit: 100,
+      filter: { content: { priority: null } },
+    });
     expect(result.records.length).toBe(1);
     expect(result.records[0].id).toBe('r1');
   });
@@ -845,7 +858,10 @@ describe('records — queries', () => {
       makeRecord({ id: 'r1', content: { text: 'explicit null', priority: null } }),
     );
     await adapter.createRecord(makeRecord({ id: 'r2', content: { text: 'has one', priority: 1 } }));
-    const result = await adapter.queryRecords({ filter: { content: { priority: null } } });
+    const result = await adapter.queryRecords({
+      limit: 100,
+      filter: { content: { priority: null } },
+    });
     expect(result.records.length).toBe(1);
     expect(result.records[0].id).toBe('r1');
   });
@@ -858,10 +874,10 @@ describe('records — queries', () => {
     await adapter.createRecord(makeRecord({ id: 'r2', content: { text: 'undated' } }));
     await adapter.createRecord(makeRecord({ id: 'r3', content: { text: 'null', at: null } }));
 
-    const present = await adapter.queryRecords({ filter: { contentPresent: ['at'] } });
+    const present = await adapter.queryRecords({ limit: 100, filter: { contentPresent: ['at'] } });
     expect(present.records.map((r) => r.id)).toEqual(['r1']);
 
-    const absent = await adapter.queryRecords({ filter: { content: { at: null } } });
+    const absent = await adapter.queryRecords({ limit: 100, filter: { content: { at: null } } });
     expect(absent.records.map((r) => r.id).sort()).toEqual(['r2', 'r3']);
   });
 
@@ -875,7 +891,10 @@ describe('records — queries', () => {
     );
     await adapter.createRecord(makeRecord({ id: 'r3', content: { text: 'empty', emails: [] } }));
 
-    const result = await adapter.queryRecords({ filter: { contentPresent: ['emails.value'] } });
+    const result = await adapter.queryRecords({
+      limit: 100,
+      filter: { contentPresent: ['emails.value'] },
+    });
     expect(result.records.map((r) => r.id)).toEqual(['r1']);
   });
 
@@ -893,6 +912,7 @@ describe('records — queries', () => {
     );
 
     const result = await adapter.queryRecords({
+      limit: 100,
       filter: { contentPresent: ['at'], content: { kind: 'post' } },
       sort: { contentField: 'text', direction: 'asc' },
     });
@@ -907,7 +927,10 @@ describe('records — queries', () => {
     await adapter.createRecord(
       makeRecord({ id: 'r2', content: { text: 'plain', tags: ['todo'] } }),
     );
-    const result = await adapter.queryRecords({ filter: { content: { tags: 'starred' } } });
+    const result = await adapter.queryRecords({
+      limit: 100,
+      filter: { content: { tags: 'starred' } },
+    });
     expect(result.records.map((r) => r.id)).toEqual(['r1']);
   });
 
@@ -920,6 +943,7 @@ describe('records — queries', () => {
       makeRecord({ id: 'r2', content: { text: 'b', address: { city: 'Porto' } } }),
     );
     const result = await adapter.queryRecords({
+      limit: 100,
       filter: { content: { 'address.city': 'Lisbon' } },
     });
     expect(result.records.map((r) => r.id)).toEqual(['r1']);
@@ -948,11 +972,15 @@ describe('records — queries', () => {
       }),
     );
     const byValue = await adapter.queryRecords({
+      limit: 100,
       filter: { content: { 'emails.value': 'a@work.example' } },
     });
     expect(byValue.records.map((r) => r.id)).toEqual(['r1']);
 
-    const byLabel = await adapter.queryRecords({ filter: { content: { 'emails.label': 'work' } } });
+    const byLabel = await adapter.queryRecords({
+      limit: 100,
+      filter: { content: { 'emails.label': 'work' } },
+    });
     expect(byLabel.records.map((r) => r.id)).toEqual(['r1']);
   });
 
@@ -964,14 +992,14 @@ describe('records — queries', () => {
     await adapter.createRecord(
       makeRecord({ id: 'r2', content: { text: 'b', a: { b: { c: 8 } } } }),
     );
-    const result = await adapter.queryRecords({ filter: { content: { 'a.b.c': 7 } } });
+    const result = await adapter.queryRecords({ limit: 100, filter: { content: { 'a.b.c': 7 } } });
     expect(result.records.map((r) => r.id)).toEqual(['r1']);
   });
 
   test('a dotted filter key is a path, never a literal field name', async () => {
     const adapter = await initAdapter();
     await adapter.createRecord(makeRecord({ id: 'r1', content: { text: 'nested', a: { b: 1 } } }));
-    const result = await adapter.queryRecords({ filter: { content: { 'a.b': 1 } } });
+    const result = await adapter.queryRecords({ limit: 100, filter: { content: { 'a.b': 1 } } });
     expect(result.records.map((r) => r.id)).toEqual(['r1']);
   });
 
@@ -985,25 +1013,31 @@ describe('records — queries', () => {
     await adapter.createRecord(
       makeRecord({ id: 'r4', content: { text: 'present', address: { city: 'Lisbon' } } }),
     );
-    const result = await adapter.queryRecords({ filter: { content: { 'address.city': null } } });
+    const result = await adapter.queryRecords({
+      limit: 100,
+      filter: { content: { 'address.city': null } },
+    });
     expect(result.records.map((r) => r.id).sort()).toEqual(['r1', 'r2', 'r3']);
   });
 
   test('a filter path descending through a scalar matches nothing', async () => {
     const adapter = await initAdapter();
     await adapter.createRecord(makeRecord({ id: 'r1', content: { text: 'a', a: 'hello' } }));
-    const result = await adapter.queryRecords({ filter: { content: { 'a.b': 'hello' } } });
+    const result = await adapter.queryRecords({
+      limit: 100,
+      filter: { content: { 'a.b': 'hello' } },
+    });
     expect(result.records).toEqual([]);
   });
 
   test('a filter path segment carrying a reserved character is refused', async () => {
     const adapter = await initAdapter();
     await expect(
-      adapter.queryRecords({ filter: { content: { 'emails[0]': 'x' } } }),
+      adapter.queryRecords({ limit: 100, filter: { content: { 'emails[0]': 'x' } } }),
     ).rejects.toThrow(StackBadRequestError);
-    await expect(adapter.queryRecords({ filter: { content: { 'a..b': 'x' } } })).rejects.toThrow(
-      StackBadRequestError,
-    );
+    await expect(
+      adapter.queryRecords({ limit: 100, filter: { content: { 'a..b': 'x' } } }),
+    ).rejects.toThrow(StackBadRequestError);
   });
 
   test('two content filters both apply', async () => {
@@ -1015,6 +1049,7 @@ describe('records — queries', () => {
       makeRecord({ id: 'r2', content: { text: 'b', a: { b: 1 }, c: 'no' } }),
     );
     const result = await adapter.queryRecords({
+      limit: 100,
       filter: { content: { 'a.b': 1, c: 'yes' } },
     });
     expect(result.records.map((r) => r.id)).toEqual(['r1']);
@@ -1031,7 +1066,10 @@ describe('records — queries', () => {
     await adapter.createRecord(makeRecord({ id: 'r1', content: { text: 'a', [key]: 'hit' } }));
     await adapter.createRecord(makeRecord({ id: 'r2', content: { text: 'b', other: 'miss' } }));
 
-    const result = await adapter.queryRecords({ filter: { content: { [key]: 'hit' } } });
+    const result = await adapter.queryRecords({
+      limit: 100,
+      filter: { content: { [key]: 'hit' } },
+    });
     expect(result.records.map((r) => r.id)).toEqual(['r1']);
   });
 
@@ -1043,9 +1081,9 @@ describe('records — queries', () => {
     await adapter.createRecord(makeRecord({ id: 'r1', content: { text: 'present' } }));
 
     for (const key of ['$.', '[', '"', 'a[0', '', 'a..b', '*', '#']) {
-      await expect(adapter.queryRecords({ filter: { content: { [key]: 'x' } } })).rejects.toThrow(
-        StackBadRequestError,
-      );
+      await expect(
+        adapter.queryRecords({ limit: 100, filter: { content: { [key]: 'x' } } }),
+      ).rejects.toThrow(StackBadRequestError);
     }
   });
 
@@ -1063,13 +1101,13 @@ describe('records — queries', () => {
     );
 
     await expect(
-      adapter.queryRecords({ filter: { content: { [deepest]: 'x' } } }),
+      adapter.queryRecords({ limit: 100, filter: { content: { [deepest]: 'x' } } }),
     ).resolves.toMatchObject({ records: [{ id: 'r2' }] });
     await expect(
-      adapter.queryRecords({ filter: { content: { [deepest]: null } } }),
+      adapter.queryRecords({ limit: 100, filter: { content: { [deepest]: null } } }),
     ).resolves.toMatchObject({ records: [{ id: 'r1' }] });
     await expect(
-      adapter.queryRecords({ filter: { content: { [`${deepest}.s33`]: 'x' } } }),
+      adapter.queryRecords({ limit: 100, filter: { content: { [`${deepest}.s33`]: 'x' } } }),
     ).rejects.toThrow(StackBadRequestError);
   });
 
@@ -1084,10 +1122,14 @@ describe('records — queries', () => {
     await adapter.createRecord(makeRecord({ id: 'r2', content: { text: 'b', obj: { k: 'v' } } }));
 
     const nested = await adapter.queryRecords({
+      limit: 100,
       filter: { content: { 'a.b': '{"k":"v"}' } },
     });
     expect(nested.records).toEqual([]);
-    const top = await adapter.queryRecords({ filter: { content: { obj: '{"k":"v"}' } } });
+    const top = await adapter.queryRecords({
+      limit: 100,
+      filter: { content: { obj: '{"k":"v"}' } },
+    });
     expect(top.records).toEqual([]);
   });
 
@@ -1097,7 +1139,7 @@ describe('records — queries', () => {
     await adapter.createRecord(
       makeRecord({ id: 'r2', content: { text: 'Postgres is also great' } }),
     );
-    const result = await adapter.queryRecords({ filter: { search: 'SQLite' } });
+    const result = await adapter.queryRecords({ limit: 100, filter: { search: 'SQLite' } });
     expect(result.records.length).toBe(1);
     expect(result.records[0].id).toBe('r1');
   });
@@ -1111,7 +1153,7 @@ describe('records — queries', () => {
     await adapter.createRecord(
       makeRecord({ id: 'r2', content: { text: 'Postgres is also great' } }),
     );
-    const result = await adapter.queryRecords({ filter: { search: '*' } });
+    const result = await adapter.queryRecords({ limit: 100, filter: { search: '*' } });
     expect(result.records).toEqual([]);
   });
 
@@ -1136,7 +1178,7 @@ describe('records — queries', () => {
   ])('search survives %s', async (_label, search) => {
     const adapter = await initAdapter();
     await adapter.createRecord(makeRecord({ id: 'r1', content: { text: 'SQLite is great' } }));
-    await expect(adapter.queryRecords({ filter: { search } })).resolves.toBeDefined();
+    await expect(adapter.queryRecords({ limit: 100, filter: { search } })).resolves.toBeDefined();
   });
 
   test('a repaired search still finds its terms', async () => {
@@ -1145,7 +1187,7 @@ describe('records — queries', () => {
     await adapter.createRecord(
       makeRecord({ id: 'r2', content: { text: 'Postgres is also great' } }),
     );
-    const result = await adapter.queryRecords({ filter: { search: 'SQLite AND' } });
+    const result = await adapter.queryRecords({ limit: 100, filter: { search: 'SQLite AND' } });
     expect(result.records.map((r) => r.id)).toEqual(['r1']);
   });
 
@@ -1159,9 +1201,9 @@ describe('records — queries', () => {
     vi.spyOn(execOf(adapter), 'all').mockImplementation(() => {
       throw new Error('fts5: syntax error near ""');
     });
-    await expect(adapter.queryRecords({ filter: { search: 'anything' } })).rejects.toThrow(
-      StackBadRequestError,
-    );
+    await expect(
+      adapter.queryRecords({ limit: 100, filter: { search: 'anything' } }),
+    ).rejects.toThrow(StackBadRequestError);
   });
 
   test('a non-search query failure is not relabelled as a bad request', async () => {
@@ -1169,7 +1211,7 @@ describe('records — queries', () => {
     vi.spyOn(execOf(adapter), 'all').mockImplementation(() => {
       throw new Error('database disk image is malformed');
     });
-    await expect(adapter.queryRecords({ filter: { typeId: 'x/y@1' } })).rejects.toThrow(
+    await expect(adapter.queryRecords({ limit: 100, filter: { typeId: 'x/y@1' } })).rejects.toThrow(
       'database disk image is malformed',
     );
   });
@@ -1180,9 +1222,9 @@ describe('records — queries', () => {
     await adapter.createRecord(record);
     await adapter.patchContent(record.id, { text: 'updated content here' });
 
-    const staleSearch = await adapter.queryRecords({ filter: { search: 'original' } });
+    const staleSearch = await adapter.queryRecords({ limit: 100, filter: { search: 'original' } });
     expect(staleSearch.records).toEqual([]);
-    const freshSearch = await adapter.queryRecords({ filter: { search: 'updated' } });
+    const freshSearch = await adapter.queryRecords({ limit: 100, filter: { search: 'updated' } });
     expect(freshSearch.records.map((r) => r.id)).toEqual([record.id]);
   });
 
@@ -1192,7 +1234,7 @@ describe('records — queries', () => {
     await adapter.createRecord(record);
     await adapter.deleteRecord(record.id, { purge: true });
 
-    const result = await adapter.queryRecords({ filter: { search: 'findme' } });
+    const result = await adapter.queryRecords({ limit: 100, filter: { search: 'findme' } });
     expect(result.records).toEqual([]);
   });
 
@@ -1222,9 +1264,9 @@ describe('records — queries', () => {
   test('malformed cursor throws StackBadRequestError', async () => {
     const adapter = await initAdapter();
     await adapter.createRecord(makeRecord({ id: 'r1' }));
-    await expect(adapter.queryRecords({ cursor: '!!!not-a-cursor!!!' })).rejects.toThrow(
-      StackBadRequestError,
-    );
+    await expect(
+      adapter.queryRecords({ limit: 100, cursor: '!!!not-a-cursor!!!' }),
+    ).rejects.toThrow(StackBadRequestError);
   });
 
   test('cursor minted under one sort field replayed with a different sort field throws StackBadRequestError', async () => {
@@ -1252,7 +1294,10 @@ describe('records — queries', () => {
     await adapter.createRecord(makeRecord({ id: 'r1', createdAt: new Date(1000) }));
     await adapter.createRecord(makeRecord({ id: 'r2', createdAt: new Date(2000) }));
     await adapter.createRecord(makeRecord({ id: 'r3', createdAt: new Date(3000) }));
-    const result = await adapter.queryRecords({ sort: { field: 'createdAt', direction: 'desc' } });
+    const result = await adapter.queryRecords({
+      limit: 100,
+      sort: { field: 'createdAt', direction: 'desc' },
+    });
     expect(result.records.map((r) => r.id)).toEqual(['r3', 'r2', 'r1']);
   });
 });
@@ -1289,7 +1334,10 @@ describe('file-ref indexing', () => {
       makeRecord({ id: 'r1', typeId: FILE_REF_TYPE.id, content: { coverFileId: 'file-1' } }),
     );
 
-    const result = await adapter.queryRecords({ filter: { referencesFileId: 'file-1' } });
+    const result = await adapter.queryRecords({
+      limit: 100,
+      filter: { referencesFileId: 'file-1' },
+    });
     expect(result.records.map((r) => r.id)).toEqual(['r1']);
   });
 
@@ -1300,7 +1348,10 @@ describe('file-ref indexing', () => {
       makeRecord({ id: 'r1', typeId: STRING_TYPE.id, content: { coverFileId: 'file-1' } }),
     );
 
-    const result = await adapter.queryRecords({ filter: { referencesFileId: 'file-1' } });
+    const result = await adapter.queryRecords({
+      limit: 100,
+      filter: { referencesFileId: 'file-1' },
+    });
     expect(result.records).toEqual([]);
   });
 
@@ -1315,9 +1366,15 @@ describe('file-ref indexing', () => {
     await adapter.createRecord(record);
     await adapter.patchContent('r1', { coverFileId: 'file-2' });
 
-    const oldMatch = await adapter.queryRecords({ filter: { referencesFileId: 'file-1' } });
+    const oldMatch = await adapter.queryRecords({
+      limit: 100,
+      filter: { referencesFileId: 'file-1' },
+    });
     expect(oldMatch.records).toEqual([]);
-    const newMatch = await adapter.queryRecords({ filter: { referencesFileId: 'file-2' } });
+    const newMatch = await adapter.queryRecords({
+      limit: 100,
+      filter: { referencesFileId: 'file-2' },
+    });
     expect(newMatch.records.map((r) => r.id)).toEqual(['r1']);
   });
 
@@ -1329,7 +1386,10 @@ describe('file-ref indexing', () => {
     );
     await adapter.deleteRecord('r1', { purge: true });
 
-    const result = await adapter.queryRecords({ filter: { referencesFileId: 'file-1' } });
+    const result = await adapter.queryRecords({
+      limit: 100,
+      filter: { referencesFileId: 'file-1' },
+    });
     expect(result.records).toEqual([]);
   });
 
@@ -1360,14 +1420,14 @@ describe('file-ref indexing', () => {
     await adapter.createRecord(
       makeRecord({ id: 'r1', typeId: FILE_REF_TYPE.id, content: { coverFileId: 'file-1' } }),
     );
-    let result = await adapter.queryRecords({ filter: { referencesFileId: 'file-1' } });
+    let result = await adapter.queryRecords({ limit: 100, filter: { referencesFileId: 'file-1' } });
     expect(result.records.map((r) => r.id)).toEqual(['r1']);
 
     // Redefine the same typeId so coverFileId is no longer a file-ref field.
     await adapter.saveType({ ...FILE_REF_TYPE, schema: STRING_TYPE.schema });
     await adapter.patchContent('r1', { coverFileId: 'file-1' });
 
-    result = await adapter.queryRecords({ filter: { referencesFileId: 'file-1' } });
+    result = await adapter.queryRecords({ limit: 100, filter: { referencesFileId: 'file-1' } });
     expect(result.records).toEqual([]);
   });
 
@@ -1383,7 +1443,10 @@ describe('file-ref indexing', () => {
       makeRecord({ id: 'r1', typeId: FILE_REF_TYPE.id, content: { coverFileId: 'file-1' } }),
     );
 
-    const result = await reopened.queryRecords({ filter: { referencesFileId: 'file-1' } });
+    const result = await reopened.queryRecords({
+      limit: 100,
+      filter: { referencesFileId: 'file-1' },
+    });
     expect(result.records.map((r) => r.id)).toEqual(['r1']);
   });
 });
@@ -1703,6 +1766,7 @@ describe('records — relatedTo filter', () => {
     const adapter = await initAdapter();
     await seed(adapter);
     const result = await adapter.queryRecords({
+      limit: 100,
       filter: { relatedTo: { target: { kind: 'record', recordId: 'rec-subject' } } },
     });
     expect(ids(result)).toEqual(['rec-series']);
@@ -1712,6 +1776,7 @@ describe('records — relatedTo filter', () => {
     const adapter = await initAdapter();
     await seed(adapter);
     const result = await adapter.queryRecords({
+      limit: 100,
       filter: { relatedTo: { target: { kind: 'entity', entityId: 'did:key:z6MkAlice' } } },
     });
     expect(ids(result)).toEqual(['rec-authored']);
@@ -1721,6 +1786,7 @@ describe('records — relatedTo filter', () => {
     const adapter = await initAdapter();
     await seed(adapter);
     const result = await adapter.queryRecords({
+      limit: 100,
       filter: { relatedTo: { target: { kind: 'external', ns: 'atproto' } } },
     });
     expect(ids(result)).toEqual(['rec-syndicated']);
@@ -1729,7 +1795,10 @@ describe('records — relatedTo filter', () => {
   test('a bare label matches every target under it', async () => {
     const adapter = await initAdapter();
     await seed(adapter);
-    const result = await adapter.queryRecords({ filter: { relatedTo: { label: 'author' } } });
+    const result = await adapter.queryRecords({
+      limit: 100,
+      filter: { relatedTo: { label: 'author' } },
+    });
     expect(ids(result)).toEqual(['rec-authored']);
   });
 
@@ -1739,6 +1808,7 @@ describe('records — relatedTo filter', () => {
     const adapter = await initAdapter();
     await seed(adapter);
     const result = await adapter.queryRecords({
+      limit: 100,
       filter: { relatedTo: { target: { kind: 'record', recordId: 'did:key:z6MkAlice' } } },
     });
     expect(result.records).toHaveLength(0);
@@ -1766,11 +1836,13 @@ describe('records — relatedTo filter', () => {
     ]);
 
     const local = await adapter.queryRecords({
+      limit: 100,
       filter: { relatedTo: { target: { kind: 'record', recordId: 'rec-elsewhere' } } },
     });
     expect(local.records).toHaveLength(0);
 
     const scoped = await adapter.queryRecords({
+      limit: 100,
       filter: {
         relatedTo: {
           target: {
@@ -1807,6 +1879,7 @@ describe('records — attachment filter', () => {
     const adapter = await initAdapter();
     await seed(adapter);
     const result = await adapter.queryRecords({
+      limit: 100,
       filter: { attachment: { label: 'cover', fileId: 'file-2' } },
     });
     expect(ids(result)).toEqual(['rec-cover']);
@@ -1815,14 +1888,20 @@ describe('records — attachment filter', () => {
   test('a label alone matches every file under it', async () => {
     const adapter = await initAdapter();
     await seed(adapter);
-    const result = await adapter.queryRecords({ filter: { attachment: { label: 'cover' } } });
+    const result = await adapter.queryRecords({
+      limit: 100,
+      filter: { attachment: { label: 'cover' } },
+    });
     expect(ids(result)).toEqual(['rec-both', 'rec-cover']);
   });
 
   test('a fileId alone matches every label holding it', async () => {
     const adapter = await initAdapter();
     await seed(adapter);
-    const result = await adapter.queryRecords({ filter: { attachment: { fileId: 'file-2' } } });
+    const result = await adapter.queryRecords({
+      limit: 100,
+      filter: { attachment: { fileId: 'file-2' } },
+    });
     expect(ids(result)).toEqual(['rec-both', 'rec-cover']);
   });
 });
@@ -1903,6 +1982,7 @@ describe('setAccess and editAccess', () => {
     await adapter.editAccess(record.id, [{ op: 'add', association: grant }]);
 
     const related = await adapter.queryRecords({
+      limit: 100,
       filter: { relatedTo: { target: { kind: 'entity', entityId } } },
     });
     expect(related.records.map((r) => r.id)).not.toContain(record.id);
@@ -1956,7 +2036,7 @@ describe('absent fields are read by presence, not truthiness', () => {
     await adapter.createRecord(record);
     expect((await adapter.getRecord(record.id))?.parentId).toBe('');
     // And it is not at the root, which is what the filter already said.
-    const roots = await adapter.queryRecords({ filter: { parentId: null } });
+    const roots = await adapter.queryRecords({ limit: 100, filter: { parentId: null } });
     expect(roots.records.map((r) => r.id)).not.toContain(record.id);
   });
 
@@ -1976,7 +2056,7 @@ describe('absent fields are read by presence, not truthiness', () => {
     await adapter.createRecord(record);
     expect((await adapter.getRecord(record.id))?.deletedAt).toEqual(new Date(0));
     // The query predicate already excluded it; now getRecord() agrees.
-    const live = await adapter.queryRecords({});
+    const live = await adapter.queryRecords({ limit: 100 });
     expect(live.records.map((r) => r.id)).not.toContain(record.id);
   });
 
@@ -2049,7 +2129,7 @@ describe('setParent', () => {
     await adapter.createRecord(box);
     await adapter.createRecord(record);
     await adapter.setParent(record.id, box.id);
-    const result = await adapter.queryRecords({ filter: { parentId: box.id } });
+    const result = await adapter.queryRecords({ limit: 100, filter: { parentId: box.id } });
     expect(result.records.map((r) => r.id)).toEqual([record.id]);
   });
 
@@ -2122,7 +2202,9 @@ describe('versions', () => {
     const restored = await adapter.restoreVersion(record.id, 1);
     expect(restored.content).toEqual({ text: 'original' });
     expect(restored.parentId).toBe(box.id);
-    expect((await adapter.queryRecords({ filter: { parentId: box.id } })).records).toHaveLength(1);
+    expect(
+      (await adapter.queryRecords({ limit: 100, filter: { parentId: box.id } })).records,
+    ).toHaveLength(1);
   });
 
   test('restoreVersion leaves a root record at the root', async () => {
@@ -2139,7 +2221,9 @@ describe('versions', () => {
     });
     const restored = await adapter.restoreVersion(record.id, 1);
     expect(restored.parentId).toBeUndefined();
-    expect((await adapter.queryRecords({ filter: { parentId: null } })).records).toHaveLength(2);
+    expect(
+      (await adapter.queryRecords({ limit: 100, filter: { parentId: null } })).records,
+    ).toHaveLength(2);
   });
 
   test('saveVersion throws on a (record, version) collision instead of silently dropping the snapshot', async () => {
@@ -2315,9 +2399,15 @@ describe('restoreVersion', () => {
 
     await adapter.restoreVersion(record.id, 1);
 
-    const findsOriginal = await adapter.queryRecords({ filter: { search: 'searchable' } });
+    const findsOriginal = await adapter.queryRecords({
+      limit: 100,
+      filter: { search: 'searchable' },
+    });
     expect(findsOriginal.records.map((r) => r.id)).toEqual([record.id]);
-    const findsChanged = await adapter.queryRecords({ filter: { search: 'unrelated' } });
+    const findsChanged = await adapter.queryRecords({
+      limit: 100,
+      filter: { search: 'unrelated' },
+    });
     expect(findsChanged.records).toEqual([]);
   });
 

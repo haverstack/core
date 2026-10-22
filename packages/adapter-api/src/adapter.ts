@@ -34,7 +34,6 @@ import type {
   StackType,
   TypeId,
   RecordVersion,
-  StackQuery,
   QueryResult,
   IfVersionOptions,
   AssociationEdit,
@@ -56,7 +55,7 @@ import {
   assertValidAssociationFilters,
   filtersContent,
 } from '@haverstack/core/adapter';
-import type { StackAdapter } from '@haverstack/core/adapter';
+import type { AdapterQuery, StackAdapter } from '@haverstack/core/adapter';
 import { assertQueryTravels } from '@haverstack/core/wire';
 import type { DidCredential } from '@haverstack/core/wire';
 import {
@@ -588,7 +587,7 @@ export class APIAdapter implements StackAdapter {
     });
   }
 
-  async queryRecords(query: StackQuery): Promise<QueryResult> {
+  async queryRecords(query: AdapterQuery): Promise<QueryResult> {
     // Delegates the fail-loud decision to core's shared
     // assertQueryCapabilities so the wire and local paths enforce one rule
     // — re-thrown as APIAdapterCapabilityError for this adapter's callers.

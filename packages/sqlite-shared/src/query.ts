@@ -19,10 +19,9 @@ import {
   type ContentArm,
   type ContentSortKey,
   type NativeSortField,
-  type StackQuery,
 } from '@haverstack/core';
 import { constantSortEntry, contentSortKey, parseContentFilterKey } from '@haverstack/core/adapter';
-import type { Reach, SortEntry } from '@haverstack/core/adapter';
+import type { AdapterQuery, Reach, SortEntry } from '@haverstack/core/adapter';
 import {
   byTypeDescriptor,
   decodeCursor,
@@ -54,7 +53,7 @@ export const atBudget = (page: QueryStatement, rows: number): QueryStatement => 
  * text, so an unchecked value here would be an injection sink. Core
  * resolves the default direction before any adapter sees the query.
  */
-const sqlDirection = (query: StackQuery): 'ASC' | 'DESC' => {
+const sqlDirection = (query: AdapterQuery): 'ASC' | 'DESC' => {
   // No sort at all is the unsorted default; a sort always carries its direction.
   const dir = query.sort ? query.sort.direction : 'desc';
   if (dir !== 'asc' && dir !== 'desc') {
@@ -272,7 +271,7 @@ const reachConditions = (s: Statement, reach: Reach): void => {
  * except where in the ordering to resume, which is per-partition and gets
  * appended by the caller.
  */
-const recordConditions = (query: StackQuery, reach: Reach | undefined): Statement => {
+const recordConditions = (query: AdapterQuery, reach: Reach | undefined): Statement => {
   const s = emptyStatement();
   const { conditions, params } = s;
   const f = query.filter ?? {};
@@ -491,7 +490,7 @@ const statement = (s: Statement, from: string, tail: string): QueryStatement => 
  * so the second is never run for a page that doesn't reach it. Each still
  * needs the row budget its `LIMIT ?` binds — see atBudget.
  */
-export const buildQueryPlan = (query: StackQuery, reach?: Reach): QueryStatement[] => {
+export const buildQueryPlan = (query: AdapterQuery, reach?: Reach): QueryStatement[] => {
   const dir = sqlDirection(query);
   const op = dir === 'ASC' ? '>' : '<';
   const decoded = query.cursor ? decodeCursor(query.cursor) : null;
@@ -558,7 +557,7 @@ export const buildQueryPlan = (query: StackQuery, reach?: Reach): QueryStatement
  * constants are each rows(). See docs/spec/data-model.md § Sorting by a content field.
  */
 const byTypePlan = (
-  query: StackQuery,
+  query: AdapterQuery,
   reach: Reach | undefined,
   byType: Record<string, ContentSortKey>,
   dir: 'ASC' | 'DESC',

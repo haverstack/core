@@ -8523,6 +8523,14 @@ describe('query — sort direction defaults', () => {
     expect(spy.mock.calls[0]![0]).not.toHaveProperty('sort');
     expect(spy.mock.calls[1]![0].sort).toEqual({ contentField: 'text', direction: 'asc' });
   });
+
+  test('the adapter receives an explicit limit: the default page, or the ceiling', async () => {
+    const spy = vi.spyOn(adapter, 'queryRecords');
+    await stack.query();
+    await stack.query({ limit: 5 });
+    await stack.query({ limit: 5000 });
+    expect(spy.mock.calls.map(([q]) => q.limit)).toEqual([50, 5, 1000]);
+  });
 });
 
 // -------------------------------------------------------

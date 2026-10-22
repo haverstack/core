@@ -24,7 +24,6 @@ import type {
   TypeId,
   FileId,
   RecordVersion,
-  StackQuery,
   QueryResult,
   Association,
   AssociationEdit,
@@ -39,6 +38,7 @@ import {
   softDeletedRefusal,
 } from '@haverstack/core/adapter';
 import type {
+  AdapterQuery,
   AspectWriteOptions,
   ElementWriteOptions,
   JournalEntryInput,
@@ -69,7 +69,7 @@ import { makeCursor } from './cursor.js';
  * fully repair. Any other clause is built from parameters, so a parse
  * error there is this module's bug and is rethrown untouched.
  */
-const asStackBadRequestError = <T>(query: StackQuery, run: () => T): T => {
+const asStackBadRequestError = <T>(query: AdapterQuery, run: () => T): T => {
   try {
     return run();
   } catch (err) {
@@ -495,17 +495,17 @@ export class SharedSqlRecordLogic {
     this.contentIndex.sync(id, typeId, content);
   }
 
-  queryRecords(query: StackQuery): Promise<QueryResult> {
+  queryRecords(query: AdapterQuery): Promise<QueryResult> {
     return this.page(query);
   }
 
-  queryReadable(query: StackQuery, reach: Reach): Promise<QueryResult> {
+  queryReadable(query: AdapterQuery, reach: Reach): Promise<QueryResult> {
     return this.page(query, reach);
   }
 
   /** `reach`, when given, is one more condition of every statement in the plan. */
-  private async page(query: StackQuery, reach?: Reach): Promise<QueryResult> {
-    const limit = query.limit ?? 50;
+  private async page(query: AdapterQuery, reach?: Reach): Promise<QueryResult> {
+    const { limit } = query;
     // One extra row, to learn whether a further page follows.
     const fetch = limit + 1;
 

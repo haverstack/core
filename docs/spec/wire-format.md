@@ -336,6 +336,8 @@ This is what lets a client report a mutation's outcome without a second read, an
 
 **`?sort=` or `?sortContent=` without `?direction=` is ascending, and a request with no sort is `createdAt`, newest first.** In a `POST /records/query` body, `sort.direction` absent means the same. A server built on `Stack.query()` inherits both; see [Data model § Sorting and pagination](./data-model.md#sorting-and-pagination).
 
+**A server built on `Stack.query()` answers a request without `?limit=` with a page of 50**, and one above 1000 with 1000. `APIAdapter` always sends a `limit`, since `Stack` resolves it before any adapter sees the query, so the default serves foreign clients.
+
 `GET /records` covers all native field queries and is usable from a browser or simple HTTP client without a JSON body. `POST /records/query` is a superset — it accepts the full `StackQuery` object as a JSON body and additionally supports `content` field filtering. A server that declares `filter.content: "none"` in discovery does not support the POST query endpoint.
 
 `@haverstack/core/wire` exports a conforming implementation of both — `parseQueryParams()` for the params above and `parseQueryBody()` for the JSON body — the same way [Authentication](#authentication) points at the handshake helpers. The table stays normative for a server written in another language; a server built on core inherits the grammar rather than transcribing it.

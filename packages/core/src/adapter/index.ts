@@ -9,6 +9,7 @@
  */
 
 export type {
+  AdapterQuery,
   StackAdapter,
   StackRecordAdapter,
   StackBlobAdapter,
