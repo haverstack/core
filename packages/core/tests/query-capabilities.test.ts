@@ -99,7 +99,10 @@ describe('a refused query names the capability it needed', () => {
   test('sort.contentField', () => {
     expect(
       refusalFor(() =>
-        assertSortCapability({ contentField: 'slug' }, without({ sort: { contentField: false } })),
+        assertSortCapability(
+          { contentField: 'slug', direction: 'asc' },
+          without({ sort: { contentField: false } }),
+        ),
       ),
     ).toBe('sort.contentField');
   });
@@ -145,7 +148,10 @@ describe('a refused query names the capability it needed', () => {
   });
 
   test('sort.contentFieldByType declined', () => {
-    const sort = { contentFieldByType: { 'com.example/x@1': { field: 'a' } } };
+    const sort = {
+      contentFieldByType: { 'com.example/x@1': { field: 'a' } },
+      direction: 'asc' as const,
+    };
     expect(
       refusalFor(() =>
         assertSortCapability(sort, without({ sort: { contentFieldByType: false } })),
@@ -158,6 +164,7 @@ describe('a refused query names the capability it needed', () => {
     const filter = { contentByType: Object.fromEntries(typeIds.map((id) => [id, {}])) };
     const sort = {
       contentFieldByType: Object.fromEntries(typeIds.map((id) => [id, { field: 'a' }])),
+      direction: 'asc' as const,
     };
     expect(() => assertQueryCapabilities(filter, ALL)).not.toThrow();
     expect(() => assertSortCapability(sort, ALL)).not.toThrow();
@@ -166,7 +173,10 @@ describe('a refused query names the capability it needed', () => {
   test('sort.fields', () => {
     expect(
       refusalFor(() =>
-        assertSortCapability({ field: 'version' }, without({ sort: { fields: [] } })),
+        assertSortCapability(
+          { field: 'version', direction: 'asc' },
+          without({ sort: { fields: [] } }),
+        ),
       ),
     ).toBe('sort.fields');
   });

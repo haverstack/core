@@ -27,6 +27,7 @@
 
 import { StackBadRequestError } from '../errors.js';
 import { TARGET_KEYS } from '../associations/validation.js';
+import { assertWindowInteger } from '../query-validation.js';
 import { NATIVE_SORT_FIELDS } from '../types/index.js';
 import type {
   DataAssociation,
@@ -544,8 +545,9 @@ export function parseQueryParams(url: URL): StackQuery {
 
 /** Validate a limit that already arrived as a JSON number. */
 function parseLimitValue(raw: unknown): number {
-  if (typeof raw !== 'number' || !Number.isInteger(raw) || raw <= 0)
+  if (typeof raw !== 'number')
     throw new StackBadRequestError(`Invalid limit: ${JSON.stringify(raw)}`);
+  assertWindowInteger(raw, 'limit', 1);
   return raw;
 }
 

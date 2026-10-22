@@ -54,7 +54,7 @@ import {
   AUTH_FIXTURE_SIGNATURE,
   AUTH_FIXTURE_FOREIGN_SIGNATURE,
 } from '@haverstack/conformance-fixtures';
-import type { AssociationEdit, StackType } from '@haverstack/core';
+import type { AssociationEdit, StackQuery, StackType } from '@haverstack/core';
 import type { WireAuthError, WireVersionsResponse } from '@haverstack/wire-types';
 import {
   StackPermissionError,
@@ -72,8 +72,10 @@ import {
   verifyAuthChallenge,
   base64urlDecode,
   didCredentialFromKeypair,
+  parseQueryParams,
 } from '@haverstack/core/wire';
 import { generateDidKeypair } from '@haverstack/core/did';
+import { resolveQuery } from '@haverstack/core/adapter';
 
 useFetchMock();
 
@@ -287,6 +289,15 @@ describe('createRecord fixtures', () => {
 });
 
 describe('queryRecords fixtures', () => {
+  // A fixture's request is one any client may send; APIAdapter sends the
+  // same query with Stack's defaults resolved.
+  const fixtureQuery = (path: string): StackQuery =>
+    resolveQuery(parseQueryParams(new URL(`${BASE_URL}${path}`)));
+  const sentQuery = (url: string): StackQuery => {
+    expect(new URL(url).pathname).toBe('/records');
+    return parseQueryParams(new URL(url));
+  };
+
   const NATIVE_ONLY_DISCOVERY = {
     ...DISCOVERY,
     capabilities: {
@@ -300,12 +311,13 @@ describe('queryRecords fixtures', () => {
       const adapter = await openAdapter();
       mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
 
-      const result = await adapter.queryRecords(fixture.requestBody as never);
+      const query = resolveQuery(fixture.requestBody as StackQuery);
+      const result = await adapter.queryRecords(query);
 
       const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
       expect(url).toBe(`${BASE_URL}${fixture.path}`);
       expect(init.method).toBe(fixture.method);
-      expect(JSON.parse(init.body as string)).toEqual(fixture.requestBody);
+      expect(JSON.parse(init.body as string)).toEqual(query);
       expect(result.records.map((r) => r.id)).toEqual(
         fixture.responseBody!.records.map((r) => r.id),
       );
@@ -323,13 +335,12 @@ describe('queryRecords fixtures', () => {
     const adapter = await APIAdapter.open({ url: BASE_URL });
     mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
 
-    await adapter.queryRecords({
-      limit: 50,
-      sort: { contentField: 'publishedAt', direction: 'asc' },
-    });
+    await adapter.queryRecords(
+      resolveQuery({ sort: { contentField: 'publishedAt', direction: 'asc' } }),
+    );
 
     const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
-    expect(url).toBe(`${BASE_URL}${fixture.path}`);
+    expect(sentQuery(url)).toEqual(fixtureQuery(fixture.path));
     expect(init.method).toBe('GET');
   });
 
@@ -341,13 +352,15 @@ describe('queryRecords fixtures', () => {
     const adapter = await APIAdapter.open({ url: BASE_URL });
     mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
 
-    const result = await adapter.queryRecords({
-      filter: { typeId: 'com.example/note@1' },
-      limit: 2,
-    });
+    const result = await adapter.queryRecords(
+      resolveQuery({
+        filter: { typeId: 'com.example/note@1' },
+        limit: 2,
+      }),
+    );
 
     const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
-    expect(url).toBe(`${BASE_URL}${fixture.path}`);
+    expect(sentQuery(url)).toEqual(fixtureQuery(fixture.path));
     expect(init.method).toBe('GET');
     expect(result.records).toEqual([]);
     expect(result.cursor).toBe(fixture.responseBody!.cursor);
@@ -393,10 +406,10 @@ describe('queryRecords fixtures', () => {
       const adapter = await APIAdapter.open({ url: BASE_URL });
       mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
 
-      await adapter.queryRecords({ limit: 50, filter });
+      await adapter.queryRecords(resolveQuery({ filter }));
 
       const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
-      expect(url).toBe(`${BASE_URL}${fixture.path}`);
+      expect(sentQuery(url)).toEqual(fixtureQuery(fixture.path));
       expect(init.method).toBe('GET');
     });
   }
@@ -872,7 +885,7 @@ describe('error response fixtures', () => {
           });
         }
         if (fixture.method === 'POST' && fixture.path === '/records/query') {
-          return adapter.queryRecords(fixture.requestBody as never);
+          return adapter.queryRecords(resolveQuery(fixture.requestBody as never));
         }
         if (fixture.method === 'POST' && fixture.path === '/types') {
           const { createdAt, ...rest } = fixture.requestBody as Record<string, unknown>;

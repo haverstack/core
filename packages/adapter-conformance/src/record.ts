@@ -26,20 +26,15 @@ import type {
   AuthorityAssociation,
   DataAssociation,
   StackCapabilities,
+  StackQuery,
   StackRecord,
 } from '@haverstack/core';
-import { ElementSetMovedError, inReach } from '@haverstack/core/adapter';
-import type { AdapterQuery, Reach, StackRecordAdapter } from '@haverstack/core/adapter';
+import { ElementSetMovedError, inReach, resolveQuery } from '@haverstack/core/adapter';
+import type { Reach, StackRecordAdapter } from '@haverstack/core/adapter';
 
 type PermissionElement = Extract<AuthorityAssociation, { kind: 'permission' }>;
 import { expectStackErrorCode } from './errors.js';
 import { CONFORMANCE_TYPE_ID, conformanceType, makeRecord, uniqueId } from './helpers.js';
-
-/**
- * The page a test asks for when it reads back every Record it wrote.
- * `Stack` always sends a `limit`, so the suite does too.
- */
-const PAGE = 100;
 
 export interface RecordAdapterConformanceOptions {
   /** Used in describe() titles, so pick something that reads well there. */
@@ -106,6 +101,12 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
           expect(capabilities.filter.contentByType).toBe(false);
           expect(capabilities.sort.contentFieldByType).toBe(false);
         }
+      });
+
+      // A query naming no sort reads `createdAt`, newest first, so every
+      // adapter already orders by it.
+      test('sort.fields includes createdAt', () => {
+        expect(capabilities.sort.fields).toContain('createdAt');
       });
     });
 
@@ -341,7 +342,7 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         // initialization, outside this interface — nothing here writes it.
         // The invariant holds either way: if the adapter under test has one,
         // a generic query must still never surface it.
-        const { records } = await adapter.queryRecords({ limit: PAGE });
+        const { records } = await adapter.queryRecords(resolveQuery({}));
         expect(records.some((r) => r.id === SYSTEM_TYPES.CONFIG)).toBe(false);
       });
     });
@@ -363,10 +364,9 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         await adapter.createRecord(all);
         await adapter.createRecord(allButOne);
 
-        const result = await adapter.queryRecords({
-          limit: PAGE,
-          filter: { tags: [...labels, labels[0]!] },
-        });
+        const result = await adapter.queryRecords(
+          resolveQuery({ filter: { tags: [...labels, labels[0]!] } }),
+        );
         expect(result.records.map((r) => r.id)).toEqual([all.id]);
       });
 
@@ -966,7 +966,9 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         const seen = new Set<string>();
         let cursor: string | null | undefined;
         do {
-          const page = await adapter.queryRecords({ limit: 2, cursor: cursor ?? undefined });
+          const page = await adapter.queryRecords(
+            resolveQuery({ limit: 2, cursor: cursor ?? undefined }),
+          );
           expect(page.records.length).toBeLessThanOrEqual(2);
           for (const r of page.records) seen.add(r.id);
           cursor = page.cursor;
@@ -982,18 +984,22 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
           await adapter.createRecord(makeRecord({ createdAt: new Date(1_000 + i) }));
         }
         const sort = { field: 'createdAt', direction: 'asc' } as const;
-        const first = await adapter.queryRecords({ limit: 2, sort });
+        const first = await adapter.queryRecords(resolveQuery({ limit: 2, sort }));
         await adapter.createRecord(makeRecord({ createdAt: new Date(1) }));
-        const second = await adapter.queryRecords({ limit: 2, cursor: first.cursor!, sort });
+        const second = await adapter.queryRecords(
+          resolveQuery({ limit: 2, cursor: first.cursor!, sort }),
+        );
 
-        const all = (await adapter.queryRecords({ limit: 100, sort })).records.map((r) => r.id);
+        const all = (await adapter.queryRecords(resolveQuery({ limit: 100, sort }))).records.map(
+          (r) => r.id,
+        );
         const after = all.indexOf(first.records[1]!.id);
         expect(second.records.map((r) => r.id)).toEqual(all.slice(after + 1, after + 3));
       });
 
       test('a malformed cursor is refused rather than misread', async () => {
         await expectStackErrorCode(
-          adapter.queryRecords({ limit: PAGE, cursor: 'not-a-real-cursor' }),
+          adapter.queryRecords(resolveQuery({ cursor: 'not-a-real-cursor' })),
           'bad_request',
         );
       });
@@ -1001,17 +1007,21 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
       test('a cursor minted under one sort field is refused when replayed under a different one', async () => {
         await adapter.createRecord(makeRecord());
         await adapter.createRecord(makeRecord());
-        const minted = await adapter.queryRecords({
-          limit: 1,
-          sort: { field: 'createdAt', direction: 'asc' },
-        });
+        const minted = await adapter.queryRecords(
+          resolveQuery({
+            limit: 1,
+            sort: { field: 'createdAt', direction: 'asc' },
+          }),
+        );
         expect(minted.cursor).not.toBeNull();
         await expectStackErrorCode(
-          adapter.queryRecords({
-            limit: 1,
-            cursor: minted.cursor!,
-            sort: { field: 'updatedAt', direction: 'asc' },
-          }),
+          adapter.queryRecords(
+            resolveQuery({
+              limit: 1,
+              cursor: minted.cursor!,
+              sort: { field: 'updatedAt', direction: 'asc' },
+            }),
+          ),
           'bad_request',
         );
       });
@@ -1164,7 +1174,7 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
       test.each(reaches)('returns exactly the Records in reach: %s', async (_name, reach) => {
         if (!adapter.queryReadable) return;
         const records = await populate();
-        const result = await adapter.queryReadable({ limit: 100 }, reach);
+        const result = await adapter.queryReadable(resolveQuery({ limit: 100 }), reach);
         const expected = records.filter((r) => inReach(r, reach)).map((r) => r.id);
         expect(result.records.map((r) => r.id).sort()).toEqual(expected.sort());
         expect(result.cursor).toBeNull();
@@ -1178,17 +1188,16 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         await adapter.createRecord(makeRecord({ permissions: [anyone] }));
         await adapter.createRecord(makeRecord({ associations: [pinned] }));
 
-        const result = await adapter.queryReadable(
-          { limit: PAGE, filter: { tags: ['pinned'] } },
-          { within: { types: [], permissions: [[anyone]] } },
-        );
+        const result = await adapter.queryReadable(resolveQuery({ filter: { tags: ['pinned'] } }), {
+          within: { types: [], permissions: [[anyone]] },
+        });
         expect(result.records.map((r) => r.id)).toEqual([tagged.id]);
       });
 
       // Paging is decided among the Records in reach alone: every page is
       // full, and no cursor comes back once they are exhausted, however
       // many Records outside the reach remain.
-      const pagesWithin = async (sort: AdapterQuery['sort']): Promise<void> => {
+      const pagesWithin = async (sort: StackQuery['sort']): Promise<void> => {
         if (!adapter.queryReadable) return;
         const reach: Reach = { within: { types: [], permissions: [[anyone]] } };
         const inside: string[] = [];
@@ -1205,7 +1214,7 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         const seen: string[] = [];
         let cursor: string | undefined;
         do {
-          const page = await adapter.queryReadable({ limit: 1, cursor, sort }, reach);
+          const page = await adapter.queryReadable(resolveQuery({ limit: 1, cursor, sort }), reach);
           expect(page.records).toHaveLength(1);
           seen.push(page.records[0]!.id);
           cursor = page.cursor ?? undefined;
@@ -1235,10 +1244,9 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
           await adapter.createRecord(match);
           await adapter.createRecord(decoy);
 
-          const result = await adapter.queryRecords({
-            limit: PAGE,
-            filter: { content: { priority: 1 } },
-          });
+          const result = await adapter.queryRecords(
+            resolveQuery({ filter: { content: { priority: 1 } } }),
+          );
           // The positive assertion first: `not.toContain` and `every` are
           // both vacuously true on an empty result, so without this an
           // adapter that declares filter.content and returns nothing at
@@ -1258,10 +1266,9 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
           await adapter.createRecord(explicitNull);
           await adapter.createRecord(present);
 
-          const result = await adapter.queryRecords({
-            limit: PAGE,
-            filter: { content: { priority: null } },
-          });
+          const result = await adapter.queryRecords(
+            resolveQuery({ filter: { content: { priority: null } } }),
+          );
           const ids = result.records.map((r) => r.id).sort();
           expect(ids).toEqual([absent.id, explicitNull.id].sort());
           expect(ids).not.toContain(present.id);
@@ -1273,10 +1280,9 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
           await adapter.createRecord(scalarMatch);
           await adapter.createRecord(nested);
 
-          const result = await adapter.queryRecords({
-            limit: PAGE,
-            filter: { content: { priority: 1 } },
-          });
+          const result = await adapter.queryRecords(
+            resolveQuery({ filter: { content: { priority: 1 } } }),
+          );
           expect(result.records.map((r) => r.id)).toContain(scalarMatch.id);
           expect(result.records.map((r) => r.id)).not.toContain(nested.id);
         });
@@ -1290,10 +1296,9 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
             await adapter.createRecord(absent);
             await adapter.createRecord(nullValue);
 
-            const result = await adapter.queryRecords({
-              limit: PAGE,
-              filter: { contentPresent: ['priority'] },
-            });
+            const result = await adapter.queryRecords(
+              resolveQuery({ filter: { contentPresent: ['priority'] } }),
+            );
             expect(result.records.map((r) => r.id)).toEqual([present.id]);
           });
         }
@@ -1311,10 +1316,9 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
             [1, num],
             ['1', text],
           ] as const) {
-            const result = await adapter.queryRecords({
-              limit: PAGE,
-              filter: { content: { flag: value } },
-            });
+            const result = await adapter.queryRecords(
+              resolveQuery({ filter: { content: { flag: value } } }),
+            );
             expect(result.records.map((r) => r.id)).toEqual([record.id]);
           }
         });
@@ -1329,15 +1333,13 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
             await adapter.createRecord(mixed);
 
             for (const path of ['tags', 'emails.value']) {
-              const present = await adapter.queryRecords({
-                limit: PAGE,
-                filter: { contentPresent: [path] },
-              });
+              const present = await adapter.queryRecords(
+                resolveQuery({ filter: { contentPresent: [path] } }),
+              );
               expect(present.records.map((r) => r.id)).toEqual([mixed.id]);
-              const nulls = await adapter.queryRecords({
-                limit: PAGE,
-                filter: { content: { [path]: null } },
-              });
+              const nulls = await adapter.queryRecords(
+                resolveQuery({ filter: { content: { [path]: null } } }),
+              );
               expect(nulls.records.map((r) => r.id)).toEqual([mixed.id]);
             }
           });
@@ -1354,10 +1356,11 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
             await adapter.createRecord(match);
             await adapter.createRecord(noMatch);
 
-            const result = await adapter.queryRecords({
-              limit: PAGE,
-              filter: { content: { 'emails.value': 'a@b.c' } },
-            });
+            const result = await adapter.queryRecords(
+              resolveQuery({
+                filter: { content: { 'emails.value': 'a@b.c' } },
+              }),
+            );
             expect(result.records.map((r) => r.id)).toEqual([match.id]);
           });
 
@@ -1367,19 +1370,21 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
             await adapter.createRecord(match);
             await adapter.createRecord(noMatch);
 
-            const result = await adapter.queryRecords({
-              limit: PAGE,
-              filter: { content: { 'address.city': 'Berlin' } },
-            });
+            const result = await adapter.queryRecords(
+              resolveQuery({
+                filter: { content: { 'address.city': 'Berlin' } },
+              }),
+            );
             expect(result.records.map((r) => r.id)).toEqual([match.id]);
           });
 
           test('a filter path descending through a scalar matches nothing, rather than throwing', async () => {
             await adapter.createRecord(makeRecord({ content: { title: 'x', priority: 1 } }));
-            const result = await adapter.queryRecords({
-              limit: PAGE,
-              filter: { content: { 'priority.nested': 'anything' } },
-            });
+            const result = await adapter.queryRecords(
+              resolveQuery({
+                filter: { content: { 'priority.nested': 'anything' } },
+              }),
+            );
             expect(result.records).toEqual([]);
           });
         }
@@ -1404,15 +1409,16 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
           ];
           for (const record of [note, other, ...decoys]) await adapter.createRecord(record);
 
-          const result = await adapter.queryRecords({
-            limit: PAGE,
-            filter: {
-              contentByType: {
-                [CONFORMANCE_TYPE_ID]: { content: { title: 'a' } },
-                [OTHER]: { content: { heading: 'a' } },
+          const result = await adapter.queryRecords(
+            resolveQuery({
+              filter: {
+                contentByType: {
+                  [CONFORMANCE_TYPE_ID]: { content: { title: 'a' } },
+                  [OTHER]: { content: { heading: 'a' } },
+                },
               },
-            },
-          });
+            }),
+          );
           expect(result.records.map((r) => r.id).sort()).toEqual([note.id, other.id].sort());
         });
 
@@ -1421,12 +1427,13 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
           const decoy = makeRecord({ typeId: THIRD });
           for (const record of [...notes, decoy]) await adapter.createRecord(record);
 
-          const result = await adapter.queryRecords({
-            limit: PAGE,
-            filter: {
-              contentByType: { [CONFORMANCE_TYPE_ID]: {}, [OTHER]: { content: { a: 1 } } },
-            },
-          });
+          const result = await adapter.queryRecords(
+            resolveQuery({
+              filter: {
+                contentByType: { [CONFORMANCE_TYPE_ID]: {}, [OTHER]: { content: { a: 1 } } },
+              },
+            }),
+          );
           expect(result.records.map((r) => r.id).sort()).toEqual(notes.map((r) => r.id).sort());
         });
 
@@ -1437,13 +1444,14 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
           await adapter.createRecord(kept);
           await adapter.createRecord(child);
 
-          const result = await adapter.queryRecords({
-            limit: PAGE,
-            filter: {
-              parentId: parent.id,
-              contentByType: { [CONFORMANCE_TYPE_ID]: { content: { title: 'a' } }, [OTHER]: {} },
-            },
-          });
+          const result = await adapter.queryRecords(
+            resolveQuery({
+              filter: {
+                parentId: parent.id,
+                contentByType: { [CONFORMANCE_TYPE_ID]: { content: { title: 'a' } }, [OTHER]: {} },
+              },
+            }),
+          );
           expect(result.records.map((r) => r.id)).toEqual([child.id]);
         });
 
@@ -1454,15 +1462,16 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
             const other = makeRecord({ typeId: OTHER, content: { priority: 1 } });
             for (const record of [present, absent, other]) await adapter.createRecord(record);
 
-            const result = await adapter.queryRecords({
-              limit: PAGE,
-              filter: {
-                contentByType: {
-                  [CONFORMANCE_TYPE_ID]: { contentPresent: ['priority'] },
-                  [OTHER]: { contentPresent: ['missing'] },
+            const result = await adapter.queryRecords(
+              resolveQuery({
+                filter: {
+                  contentByType: {
+                    [CONFORMANCE_TYPE_ID]: { contentPresent: ['priority'] },
+                    [OTHER]: { contentPresent: ['missing'] },
+                  },
                 },
-              },
-            });
+              }),
+            );
             expect(result.records.map((r) => r.id)).toEqual([present.id]);
           });
         }
@@ -1512,10 +1521,11 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
           'orders each type by its own field or constant, %s, holding no value last',
           async (direction) => {
             await seed();
-            const result = await adapter.queryRecords({
-              limit: PAGE,
-              sort: { contentFieldByType: BY_TYPE, direction },
-            });
+            const result = await adapter.queryRecords(
+              resolveQuery({
+                sort: { contentFieldByType: BY_TYPE, direction },
+              }),
+            );
             const ordered = ['a', 'b', 'c', 'd', 'e'];
             expect(titles(result.records)).toEqual([
               ...(direction === 'asc' ? ordered : ordered.reverse()),
@@ -1530,11 +1540,13 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
           const seen: unknown[] = [];
           let cursor: string | null | undefined;
           do {
-            const page = await adapter.queryRecords({
-              limit: 1,
-              cursor: cursor ?? undefined,
-              sort: { contentFieldByType: BY_TYPE, direction: 'asc' },
-            });
+            const page = await adapter.queryRecords(
+              resolveQuery({
+                limit: 1,
+                cursor: cursor ?? undefined,
+                sort: { contentFieldByType: BY_TYPE, direction: 'asc' },
+              }),
+            );
             seen.push(...titles(page.records));
             cursor = page.cursor;
           } while (cursor);
@@ -1544,16 +1556,20 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         if (capabilities.sort.contentField) {
           test('a cursor minted under one field is refused under a map', async () => {
             await seed();
-            const minted = await adapter.queryRecords({
-              limit: 1,
-              sort: { contentField: 'priority', direction: 'asc' },
-            });
-            await expectStackErrorCode(
-              adapter.queryRecords({
+            const minted = await adapter.queryRecords(
+              resolveQuery({
                 limit: 1,
-                cursor: minted.cursor!,
-                sort: { contentFieldByType: BY_TYPE, direction: 'asc' },
+                sort: { contentField: 'priority', direction: 'asc' },
               }),
+            );
+            await expectStackErrorCode(
+              adapter.queryRecords(
+                resolveQuery({
+                  limit: 1,
+                  cursor: minted.cursor!,
+                  sort: { contentFieldByType: BY_TYPE, direction: 'asc' },
+                }),
+              ),
               'bad_request',
             );
           });
@@ -1571,10 +1587,9 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
           const a = await adapter.createRecord(makeRecord());
           await new Promise((r) => setTimeout(r, 5));
           const b = await adapter.createRecord(makeRecord());
-          const result = await adapter.queryRecords({
-            limit: PAGE,
-            sort: { field: 'createdAt', direction },
-          });
+          const result = await adapter.queryRecords(
+            resolveQuery({ sort: { field: 'createdAt', direction } }),
+          );
           const ids = result.records.map((r) => r.id);
           expect(ids).toEqual(direction === 'asc' ? [a.id, b.id] : [b.id, a.id]);
         },
@@ -1590,10 +1605,11 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
             await adapter.createRecord(makeRecord({ content: { title: 'x', priority: 1 } }));
             await adapter.createRecord(makeRecord({ content: { title: 'y', priority: 2 } }));
 
-            const result = await adapter.queryRecords({
-              limit: PAGE,
-              sort: { contentField: 'priority', direction },
-            });
+            const result = await adapter.queryRecords(
+              resolveQuery({
+                sort: { contentField: 'priority', direction },
+              }),
+            );
             const priorities = result.records.map(
               (r) => (r.content as { priority: number }).priority,
             );
@@ -1610,10 +1626,11 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
           await adapter.createRecord(makeRecord({ content: { title: 'y', priority: 1 } }));
           await adapter.createRecord(makeRecord({ content: { title: 'z', priority: 2 } }));
 
-          const result = await adapter.queryRecords({
-            limit: PAGE,
-            sort: { contentField: 'priority', direction: 'asc' },
-          });
+          const result = await adapter.queryRecords(
+            resolveQuery({
+              sort: { contentField: 'priority', direction: 'asc' },
+            }),
+          );
           expect(result.records.map((r) => (r.content as { priority: number }).priority)).toEqual([
             1, 2, 3,
           ]);
@@ -1632,10 +1649,11 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
             await adapter.createRecord(makeRecord({ content: { title: status, status } }));
           }
 
-          const result = await adapter.queryRecords({
-            limit: PAGE,
-            sort: { contentField: 'status', direction: 'asc' },
-          });
+          const result = await adapter.queryRecords(
+            resolveQuery({
+              sort: { contentField: 'status', direction: 'asc' },
+            }),
+          );
           expect(result.records.map((r) => (r.content as { status: string }).status)).toEqual([
             'finished',
             'reading',
@@ -1656,7 +1674,7 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
           await adapter.createRecord(match);
           await adapter.createRecord(noMatch);
 
-          const result = await adapter.queryRecords({ limit: PAGE, filter: { search: 'brown' } });
+          const result = await adapter.queryRecords(resolveQuery({ filter: { search: 'brown' } }));
           expect(result.records.map((r) => r.id)).toContain(match.id);
           expect(result.records.map((r) => r.id)).not.toContain(noMatch.id);
         });
@@ -1670,10 +1688,12 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
           await adapter.createRecord(record);
           await adapter.patchContent(record.id, { title: 'updated wording' });
 
-          const stale = await adapter.queryRecords({ limit: PAGE, filter: { search: 'original' } });
+          const stale = await adapter.queryRecords(
+            resolveQuery({ filter: { search: 'original' } }),
+          );
           expect(stale.records.map((r) => r.id)).not.toContain(record.id);
 
-          const fresh = await adapter.queryRecords({ limit: PAGE, filter: { search: 'updated' } });
+          const fresh = await adapter.queryRecords(resolveQuery({ filter: { search: 'updated' } }));
           expect(fresh.records.map((r) => r.id)).toContain(record.id);
         });
 
@@ -1682,10 +1702,9 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
           await adapter.createRecord(record);
           await adapter.deleteRecord(record.id, { purge: true });
 
-          const result = await adapter.queryRecords({
-            limit: PAGE,
-            filter: { search: 'ephemeral' },
-          });
+          const result = await adapter.queryRecords(
+            resolveQuery({ filter: { search: 'ephemeral' } }),
+          );
           expect(result.records.map((r) => r.id)).not.toContain(record.id);
         });
       });

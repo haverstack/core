@@ -5,8 +5,8 @@ import { tmpdir } from 'os';
 import { DatabaseSync } from '../src/node-sqlite.js';
 import { NativeSQLiteRecordAdapter } from '../src/index.js';
 import { StackBadRequestError } from '@haverstack/core';
-import type { StackRecord, StackType } from '@haverstack/core';
-import type { AdapterQuery } from '@haverstack/core/adapter';
+import type { StackQuery, StackRecord, StackType } from '@haverstack/core';
+import { resolveQuery } from '@haverstack/core/adapter';
 
 // -------------------------------------------------------
 // Test helpers
@@ -43,21 +43,19 @@ const create = async (typeId: string, content: Record<string, unknown>): Promise
   adapter.createRecord(makeRecord(typeId, content));
 
 /** Every record the query matches, followed to the last page. */
-const pagedTitles = async (query: AdapterQuery): Promise<string[]> => {
+const pagedTitles = async (query: StackQuery): Promise<string[]> => {
   const titles: string[] = [];
   let cursor: string | undefined;
   do {
-    const page = await adapter.queryRecords({ ...query, ...(cursor && { cursor }) });
+    const page = await adapter.queryRecords(resolveQuery({ ...query, ...(cursor && { cursor }) }));
     titles.push(...page.records.map((r) => r.content.title as string));
     cursor = page.cursor ?? undefined;
   } while (cursor);
   return titles;
 };
 
-const titles = async (query: Omit<AdapterQuery, 'limit'>): Promise<string[]> =>
-  (await adapter.queryRecords({ limit: 100, ...query })).records.map(
-    (r) => r.content.title as string,
-  );
+const titles = async (query: StackQuery): Promise<string[]> =>
+  (await adapter.queryRecords(resolveQuery(query))).records.map((r) => r.content.title as string);
 
 beforeEach(async () => {
   testDir = join(tmpdir(), `sort-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -179,10 +177,11 @@ describe('sorting by a content field', () => {
   test('a record appears once, not once per index row', async () => {
     for (const title of ['a', 'b', 'c']) await create(ARTICLE, { title, order: 1 });
 
-    const result = await adapter.queryRecords({
-      limit: 100,
-      sort: { contentField: 'order', direction: 'asc' },
-    });
+    const result = await adapter.queryRecords(
+      resolveQuery({
+        sort: { contentField: 'order', direction: 'asc' },
+      }),
+    );
     // All three tie on the sort field, so the id tiebreak orders them.
     expect(result.records.map((r) => r.content.title)).toEqual(['a', 'b', 'c']);
   });
@@ -231,23 +230,25 @@ describe('paginating a content sort', () => {
     await create(ARTICLE, { title: 'a', order: 1 });
     await create(ARTICLE, { title: 'b', order: 2 });
 
-    const page = await adapter.queryRecords({
-      sort: { contentField: 'order', direction: 'asc' },
-      limit: 1,
-    });
+    const page = await adapter.queryRecords(
+      resolveQuery({
+        sort: { contentField: 'order', direction: 'asc' },
+        limit: 1,
+      }),
+    );
     const cursor = page.cursor as string;
 
     await expect(
-      adapter.queryRecords({
-        limit: 100,
-        sort: { contentField: 'title', direction: 'asc' },
-        cursor,
-      }),
+      adapter.queryRecords(
+        resolveQuery({ sort: { contentField: 'title', direction: 'asc' }, cursor }),
+      ),
     ).rejects.toThrow(StackBadRequestError);
     await expect(
-      adapter.queryRecords({ limit: 100, sort: { field: 'createdAt', direction: 'asc' }, cursor }),
+      adapter.queryRecords(
+        resolveQuery({ sort: { field: 'createdAt', direction: 'asc' }, cursor }),
+      ),
     ).rejects.toThrow(StackBadRequestError);
-    await expect(adapter.queryRecords({ limit: 100, cursor })).rejects.toThrow(
+    await expect(adapter.queryRecords(resolveQuery({ cursor }))).rejects.toThrow(
       StackBadRequestError,
     );
   });
@@ -256,16 +257,19 @@ describe('paginating a content sort', () => {
     await create(ARTICLE, { title: 'a' });
     await create(ARTICLE, { title: 'b' });
 
-    const page = await adapter.queryRecords({
-      sort: { field: 'createdAt', direction: 'asc' },
-      limit: 1,
-    });
-    await expect(
-      adapter.queryRecords({
-        limit: 100,
-        sort: { contentField: 'title', direction: 'asc' },
-        cursor: page.cursor as string,
+    const page = await adapter.queryRecords(
+      resolveQuery({
+        sort: { field: 'createdAt', direction: 'asc' },
+        limit: 1,
       }),
+    );
+    await expect(
+      adapter.queryRecords(
+        resolveQuery({
+          sort: { contentField: 'title', direction: 'asc' },
+          cursor: page.cursor as string,
+        }),
+      ),
     ).rejects.toThrow(StackBadRequestError);
   });
 });

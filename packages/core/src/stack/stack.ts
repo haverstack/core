@@ -109,9 +109,7 @@ import {
   assertValidBaseIdFilter,
   assertValidJournalQuery,
   assertValidVersionsQuery,
-  assertValidSort,
-  normalizeSort,
-  assertValidQueryLimit,
+  resolveQuery,
   filtersContent,
   assertFamilyId,
 } from '../query-validation.js';
@@ -134,7 +132,7 @@ import {
   validateIdTimestampSkew,
   DEFAULT_ID_TIMESTAMP_SKEW_MS,
 } from './record-id.js';
-import { queryAllPages, lookupEntityByDid, DEFAULT_QUERY_LIMIT, MAX_QUERY_LIMIT } from './reads.js';
+import { queryAllPages, lookupEntityByDid } from './reads.js';
 import { contentEqual } from '../record-changes.js';
 import {
   assertAssociationSet,
@@ -209,6 +207,9 @@ function normalizeActor(actor: Actor | undefined): Actor | undefined {
     ? { subjectId }
     : { subjectId, principalId };
 }
+
+/** How many Records migrateAll() reads and migrates per page. */
+const MIGRATE_ALL_BATCH = 100;
 
 /** Sentinel: filter.baseId resolved to zero matching types. */
 const EMPTY_FAMILY = Symbol('empty-family');
@@ -571,11 +572,13 @@ export class Stack implements StackClient {
 
       let cursor: string | undefined;
       do {
-        const result: QueryResult = await this.adapter.queryRecords({
-          filter: { typeId, includeDeleted: true, includeUnlisted: !listedOnly },
-          limit: DEFAULT_QUERY_LIMIT,
-          cursor,
-        });
+        const result: QueryResult = await this.adapter.queryRecords(
+          resolveQuery({
+            filter: { typeId, includeDeleted: true, includeUnlisted: !listedOnly },
+            limit: MIGRATE_ALL_BATCH,
+            cursor,
+          }),
+        );
 
         for (const record of result.records) {
           if (listedOnly && record.deletedAt) {
@@ -1218,15 +1221,13 @@ export class Stack implements StackClient {
     read: (resolved: AdapterQuery, types: Lazy<StackType[]>) => Promise<QueryResult>,
   ): Promise<QueryResult> {
     this.assertOpen();
-    const { presentAt, filter, sort, limit: rawLimit, ...rest } = query;
+    const { presentAt, filter } = query;
     assertValidContentByType(filter);
     assertQueryCapabilities(filter, this.adapter.capabilities);
-    assertValidSort(sort);
-    assertSortCapability(sort, this.adapter.capabilities);
-    assertValidQueryLimit(rawLimit);
+    const resolved = resolveQuery(query);
+    assertSortCapability(resolved.sort, this.adapter.capabilities);
     assertValidAssociationFilters(filter);
     assertValidBaseIdFilter(filter);
-    const limit = Math.min(rawLimit ?? DEFAULT_QUERY_LIMIT, MAX_QUERY_LIMIT);
 
     // Read once whether the filter, the reach or both resolve families.
     const types = new Lazy(() => this.adapter.listTypes());
@@ -1236,12 +1237,7 @@ export class Stack implements StackClient {
     }
 
     const result = await read(
-      {
-        ...rest,
-        ...(sort && { sort: normalizeSort(sort) }),
-        ...(resolvedFilter !== undefined && { filter: resolvedFilter }),
-        limit,
-      },
+      { ...resolved, ...(resolvedFilter !== undefined && { filter: resolvedFilter }) },
       types,
     );
 

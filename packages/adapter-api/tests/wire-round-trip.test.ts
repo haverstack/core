@@ -17,8 +17,8 @@ import {
 } from '@haverstack/core/wire';
 import type { WireCreateRequest, TokenSession } from '@haverstack/core/wire';
 import type { StackQuery, StackRecord, SubscribeOptions } from '@haverstack/core';
-import type { AdapterQuery } from '@haverstack/core/adapter';
 import { serializeRecord } from '@haverstack/wire-types';
+import { resolveQuery } from '@haverstack/core/adapter';
 
 /**
  * The request encoding, exercised as a round trip: a query goes out through
@@ -54,15 +54,12 @@ useFetchMock();
  * takes GET /records' search params, true takes POST /records/query's JSON
  * body.
  */
-/** A case names its query as a caller would; the adapter always sends a `limit`. */
-type QueryCase = Omit<AdapterQuery, 'limit'> & { limit?: number };
-
-async function roundTrip(query: AdapterQuery, reachesContent = false): Promise<StackQuery> {
+async function roundTrip(query: StackQuery, reachesContent = false): Promise<StackQuery> {
   mockFetch.mockResolvedValueOnce(jsonResponse(discovery(reachesContent)));
   const adapter = await APIAdapter.open({ url: BASE_URL, token: 'test-token' });
 
   mockFetch.mockResolvedValueOnce(jsonResponse(EMPTY_PAGE));
-  await adapter.queryRecords(query);
+  await adapter.queryRecords(resolveQuery(query));
 
   const [url, init] = mockFetch.mock.calls[1] as [string, RequestInit];
   return reachesContent
@@ -103,7 +100,7 @@ async function roundTripChanges(
 // -------------------------------------------------------
 
 describe('GET /records round trip', () => {
-  const cases: Array<[string, QueryCase]> = [
+  const cases: Array<[string, StackQuery]> = [
     ['empty query', {}],
     ['single typeId', { filter: { typeId: 'com.example/note@1' } }],
     ['typeId array', { filter: { typeId: ['com.example/note@1', 'com.example/note@2'] } }],
@@ -192,9 +189,9 @@ describe('GET /records round trip', () => {
         },
       },
     ],
-    ['sort ascending', { sort: { field: 'createdAt', direction: 'asc' } }],
-    ['sort descending', { sort: { field: 'updatedAt', direction: 'desc' } }],
-    ['limit', { limit: 25 }],
+    ['sort field', { sort: { field: 'createdAt' } }],
+    ['sort with direction', { sort: { field: 'updatedAt', direction: 'desc' } }],
+    ['limit', { limit: 50 }],
     ['cursor', { cursor: 'opaque-cursor-value' }],
     [
       'every native field at once',
@@ -221,9 +218,8 @@ describe('GET /records round trip', () => {
     ],
   ];
 
-  test.each(cases)('%s survives the round trip', async (_name, c) => {
-    const query = { limit: 50, ...c };
-    expect(await roundTrip(query)).toEqual(query);
+  test.each(cases)('%s survives the round trip', async (_name, query) => {
+    expect(await roundTrip(query)).toEqual(resolveQuery(query));
   });
 });
 
@@ -232,7 +228,7 @@ describe('GET /records round trip', () => {
 // -------------------------------------------------------
 
 describe('POST /records/query round trip', () => {
-  const cases: Array<[string, QueryCase]> = [
+  const cases: Array<[string, StackQuery]> = [
     ['empty query', {}],
     ['native fields', { filter: { typeId: 'com.example/note@1', tags: ['starred'] } }],
     ['root records', { filter: { parentId: null } }],
@@ -249,9 +245,8 @@ describe('POST /records/query round trip', () => {
     ],
   ];
 
-  test.each(cases)('%s survives the round trip', async (_name, c) => {
-    const query = { limit: 50, ...c };
-    expect(await roundTrip(query, true)).toEqual(query);
+  test.each(cases)('%s survives the round trip', async (_name, query) => {
+    expect(await roundTrip(query, true)).toEqual(resolveQuery(query));
   });
 
   // filter.content has no URL-param encoding on either side, by design:
@@ -261,7 +256,7 @@ describe('POST /records/query round trip', () => {
     mockFetch.mockResolvedValueOnce(jsonResponse(discovery(true)));
     const adapter = await APIAdapter.open({ url: BASE_URL, token: 'test-token' });
     mockFetch.mockResolvedValueOnce(jsonResponse(EMPTY_PAGE));
-    await adapter.queryRecords({ limit: 100, filter: { content: { status: 'open' } } });
+    await adapter.queryRecords(resolveQuery({ filter: { content: { status: 'open' } } }));
 
     const [url, init] = mockFetch.mock.calls[1] as [string, RequestInit];
     expect(url).toBe(`${BASE_URL}/records/query`);

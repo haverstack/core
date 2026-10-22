@@ -72,7 +72,7 @@ import {
   assertSortCapability,
   assertValidAssociationFilters,
   assertValidBaseIdFilter,
-  assertValidSort,
+  resolveQuery,
   filtersContent,
 } from '../query-validation.js';
 import {
@@ -490,8 +490,7 @@ export class ScopedStack implements StackClient {
    * Records alone. See docs/spec/disclosure.md § What a query reveals.
    */
   async query(query: StackQuery = {}): Promise<QueryResult> {
-    assertValidSort(query.sort);
-    assertSortCapability(query.sort, this.stack.capabilities);
+    assertSortCapability(resolveQuery(query).sort, this.stack.capabilities);
     assertValidAssociationFilters(query.filter);
     assertValidBaseIdFilter(query.filter);
     if (query.filter?.includeUnlisted && !this.#authority.ownerActingAlone) {

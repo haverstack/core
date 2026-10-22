@@ -22,13 +22,7 @@ import {
 } from '@haverstack/core';
 import { constantSortEntry, contentSortKey, parseContentFilterKey } from '@haverstack/core/adapter';
 import type { AdapterQuery, Reach, SortEntry } from '@haverstack/core/adapter';
-import {
-  byTypeDescriptor,
-  decodeCursor,
-  getSortColumn,
-  getSortField,
-  type DecodedCursor,
-} from './cursor.js';
+import { byTypeDescriptor, decodeCursor, getSortColumn, type DecodedCursor } from './cursor.js';
 import { sanitizeFts5Query } from './fts5.js';
 import { permissionKeyColumns } from './mappers.js';
 
@@ -48,14 +42,13 @@ export const atBudget = (page: QueryStatement, rows: number): QueryStatement => 
 });
 
 /**
- * Reduce `sort.direction` to a keyword safe to interpolate. Core's
- * assertValidSort() already checks it, but this is where it reaches SQL
- * text, so an unchecked value here would be an injection sink. Core
- * resolves the default direction before any adapter sees the query.
+ * Reduce `sort.direction` to a keyword safe to interpolate. The type and
+ * core's resolveQuery() already promise one of the two, but this is
+ * where the value becomes SQL text, so it is checked here too: an
+ * unchecked value would be an injection sink, not merely a wrong order.
  */
 const sqlDirection = (query: AdapterQuery): 'ASC' | 'DESC' => {
-  // No sort at all is the unsorted default; a sort always carries its direction.
-  const dir = query.sort ? query.sort.direction : 'desc';
+  const dir = query.sort.direction;
   if (dir !== 'asc' && dir !== 'desc') {
     throw new StackBadRequestError(`Invalid sort direction "${dir}": expected "asc" or "desc".`);
   }
@@ -494,14 +487,13 @@ export const buildQueryPlan = (query: AdapterQuery, reach?: Reach): QueryStateme
   const dir = sqlDirection(query);
   const op = dir === 'ASC' ? '>' : '<';
   const decoded = query.cursor ? decodeCursor(query.cursor) : null;
-  if (query.sort?.contentFieldByType) {
+  if (query.sort.contentFieldByType) {
     return byTypePlan(query, reach, query.sort.contentFieldByType, dir, op, decoded);
   }
-  const contentField = query.sort?.contentField;
+  const { contentField, field } = query.sort;
 
-  if (contentField === undefined) {
+  if (field !== undefined) {
     const where = recordConditions(query, reach);
-    const field = getSortField(query);
     const col = getSortColumn(field);
     if (decoded) {
       const cursor = nativeCursor(decoded, field);

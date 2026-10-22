@@ -9,12 +9,11 @@
 
 import { NATIVE_SORT_FIELDS, StackBadRequestError } from '@haverstack/core';
 import { constantSortEntry, contentSortEntry } from '@haverstack/core/adapter';
-import type { SortEntry } from '@haverstack/core/adapter';
+import type { AdapterSort, SortEntry } from '@haverstack/core/adapter';
 import type {
   ContentSortKey,
   StackRecord,
   NativeSortField,
-  QuerySort,
   ScalarFieldKind,
 } from '@haverstack/core';
 
@@ -97,9 +96,6 @@ export const decodeCursor = (cursor: string): DecodedCursor => {
 export const byTypeDescriptor = (byType: Record<string, ContentSortKey>): string =>
   JSON.stringify(Object.entries(byType).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
 
-export const getSortField = (query: { sort?: QuerySort }): NativeSortField =>
-  query.sort?.field ?? 'createdAt';
-
 export const getSortColumn = (field: NativeSortField): string =>
   field === 'createdAt' ? 'created_at' : field === 'updatedAt' ? 'updated_at' : 'version';
 
@@ -112,10 +108,10 @@ export const getSortColumn = (field: NativeSortField): string =>
  */
 export const makeCursor = (
   record: StackRecord,
-  sort: QuerySort | undefined,
+  sort: AdapterSort,
   kindOf?: (record: StackRecord, field: string) => ScalarFieldKind | undefined,
 ): string => {
-  const byType = sort?.contentFieldByType;
+  const byType = sort.contentFieldByType;
   if (byType) {
     const field = byTypeDescriptor(byType);
     const key = Object.hasOwn(byType, record.typeId) ? byType[record.typeId] : undefined;
@@ -126,9 +122,8 @@ export const makeCursor = (
         : key && constantSortEntry(key.value ?? null);
     return encodeEntry(field, entry || null, record.id);
   }
-  const contentField = sort?.contentField;
-  if (contentField === undefined) {
-    const field = getSortField({ sort });
+  const { contentField, field } = sort;
+  if (field !== undefined) {
     const value =
       field === 'updatedAt'
         ? record.updatedAt.getTime()

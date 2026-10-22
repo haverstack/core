@@ -79,7 +79,14 @@ export function normalizeCapabilities(
       search: filter?.search === true,
     },
     sort: {
-      fields: (sort?.fields ?? []).filter((f): f is NativeSortField => SORT_FIELDS.has(f)),
+      // The floor is `createdAt`, not nothing: a query naming no sort reads
+      // in it, so every server already orders by it.
+      fields: [
+        ...new Set<NativeSortField>([
+          'createdAt',
+          ...(sort?.fields ?? []).filter((f): f is NativeSortField => SORT_FIELDS.has(f)),
+        ]),
+      ],
       contentField: sort?.contentField === true,
       contentFieldByType: reaches && sort?.contentFieldByType === true,
     },

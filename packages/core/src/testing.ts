@@ -411,13 +411,9 @@ export class MemoryAdapter implements StackAdapter {
   }
 
   /** The sort a cursor was minted under, as an opaque comparable descriptor. */
-  private sortDescriptor(sort: AdapterSort | undefined): string {
-    const content = sort?.contentField ?? sort?.contentFieldByType;
-    return JSON.stringify([
-      content ?? null,
-      content === undefined ? (sort?.field ?? 'createdAt') : null,
-      sort ? sort.direction : 'desc',
-    ]);
+  private sortDescriptor(sort: AdapterSort): string {
+    const content = sort.contentField ?? sort.contentFieldByType;
+    return JSON.stringify([content ?? null, sort.field ?? null, sort.direction]);
   }
 
   /**
@@ -425,7 +421,7 @@ export class MemoryAdapter implements StackAdapter {
    * minted under — mirroring the real adapters' keyed cursors.
    * See docs/spec/data-model.md § Sorting and pagination.
    */
-  private encodeCursor(sort: AdapterSort | undefined, key: OrderKey): string {
+  private encodeCursor(sort: AdapterSort, key: OrderKey): string {
     const json = JSON.stringify({ d: this.sortDescriptor(sort), k: key });
     // Explicit UTF-8 step before btoa, matching sqlite-shared's codec: the
     // descriptor embeds `sort.contentField` verbatim, and a non-Latin-1
@@ -443,7 +439,7 @@ export class MemoryAdapter implements StackAdapter {
    * cursor replayed under a changed sort gets from the real adapters,
    * rather than silently paging through the wrong order.
    */
-  private decodeCursor(cursor: string, sort: AdapterSort | undefined): OrderKey {
+  private decodeCursor(cursor: string, sort: AdapterSort): OrderKey {
     let parsed: unknown;
     try {
       const binary = atob(cursor);
@@ -475,15 +471,15 @@ export class MemoryAdapter implements StackAdapter {
    * The comparison itself is core's, not this double's
    * (docs/spec/data-model.md § Sorting by a content field).
    */
-  private sortRecords(records: StackRecord[], sort: AdapterSort | undefined): StackRecord[] {
+  private sortRecords(records: StackRecord[], sort: AdapterSort): StackRecord[] {
     const keys = new Map(records.map((r) => [r.id, this.orderKey(r, sort)]));
     return [...records].sort((a, b) => this.compareKeys(keys.get(a.id)!, keys.get(b.id)!, sort));
   }
 
   /** Where a record falls in the order `sort` names: its value there, then its id. */
-  private orderKey(record: StackRecord, sort: AdapterSort | undefined): OrderKey {
-    if (sort?.contentField === undefined && sort?.contentFieldByType === undefined) {
-      const field = sort?.field ?? 'createdAt';
+  private orderKey(record: StackRecord, sort: AdapterSort): OrderKey {
+    const { field } = sort;
+    if (field !== undefined) {
       const value =
         field === 'version'
           ? record.version
@@ -493,8 +489,8 @@ export class MemoryAdapter implements StackAdapter {
     return { value: this.sortEntry(record, sort), id: record.id };
   }
 
-  private compareKeys(a: OrderKey, b: OrderKey, sort: AdapterSort | undefined): number {
-    const direction = sort ? sort.direction : 'desc';
+  private compareKeys(a: OrderKey, b: OrderKey, sort: AdapterSort): number {
+    const { direction } = sort;
     const sign = direction === 'asc' ? 1 : -1;
     const byValue =
       typeof a.value === 'number' && typeof b.value === 'number'

@@ -32,6 +32,7 @@ export {
   assertQueryCapabilities,
   assertSortCapability,
   assertValidSort,
+  resolveQuery,
   assertValidAssociationFilters,
   assertValidJournalQuery,
   assertValidVersionsQuery,

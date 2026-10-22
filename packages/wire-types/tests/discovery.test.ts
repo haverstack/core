@@ -54,11 +54,18 @@ describe('isProtocolCompatible', () => {
 
 const NONE: StackCapabilities = {
   filter: { content: 'none', contentPresent: false, contentByType: false, search: false },
-  sort: { fields: [], contentField: false, contentFieldByType: false },
+  sort: { fields: ['createdAt'], contentField: false, contentFieldByType: false },
   limits: { attachmentBytes: null, contentBytes: null },
 };
 
 describe('normalizeCapabilities', () => {
+  it('reads createdAt into sort.fields whatever is declared', () => {
+    expect(normalizeCapabilities({ sort: { fields: ['version'] } }).sort.fields).toEqual([
+      'createdAt',
+      'version',
+    ]);
+  });
+
   it('reads what a server declares', () => {
     expect(
       normalizeCapabilities({
