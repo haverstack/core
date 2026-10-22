@@ -66,65 +66,94 @@ const sqlDirection = (query: StackQuery): 'ASC' | 'DESC' => {
 /**
  * Normalize a json_each row's value so one array element and one bare
  * value are walked by the same clause: an array stands for its elements,
- * anything else for itself. See docs/spec/data-model.md § Nested content
- * paths.
+ * anything else for itself. A boolean is rewrapped from its type, since
+ * json_each's `value` reads it as 0 or 1. See docs/spec/data-model.md
+ * § Nested content paths.
  */
 const spread = (alias: string): string =>
-  `CASE WHEN ${alias}.type = 'array' THEN ${alias}.value ` +
-  `WHEN ${alias}.type = 'object' THEN json_array(json(${alias}.value)) ` +
+  `CASE ${alias}.type WHEN 'array' THEN ${alias}.value ` +
+  `WHEN 'object' THEN json_array(json(${alias}.value)) ` +
+  `WHEN 'true' THEN '[true]' WHEN 'false' THEN '[false]' ` +
   `ELSE json_array(${alias}.value) END`;
 
 /**
- * The members of a json_each row that is an object, and none for a row
- * that is not — a path descending through a scalar reaches no value rather
- * than reaching an error.
+ * The members of a walk row that is an object, and none for a row that is
+ * not — a path descending through a scalar reaches no value rather than
+ * reaching an error.
  */
 const members = (alias: string): string =>
-  `CASE WHEN ${alias}.type = 'object' THEN ${alias}.value ELSE '{}' END`;
+  `CASE WHEN ${alias}.t = 'object' THEN ${alias}.v ELSE '{}' END`;
 
 /**
- * True when some value reached by `segments` satisfies `leaf`, applied to
- * the alias holding that value. Each segment is a bound parameter matched
- * against json_each's `key`, never interpolated into a path expression, so
- * no key can be read as syntax. See docs/spec/data-model.md § Filter.
+ * One statement as it is built: its tables, then its conditions on `r` and
+ * the parameters its text binds, in textual order. Every table's parameter
+ * binds ahead of the text's, since the tables lead the statement.
  */
-const contentPathExists = (
-  segments: string[],
-  leaf: (alias: string) => string,
-  params: unknown[],
-  nextAlias: () => string,
-): string => {
-  // The walk is a flat join list, not a subquery per segment: both SQLite
-  // builds cap expression-tree depth far below the segment cap, and
-  // nesting spends that budget while a join list spends the join budget
-  // the cap is actually sized against.
-  let key = nextAlias();
-  let value = nextAlias();
-  const from = [`json_each(r.content) AS ${key}`, `json_each(${spread(key)}) AS ${value}`];
-  const where = [`${key}.key = ?`];
-  params.push(segments[0]);
-
-  for (const segment of segments.slice(1)) {
-    key = nextAlias();
-    from.push(`json_each(${members(value)}) AS ${key}`);
-    value = nextAlias();
-    from.push(`json_each(${spread(key)}) AS ${value}`);
-    where.push(`${key}.key = ?`);
-    params.push(segment);
-  }
-
-  where.push(leaf(value));
-  return `EXISTS (SELECT 1 FROM ${from.join(', ')} WHERE ${where.join(' AND ')})`;
+type Statement = {
+  tables: string[];
+  tableParams: unknown[];
+  conditions: string[];
+  params: unknown[];
 };
 
+const emptyStatement = (): Statement => ({
+  tables: [],
+  tableParams: [],
+  conditions: ["r.id != '_config'"],
+  params: [],
+});
+
 /**
- * A scalar filter value never matches an object or array stored at the
- * path: json_each exposes those as their JSON text, which would compare
- * equal to a string spelling the same document while every non-SQL adapter
- * compares the value itself.
+ * Tuples as a table of `s` with `columns`, named in tuple order: the one
+ * shape a caller-sized part of a query takes. It binds as one JSON
+ * parameter, so the statement never grows with it, and is materialized
+ * once, so nothing that reads it per record re-parses the JSON. Returns the
+ * table's name. See docs/spec/adapters.md § Statement size.
  */
-const equalsLeaf = (alias: string): string =>
-  `${alias}.type NOT IN ('object', 'array') AND ${alias}.value = ?`;
+const rows = (s: Statement, columns: readonly string[], tuples: unknown[][]): string => {
+  const name = `t${s.tables.length}`;
+  s.tables.push(`${name} AS MATERIALIZED ${rowsTable(columns)}`);
+  s.tableParams.push(JSON.stringify(tuples));
+  return name;
+};
+
+/** The table rows() binds, for a statement outside the query plan. */
+export const rowsTable = (columns: readonly string[]): string => {
+  const named = columns.map((column, i) => `json_extract(value, '$[${i}]') AS ${column}`);
+  return `(SELECT ${named.join(', ')} FROM json_each(?))`;
+};
+
+/** The columns of a content condition; see contentRows(). */
+const CONDITION_COLUMNS = ['scope', 'path', 'op', 'val', 'kind'];
+
+/**
+ * A JSON value's type as json_each reports it, with integer and real as one
+ * number: what an `equals` condition compares besides the value itself, as
+ * `===` does. valueKind() reads a filter value the same way.
+ */
+const kindOf = (type: string): string =>
+  `CASE ${type} WHEN 'integer' THEN 'number' WHEN 'real' THEN 'number' ELSE ${type} END`;
+
+/**
+ * Whether condition row `c` holds for record row `r`: one walk of the path
+ * as data, a segment matched against json_each's `key` per step, gathering
+ * what each op asks of the values it reaches. See docs/spec/adapters.md
+ * § Statement size and docs/spec/data-model.md § Filter.
+ */
+const holds = (c: string, r: string): string => {
+  const depth = `json_array_length(${c}.path)`;
+  return (
+    `(WITH RECURSIVE w(d, v, t) AS (SELECT 0, ${r}.content, 'object' UNION ALL ` +
+    `SELECT w.d + 1, e.value, e.type FROM w JOIN json_each(${members('w')}) m ` +
+    `JOIN json_each(${spread('m')}) e ` +
+    `WHERE w.d < ${depth} AND m.key = json_extract(${c}.path, '$[' || w.d || ']')) ` +
+    `SELECT CASE ${c}.op ` +
+    `WHEN 'equals' THEN IFNULL(MAX(${kindOf('w.t')} = ${c}.kind AND w.v = ${c}.val), 0) ` +
+    "WHEN 'present' THEN IFNULL(MAX(w.t != 'null'), 0) " +
+    "WHEN 'isNull' THEN IFNULL(MAX(w.t = 'null'), 0) OR NOT IFNULL(MAX(w.t != 'null'), 0) " +
+    `END FROM w WHERE w.d = ${depth})`
+  );
+};
 
 /** The join alias the content index is read through. */
 const SORT_ALIAS = 'cs';
@@ -151,87 +180,72 @@ const contentCursor = (cursor: DecodedCursor, field: string) => {
   return cursor;
 };
 
-/**
- * A `content` and `contentPresent` predicate as conditions on `r`, binding
- * in textual order. A dot-separated path is matched element-wise through
- * arrays, and a `null` value means "no value at the path, or a value that
- * is null" (docs/spec/data-model.md § Filter): the second arm below, "some
- * value there is null" OR "nothing is there at all".
- */
-const contentConditions = (
-  predicate: ContentArm,
-  params: unknown[],
-  nextAlias: () => string,
-): string[] => {
-  const conditions: string[] = [];
-  for (const [key, value] of Object.entries(predicate.content ?? {})) {
-    const segments = parseContentFilterKey(key);
-    // undefined is the same absence null names — JSON drops it on the
-    // way over the wire, so treating it as a value would make an
-    // in-process query and its wire equivalent disagree.
-    if (value === null || value === undefined) {
-      const isNull = contentPathExists(segments, (a) => `${a}.value IS NULL`, params, nextAlias);
-      const anyValue = contentPathExists(
-        segments,
-        (a) => `${a}.value IS NOT NULL`,
-        params,
-        nextAlias,
-      );
-      conditions.push(`(${isNull} OR NOT ${anyValue})`);
-    } else {
-      const match = contentPathExists(segments, equalsLeaf, params, nextAlias);
-      params.push(value);
-      conditions.push(match);
-    }
-  }
-  // Presence — the question an exact-match value cannot ask: a path holds
-  // a value when at least one non-null value is reachable at it.
-  for (const key of predicate.contentPresent ?? []) {
-    conditions.push(
-      contentPathExists(
-        parseContentFilterKey(key),
-        (a) => `${a}.value IS NOT NULL`,
-        params,
-        nextAlias,
-      ),
-    );
-  }
-  return conditions;
+/** A filter value's kindOf(), which it mirrors, or null for one nothing equals. */
+const valueKind = (value: unknown): string | null => {
+  if (typeof value === 'boolean') return `${value}`;
+  if (typeof value === 'number') return 'number';
+  return typeof value === 'string' ? 'text' : null;
 };
 
 /**
- * Values as the condition matching any of them. A list binds as one JSON
- * parameter, since it is caller- or reach-sized and a statement's parameter
- * count is capped (at 100 on Durable Object SQLite); one value binds as
- * itself, so an index on the column still yields rows in its order. An
- * empty list matches nothing.
+ * A `content` and `contentPresent` predicate as condition rows scoped to
+ * `scope`: path segments, the op, and for `equals` the value and its
+ * valueKind(). A `null` value means "no value at the path, or a value that
+ * is null" (docs/spec/data-model.md § Filter).
  */
-const inList = (column: string, values: readonly string[], params: unknown[]): string => {
+const contentRows = (scope: string | null, predicate: ContentArm): unknown[][] => {
+  const row = (key: string, op: string, value: unknown = null) => {
+    const path = parseContentFilterKey(key);
+    return [scope, path, op, value, valueKind(value)];
+  };
+  return [
+    ...Object.entries(predicate.content ?? {}).map(([key, value]) =>
+      // undefined is the same absence null names — JSON drops it on the way
+      // over the wire, so treating it as a value would make an in-process
+      // query and its wire equivalent disagree.
+      value === null || value === undefined ? row(key, 'isNull') : row(key, 'equals', value),
+    ),
+    ...(predicate.contentPresent ?? []).map((key) => row(key, 'present')),
+  ];
+};
+
+/**
+ * Values as the condition matching any of them: rows() of one column, or
+ * one value bound as itself, so an index on the column still yields rows in
+ * its order. An empty list matches nothing.
+ */
+const inList = (s: Statement, column: string, values: readonly string[]): string => {
   if (values.length === 1) {
-    params.push(values[0]);
+    s.params.push(values[0]);
     return `${column} = ?`;
   }
-  params.push(JSON.stringify(values));
-  return `${column} IN (SELECT value FROM json_each(?))`;
+  const table = rows(
+    s,
+    ['value'],
+    values.map((value) => [value]),
+  );
+  return `${column} IN (SELECT value FROM ${table})`;
 };
 
 /**
  * Whether the record carries every element of one of `sets`, matched on the
  * permissions table's key — the identity editAccess() removes by — through
- * idx_permissions_element. The sets travel as one JSON parameter, each row
- * naming its set and that set's size; an empty set matches nothing.
+ * idx_permissions_element. Each element is a row naming its set and that
+ * set's size; an empty set matches nothing.
  */
-const carriesPermissions = (sets: AuthorityAssociation[][], params: unknown[]): string => {
-  const rows = sets.flatMap((set, i) =>
-    set.map((p) => [i, set.length, p.kind, p.label, ...permissionKeyColumns(p)]),
+const carriesPermissions = (s: Statement, sets: AuthorityAssociation[][]): string => {
+  const elements = rows(
+    s,
+    ['set_index', 'set_size', 'kind', 'label', 'grantee_kind', 'grantee_id', 'role'],
+    sets.flatMap((set, i) =>
+      set.map((p) => [i, set.length, p.kind, p.label, ...permissionKeyColumns(p)]),
+    ),
   );
-  params.push(JSON.stringify(rows));
-  const at = (i: number) => `json_extract(e.value, '$[${i}]')`;
   return (
-    `r.id IN (SELECT p.record_id FROM json_each(?) e JOIN permissions p ` +
-    `ON p.kind = ${at(2)} AND p.label = ${at(3)} AND p.grantee_kind = ${at(4)} ` +
-    `AND p.grantee_id = ${at(5)} AND p.role = ${at(6)} ` +
-    `GROUP BY p.record_id, ${at(0)} HAVING COUNT(*) = MAX(${at(1)}))`
+    `r.id IN (SELECT p.record_id FROM ${elements} e JOIN permissions p ` +
+    'ON p.kind = e.kind AND p.label = e.label AND p.grantee_kind = e.grantee_kind ' +
+    'AND p.grantee_id = e.grantee_id AND p.role = e.role ' +
+    'GROUP BY p.record_id, e.set_index HAVING COUNT(*) = MAX(e.set_size))'
   );
 };
 
@@ -239,20 +253,18 @@ const carriesPermissions = (sets: AuthorityAssociation[][], params: unknown[]): 
  * The reach as conditions on `r`: inside the fence, and inside `within` by
  * one of its arms. See docs/spec/access-control.md § Reach.
  */
-const reachConditions = (reach: Reach, params: unknown[]): string[] => {
-  const conditions: string[] = [];
-  if (reach.fence) conditions.push(inList('r.type_id', reach.fence, params));
+const reachConditions = (s: Statement, reach: Reach): void => {
+  if (reach.fence) s.conditions.push(inList(s, 'r.type_id', reach.fence));
   const within = reach.within;
   if (within) {
-    const arms = [inList('r.type_id', within.types, params)];
+    const arms = [inList(s, 'r.type_id', within.types)];
     if (within.authored) {
-      params.push(within.authored.subjectId);
-      arms.push(`(r.entity_id = ? AND ${inList('r.type_id', within.authored.types, params)})`);
+      s.params.push(within.authored.subjectId);
+      arms.push(`(r.entity_id = ? AND ${inList(s, 'r.type_id', within.authored.types)})`);
     }
-    arms.push(carriesPermissions(within.permissions, params));
-    conditions.push(`(${arms.join(' OR ')})`);
+    arms.push(carriesPermissions(s, within.permissions));
+    s.conditions.push(`(${arms.join(' OR ')})`);
   }
-  return conditions;
 };
 
 /**
@@ -260,15 +272,10 @@ const reachConditions = (reach: Reach, params: unknown[]): string[] => {
  * except where in the ordering to resume, which is per-partition and gets
  * appended by the caller.
  */
-const recordConditions = (
-  query: StackQuery,
-  reach: Reach | undefined,
-): { conditions: string[]; params: unknown[] } => {
-  const conditions: string[] = ["r.id != '_config'"];
-  const params: unknown[] = [];
+const recordConditions = (query: StackQuery, reach: Reach | undefined): Statement => {
+  const s = emptyStatement();
+  const { conditions, params } = s;
   const f = query.filter ?? {};
-  let aliasSeq = 0;
-  const nextContentAlias = () => `cp${aliasSeq++}`;
 
   /**
    * A filter that accepts one value or a list of them, as the one `IN` that
@@ -276,9 +283,7 @@ const recordConditions = (
    */
   const inFilter = (column: string, value: string | readonly string[] | undefined): void => {
     if (value === undefined) return;
-    conditions.push(
-      inList(`r.${column}`, Array.isArray(value) ? value : [value as string], params),
-    );
+    conditions.push(inList(s, `r.${column}`, Array.isArray(value) ? value : [value as string]));
   };
 
   /** One side of a date range, as the open-ended comparison it is. */
@@ -304,7 +309,7 @@ const recordConditions = (
     conditions.push('r.unlisted_at IS NULL');
   }
 
-  if (reach) conditions.push(...reachConditions(reach, params));
+  if (reach) reachConditions(s, reach);
 
   inFilter('type_id', f.typeId);
 
@@ -345,7 +350,7 @@ const recordConditions = (
   // counted against the distinct tags asked for, the list bound as one.
   if (f.tags?.length) {
     const tags = [...new Set(f.tags)];
-    const label = inList('a.label', tags, params);
+    const label = inList(s, 'a.label', tags);
     conditions.push(
       `r.id IN (SELECT a.record_id FROM associations a WHERE a.kind = 'tag' AND ${label} ` +
         `GROUP BY a.record_id HAVING COUNT(DISTINCT a.label) = ?)`,
@@ -407,18 +412,25 @@ const recordConditions = (
     conditions.push(hasAssociation('relationship', clauses));
   }
 
-  if (f.content || f.contentPresent?.length) {
-    conditions.push(...contentConditions(f, params, nextContentAlias));
+  // An arm is the content filter scoped to one Type; types partition
+  // records, so a record meets at most the arm for its own type
+  // (docs/spec/data-model.md § Content by type).
+  const content = contentRows(null, f);
+  if (f.contentByType) {
+    const arms = Object.entries(f.contentByType);
+    // The Types themselves bound the result too: an empty arm adds no
+    // condition row, yet still admits only its own Type.
+    const typeIds = arms.map(([typeId]) => typeId);
+    conditions.push(inList(s, 'r.type_id', typeIds));
+    for (const [typeId, arm] of arms) content.push(...contentRows(typeId, arm));
   }
 
-  // One arm per Type, each pinned to its type_id; types partition records,
-  // so no record meets two arms (docs/spec/data-model.md § Content by type).
-  if (f.contentByType) {
-    const arms = Object.entries(f.contentByType).map(([typeId, arm]) => {
-      params.push(typeId);
-      return ['r.type_id = ?', ...contentConditions(arm, params, nextContentAlias)].join(' AND ');
-    });
-    conditions.push(`(${arms.map((arm) => `(${arm})`).join(' OR ')})`);
+  if (content.length > 0) {
+    const table = rows(s, CONDITION_COLUMNS, content);
+    conditions.push(
+      `NOT EXISTS (SELECT 1 FROM ${table} c WHERE (c.scope IS NULL OR c.scope = r.type_id) ` +
+        `AND NOT ${holds('c', 'r')})`,
+    );
   }
 
   if (f.search) {
@@ -434,7 +446,7 @@ const recordConditions = (
     }
   }
 
-  return { conditions, params };
+  return s;
 };
 
 /**
@@ -466,16 +478,12 @@ const presentCursorCondition = (
   );
 };
 
-const statement = (
-  select: string,
-  from: string,
-  conditions: string[],
-  params: unknown[],
-  tail = '',
-): QueryStatement => ({
-  sql: `SELECT ${select} FROM ${from} WHERE ${conditions.join(' AND ')}${tail}`,
-  params,
-});
+/** `s` as one statement reading `r` from `from`, its tables leading. */
+const statement = (s: Statement, from: string, tail: string): QueryStatement => {
+  const select = `SELECT r.* FROM ${from} WHERE ${s.conditions.join(' AND ')}${tail}`;
+  const sql = s.tables.length === 0 ? select : `WITH ${s.tables.join(', ')} ${select}`;
+  return { sql, params: [...s.tableParams, ...s.params] };
+};
 
 /**
  * Compile a query into the statements that answer it, read in order and
@@ -493,23 +501,15 @@ export const buildQueryPlan = (query: StackQuery, reach?: Reach): QueryStatement
   const contentField = query.sort?.contentField;
 
   if (contentField === undefined) {
-    const { conditions, params } = recordConditions(query, reach);
+    const where = recordConditions(query, reach);
     const field = getSortField(query);
     const col = getSortColumn(field);
     if (decoded) {
       const cursor = nativeCursor(decoded, field);
-      conditions.push(`(r.${col} ${op} ? OR (r.${col} = ? AND r.id ${op} ?))`);
-      params.push(cursor.value, cursor.value, cursor.id);
+      where.conditions.push(`(r.${col} ${op} ? OR (r.${col} = ? AND r.id ${op} ?))`);
+      where.params.push(cursor.value, cursor.value, cursor.id);
     }
-    return [
-      statement(
-        'r.*',
-        'records r',
-        conditions,
-        params,
-        ` ORDER BY r.${col} ${dir}, r.id ${dir} LIMIT ?`,
-      ),
-    ];
+    return [statement(where, 'records r', ` ORDER BY r.${col} ${dir}, r.id ${dir} LIMIT ?`)];
   }
 
   const cursor = decoded ? contentCursor(decoded, contentField) : null;
@@ -518,34 +518,34 @@ export const buildQueryPlan = (query: StackQuery, reach?: Reach): QueryStatement
   // Records holding a value at the field, in that value's order. A cursor
   // sitting in the absent partition has already passed every one of them.
   if (cursor?.kind !== 'absent') {
-    const { conditions, params } = recordConditions(query, reach);
+    const where = recordConditions(query, reach);
     const from = `content_index ${SORT_ALIAS} JOIN records r ON r.id = ${SORT_ALIAS}.record_id`;
-    conditions.push(`${SORT_ALIAS}.field = ?`);
-    params.push(contentField);
-    if (cursor) conditions.push(presentCursorCondition(cursor, op, params));
+    where.conditions.push(`${SORT_ALIAS}.field = ?`);
+    where.params.push(contentField);
+    if (cursor) where.conditions.push(presentCursorCondition(cursor, op, where.params));
     // Ordered exactly as idx_content_index_sort stores it, so the page is
     // an ordered walk of the index rather than a sort of the matches.
     const order =
       `${SORT_ALIAS}.value_rank ${dir}, ${SORT_ALIAS}.num_value ${dir}, ` +
       `${SORT_ALIAS}.text_key ${dir}, ${SORT_ALIAS}.text_value ${dir}, ` +
       `${SORT_ALIAS}.record_id ${dir}`;
-    pages.push(statement('r.*', from, conditions, params, ` ORDER BY ${order} LIMIT ?`));
+    pages.push(statement(where, from, ` ORDER BY ${order} LIMIT ?`));
   }
 
   // Records holding nothing there, which trail the others whichever way
   // the sort runs (docs/spec/data-model.md § Sorting by a content field).
   {
-    const { conditions, params } = recordConditions(query, reach);
-    conditions.push(
+    const where = recordConditions(query, reach);
+    where.conditions.push(
       `NOT EXISTS (SELECT 1 FROM content_index ${SORT_ALIAS} ` +
         `WHERE ${SORT_ALIAS}.record_id = r.id AND ${SORT_ALIAS}.field = ?)`,
     );
-    params.push(contentField);
+    where.params.push(contentField);
     if (cursor?.kind === 'absent') {
-      conditions.push(`r.id ${op} ?`);
-      params.push(cursor.id);
+      where.conditions.push(`r.id ${op} ?`);
+      where.params.push(cursor.id);
     }
-    pages.push(statement('r.*', 'records r', conditions, params, ` ORDER BY r.id ${dir} LIMIT ?`));
+    pages.push(statement(where, 'records r', ` ORDER BY r.id ${dir} LIMIT ?`));
   }
 
   return pages;
@@ -554,8 +554,8 @@ export const buildQueryPlan = (query: StackQuery, reach?: Reach): QueryStatement
 /**
  * A sort naming its value per Type, read through a derived table in place
  * of the index: each Type's own index rows, and its constant in the index's
- * columns, so one cursor condition and one ORDER BY serve both. See
- * docs/spec/data-model.md § Sorting by a content field.
+ * columns, so one cursor condition and one ORDER BY serve both. Fields and
+ * constants are each rows(). See docs/spec/data-model.md § Sorting by a content field.
  */
 const byTypePlan = (
   query: StackQuery,
@@ -577,32 +577,36 @@ const byTypePlan = (
     if (entry) constants.push([typeId, entry]);
   }
   const pages: QueryStatement[] = [];
-  const fieldOf = (alias: string, record: string) =>
-    fields.map(() => `(${record}.type_id = ? AND ${alias}.field = ?)`).join(' OR ');
 
   if (cursor?.kind !== 'absent' && fields.length + constants.length > 0) {
+    const where = recordConditions(query, reach);
     const sources: string[] = [];
-    const sourceParams: unknown[] = [];
     if (fields.length > 0) {
+      const byField = rows(where, ['type_id', 'field'], fields);
       sources.push(
-        'SELECT c.record_id AS record_id, c.value_rank AS value_rank, c.num_value AS num_value, ' +
-          'c.text_key AS text_key, c.text_value AS text_value ' +
-          `FROM content_index c JOIN records t ON t.id = c.record_id WHERE ${fieldOf('c', 't')}`,
-      );
-      for (const [typeId, field] of fields) sourceParams.push(typeId, field);
-    }
-    for (const [typeId, entry] of constants) {
-      sources.push(
-        'SELECT t.id AS record_id, ? AS value_rank, ? AS num_value, ? AS text_key, ' +
-          '? AS text_value FROM records t WHERE t.type_id = ?',
-      );
-      sourceParams.push(
-        ...(entry.kind === 'num' ? [0, entry.num, null, null] : [1, null, entry.key, entry.text]),
-        typeId,
+        'SELECT ci.record_id AS record_id, ci.value_rank AS value_rank, ' +
+          'ci.num_value AS num_value, ci.text_key AS text_key, ci.text_value AS text_value ' +
+          `FROM ${byField} f JOIN content_index ci ON ci.field = f.field ` +
+          'JOIN records t ON t.id = ci.record_id AND t.type_id = f.type_id',
       );
     }
-    const { conditions, params } = recordConditions(query, reach);
-    if (cursor) conditions.push(presentCursorCondition(cursor, op, params));
+    if (constants.length > 0) {
+      const byConstant = rows(
+        where,
+        ['type_id', 'value_rank', 'num_value', 'text_key', 'text_value'],
+        constants.map(([typeId, entry]) =>
+          entry.kind === 'num'
+            ? [typeId, 0, entry.num, null, null]
+            : [typeId, 1, null, entry.key, entry.text],
+        ),
+      );
+      sources.push(
+        'SELECT t.id AS record_id, k.value_rank AS value_rank, k.num_value AS num_value, ' +
+          'k.text_key AS text_key, k.text_value AS text_value ' +
+          `FROM ${byConstant} k JOIN records t ON t.type_id = k.type_id`,
+      );
+    }
+    if (cursor) where.conditions.push(presentCursorCondition(cursor, op, where.params));
     const from =
       `(${sources.join(' UNION ALL ')}) ${SORT_ALIAS} ` +
       `JOIN records r ON r.id = ${SORT_ALIAS}.record_id`;
@@ -610,37 +614,30 @@ const byTypePlan = (
       `${SORT_ALIAS}.value_rank ${dir}, ${SORT_ALIAS}.num_value ${dir}, ` +
       `${SORT_ALIAS}.text_key ${dir}, ${SORT_ALIAS}.text_value ${dir}, ` +
       `${SORT_ALIAS}.record_id ${dir}`;
-    pages.push(
-      statement(
-        'r.*',
-        from,
-        conditions,
-        [...sourceParams, ...params],
-        ` ORDER BY ${order} LIMIT ?`,
-      ),
-    );
+    pages.push(statement(where, from, ` ORDER BY ${order} LIMIT ?`));
   }
 
   // Records holding nothing to order by: a Type's field with no value, a
   // `null` constant, or a Type the map does not name.
   {
-    const { conditions, params } = recordConditions(query, reach);
+    const where = recordConditions(query, reach);
     if (fields.length > 0) {
-      conditions.push(
-        `NOT EXISTS (SELECT 1 FROM content_index ${SORT_ALIAS} ` +
-          `WHERE ${SORT_ALIAS}.record_id = r.id AND (${fieldOf(SORT_ALIAS, 'r')}))`,
+      const byField = rows(where, ['type_id', 'field'], fields);
+      where.conditions.push(
+        `NOT EXISTS (SELECT 1 FROM ${byField} f JOIN content_index ${SORT_ALIAS} ` +
+          `ON ${SORT_ALIAS}.record_id = r.id AND ${SORT_ALIAS}.field = f.field ` +
+          'WHERE f.type_id = r.type_id)',
       );
-      for (const [typeId, field] of fields) params.push(typeId, field);
     }
     if (constants.length > 0) {
       const typeIds = constants.map(([typeId]) => typeId);
-      conditions.push(`NOT (${inList('r.type_id', typeIds, params)})`);
+      where.conditions.push(`NOT (${inList(where, 'r.type_id', typeIds)})`);
     }
     if (cursor?.kind === 'absent') {
-      conditions.push(`r.id ${op} ?`);
-      params.push(cursor.id);
+      where.conditions.push(`r.id ${op} ?`);
+      where.params.push(cursor.id);
     }
-    pages.push(statement('r.*', 'records r', conditions, params, ` ORDER BY r.id ${dir} LIMIT ?`));
+    pages.push(statement(where, 'records r', ` ORDER BY r.id ${dir} LIMIT ?`));
   }
   return pages;
 };

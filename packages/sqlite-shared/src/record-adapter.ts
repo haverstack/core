@@ -53,15 +53,13 @@ export const SQLITE_RECORD_CAPABILITIES: StackCapabilities = {
   filter: {
     content: 'path',
     contentPresent: true,
-    // Inside SQLite's limits on expression depth and compound selects; see
-    // docs/spec/adapters.md § Adapter capabilities.
-    contentByType: 64,
+    contentByType: true,
     search: true,
   },
   sort: {
     fields: ['createdAt', 'updatedAt', 'version'],
     contentField: true,
-    contentFieldByType: 64,
+    contentFieldByType: true,
   },
   limits: {
     attachmentBytes: null,

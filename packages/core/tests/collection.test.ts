@@ -692,12 +692,12 @@ describe.each([
   let adapter: MemoryAdapter;
   let stack: Stack;
 
-  const open = async (filterArms = 64, sortKeys = 64) => {
+  const open = async (byType = true) => {
     adapter = await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' });
     (adapter as { capabilities: StackClient['capabilities'] }).capabilities = {
       ...adapter.capabilities,
-      filter: { ...adapter.capabilities.filter, contentByType: filterArms },
-      sort: { ...adapter.capabilities.sort, contentFieldByType: sortKeys },
+      filter: { ...adapter.capabilities.filter, contentByType: byType },
+      sort: { ...adapter.capabilities.sort, contentFieldByType: byType },
     };
     stack = await Stack.open(adapter, { migrations: TASK_MIGRATIONS });
     for (const type of [TaskV1, TaskV2, Task]) await stack.defineType(type);
@@ -803,7 +803,7 @@ describe.each([
   });
 
   test('an adapter that declines the shape gets the handle-only query', async () => {
-    await open(0, 0);
+    await open(false);
     const [, , v3] = await seed('Ada');
     const filtered = await tasks().query({ filter: { content: { owner: 'Ada' } } });
     expect(filtered.records.map((r) => r.id)).toEqual([v3.id]);
@@ -811,14 +811,6 @@ describe.each([
     const sorted = await tasks().query({ sort: { contentField: 'owner' } });
     expect(sorted.records.map((r) => r.id)).toEqual([v3.id]);
     expect(sorted.skipped).toEqual({ older: true, newer: false });
-  });
-
-  test('an adapter with a lower cap gets the newest versions that fit', async () => {
-    await open(2);
-    const [, v2, v3] = await seed('Ada');
-    const page = await tasks().query({ filter: { content: { owner: 'Ada' } } });
-    expect(page.records.map((r) => r.id).sort()).toEqual([v2.id, v3.id].sort());
-    expect(page.skipped).toEqual({ older: true, newer: false });
   });
 
   test('a migration not built by migration() is narrowed', async () => {

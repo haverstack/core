@@ -69,7 +69,7 @@ type Reach = {
 
 The shape and its reading are [Access control § Reach](./access-control.md#reach)'s, over TypeIds where that section's are over families: `Stack` resolves each family to its registered versions before the call, the resolution [`filter.baseId`](./data-model.md#filter) gets, so an adapter needs no family concept. The reach is one more condition of the query, beside its own `filter`, so it narrows and never widens. Every rule behind it is resolved before the adapter sees it, so the adapter applies none of access control: it matches a description, the way it matches a `filter`. `inReach()` in `@haverstack/core/adapter` is the reference reading, and the [conformance suite](#conformance) holds an adapter to it.
 
-**Every local adapter implements it.** It is optional only so `APIAdapter` can leave it out: a stack whose adapter lacks it [cannot be scoped at all](./access-control.md#enforcement-stackasentity), which a server-backed stack never needs. A reach is sized by the requester's grants and rosters, not by anything the adapter controls, so **a list in it never costs a bound parameter per entry** — the rule a SQLite adapter holds every list a query carries to, a `filter`'s and a reach's alike: each binds as one JSON parameter read through `json_each`, the permission sets and a tag filter's all-of list included, since Durable Object SQLite caps a statement at 100 parameters. What is not a list, the per-Type arms of `contentByType` and `contentFieldByType`, is bounded instead by the cap the adapter [declares](#adapter-capabilities) for it. It matches each permission element through an index on the element's identity ending in `record_id`, the same semi-join shape as the association filters.
+**Every local adapter implements it.** It is optional only so `APIAdapter` can leave it out: a stack whose adapter lacks it [cannot be scoped at all](./access-control.md#enforcement-stackasentity), which a server-backed stack never needs. A reach is sized by the requester's grants and rosters, not by anything the adapter controls, so a SQLite adapter binds each list in it as one parameter, the permission sets included — the rule it holds every part of a query to; see [Statement size](#statement-size). It matches each permission element through an index on the element's identity ending in `record_id`, the same semi-join shape as the association filters.
 
 ## Package naming convention
 
@@ -172,6 +172,17 @@ This is why a SQLite-backed adapter's write is unindex, write, re-index rather t
 
 A missing row is not only a stale read. `deleteUnreferencedAttachmentRecords()` decides whether a file is still referenced by looking for one, so a `file-ref` field with no row makes a referenced file look unreferenced, and the attachment's metadata Records are purged rather than refused. A writer that touches `content` without rewriting the row is the one way to reach that.
 
+### Statement size
+
+**A statement's text and its bound parameters never grow with how many entries a query's keys hold.** Durable Object SQLite caps a statement at 100 parameters and 100 KB of text, and a query's size is not the adapter's to choose: a reach is sized by the requester's grants and rosters, a filter by whoever wrote it. A statement that grew with either would fail on one engine for a query another answers, and a declared [capability](#adapter-capabilities) could not promise anything. **Every caller-sized part of a query is a table of rows**, bound as one JSON array of tuples and read through `json_each` as named columns:
+
+- **A list is rows of one column** — a filter's type, app and author lists and its tags, and a reach's type lists. A list of one value binds as that value instead, so an index on its column keeps yielding rows in order; that is a smaller statement, never a larger one.
+- **A reach's permission sets** are rows of one element each, naming the set it belongs to and that set's size.
+- **`sort.contentFieldByType`** is two tables, the Types ordered by a field and the Types ordered by a constant.
+- **The content conditions** — every `filter.content` and `filter.contentPresent` key, and every key of every `filter.contentByType` arm — are one table, each row naming its path, what it asks, and the Type it is scoped to (none for `filter.content`). A record matches when every row scoped to nothing or to its own Type holds. One recursive walk per row matches a segment per step and gathers what the row asks of the values it reaches, so neither the number of conditions nor a path's length adds text.
+
+What remains binds a fixed count: a scalar filter's value, a date bound, a cursor's position, the page's row budget. Since a statement's size is set by its shape and not by its query, every engine running the shared query builder honors the same capability declaration.
+
 ## Adapter capabilities
 
 Adapters expose a capabilities object so apps can check what's supported before relying on a feature:
@@ -181,13 +192,13 @@ type StackCapabilities = {
   filter: {
     content: 'none' | 'field' | 'path'; // how far a content filter key may reach
     contentPresent: boolean; // filter.contentPresent is honored
-    contentByType: number; // most arms filter.contentByType may hold; 0 = not honored
+    contentByType: boolean; // filter.contentByType is honored
     search: boolean; // filter.search is honored
   };
   sort: {
     fields: ('createdAt' | 'updatedAt' | 'version')[]; // native columns this adapter can order by
     contentField: boolean; // sort.contentField is honored
-    contentFieldByType: number; // most keys sort.contentFieldByType may hold; 0 = not honored
+    contentFieldByType: boolean; // sort.contentFieldByType is honored
   };
   limits: {
     attachmentBytes: number | null; // upload size ceiling, or null = client can't pre-check
@@ -208,13 +219,13 @@ One type, `StackCapabilities`, names both sides: an adapter declares it as `capa
 
 **`filter.contentPresent` sits beside the ladder rather than on it.** It gates `filter.contentPresent`, and is required `true` for local adapters on the same reasoning: asking whether a path holds a value is the same walk with a weaker predicate. It is not a rung because a server promising to match a content value has not thereby promised to answer whether one is there at all. It is meaningful only above `'none'` — presence travels in the `POST /records/query` body, which a server reaching no content does not expose — and a presence path is itself gated by the rung, so a multi-segment one needs `'path'`.
 
-**`filter.contentByType` and `sort.contentFieldByType` are caps, not flags.** Each is the most keys the [per-Type shape](./data-model.md#content-by-type) may hold, and `0` declines it. A local adapter must honor both, on the reasoning that makes `'path'` required: an arm is the content filter it already runs, scoped to one `typeId`. The first-party ones declare `64`, far above any family's version count and inside SQLite's limits on expression depth and compound statements. A server may declare any cap, `0` included, and a collection then narrows the versions it cannot reach rather than failing the query — see [Data model § Content queries across versions](./data-model.md#content-queries-across-versions). Both are meaningful only above `filter.content: 'none'`, since they travel in the `POST /records/query` body.
+**`filter.contentByType` and `sort.contentFieldByType` are flags, like `filter.contentPresent`.** Each says the [per-Type shape](./data-model.md#content-by-type) is honored, with any number of keys. A local adapter must honor both, on the reasoning that makes `'path'` required: an arm is the content filter it already runs, scoped to one `typeId`, and costs a SQLite adapter no statement text or parameter of its own (see [Statement size](#statement-size)). Neither carries a count, as nothing else a query holds does — `filter.content` keys, `contentPresent` paths and tag lists are unbounded too: a server bounds what a query costs it the one way it bounds all of them, under [Wire format § Bounding query cost](./wire-format.md#bounding-query-cost). A collection facing `false` queries its handle's version alone rather than failing — see [Data model § Content queries across versions](./data-model.md#content-queries-across-versions). Like `filter.contentPresent`, both travel only in the `POST /records/query` body, which a server reaching no content does not serve, so all three are `false` beside `filter.content: 'none'`. The dependency is on that endpoint, not on filtering: a per-Type sort needs it where `sort.contentField`, sent as a query parameter, does not. That holds where capabilities enter, so nothing reading them re-derives it: the [conformance suite](#conformance) holds a local adapter's declaration to it, and `normalizeCapabilities()` applies it to a discovery response.
 
 **`filter.search` has no local-required rule.** A full-text index is a different mechanism from field matching, and neither implies the other, so a local adapter may legitimately decline it (see the JSON adapter note below).
 
 **`sort.contentField` is a boolean, and `sort.fields` names native columns only.** Content fields are app-defined and unbounded, so an adapter cannot enumerate them; and an adapter that indexes content for sorting indexes [every top-level scalar](./data-model.md#sorting-by-a-content-field), so there is nothing per-field left to declare. `sort.contentField` is required `true` for local adapters, and independent of `filter.content`: the two describe ordering and filtering, and a server may offer either without the other — filtering is answerable at whatever scale a server already scans at, where ordering wants an index. Both are enforced: `Stack.query()` refuses a sort the adapter hasn't declared rather than letting it be answered in some other order, which a caller reading one bounded page cannot detect.
 
-**Absent, malformed or unrecognized reads as the least capable value it could stand for.** One rule, for every entry: `'none'` for the reach, `false` for a flag, `0` for a cap, nothing for `sort.fields`, `null` for a limit. A discovery response that omits a group, omits `capabilities` entirely, or names a reach this client has never heard of describes a server this client will not send that query to — silence is never a claim, in either direction, and an unrecognized rung places nowhere on a ladder so it can only be read as its bottom. `normalizeCapabilities()` in `@haverstack/wire-types` applies the rule, so a client reads a foreign discovery response through one function rather than defaulting keys at each use.
+**Absent, malformed or unrecognized reads as the least capable value it could stand for.** One rule, for every entry: `'none'` for the reach, `false` for a flag, nothing for `sort.fields`, `null` for a limit. A discovery response that omits a group, omits `capabilities` entirely, or names a reach this client has never heard of describes a server this client will not send that query to — silence is never a claim, in either direction, and an unrecognized rung places nowhere on a ladder so it can only be read as its bottom. `normalizeCapabilities()` in `@haverstack/wire-types` applies the rule, so a client reads a foreign discovery response through one function rather than defaulting keys at each use.
 
 Two things this does not refuse. A query naming no sort asks for the server's own default order rather than a stated one, so it claims nothing that has to be declared and runs against an empty `sort.fields`. And a `null` limit is permissive by design: it says this client cannot pre-check, not that nothing is enforced — the server's own ceiling still answers with a `413`.
 

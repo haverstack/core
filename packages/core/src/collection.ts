@@ -492,16 +492,11 @@ export const createCollection = <S extends ReadonlyTypeSchema>(
     const predicate = contentPredicate(filter);
     const sortField = sort?.contentField;
     const { capabilities } = client;
-    // A version past the adapter's cap is narrowed, newest kept first:
-    // the older a version, the fewer apps still write it.
-    const filterCap =
-      predicate === undefined
-        ? Infinity
-        : capabilities.filter.content === 'none'
-          ? 0
-          : capabilities.filter.contentByType;
-    const sortCap = sortField === undefined ? Infinity : capabilities.sort.contentFieldByType;
-    const cap = Math.min(filterCap, sortCap);
+    // Spanning versions takes the per-Type shape of each content key the
+    // query carries; an adapter without one gets the handle's version alone.
+    const spans =
+      (predicate === undefined || capabilities.filter.contentByType) &&
+      (sortField === undefined || capabilities.sort.contentFieldByType);
     const sortKind = (() => {
       const def = sortField === undefined ? undefined : handle.schema[sortField];
       return def && def.kind !== 'array' && def.kind !== 'object' ? def.kind : undefined;
@@ -511,9 +506,7 @@ export const createCollection = <S extends ReadonlyTypeSchema>(
       pinned
         ? pinned.map((id) => ({ id, baseId: handle.baseId, version: versionOf(id) }))
         : await listTypes()
-    )
-      .filter((type) => type.baseId === handle.baseId && type.version !== handleVersion)
-      .sort((a, b) => b.version - a.version);
+    ).filter((type) => type.baseId === handle.baseId && type.version !== handleVersion);
     const arms: Record<TypeId, ContentArm> = { [handle.id]: predicate ?? {} };
     const keys: Record<TypeId, ContentSortKey> = sortField
       ? { [handle.id]: { field: sortField } }
@@ -539,11 +532,7 @@ export const createCollection = <S extends ReadonlyTypeSchema>(
           : origins
             ? translateSortKey(origins, sortField, sortKind)
             : UNTRANSLATABLE;
-      if (
-        translated === UNTRANSLATABLE ||
-        key === UNTRANSLATABLE ||
-        Object.keys(arms).length >= cap
-      ) {
+      if (translated === UNTRANSLATABLE || key === UNTRANSLATABLE || !spans) {
         narrowed.push(type.id);
         continue;
       }

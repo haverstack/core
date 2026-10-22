@@ -25,11 +25,11 @@ import type {
 } from '../src/types/index.js';
 
 const ALL: StackCapabilities = {
-  filter: { content: 'path', contentPresent: true, contentByType: 64, search: true },
+  filter: { content: 'path', contentPresent: true, contentByType: true, search: true },
   sort: {
     fields: ['createdAt', 'updatedAt', 'version'],
     contentField: true,
-    contentFieldByType: 64,
+    contentFieldByType: true,
   },
   limits: { attachmentBytes: null, contentBytes: null },
 };
@@ -110,17 +110,10 @@ describe('a refused query names the capability it needed', () => {
 
   test('filter.contentByType declined', () => {
     expect(
-      refusalFor(() => assertQueryCapabilities(ARMS, without({ filter: { contentByType: 0 } }))),
+      refusalFor(() =>
+        assertQueryCapabilities(ARMS, without({ filter: { contentByType: false } })),
+      ),
     ).toBe('filter.contentByType');
-  });
-
-  test('filter.contentByType past its cap', () => {
-    expect(
-      refusalFor(() => assertQueryCapabilities(ARMS, without({ filter: { contentByType: 1 } }))),
-    ).toBe('filter.contentByType');
-    expect(() =>
-      assertQueryCapabilities(ARMS, without({ filter: { contentByType: 2 } })),
-    ).not.toThrow();
   });
 
   test("filter.contentByType against reach 'none'", () => {
@@ -151,14 +144,23 @@ describe('a refused query names the capability it needed', () => {
     ).toBe('filter.contentPresent');
   });
 
-  test('sort.contentFieldByType declined, or past its cap', () => {
+  test('sort.contentFieldByType declined', () => {
     const sort = { contentFieldByType: { 'com.example/x@1': { field: 'a' } } };
     expect(
-      refusalFor(() => assertSortCapability(sort, without({ sort: { contentFieldByType: 0 } }))),
+      refusalFor(() =>
+        assertSortCapability(sort, without({ sort: { contentFieldByType: false } })),
+      ),
     ).toBe('sort.contentFieldByType');
-    expect(() =>
-      assertSortCapability(sort, without({ sort: { contentFieldByType: 1 } })),
-    ).not.toThrow();
+  });
+
+  test('a declared per-Type shape takes any number of keys', () => {
+    const typeIds = Array.from({ length: 500 }, (_, i) => `com.example/x@${i + 1}`);
+    const filter = { contentByType: Object.fromEntries(typeIds.map((id) => [id, {}])) };
+    const sort = {
+      contentFieldByType: Object.fromEntries(typeIds.map((id) => [id, { field: 'a' }])),
+    };
+    expect(() => assertQueryCapabilities(filter, ALL)).not.toThrow();
+    expect(() => assertSortCapability(sort, ALL)).not.toThrow();
   });
 
   test('sort.fields', () => {

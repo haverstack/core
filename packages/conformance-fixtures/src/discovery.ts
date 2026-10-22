@@ -21,13 +21,13 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
         filter: {
           content: 'path',
           contentPresent: true,
-          contentByType: 16,
+          contentByType: true,
           search: true,
         },
         sort: {
           fields: ['createdAt', 'updatedAt', 'version'],
           contentField: true,
-          contentFieldByType: 16,
+          contentFieldByType: true,
         },
         limits: {
           attachmentBytes: 52428800,
@@ -49,11 +49,11 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
       version: WIRE_PROTOCOL_VERSION,
       entityId: 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK',
       capabilities: {
-        filter: { content: 'none', contentPresent: false, contentByType: 0, search: false },
+        filter: { content: 'none', contentPresent: false, contentByType: false, search: false },
         sort: {
           fields: ['createdAt', 'updatedAt', 'version'],
           contentField: false,
-          contentFieldByType: 0,
+          contentFieldByType: false,
         },
         limits: { attachmentBytes: null, contentBytes: null },
       },
@@ -76,13 +76,13 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
         filter: {
           content: 'none',
           contentPresent: false,
-          contentByType: 0,
+          contentByType: false,
           search: false,
         },
         sort: {
           fields: ['createdAt'],
           contentField: false,
-          contentFieldByType: 0,
+          contentFieldByType: false,
         },
         limits: {
           attachmentBytes: null,
@@ -110,13 +110,13 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
         filter: {
           content: 'path',
           contentPresent: true,
-          contentByType: 16,
+          contentByType: true,
           search: true,
         },
         sort: {
           fields: ['createdAt', 'updatedAt', 'version'],
           contentField: true,
-          contentFieldByType: 16,
+          contentFieldByType: true,
         },
         limits: {
           attachmentBytes: 52428800,
@@ -144,13 +144,13 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
         filter: {
           content: 'path',
           contentPresent: true,
-          contentByType: 16,
+          contentByType: true,
           search: true,
         },
         sort: {
           fields: ['createdAt', 'updatedAt', 'version'],
           contentField: true,
-          contentFieldByType: 16,
+          contentFieldByType: true,
         },
         limits: {
           attachmentBytes: 52428800,
@@ -178,13 +178,13 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
         filter: {
           content: 'none',
           contentPresent: false,
-          contentByType: 0,
+          contentByType: false,
           search: false,
         },
         sort: {
           fields: ['createdAt'],
           contentField: false,
-          contentFieldByType: 0,
+          contentFieldByType: false,
         },
         limits: {
           attachmentBytes: null,

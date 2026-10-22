@@ -1049,22 +1049,27 @@ describe('records — queries', () => {
     }
   });
 
-  // The segment cap is what keeps the generated join list inside SQLite's
-  // 64-table limit, so the longest legal path has to be executable, not
-  // merely accepted. See docs/spec/data-model.md § Nested content paths.
-  test('a path at the segment cap executes; one past it is refused', async () => {
+  // The longest legal path reaches the deepest value a write accepts, and
+  // has to execute, not merely be accepted. See docs/spec/data-model.md
+  // § Nested content paths.
+  test('a path at the segment cap reaches the deepest value; one past it is refused', async () => {
     const adapter = await initAdapter();
-    const deepest = Array.from({ length: 32 }, (_, i) => `s${i}`).join('.');
+    const segments = Array.from({ length: 33 }, (_, i) => `s${i}`);
+    const deepest = segments.join('.');
+    const nested = segments.reduceRight<unknown>((value, key) => ({ [key]: value }), 'x');
     await adapter.createRecord(makeRecord({ id: 'r1', content: { text: 'shallow' } }));
+    await adapter.createRecord(
+      makeRecord({ id: 'r2', content: { text: 'deep', ...(nested as object) } }),
+    );
 
     await expect(
       adapter.queryRecords({ filter: { content: { [deepest]: 'x' } } }),
-    ).resolves.toMatchObject({ records: [] });
+    ).resolves.toMatchObject({ records: [{ id: 'r2' }] });
     await expect(
       adapter.queryRecords({ filter: { content: { [deepest]: null } } }),
     ).resolves.toMatchObject({ records: [{ id: 'r1' }] });
     await expect(
-      adapter.queryRecords({ filter: { content: { [`${deepest}.s32`]: 'x' } } }),
+      adapter.queryRecords({ filter: { content: { [`${deepest}.s33`]: 'x' } } }),
     ).rejects.toThrow(StackBadRequestError);
   });
 

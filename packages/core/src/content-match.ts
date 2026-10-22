@@ -17,8 +17,8 @@ const spreadValue = (value: unknown): unknown[] => (Array.isArray(value) ? value
 
 /**
  * Every value reachable by walking `segments`, spreading arrays at each
- * step — sqlite-shared's contentPathExists() walk, so a filter answers the
- * same against either. Empty means the path reaches nothing, which a `null`
+ * step — the walk sqlite-shared runs in SQL, so a filter answers the same
+ * against either. Empty means the path reaches nothing, which a `null`
  * filter value matches.
  */
 export const valuesAtContentPath = (

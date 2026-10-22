@@ -39,8 +39,13 @@ export type DiscoveryResponse = {
  * checks rather than casts. See docs/spec/wire-format.md § Discovery.
  */
 export type DiscoveryCapabilities = {
-  filter?: { content?: string; contentPresent?: boolean; contentByType?: number; search?: boolean };
-  sort?: { fields?: string[]; contentField?: boolean; contentFieldByType?: number };
+  filter?: {
+    content?: string;
+    contentPresent?: boolean;
+    contentByType?: boolean;
+    search?: boolean;
+  };
+  sort?: { fields?: string[]; contentField?: boolean; contentFieldByType?: boolean };
   limits?: { attachmentBytes?: number | null; contentBytes?: number | null };
 };
 
@@ -49,10 +54,10 @@ const SORT_FIELDS: ReadonlySet<string> = new Set(NATIVE_SORT_FIELDS);
 
 /**
  * Resolves anything absent, malformed or unrecognized to the least capable
- * value it could stand for — one rule, applied once, rather than a default
- * per key at each call site. A `null` limit is the one permissive reading,
- * since the server's own ceiling still answers 413. See
- * docs/spec/adapters.md § Adapter capabilities.
+ * value it could stand for, and what needs the POST /records/query body to
+ * false below `'none'` — applied once, where capabilities enter. A `null`
+ * limit is the one permissive reading. See docs/spec/adapters.md § Adapter
+ * capabilities.
  */
 export function normalizeCapabilities(
   capabilities: DiscoveryCapabilities | undefined,
@@ -63,20 +68,20 @@ export function normalizeCapabilities(
   const reach = CONTENT_FILTER_REACHES.has(filter?.content as string)
     ? (filter?.content as ContentFilterReach)
     : 'none';
-  // The per-Type shapes travel in the POST /records/query body, which a
-  // server reaching no content does not serve.
-  const cap = (value: unknown): number => (reach === 'none' ? 0 : capOrZero(value));
+  // These travel in the POST /records/query body, which a server reaching
+  // no content does not serve.
+  const reaches = reach !== 'none';
   return {
     filter: {
       content: reach,
-      contentPresent: filter?.contentPresent === true,
-      contentByType: cap(filter?.contentByType),
+      contentPresent: reaches && filter?.contentPresent === true,
+      contentByType: reaches && filter?.contentByType === true,
       search: filter?.search === true,
     },
     sort: {
       fields: (sort?.fields ?? []).filter((f): f is NativeSortField => SORT_FIELDS.has(f)),
       contentField: sort?.contentField === true,
-      contentFieldByType: cap(sort?.contentFieldByType),
+      contentFieldByType: reaches && sort?.contentFieldByType === true,
     },
     limits: {
       attachmentBytes: finiteOrNull(limits?.attachmentBytes),
@@ -84,10 +89,6 @@ export function normalizeCapabilities(
     },
   };
 }
-
-/** A cap on keys, or 0 — declined — for anything but a non-negative integer. */
-const capOrZero = (value: unknown): number =>
-  typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : 0;
 
 /** A ceiling this client can compare against, or null for "cannot pre-check". */
 const finiteOrNull = (value: unknown): number | null =>

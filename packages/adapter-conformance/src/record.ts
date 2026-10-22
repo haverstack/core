@@ -81,31 +81,25 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
     describe('capabilities', () => {
       test('declares a well-formed StackCapabilities object', () => {
         expect(['none', 'field', 'path']).toContain(capabilities.filter.content);
-        expect(typeof capabilities.filter.contentPresent).toBe('boolean');
-        expect(typeof capabilities.filter.search).toBe('boolean');
-        expect(Array.isArray(capabilities.sort.fields)).toBe(true);
-        expect(typeof capabilities.sort.contentField).toBe('boolean');
-        for (const cap of [
+        for (const flag of [
+          capabilities.filter.contentPresent,
           capabilities.filter.contentByType,
+          capabilities.filter.search,
+          capabilities.sort.contentField,
           capabilities.sort.contentFieldByType,
         ]) {
-          expect(Number.isInteger(cap) && cap >= 0).toBe(true);
+          expect(typeof flag).toBe('boolean');
         }
+        expect(Array.isArray(capabilities.sort.fields)).toBe(true);
       });
 
-      test('the per-Type caps are 0 whenever filter.content is "none"', () => {
-        // Both travel in the body of the endpoint a reach of "none" omits.
-        if (capabilities.filter.content === 'none') {
-          expect(capabilities.filter.contentByType).toBe(0);
-          expect(capabilities.sort.contentFieldByType).toBe(0);
-        }
-      });
-
-      test('filter.contentPresent is false whenever filter.content is "none"', () => {
-        // contentPresent asks whether a value is there at all — meaningless
-        // to promise from an adapter that reaches no content to look at.
+      // Each travels only in the POST /records/query body, which a reach of
+      // "none" does not serve.
+      test('what needs the query body is false whenever filter.content is "none"', () => {
         if (capabilities.filter.content === 'none') {
           expect(capabilities.filter.contentPresent).toBe(false);
+          expect(capabilities.filter.contentByType).toBe(false);
+          expect(capabilities.sort.contentFieldByType).toBe(false);
         }
       });
     });
@@ -1284,6 +1278,42 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
           });
         }
 
+        // A value matches as `===` compares it: its JSON type as well as
+        // its value. See docs/spec/data-model.md § Filter.
+        test('a content filter value matches its own JSON type only', async () => {
+          const bool = makeRecord({ content: { title: 'b', flag: true } });
+          const num = makeRecord({ content: { title: 'n', flag: 1 } });
+          const text = makeRecord({ content: { title: 't', flag: '1' } });
+          for (const record of [bool, num, text]) await adapter.createRecord(record);
+
+          for (const [value, record] of [
+            [true, bool],
+            [1, num],
+            ['1', text],
+          ] as const) {
+            const result = await adapter.queryRecords({ filter: { content: { flag: value } } });
+            expect(result.records.map((r) => r.id)).toEqual([record.id]);
+          }
+        });
+
+        if (capabilities.filter.contentPresent && capabilities.filter.content === 'path') {
+          // Both are element-wise, so a path reaching a null and a value
+          // satisfies each. See docs/spec/data-model.md § Filter.
+          test('a multi-valued path satisfies both contentPresent and a null filter', async () => {
+            const mixed = makeRecord({
+              content: { title: 'x', tags: [null, 'a'], emails: [{ value: null }, { value: 1 }] },
+            });
+            await adapter.createRecord(mixed);
+
+            for (const path of ['tags', 'emails.value']) {
+              const present = await adapter.queryRecords({ filter: { contentPresent: [path] } });
+              expect(present.records.map((r) => r.id)).toEqual([mixed.id]);
+              const nulls = await adapter.queryRecords({ filter: { content: { [path]: null } } });
+              expect(nulls.records.map((r) => r.id)).toEqual([mixed.id]);
+            }
+          });
+        }
+
         if (capabilities.filter.content === 'path') {
           test('an array is spread element-wise when filtering a nested path', async () => {
             const match = makeRecord({
@@ -1327,7 +1357,7 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
     // -----------------------------------------------------------------
     // Content by type — capability-gated on filter.contentByType
     // -----------------------------------------------------------------
-    if (capabilities.filter.contentByType >= 2) {
+    if (capabilities.filter.contentByType) {
       describe('content by type', () => {
         const OTHER = 'org.haverstack.conformance/other@1';
         const THIRD = 'org.haverstack.conformance/third@1';
@@ -1406,7 +1436,7 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
     // -----------------------------------------------------------------
     // Sort by content field per type — gated on sort.contentFieldByType
     // -----------------------------------------------------------------
-    if (capabilities.sort.contentFieldByType >= 3) {
+    if (capabilities.sort.contentFieldByType) {
       describe('sort by content field per type', () => {
         const OTHER = 'org.haverstack.conformance/other@1';
         const THIRD = 'org.haverstack.conformance/third@1';

@@ -28,13 +28,13 @@ const capabilities: StackCapabilities = {
   filter: {
     content: 'none',
     contentPresent: false,
-    contentByType: 0,
+    contentByType: false,
     search: false,
   },
   sort: {
     fields: ['createdAt', 'updatedAt', 'version'],
     contentField: false,
-    contentFieldByType: 0,
+    contentFieldByType: false,
   },
   limits: {
     attachmentBytes: null,

@@ -21,6 +21,7 @@ import { familyIdProblem, parseTypeId } from './schema.js';
 import { targetErrors } from './associations/validation.js';
 import {
   CONTENT_SEGMENT_METACHARACTERS,
+  MAX_VALIDATION_DEPTH,
   SEGMENT_METACHARACTER_RE,
   isPlainObject,
 } from './validate.js';
@@ -71,13 +72,10 @@ export function assertQueryCapabilities(
       'filter.content',
     );
   }
-  if (arms.length > contentByType) {
+  if (arms.length > 0 && !contentByType) {
     throw new StackBadRequestError(
-      contentByType === 0
-        ? 'Query uses filter.contentByType, but this adapter does not declare the ' +
-            'filter.contentByType capability.'
-        : `Query uses ${arms.length} filter.contentByType arms, but this adapter takes at ` +
-            `most ${contentByType}.`,
+      'Query uses filter.contentByType, but this adapter does not declare the ' +
+        'filter.contentByType capability.',
       'filter.contentByType',
     );
   }
@@ -167,8 +165,13 @@ export function filtersContent(features: Pick<StackCapabilities, 'filter'>): boo
   return features.filter.content !== 'none';
 }
 
-/** The longest path both SQLite engines can execute — see the spec link below. */
-const MAX_CONTENT_PATH_SEGMENTS = 32;
+/**
+ * The longest path that can reach a stored value: a top-level field sits at
+ * depth 0 and each segment descends one level, so a path past this reaches
+ * nothing a write accepts. See docs/spec/data-model.md § Nested content
+ * paths.
+ */
+const MAX_CONTENT_PATH_SEGMENTS = MAX_VALIDATION_DEPTH + 1;
 
 /**
  * Split a content filter key into path segments. Write-time validation
@@ -178,9 +181,6 @@ const MAX_CONTENT_PATH_SEGMENTS = 32;
  */
 export function parseContentFilterKey(key: string): string[] {
   const segments = key.split('.');
-  // A SQLite adapter spends two json_each joins per segment against a
-  // 64-table join limit, so a path past the cap is one the engine could
-  // not execute. See docs/spec/data-model.md § Nested content paths.
   if (segments.length > MAX_CONTENT_PATH_SEGMENTS) {
     throw new StackBadRequestError(
       `Invalid content filter path "${key}": at most ${MAX_CONTENT_PATH_SEGMENTS} segments.`,
@@ -324,14 +324,10 @@ export function assertSortCapability(
 ): void {
   if (!sort) return;
   if (sort.contentFieldByType !== undefined) {
-    const keys = Object.keys(sort.contentFieldByType).length;
-    const cap = capabilities.sort.contentFieldByType;
-    if (keys > cap) {
+    if (!capabilities.sort.contentFieldByType) {
       throw new StackBadRequestError(
-        cap === 0
-          ? 'Query uses sort.contentFieldByType, but this adapter does not declare the ' +
-              'sort.contentFieldByType capability.'
-          : `Query uses ${keys} sort.contentFieldByType keys, but this adapter takes at most ${cap}.`,
+        'Query uses sort.contentFieldByType, but this adapter does not declare the ' +
+          'sort.contentFieldByType capability.',
         'sort.contentFieldByType',
       );
     }
