@@ -28,6 +28,7 @@ import {
 import { NATIVE_SORT_FIELDS } from './types/index.js';
 import type {
   AdapterQuery,
+  PlainQuery,
   AdapterSort,
   StackQuery,
   JournalQuery,
@@ -321,19 +322,43 @@ export const MAX_QUERY_LIMIT = 1000;
  * assertQueryCapabilities() for those that do. See docs/spec/data-model.md
  * § Sorting and pagination.
  */
-export function resolveQuery(query: StackQuery): AdapterQuery {
-  const { presentAt: _presentAt, sort, limit, ...rest } = query;
+export function resolveQuery(query: PlainQuery): AdapterQuery {
+  const { sort, limit, ...rest } = query;
   assertValidContentByType(query.filter);
   assertValidSort(sort);
   assertWindowInteger(limit, 'limit', 1);
   assertValidAssociationFilters(query.filter);
-  assertValidBaseIdFilter(query.filter);
   return {
     ...rest,
     sort: sort
       ? ({ ...sort, direction: sort.direction ?? 'asc' } as AdapterSort)
       : { field: 'createdAt', direction: 'desc' },
     limit: Math.min(limit ?? DEFAULT_QUERY_LIMIT, MAX_QUERY_LIMIT),
+  };
+}
+
+/** A query split where it enters `Stack`; see splitQuery(). */
+export type SplitQuery = {
+  query: AdapterQuery;
+  presentAt?: StackQuery['presentAt'];
+  baseId?: RecordFilter['baseId'];
+};
+
+/**
+ * Split a query at the door into what an adapter sees, resolved, and the
+ * two directives only `Stack` can apply: `presentAt`, which migrates the
+ * results, and `filter.baseId`, which needs the registered Types. Every
+ * check runs here, before either directive costs a read. See
+ * docs/spec/data-model.md § Sorting and pagination.
+ */
+export function splitQuery(query: StackQuery): SplitQuery {
+  const { presentAt, filter, ...rest } = query;
+  assertValidBaseIdFilter(filter);
+  const { baseId, ...plain } = filter ?? {};
+  return {
+    query: resolveQuery({ ...rest, ...(filter && { filter: plain }) }),
+    ...(presentAt !== undefined && { presentAt }),
+    ...(baseId !== undefined && { baseId }),
   };
 }
 

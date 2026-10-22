@@ -43,6 +43,8 @@ import type {
   AttachmentFilter,
   RelationshipTargetPattern,
   StackQuery,
+  PlainQuery,
+  AdapterFilter,
 } from '../types/index.js';
 
 // -------------------------------------------------------
@@ -461,17 +463,17 @@ function parseCreatedByParams(url: URL): RecordFilter['createdBy'] {
 }
 
 /**
- * Build a `StackQuery` from `GET /records` search params — the inverse of
+ * Build a `PlainQuery` from `GET /records` search params — the inverse of
  * what `APIAdapter` encodes for a server that reaches no content.
  * `parentId=null` is the literal string, the sentinel for "top level":
  * Crockford base-32 excludes `u` and `l`, so no record ID can collide
  * with it. See docs/spec/wire-format.md § Records.
  */
-export function parseQueryParams(url: URL): StackQuery {
+export function parseQueryParams(url: URL): PlainQuery {
   assertNoUntravelableFields(url.searchParams.has('baseId'), url.searchParams.has('presentAt'));
   requireKnownParams(url, RECORD_QUERY_PARAMS);
 
-  const filter: RecordFilter = {};
+  const filter: AdapterFilter = {};
 
   const typeIds = url.searchParams.getAll('typeId');
   if (typeIds.length) filter.typeId = typeIds.length === 1 ? typeIds[0] : typeIds;
@@ -521,7 +523,7 @@ export function parseQueryParams(url: URL): StackQuery {
   if (booleanParam(url, 'includeDeleted')) filter.includeDeleted = true;
   if (booleanParam(url, 'includeUnlisted')) filter.includeUnlisted = true;
 
-  const query: StackQuery = {};
+  const query: PlainQuery = {};
   if (Object.keys(filter).length) query.filter = filter;
 
   const sort = buildSort(
@@ -590,12 +592,12 @@ function parseSortByTypeBody(raw: unknown): Record<string, ContentSortKey> {
 }
 
 /**
- * Build a `StackQuery` from a `POST /records/query` body — the superset
+ * Build a `PlainQuery` from a `POST /records/query` body — the superset
  * form, which also carries `filter.content`, with ISO date strings decoded.
  * `undefined` is the absent body; any other non-object is refused.
  * See docs/spec/wire-format.md § Records.
  */
-export function parseQueryBody(raw: unknown): StackQuery {
+export function parseQueryBody(raw: unknown): PlainQuery {
   if (raw === undefined) return {};
   const body = requirePlainObject(raw, 'query body');
   const f = body.filter !== undefined ? requirePlainObject(body.filter, 'filter') : undefined;
@@ -603,10 +605,10 @@ export function parseQueryBody(raw: unknown): StackQuery {
   requireKnownKeys(body, ['filter', 'sort', 'limit', 'cursor'], 'query body');
   if (f) requireKnownKeys(f, QUERY_BODY_FILTER_KEYS, 'filter');
 
-  const query: StackQuery = {};
+  const query: PlainQuery = {};
 
   if (f) {
-    const filter: RecordFilter = {};
+    const filter: AdapterFilter = {};
 
     if (f.typeId !== undefined) filter.typeId = requireStringOrArray(f.typeId, 'filter.typeId');
     if (f.parentId !== undefined)

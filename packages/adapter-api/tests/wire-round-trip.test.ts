@@ -16,7 +16,8 @@ import {
   createOptionsFromWireRecord,
 } from '@haverstack/core/wire';
 import type { WireCreateRequest, TokenSession } from '@haverstack/core/wire';
-import type { StackQuery, StackRecord, SubscribeOptions } from '@haverstack/core';
+import type { StackRecord, SubscribeOptions } from '@haverstack/core';
+import type { PlainQuery } from '@haverstack/core/adapter';
 import { serializeRecord } from '@haverstack/wire-types';
 import { resolveQuery } from '@haverstack/core/adapter';
 
@@ -54,7 +55,7 @@ useFetchMock();
  * takes GET /records' search params, true takes POST /records/query's JSON
  * body.
  */
-async function roundTrip(query: StackQuery, reachesContent = false): Promise<StackQuery> {
+async function roundTrip(query: PlainQuery, reachesContent = false): Promise<PlainQuery> {
   mockFetch.mockResolvedValueOnce(jsonResponse(discovery(reachesContent)));
   const adapter = await APIAdapter.open({ url: BASE_URL, token: 'test-token' });
 
@@ -100,7 +101,7 @@ async function roundTripChanges(
 // -------------------------------------------------------
 
 describe('GET /records round trip', () => {
-  const cases: Array<[string, StackQuery]> = [
+  const cases: Array<[string, PlainQuery]> = [
     ['empty query', {}],
     ['single typeId', { filter: { typeId: 'com.example/note@1' } }],
     ['typeId array', { filter: { typeId: ['com.example/note@1', 'com.example/note@2'] } }],
@@ -228,7 +229,7 @@ describe('GET /records round trip', () => {
 // -------------------------------------------------------
 
 describe('POST /records/query round trip', () => {
-  const cases: Array<[string, StackQuery]> = [
+  const cases: Array<[string, PlainQuery]> = [
     ['empty query', {}],
     ['native fields', { filter: { typeId: 'com.example/note@1', tags: ['starred'] } }],
     ['root records', { filter: { parentId: null } }],

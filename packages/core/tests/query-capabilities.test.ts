@@ -20,7 +20,7 @@ import { StackBadRequestError } from '../src/errors.js';
 import type {
   MissingCapability,
   QuerySort,
-  RecordFilter,
+  AdapterFilter,
   StackCapabilities,
 } from '../src/types/index.js';
 
@@ -71,7 +71,7 @@ describe('a refused query names the capability it needed', () => {
   test.each([
     ['filter.content', { content: { slug: 'x' } }],
     ['filter.contentPresent', { contentPresent: ['slug'] }],
-  ] as [string, RecordFilter][])("reach 'none', asked for by %s", (_label, filter) => {
+  ] as [string, AdapterFilter][])("reach 'none', asked for by %s", (_label, filter) => {
     expect(
       refusalFor(() =>
         assertQueryCapabilities(resolveQuery({ filter }), without({ filter: { content: 'none' } })),
@@ -112,7 +112,7 @@ describe('a refused query names the capability it needed', () => {
     ).toBe('sort.contentField');
   });
 
-  const ARMS: RecordFilter = {
+  const ARMS: AdapterFilter = {
     contentByType: { 'com.example/x@1': { content: { a: 1 } }, 'com.example/x@2': {} },
   };
 
@@ -139,7 +139,7 @@ describe('a refused query names the capability it needed', () => {
   });
 
   test("an arm's keys are gated as top-level keys are", () => {
-    const arm = (predicate: object): RecordFilter => ({
+    const arm = (predicate: object): AdapterFilter => ({
       contentByType: { 'com.example/x@1': predicate },
     });
     expect(
@@ -233,7 +233,7 @@ describe('the per-Type shapes are held to a split along Types', () => {
       { contentByType: { 'com.example/x@1': { content: { 'a..b': 1 } } } },
     ],
   ])('filter.contentByType refuses %s', (_label, filter) => {
-    expect(refusalFor(() => assertValidContentByType(filter as RecordFilter))).toBeUndefined();
+    expect(refusalFor(() => assertValidContentByType(filter as AdapterFilter))).toBeUndefined();
   });
 
   test.each([

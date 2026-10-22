@@ -12,7 +12,7 @@ import type { StackCapabilities } from './capabilities.js';
 import type { RecordChange, Unsubscribe, SubscribeOptions } from './events.js';
 import type { RecordId, TypeId, FileId, AppId, EntityId, Actor } from './ids.js';
 import type { JournalEntryInput, RecordJournalEntry, JournalQuery } from './journal.js';
-import type { StackQuery, QuerySort, QueryResult } from './query.js';
+import type { StackQuery, QuerySort, QueryResult, RecordFilter } from './query.js';
 import type { StackRecord, RecordVersion, VersionsQuery } from './records.js';
 import type { StackType } from './schema.js';
 
@@ -83,12 +83,24 @@ export type ElementWriteOptions<E extends Association> = AspectWriteOptions & {
 /** A named sort as an adapter receives it: `Stack` has resolved its `direction`. */
 export type AdapterSort = QuerySort & { direction: 'asc' | 'desc' };
 
+/** A filter as an adapter receives it: `Stack` has resolved `baseId` to `typeId`. */
+export type AdapterFilter = Omit<RecordFilter, 'baseId'> & { baseId?: never };
+
+/**
+ * A query carrying neither directive only `Stack` can apply — no
+ * `presentAt`, no `filter.baseId` — with its defaults still open: what
+ * travels on the wire, and what resolveQuery() takes.
+ */
+export type PlainQuery = Omit<AdapterQuery, 'sort' | 'limit'> & Pick<StackQuery, 'sort' | 'limit'>;
+
 /**
  * A query as an adapter receives it, from resolveQuery(): every default
- * resolved, so no adapter carries one. See docs/spec/data-model.md
+ * resolved, so no adapter carries one, and neither directive only `Stack`
+ * can apply — `presentAt`, `filter.baseId`. See docs/spec/data-model.md
  * § Sorting and pagination.
  */
-export type AdapterQuery = Omit<StackQuery, 'sort' | 'limit' | 'presentAt'> & {
+export type AdapterQuery = Omit<StackQuery, 'sort' | 'limit' | 'presentAt' | 'filter'> & {
+  filter?: AdapterFilter;
   sort: AdapterSort;
   limit: number;
 };

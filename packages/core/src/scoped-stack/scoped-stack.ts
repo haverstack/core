@@ -31,7 +31,6 @@ import { validatePatchValues } from '../validate.js';
 import { ChangeEmitter, assertSinceUsable } from '../stack/changes.js';
 import { SYSTEM_TYPES } from '../types/index.js';
 import type {
-  AdapterQuery,
   ActorOptions,
   AppContent,
   AppId,
@@ -72,9 +71,10 @@ import { addsOf, associationEqual } from '../associations/identity.js';
 import {
   assertQueryCapabilities,
   assertValidBaseIdFilter,
-  resolveQuery,
+  splitQuery,
   filtersContent,
 } from '../query-validation.js';
+import type { SplitQuery } from '../query-validation.js';
 import {
   checkFamily,
   storedVersionDiffers,
@@ -139,11 +139,7 @@ export type ScopedStackInit = {
   /** The app's migrations, which collection() migrates records through. */
   migrations: MigrationRegistry;
   /** Stack.query() within a reach over type families — see query(). */
-  queryReadable: (
-    query: AdapterQuery,
-    reach: Reach<BaseId>,
-    presentAt?: StackQuery['presentAt'],
-  ) => Promise<QueryResult>;
+  queryReadable: (split: SplitQuery, reach: Reach<BaseId>) => Promise<QueryResult>;
 };
 
 /**
@@ -494,13 +490,13 @@ export class ScopedStack implements StackClient {
    * Records alone. See docs/spec/disclosure.md § What a query reveals.
    */
   async query(query: StackQuery = {}): Promise<QueryResult> {
-    const resolved = resolveQuery(query);
-    assertQueryCapabilities(resolved, this.stack.capabilities);
+    const split = splitQuery(query);
+    assertQueryCapabilities(split.query, this.stack.capabilities);
     if (query.filter?.includeUnlisted && !this.#authority.ownerActingAlone) {
       throw new StackPermissionError('includeUnlisted is owner-only');
     }
     const reach = await this.#authority.snapshot().reach('read');
-    const page = await this.queryReadable(resolved, reach, query.presentAt);
+    const page = await this.queryReadable(split, reach);
     // Projected here as well as in get(), or `includeDeleted` would be a
     // strictly better read channel than the fetch-by-ID it is supposed to
     // match.

@@ -9,7 +9,9 @@
  */
 
 export type {
+  AdapterFilter,
   AdapterQuery,
+  PlainQuery,
   AdapterSort,
   StackAdapter,
   StackRecordAdapter,

@@ -54,7 +54,7 @@ import {
   AUTH_FIXTURE_SIGNATURE,
   AUTH_FIXTURE_FOREIGN_SIGNATURE,
 } from '@haverstack/conformance-fixtures';
-import type { AssociationEdit, StackQuery, StackType } from '@haverstack/core';
+import type { AssociationEdit, StackType } from '@haverstack/core';
 import type { WireAuthError, WireVersionsResponse } from '@haverstack/wire-types';
 import {
   StackPermissionError,
@@ -76,7 +76,7 @@ import {
 } from '@haverstack/core/wire';
 import { generateDidKeypair } from '@haverstack/core/did';
 import { resolveQuery } from '@haverstack/core/adapter';
-import type { AdapterQuery } from '@haverstack/core/adapter';
+import type { AdapterQuery, PlainQuery } from '@haverstack/core/adapter';
 
 useFetchMock();
 
@@ -292,9 +292,9 @@ describe('createRecord fixtures', () => {
 describe('queryRecords fixtures', () => {
   // A fixture's request is one any client may send; APIAdapter sends the
   // same query with Stack's defaults resolved.
-  const fixtureQuery = (path: string): StackQuery =>
+  const fixtureQuery = (path: string): PlainQuery =>
     resolveQuery(parseQueryParams(new URL(`${BASE_URL}${path}`)));
-  const sentQuery = (url: string): StackQuery => {
+  const sentQuery = (url: string): PlainQuery => {
     expect(new URL(url).pathname).toBe('/records');
     return parseQueryParams(new URL(url));
   };
@@ -312,7 +312,7 @@ describe('queryRecords fixtures', () => {
       const adapter = await openAdapter();
       mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
 
-      const query = resolveQuery(fixture.requestBody as StackQuery);
+      const query = resolveQuery(fixture.requestBody as PlainQuery);
       const result = await adapter.queryRecords(query);
 
       const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];

@@ -8522,6 +8522,21 @@ describe('query — sort direction defaults', () => {
     expect(spy.mock.calls.map(([q]) => q.limit)).toEqual([50, 5, 1000]);
   });
 
+  test('the adapter receives neither presentAt nor filter.baseId', async () => {
+    const spy = vi.spyOn(adapter, 'queryRecords');
+    await stack.query({ filter: { baseId: fam(NOTE_V1) }, presentAt: 'latest' });
+    const [sent] = spy.mock.calls[0]!;
+    expect(sent).not.toHaveProperty('presentAt');
+    expect(sent.filter).not.toHaveProperty('baseId');
+    expect(sent.filter?.typeId).toEqual([NOTE_V1]);
+  });
+
+  test('a malformed query is refused even when its family has no Types', async () => {
+    await expect(
+      stack.query({ filter: { baseId: 'com.example.none/thing' }, limit: 0 }),
+    ).rejects.toThrow(StackBadRequestError);
+  });
+
   test('a query refused for a capability never reaches the adapter', async () => {
     const incapable = await IncapableMemoryAdapter.open({ ownerEntityId: 'owner-x' });
     const spy = vi.spyOn(incapable, 'queryRecords');

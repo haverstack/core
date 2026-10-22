@@ -5,8 +5,9 @@ import { tmpdir } from 'os';
 import { DatabaseSync } from '../src/node-sqlite.js';
 import { NativeSQLiteRecordAdapter } from '../src/index.js';
 import { StackBadRequestError } from '@haverstack/core';
-import type { StackQuery, StackRecord, StackType } from '@haverstack/core';
+import type { StackRecord, StackType } from '@haverstack/core';
 import { resolveQuery } from '@haverstack/core/adapter';
+import type { PlainQuery } from '@haverstack/core/adapter';
 
 // -------------------------------------------------------
 // Test helpers
@@ -43,7 +44,7 @@ const create = async (typeId: string, content: Record<string, unknown>): Promise
   adapter.createRecord(makeRecord(typeId, content));
 
 /** Every record the query matches, followed to the last page. */
-const pagedTitles = async (query: StackQuery): Promise<string[]> => {
+const pagedTitles = async (query: PlainQuery): Promise<string[]> => {
   const titles: string[] = [];
   let cursor: string | undefined;
   do {
@@ -54,7 +55,7 @@ const pagedTitles = async (query: StackQuery): Promise<string[]> => {
   return titles;
 };
 
-const titles = async (query: StackQuery): Promise<string[]> =>
+const titles = async (query: PlainQuery): Promise<string[]> =>
   (await adapter.queryRecords(resolveQuery(query))).records.map((r) => r.content.title as string);
 
 beforeEach(async () => {
