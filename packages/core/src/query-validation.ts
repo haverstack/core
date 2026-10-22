@@ -28,7 +28,6 @@ import {
 import { NATIVE_SORT_FIELDS } from './types/index.js';
 import type {
   AdapterQuery,
-  BaseId,
   PlainQuery,
   AdapterSort,
   StackQuery,
@@ -325,6 +324,7 @@ export const MAX_QUERY_LIMIT = 1000;
  */
 export function resolveQuery(query: PlainQuery): AdapterQuery {
   const { sort, limit, ...rest } = query;
+  assertValidBaseIdFilter(query.filter);
   assertValidContentByType(query.filter);
   assertValidSort(sort);
   assertWindowInteger(limit, 'limit', 1);
@@ -341,23 +341,19 @@ export function resolveQuery(query: PlainQuery): AdapterQuery {
 /** A query split where it enters `Stack`; see splitQuery(). */
 export type SplitQuery = {
   query: AdapterQuery;
-  baseId?: StackQuery['baseId'];
   presentAt?: StackQuery['presentAt'];
 };
 
 /**
- * Split a query at the door into what an adapter sees, resolved, and the
- * two directives only `Stack` can apply: `baseId`, which needs the
- * registered Types, and `presentAt`, which migrates the results. Every
- * check runs here, before either directive costs a read. See
- * docs/spec/data-model.md § Directives and conditions.
+ * Split a query at the door into what an adapter sees, resolved, and
+ * `presentAt`, which `Stack` applies to the results. Every check runs
+ * here, before the adapter is asked. See docs/spec/data-model.md
+ * § Sorting and pagination.
  */
 export function splitQuery(query: StackQuery): SplitQuery {
-  const { baseId, presentAt, ...plain } = query;
-  assertFamilyIds(familiesOf(baseId), 'baseId');
+  const { presentAt, ...plain } = query;
   return {
     query: resolveQuery(plain),
-    ...(baseId !== undefined && { baseId }),
     ...(presentAt !== undefined && { presentAt }),
   };
 }
@@ -439,22 +435,30 @@ export function assertValidAssociationFilters(filter: RecordFilter | undefined):
 }
 
 /**
- * Refuse every `baseId` that cannot name a type family, in one argument
- * error prefixed with the `surface` they were passed to. A TypeId there
- * would name one version while acting on all of them. See
- * docs/spec/data-model.md § Types.
+ * Refuse a `baseId` argument that cannot name a type family, as an
+ * argument error prefixed with the `surface` it was passed to. See
+ * familyIdProblem().
  */
-export function assertFamilyIds(baseIds: readonly unknown[], surface: string): void {
-  const errors = baseIds
-    .map((b) => familyIdProblem(b, surface))
-    .filter((m): m is string => m !== null)
-    .map((message) => ({ path: 'baseId', message }));
-  if (errors.length > 0) throw new StackValidationError(errors, ARGUMENTS_INVALID);
+export function assertFamilyId(baseId: unknown, surface: string): void {
+  const problem = familyIdProblem(baseId, surface);
+  if (problem) {
+    throw new StackValidationError([{ path: 'baseId', message: problem }], ARGUMENTS_INVALID);
+  }
 }
 
-/** A query's or a subscription's `baseId`, one family or many. */
-export const familiesOf = (baseId: BaseId | BaseId[] | undefined): BaseId[] =>
-  baseId === undefined ? [] : Array.isArray(baseId) ? baseId : [baseId];
+/**
+ * Refuse a `baseId` carrying an `@version` suffix. A family filter resolves
+ * against registered families, so a TypeId there would match nothing and
+ * say nothing. See docs/spec/data-model.md § Filter.
+ */
+export function assertValidBaseIdFilter(filter: { baseId?: string | string[] } | undefined): void {
+  if (filter?.baseId === undefined) return;
+  const errors = (Array.isArray(filter.baseId) ? filter.baseId : [filter.baseId])
+    .map((b) => familyIdProblem(b, 'filter.baseId'))
+    .filter((m): m is string => m !== null)
+    .map((message) => ({ path: 'filter.baseId', message }));
+  if (errors.length > 0) throw new StackValidationError(errors, ARGUMENTS_INVALID);
+}
 
 /**
  * A journal window: `afterSeq` 0 is the start of the log. No ceiling is

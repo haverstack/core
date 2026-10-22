@@ -84,11 +84,11 @@ export type ElementWriteOptions<E extends Association> = AspectWriteOptions & {
 export type AdapterSort = QuerySort & { direction: 'asc' | 'desc' };
 
 /**
- * A query without the directives only `Stack` can apply, `baseId` and
- * `presentAt`, with its defaults still open: what travels on the wire,
- * and what resolveQuery() takes.
+ * A query without `presentAt`, which applies migrations — app code no
+ * adapter or server holds — with its defaults still open: what travels
+ * on the wire, and what resolveQuery() takes.
  */
-export type PlainQuery = Omit<StackQuery, 'baseId' | 'presentAt'>;
+export type PlainQuery = Omit<StackQuery, 'presentAt'>;
 
 /**
  * A query as an adapter receives it, from resolveQuery(): every default
@@ -279,8 +279,8 @@ export interface StackRecordAdapter {
    * Atomically verify fileId is unreferenced and purge its metadata
    * records, returning them; StackConflictError if still referenced.
    * Optional — Stack.deleteAttachment() has a non-atomic fallback.
-   * `metadataTypeIds` is the resolved `_attachment` family, so an adapter
-   * needs no baseId concept. See docs/spec/attachments.md § Deleting attachments.
+   * `metadataTypeIds` is the `_attachment` family's registered versions.
+   * See docs/spec/attachments.md § Deleting attachments.
    */
   deleteUnreferencedAttachmentRecords?(
     fileId: FileId,

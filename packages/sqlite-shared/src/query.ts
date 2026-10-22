@@ -214,6 +214,29 @@ const inList = (s: Statement, column: string, values: readonly string[]): string
 };
 
 /**
+ * Families as the condition matching a TypeId in any of them: `F@…` is
+ * exactly the range from `F@` up to `FA`, since `A` follows `@` in the
+ * binary collation. A range keeps the type_id index usable, and never
+ * matches a family that merely shares a prefix, as `note` and `notes`.
+ * See docs/spec/data-model.md § Filter.
+ */
+const inFamilies = (s: Statement, column: string, baseIds: readonly string[]): string => {
+  if (baseIds.length === 1) {
+    s.params.push(`${baseIds[0]}@`, `${baseIds[0]}A`);
+    return `(${column} >= ? AND ${column} < ?)`;
+  }
+  const table = rows(
+    s,
+    ['value'],
+    baseIds.map((value) => [value]),
+  );
+  return (
+    `EXISTS (SELECT 1 FROM ${table} f ` +
+    `WHERE ${column} >= f.value || '@' AND ${column} < f.value || 'A')`
+  );
+};
+
+/**
  * Whether the record carries every element of one of `sets`, matched on the
  * permissions table's key — the identity editAccess() removes by — through
  * idx_permissions_element. Each element is a row naming its set and that
@@ -298,6 +321,9 @@ const recordConditions = (query: AdapterQuery, reach: Reach | undefined): Statem
   if (reach) reachConditions(s, reach);
 
   inFilter('type_id', f.typeId);
+  if (f.baseId !== undefined) {
+    conditions.push(inFamilies(s, 'r.type_id', Array.isArray(f.baseId) ? f.baseId : [f.baseId]));
+  }
 
   // Not an inFilter: parentId takes an explicit null for "at the root",
   // which is a different SQL predicate rather than a different value.

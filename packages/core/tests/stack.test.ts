@@ -241,7 +241,7 @@ describe('Stack.open', () => {
 
       const reopened = await Stack.open(emptyAdapter, { ownerProfile: { name: 'Jane Smith' } });
 
-      const { records } = await reopened.query({ baseId: '_entity' });
+      const { records } = await reopened.query({ filter: { baseId: '_entity' } });
       expect(records).toHaveLength(1);
       expect(records[0].typeId).toBe('_entity@2');
     });
@@ -1919,14 +1919,14 @@ describe('query — baseId filter', () => {
     const v1 = await stack.create(NOTE_V1, { text: 'old' });
     const v2 = await stack.create(NOTE_V2, { text: 'new', title: 'hi' });
 
-    const result = await stack.query({ baseId: 'com.example.test/note' });
+    const result = await stack.query({ filter: { baseId: 'com.example.test/note' } });
 
     const ids = result.records.map((r) => r.id).sort();
     expect(ids).toEqual([v1.id, v2.id].sort());
   });
 
   test('returns empty results for an unknown baseId rather than throwing', async () => {
-    const result = await stack.query({ baseId: 'com.example.test/nonexistent' });
+    const result = await stack.query({ filter: { baseId: 'com.example.test/nonexistent' } });
     expect(result).toEqual({ records: [], cursor: null });
   });
 
@@ -1935,8 +1935,7 @@ describe('query — baseId filter', () => {
     const v2 = await stack.create(NOTE_V2, { text: 'new', title: 'hi' });
 
     const result = await stack.query({
-      baseId: 'com.example.test/note',
-      filter: { typeId: NOTE_V2 },
+      filter: { baseId: 'com.example.test/note', typeId: NOTE_V2 },
     });
 
     expect(result.records.map((r) => r.id)).toEqual([v2.id]);
@@ -1954,7 +1953,7 @@ describe('query — baseId filter', () => {
     const other = await stack.create('com.example.test/other@1', { text: 'other' });
 
     const result = await stack.query({
-      baseId: ['com.example.test/note', 'com.example.test/other'],
+      filter: { baseId: ['com.example.test/note', 'com.example.test/other'] },
     });
 
     const ids = result.records.map((r) => r.id).sort();
@@ -7174,8 +7173,7 @@ describe('deleteAttachment', () => {
     await stack.deleteAttachment(fileId);
 
     const left = await stack.query({
-      baseId: '_attachment',
-      filter: { includeDeleted: true, includeUnlisted: true },
+      filter: { baseId: '_attachment', includeDeleted: true, includeUnlisted: true },
     });
     expect(left.records).toEqual([]);
     await expect(stack.getAttachment(fileId)).rejects.toThrow(StackNotFoundError);
@@ -8524,19 +8522,18 @@ describe('query — sort direction defaults', () => {
     expect(spy.mock.calls.map(([q]) => q.limit)).toEqual([50, 5, 1000]);
   });
 
-  test('the adapter receives neither presentAt nor baseId', async () => {
+  test('the adapter receives filter.baseId as given, and no presentAt', async () => {
     const spy = vi.spyOn(adapter, 'queryRecords');
-    await stack.query({ baseId: fam(NOTE_V1), presentAt: 'latest' });
+    await stack.query({ filter: { baseId: fam(NOTE_V1) }, presentAt: 'latest' });
     const [sent] = spy.mock.calls[0]!;
     expect(sent).not.toHaveProperty('presentAt');
-    expect(sent).not.toHaveProperty('baseId');
-    expect(sent.filter?.typeId).toEqual([NOTE_V1]);
+    expect(sent.filter).toEqual({ baseId: fam(NOTE_V1) });
   });
 
   test('a malformed query is refused even when its family has no Types', async () => {
-    await expect(stack.query({ baseId: 'com.example.none/thing', limit: 0 })).rejects.toThrow(
-      StackBadRequestError,
-    );
+    await expect(
+      stack.query({ filter: { baseId: 'com.example.none/thing' }, limit: 0 }),
+    ).rejects.toThrow(StackBadRequestError);
   });
 
   test('a query refused for a capability never reaches the adapter', async () => {
@@ -8582,17 +8579,19 @@ describe('family arguments refuse a versioned TypeId', () => {
     expect(await stack.listTypeGrants()).toHaveLength(1);
   });
 
-  test('a query baseId refuses it, alone or in a list', async () => {
-    await expect(stack.query({ baseId: NOTE_V1 })).rejects.toThrow(FAMILY_HINT);
-    await expect(stack.query({ baseId: [fam(NOTE_V1), NOTE_V1] })).rejects.toThrow(
+  test('RecordFilter.baseId refuses it, alone or in a list', async () => {
+    await expect(stack.query({ filter: { baseId: NOTE_V1 } })).rejects.toThrow(FAMILY_HINT);
+    await expect(stack.query({ filter: { baseId: [fam(NOTE_V1), NOTE_V1] } })).rejects.toThrow(
       StackValidationError,
     );
   });
 
-  test('a subscription baseId refuses it, scoped or not', async () => {
-    await expect(stack.subscribe(() => {}, { baseId: NOTE_V1 })).rejects.toThrow(FAMILY_HINT);
+  test('ChangeFilter.baseId refuses it, scoped or not', async () => {
+    await expect(stack.subscribe(() => {}, { filter: { baseId: NOTE_V1 } })).rejects.toThrow(
+      FAMILY_HINT,
+    );
     await expect(
-      stack.asEntity('did:key:z6MkReader').subscribe(() => {}, { baseId: NOTE_V1 }),
+      stack.asEntity('did:key:z6MkReader').subscribe(() => {}, { filter: { baseId: NOTE_V1 } }),
     ).rejects.toThrow(FAMILY_HINT);
   });
 });

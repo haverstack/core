@@ -706,7 +706,7 @@ describe('filtering is exact', () => {
       schema: { text: { kind: 'text', required: true } },
     });
     const { seen, handler } = collector();
-    await stack.subscribe(handler, { baseId: 'com.example.test/note' });
+    await stack.subscribe(handler, { filter: { baseId: 'com.example.test/note' } });
 
     await stack.create(NOTE, { text: 'a' });
     await stack.create(NOTE_V2, { text: 'later version' });
@@ -756,7 +756,7 @@ describe('filtering is exact', () => {
   test('a migration across families reaches both families', async () => {
     const note = await stack.create(NOTE, { text: 'a' });
     const left = collector();
-    await stack.subscribe(left.handler, { baseId: 'com.example.test/note' });
+    await stack.subscribe(left.handler, { filter: { baseId: 'com.example.test/note' } });
 
     await stack.commitMigration(note.id, OTHER, { text: 'a' });
 

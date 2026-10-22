@@ -25,6 +25,7 @@ import { SYSTEM_TYPES } from '@haverstack/core';
 import type {
   AuthorityAssociation,
   DataAssociation,
+  RecordFilter,
   StackCapabilities,
   StackQuery,
   StackRecord,
@@ -1231,6 +1232,52 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
           await pagesWithin({ contentField: 'priority', direction: 'desc' });
         });
       }
+    });
+
+    // -----------------------------------------------------------------
+    // Type families
+    // -----------------------------------------------------------------
+    describe('filter.baseId', () => {
+      const NOTE = 'org.haverstack.conformance/note';
+      const ids = async (filter: RecordFilter): Promise<string[]> =>
+        (await adapter.queryRecords(resolveQuery({ filter }))).records.map((r) => r.id).sort();
+
+      /** One record per TypeId, keyed by it. */
+      const seed = async (typeIds: string[]): Promise<Record<string, string>> => {
+        const seeded: Record<string, string> = {};
+        for (const typeId of typeIds) {
+          const record = makeRecord({ typeId });
+          await adapter.createRecord(record);
+          seeded[typeId] = record.id;
+        }
+        return seeded;
+      };
+
+      test('matches every version of the family and nothing that only shares its prefix', async () => {
+        const r = await seed([`${NOTE}@1`, `${NOTE}@2`, `${NOTE}s@1`, `${NOTE}-x@1`, `${NOTE}@10`]);
+        expect(await ids({ baseId: NOTE })).toEqual(
+          [r[`${NOTE}@1`], r[`${NOTE}@2`], r[`${NOTE}@10`]].sort(),
+        );
+      });
+
+      test('matches any of several families', async () => {
+        const r = await seed([`${NOTE}@1`, `${NOTE}s@1`, 'org.haverstack.conformance/other@1']);
+        expect(await ids({ baseId: [NOTE, `${NOTE}s`] })).toEqual(
+          [r[`${NOTE}@1`], r[`${NOTE}s@1`]].sort(),
+        );
+      });
+
+      test('intersects with filter.typeId', async () => {
+        const r = await seed([`${NOTE}@1`, `${NOTE}@2`, `${NOTE}s@1`]);
+        expect(await ids({ baseId: NOTE, typeId: [`${NOTE}@2`, `${NOTE}s@1`] })).toEqual([
+          r[`${NOTE}@2`],
+        ]);
+      });
+
+      test('an unknown family matches nothing', async () => {
+        await seed([`${NOTE}@1`]);
+        expect(await ids({ baseId: 'org.haverstack.conformance/none' })).toEqual([]);
+      });
     });
 
     // -----------------------------------------------------------------

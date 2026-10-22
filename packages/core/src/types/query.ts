@@ -48,6 +48,13 @@ export type ContentArm = {
 export type RecordFilter = {
   // Native fields
   typeId?: TypeId | TypeId[];
+  /**
+   * Match every version of a type family, resolved against registered
+   * Types rather than parsed from typeId strings. Intersects with `typeId`
+   * when both are given. A value carrying an `@version` suffix is refused
+   * with StackValidationError.
+   */
+  baseId?: BaseId | BaseId[];
   parentId?: RecordId | null; // null = root records only
   appId?: AppId | AppId[];
   /** Matches the record's author — never the latest actor, which isn't filterable. */
@@ -162,14 +169,6 @@ export type QuerySort =
     };
 
 export type StackQuery = {
-  /**
-   * Match every version of these type families, resolved against
-   * registered Types rather than parsed from typeId strings, and
-   * intersected with `filter.typeId` when both are given. A value carrying
-   * an `@version` suffix is refused with StackValidationError. See
-   * docs/spec/data-model.md § Directives and conditions.
-   */
-  baseId?: BaseId | BaseId[];
   filter?: RecordFilter;
   sort?: QuerySort;
   limit?: number;

@@ -101,10 +101,10 @@ describe('an argument refusal says the arguments were invalid, under their own n
     });
   });
 
-  test('query() with a versioned baseId', async () => {
-    expect(await refusal(stack.query({ baseId: NOTE }))).toEqual({
+  test('query() with a versioned filter.baseId', async () => {
+    expect(await refusal(stack.query({ filter: { baseId: NOTE } }))).toEqual({
       header: 'Invalid arguments:',
-      paths: ['baseId'],
+      paths: ['filter.baseId'],
     });
   });
 

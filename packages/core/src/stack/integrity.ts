@@ -120,8 +120,8 @@ async function checkBindingUnique(
   const clash = await findFirstMatch(
     (q) => stack.query(q),
     {
-      baseId: family,
       filter: {
+        baseId: family,
         includeDeleted: true,
         includeUnlisted: true,
         ...(filtersContent(stack.capabilities) && { content: { [field]: value } }),

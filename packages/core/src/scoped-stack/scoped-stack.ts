@@ -70,8 +70,7 @@ import { assertAssociationEdits } from '../associations/validation.js';
 import { addsOf, associationEqual } from '../associations/identity.js';
 import {
   assertQueryCapabilities,
-  assertFamilyIds,
-  familiesOf,
+  assertValidBaseIdFilter,
   splitQuery,
   filtersContent,
 } from '../query-validation.js';
@@ -979,7 +978,7 @@ export class ScopedStack implements StackClient {
     // A scoped view exists only over a stack that relays nothing, so
     // `since` never has a cursor to mean anything by.
     assertSinceUsable(opts.since, false);
-    assertFamilyIds(familiesOf(opts.baseId), 'baseId');
+    assertValidBaseIdFilter(opts.filter);
     if (opts.includeUnlisted && !this.#authority.ownerActingAlone) {
       throw new StackPermissionError('includeUnlisted is owner-only');
     }

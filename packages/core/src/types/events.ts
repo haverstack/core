@@ -3,7 +3,7 @@
  */
 
 import type { DataAssociation } from './associations.js';
-import type { RecordId, TypeId, BaseId, AppId, Actor } from './ids.js';
+import type { RecordId, TypeId, AppId, Actor } from './ids.js';
 import type { RecordFilter } from './query.js';
 import type { StackRecord } from './records.js';
 
@@ -129,7 +129,7 @@ export type RecordChange = {
  * can drive both `query()` and `subscribe()`. See docs/spec/events.md
  * § Subscribing.
  */
-export type ChangeFilter = Pick<RecordFilter, 'typeId' | 'parentId' | 'createdBy'> & {
+export type ChangeFilter = Pick<RecordFilter, 'typeId' | 'baseId' | 'parentId' | 'createdBy'> & {
   kinds?: ChangeKind[];
 };
 
@@ -142,14 +142,6 @@ export type Unsubscribe = () => void;
  * See docs/spec/events.md § Subscribing and § Where events come from.
  */
 export type SubscribeOptions = {
-  /**
-   * Every version of these type families. Unlike `StackQuery.baseId` it is
-   * matched against each change's `typeId`, by the emitter or the relay,
-   * so a version registered after the subscription opened is covered too.
-   * A versioned TypeId is refused as there. See docs/spec/events.md
-   * § Subscribing.
-   */
-  baseId?: BaseId | BaseId[];
   filter?: ChangeFilter;
   /** Ask the emitter to include `record`. Honored when it can; never assume it. */
   includeRecords?: boolean;

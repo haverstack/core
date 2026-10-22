@@ -88,8 +88,7 @@ export async function collectAttachmentGarbage(
   const now = Date.now();
 
   const metaRecords = await queryAllPages((q) => stack.query(q), {
-    baseId: SYSTEM_TYPES.ATTACHMENT,
-    filter: { includeDeleted: true, includeUnlisted: true },
+    filter: { baseId: SYSTEM_TYPES.ATTACHMENT, includeDeleted: true, includeUnlisted: true },
   });
 
   // Newest metadata record's createdAt per fileId, and its size (constant
