@@ -45,7 +45,7 @@ export function assertQueryCapabilities(
   filter: RecordFilter | undefined,
   capabilities: Pick<StackCapabilities, 'filter'>,
 ): void {
-  const { content: reach, contentPresent, search } = capabilities.filter;
+  const { content: reach, contentPresent, contentByType, search } = capabilities.filter;
   if (filter?.search && !search) {
     throw new StackBadRequestError(
       'Query uses filter.search, but this adapter does not declare the filter.search capability.',
@@ -72,7 +72,7 @@ export function assertQueryCapabilities(
       'filter.content',
     );
   }
-  if (arms.length > 0 && !capabilities.filter.contentByType) {
+  if (arms.length > 0 && !contentByType) {
     throw new StackBadRequestError(
       'Query uses filter.contentByType, but this adapter does not declare the ' +
         'filter.contentByType capability.',

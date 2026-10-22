@@ -94,7 +94,7 @@ describe('normalizeCapabilities', () => {
 
   // These travel in the POST /records/query body, which a server reaching
   // no content does not serve, so what it declares for them is unhonorable.
-  it('reads what depends on the content reach as false beside a reach of none', () => {
+  it('reads what needs the query body as false beside a reach of none', () => {
     const read = normalizeCapabilities({
       filter: { content: 'none', contentPresent: true, contentByType: true },
       sort: { contentFieldByType: true },

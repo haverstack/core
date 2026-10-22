@@ -93,9 +93,9 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         expect(Array.isArray(capabilities.sort.fields)).toBe(true);
       });
 
-      // Each asks something of content, and travels in the POST
-      // /records/query body a reach of "none" does not serve.
-      test('what depends on the content reach is false whenever filter.content is "none"', () => {
+      // Each travels only in the POST /records/query body, which a reach of
+      // "none" does not serve.
+      test('what needs the query body is false whenever filter.content is "none"', () => {
         if (capabilities.filter.content === 'none') {
           expect(capabilities.filter.contentPresent).toBe(false);
           expect(capabilities.filter.contentByType).toBe(false);

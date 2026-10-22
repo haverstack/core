@@ -112,10 +112,15 @@ const emptyStatement = (): Statement => ({
  */
 const rows = (s: Statement, columns: readonly string[], tuples: unknown[][]): string => {
   const name = `t${s.tables.length}`;
-  const named = columns.map((column, i) => `json_extract(value, '$[${i}]') AS ${column}`);
-  s.tables.push(`${name} AS MATERIALIZED (SELECT ${named.join(', ')} FROM json_each(?))`);
+  s.tables.push(`${name} AS MATERIALIZED ${rowsTable(columns)}`);
   s.tableParams.push(JSON.stringify(tuples));
   return name;
+};
+
+/** The table rows() binds, for a statement outside the query plan. */
+export const rowsTable = (columns: readonly string[]): string => {
+  const named = columns.map((column, i) => `json_extract(value, '$[${i}]') AS ${column}`);
+  return `(SELECT ${named.join(', ')} FROM json_each(?))`;
 };
 
 /** The columns of a content condition; see contentRows(). */

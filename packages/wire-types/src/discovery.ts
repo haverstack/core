@@ -54,9 +54,10 @@ const SORT_FIELDS: ReadonlySet<string> = new Set(NATIVE_SORT_FIELDS);
 
 /**
  * Resolves anything absent, malformed or unrecognized to the least capable
- * value it could stand for, and what depends on the content reach to false
- * below `'none'` — applied once, where capabilities enter. A `null` limit is
- * the one permissive reading. See docs/spec/adapters.md § Adapter capabilities.
+ * value it could stand for, and what needs the POST /records/query body to
+ * false below `'none'` — applied once, where capabilities enter. A `null`
+ * limit is the one permissive reading. See docs/spec/adapters.md § Adapter
+ * capabilities.
  */
 export function normalizeCapabilities(
   capabilities: DiscoveryCapabilities | undefined,

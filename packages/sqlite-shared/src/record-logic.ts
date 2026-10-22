@@ -48,7 +48,7 @@ import type {
 } from '@haverstack/core/adapter';
 import type { SqlExecutor } from './executor.js';
 import { isForeignKeyViolation, isUniqueConstraintViolation } from './executor.js';
-import { buildQueryPlan, atBudget } from './query.js';
+import { buildQueryPlan, atBudget, rowsTable } from './query.js';
 import { ContentIndex, SearchIndex } from './indexes.js';
 import {
   rowToRecord,
@@ -306,7 +306,7 @@ export class SharedSqlRecordLogic {
    * reads however many records it holds.
    */
   private hydrate(rows: Record<string, unknown>[]): StackRecord[] {
-    const ids = JSON.stringify(rows.map((row) => row.id));
+    const ids = rows.map((row) => row.id as string);
     const associations = this.elementsByRecord('associations', ids, rowToAssociation);
     const permissions = this.elementsByRecord('permissions', ids, rowToPermission);
     return rows.map((row) =>
@@ -804,9 +804,8 @@ export class SharedSqlRecordLogic {
     this.exec.transaction(() => {
       this.checkExpectedVersion(id, this.liveVersion(id), opts.ifVersion);
       if (opts.expectSet) {
-        const ids = JSON.stringify([id]);
         const map = table === 'associations' ? rowToAssociation : rowToPermission;
-        const stored = this.elementsByRecord<Association>(table, ids, map).get(id) ?? [];
+        const stored = this.elementsByRecord<Association>(table, [id], map).get(id) ?? [];
         if (!sameAssociationSet(stored, opts.expectSet)) throw new ElementSetMovedError(id);
       }
       write();
@@ -953,19 +952,20 @@ export class SharedSqlRecordLogic {
   }
 
   /**
-   * One element table's rows for every record in `ids` (a JSON array), in
-   * primary-key order — the order a single record's read has always had.
+   * One element table's rows for every record in `ids`, in primary-key
+   * order — the order a single record's read has always had.
    */
   private elementsByRecord<T>(
     table: 'associations' | 'permissions',
-    ids: string,
+    ids: readonly string[],
     map: (row: Record<string, unknown>) => T,
   ): Map<string, T[]> {
     const byRecord = new Map<string, T[]>();
     const rows = this.exec.all<Record<string, unknown>>(
-      `SELECT * FROM ${table} WHERE record_id IN (SELECT value FROM json_each(?))
+      `WITH ids AS MATERIALIZED ${rowsTable(['id'])}
+       SELECT * FROM ${table} WHERE record_id IN (SELECT id FROM ids)
        ORDER BY ${table === 'associations' ? ASSOCIATION_KEY : PERMISSION_KEY}`,
-      [ids],
+      [JSON.stringify(ids.map((id) => [id]))],
     );
     for (const row of rows) {
       const id = row.record_id as string;

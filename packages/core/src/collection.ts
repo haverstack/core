@@ -506,9 +506,7 @@ export const createCollection = <S extends ReadonlyTypeSchema>(
       pinned
         ? pinned.map((id) => ({ id, baseId: handle.baseId, version: versionOf(id) }))
         : await listTypes()
-    )
-      .filter((type) => type.baseId === handle.baseId && type.version !== handleVersion)
-      .sort((a, b) => b.version - a.version);
+    ).filter((type) => type.baseId === handle.baseId && type.version !== handleVersion);
     const arms: Record<TypeId, ContentArm> = { [handle.id]: predicate ?? {} };
     const keys: Record<TypeId, ContentSortKey> = sortField
       ? { [handle.id]: { field: sortField } }
