@@ -25,6 +25,7 @@ import type {
   ElementWriteOptions,
   ActorOptions,
   AdapterQuery,
+  AdapterSort,
   QueryResult,
   RecordFilter,
   Association,
@@ -53,8 +54,6 @@ import {
 import { matchesContent } from './content-match.js';
 import { applyAssociationEdits, sameAssociationSet } from './associations/identity.js';
 
-/** The sort an adapter receives: Stack has resolved its direction. */
-type Sort = NonNullable<AdapterQuery['sort']>;
 /** A FileId is the SHA-256 hex digest of its bytes — see docs/spec/attachments.md. */
 const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
 
@@ -412,7 +411,7 @@ export class MemoryAdapter implements StackAdapter {
   }
 
   /** The sort a cursor was minted under, as an opaque comparable descriptor. */
-  private sortDescriptor(sort: Sort | undefined): string {
+  private sortDescriptor(sort: AdapterSort | undefined): string {
     const content = sort?.contentField ?? sort?.contentFieldByType;
     return JSON.stringify([
       content ?? null,
@@ -426,7 +425,7 @@ export class MemoryAdapter implements StackAdapter {
    * minted under — mirroring the real adapters' keyed cursors.
    * See docs/spec/data-model.md § Sorting and pagination.
    */
-  private encodeCursor(sort: Sort | undefined, key: OrderKey): string {
+  private encodeCursor(sort: AdapterSort | undefined, key: OrderKey): string {
     const json = JSON.stringify({ d: this.sortDescriptor(sort), k: key });
     // Explicit UTF-8 step before btoa, matching sqlite-shared's codec: the
     // descriptor embeds `sort.contentField` verbatim, and a non-Latin-1
@@ -444,7 +443,7 @@ export class MemoryAdapter implements StackAdapter {
    * cursor replayed under a changed sort gets from the real adapters,
    * rather than silently paging through the wrong order.
    */
-  private decodeCursor(cursor: string, sort: Sort | undefined): OrderKey {
+  private decodeCursor(cursor: string, sort: AdapterSort | undefined): OrderKey {
     let parsed: unknown;
     try {
       const binary = atob(cursor);
@@ -476,13 +475,13 @@ export class MemoryAdapter implements StackAdapter {
    * The comparison itself is core's, not this double's
    * (docs/spec/data-model.md § Sorting by a content field).
    */
-  private sortRecords(records: StackRecord[], sort: Sort | undefined): StackRecord[] {
+  private sortRecords(records: StackRecord[], sort: AdapterSort | undefined): StackRecord[] {
     const keys = new Map(records.map((r) => [r.id, this.orderKey(r, sort)]));
     return [...records].sort((a, b) => this.compareKeys(keys.get(a.id)!, keys.get(b.id)!, sort));
   }
 
   /** Where a record falls in the order `sort` names: its value there, then its id. */
-  private orderKey(record: StackRecord, sort: Sort | undefined): OrderKey {
+  private orderKey(record: StackRecord, sort: AdapterSort | undefined): OrderKey {
     if (sort?.contentField === undefined && sort?.contentFieldByType === undefined) {
       const field = sort?.field ?? 'createdAt';
       const value =
@@ -494,7 +493,7 @@ export class MemoryAdapter implements StackAdapter {
     return { value: this.sortEntry(record, sort), id: record.id };
   }
 
-  private compareKeys(a: OrderKey, b: OrderKey, sort: Sort | undefined): number {
+  private compareKeys(a: OrderKey, b: OrderKey, sort: AdapterSort | undefined): number {
     const direction = sort ? sort.direction : 'desc';
     const sign = direction === 'asc' ? 1 : -1;
     const byValue =
@@ -510,7 +509,7 @@ export class MemoryAdapter implements StackAdapter {
    * its type says it is, and an undeclared or non-scalar field orders as
    * nothing at all.
    */
-  private sortEntry(record: StackRecord, sort: Sort): SortEntry | null {
+  private sortEntry(record: StackRecord, sort: AdapterSort): SortEntry | null {
     let field = sort.contentField;
     if (sort.contentFieldByType) {
       const key = Object.hasOwn(sort.contentFieldByType, record.typeId)

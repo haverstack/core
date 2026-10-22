@@ -80,14 +80,17 @@ export type ElementWriteOptions<E extends Association> = AspectWriteOptions & {
   expectSet?: readonly E[];
 };
 
+/** A named sort as an adapter receives it: `Stack` has resolved its `direction`. */
+export type AdapterSort = QuerySort & { direction: 'asc' | 'desc' };
+
 /**
- * A query as an adapter receives it: `Stack` resolves the sort's
- * `direction` and the page size before any adapter sees the query, so
- * each default is written once, in core. See docs/spec/data-model.md
- * § Sorting and pagination.
+ * A query as an adapter receives it: `Stack` resolves the page size and
+ * any sort's `direction` before an adapter sees the query. No sort is a
+ * state of its own, which the adapter orders by `createdAt`, newest
+ * first. See docs/spec/data-model.md § Sorting and pagination.
  */
 export type AdapterQuery = Omit<StackQuery, 'sort' | 'limit'> & {
-  sort?: QuerySort & { direction: 'asc' | 'desc' };
+  sort?: AdapterSort;
   limit: number;
 };
 

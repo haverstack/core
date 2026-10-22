@@ -111,6 +111,7 @@ import {
   assertValidVersionsQuery,
   assertValidSort,
   normalizeSort,
+  assertValidQueryLimit,
   filtersContent,
   assertFamilyId,
 } from '../query-validation.js';
@@ -572,7 +573,7 @@ export class Stack implements StackClient {
       do {
         const result: QueryResult = await this.adapter.queryRecords({
           filter: { typeId, includeDeleted: true, includeUnlisted: !listedOnly },
-          limit: 100,
+          limit: DEFAULT_QUERY_LIMIT,
           cursor,
         });
 
@@ -1222,6 +1223,7 @@ export class Stack implements StackClient {
     assertQueryCapabilities(filter, this.adapter.capabilities);
     assertValidSort(sort);
     assertSortCapability(sort, this.adapter.capabilities);
+    assertValidQueryLimit(rawLimit);
     assertValidAssociationFilters(filter);
     assertValidBaseIdFilter(filter);
     const limit = Math.min(rawLimit ?? DEFAULT_QUERY_LIMIT, MAX_QUERY_LIMIT);

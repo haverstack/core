@@ -8531,6 +8531,10 @@ describe('query — sort direction defaults', () => {
     await stack.query({ limit: 5000 });
     expect(spy.mock.calls.map(([q]) => q.limit)).toEqual([50, 5, 1000]);
   });
+
+  test.each([0, -1, 1.5, Number.NaN])('refuses a limit of %s', async (limit) => {
+    await expect(stack.query({ limit })).rejects.toThrow(StackBadRequestError);
+  });
 });
 
 // -------------------------------------------------------

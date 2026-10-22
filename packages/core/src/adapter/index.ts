@@ -10,6 +10,7 @@
 
 export type {
   AdapterQuery,
+  AdapterSort,
   StackAdapter,
   StackRecordAdapter,
   StackBlobAdapter,

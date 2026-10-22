@@ -8,4 +8,4 @@
 '@haverstack/record-adapter-do-sqlite': patch
 ---
 
-`Stack.query()` and `ScopedStack.query()` resolve the default page size (50) before any adapter sees the query, as they do the sort direction. `queryRecords()` and `queryReadable()` take an `AdapterQuery`, exported from `@haverstack/core/adapter`: a `StackQuery` whose `limit` and sort `direction` are always present. No adapter carries a page size of its own, and `APIAdapter` always sends `limit`.
+`Stack.query()` and `ScopedStack.query()` resolve the default page size (50) before any adapter sees the query, as they do the sort direction. `queryRecords()` and `queryReadable()` take an `AdapterQuery`, exported from `@haverstack/core/adapter` with `AdapterSort`: a `StackQuery` whose `limit` and any sort's `direction` are always present. A `limit` that is not a positive integer is refused with `StackBadRequestError`. No adapter carries a page size of its own, and `APIAdapter` always sends `limit`.

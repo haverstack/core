@@ -27,7 +27,7 @@ import {
 } from './validate.js';
 import { NATIVE_SORT_FIELDS } from './types/index.js';
 import type {
-  AdapterQuery,
+  AdapterSort,
   JournalQuery,
   QuerySort,
   RecordFilter,
@@ -303,9 +303,21 @@ const assertValidSortByType = (byType: unknown): void => {
  * and an explicit sort would be re-checked against the server's declared
  * `sort.fields`. See docs/spec/data-model.md § Sorting and pagination.
  */
-export function normalizeSort(sort: QuerySort | undefined): AdapterQuery['sort'] {
+export function normalizeSort(sort: QuerySort | undefined): AdapterSort | undefined {
   if (!sort) return undefined;
-  return { ...sort, direction: sort.direction ?? 'asc' } as AdapterQuery['sort'];
+  return { ...sort, direction: sort.direction ?? 'asc' } as AdapterSort;
+}
+
+/**
+ * Refuse a page size the adapters would read differently, as
+ * assertValidVersionsQuery() does for a versions window: a negative
+ * `limit` drops the last match from a JS slice and empties a SQL page.
+ */
+export function assertValidQueryLimit(limit: number | undefined): void {
+  if (limit === undefined) return;
+  if (!Number.isInteger(limit) || limit < 1) {
+    throw new StackBadRequestError(`Invalid limit ${String(limit)}: expected a positive integer.`);
+  }
 }
 
 /**
