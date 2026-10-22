@@ -81,9 +81,6 @@ const VERBS: Record<ReachVerb, { any: GrantAction; own?: GrantAction; bit?: 'rea
 
 const ANYONE: AuthorityAssociation = { kind: 'anyone', label: 'read' };
 
-/** The family a Record is listed under in a reach ScopeAuthority builds. */
-const familyOf = (record: ReachedRecord): string => baseIdOf(record.typeId);
-
 export class ScopeAuthority {
   constructor(
     private readonly stack: Stack,
@@ -92,10 +89,7 @@ export class ScopeAuthority {
     /** Whom this request acts for and attributes writes to — see ScopedStack.subjectId. */
     readonly subjectId: EntityId | null,
     /** Stack.query() within a reach — see ScopedStack.query(). */
-    private readonly queryReadable: (
-      split: SplitQuery,
-      reach: Reach<BaseId>,
-    ) => Promise<QueryResult>,
+    private readonly queryReadable: (split: SplitQuery, reach: Reach) => Promise<QueryResult>,
   ) {}
 
   /**
@@ -209,9 +203,9 @@ export class ScopeAuthority {
    * the subject reaches what grants and permissions give it, an owner
    * subject everything. See docs/spec/access-control.md § Reach.
    */
-  private async buildReach(verb: ReachVerb, snapshot: AuthoritySnapshot): Promise<Reach<BaseId>> {
+  private async buildReach(verb: ReachVerb, snapshot: AuthoritySnapshot): Promise<Reach> {
     const { any, own, bit } = VERBS[verb];
-    const reach: Reach<BaseId> = this.principalUnbounded
+    const reach: Reach = this.principalUnbounded
       ? {}
       : {
           fence: await this.familiesConveying(
@@ -265,7 +259,7 @@ export class ScopeAuthority {
 
   /** Whether this request may `verb` the Record: its reach, asked of one Record. */
   async may(verb: ReachVerb, record: ReachedRecord, snapshot: AuthoritySnapshot): Promise<boolean> {
-    return inReach(record, await snapshot.reach(verb), familyOf);
+    return inReach(record, await snapshot.reach(verb));
   }
 
   /**
@@ -278,7 +272,7 @@ export class ScopeAuthority {
     snapshot: AuthoritySnapshot,
   ): Promise<boolean> {
     const { within } = await snapshot.reach(verb);
-    return inReach(record, within ? { within } : {}, familyOf);
+    return inReach(record, within ? { within } : {});
   }
 
   canRead(record: StackRecord, snapshot: AuthoritySnapshot): Promise<boolean> {

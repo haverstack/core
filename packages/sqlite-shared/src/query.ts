@@ -218,7 +218,7 @@ const inList = (s: Statement, column: string, values: readonly string[]): string
  * exactly the range from `F@` up to `FA`, since `A` follows `@` in the
  * binary collation. A range keeps the type_id index usable, and never
  * matches a family that merely shares a prefix, as `note` and `notes`.
- * See docs/spec/data-model.md § Filter.
+ * An empty list matches nothing. See docs/spec/data-model.md § Filter.
  */
 const inFamilies = (s: Statement, column: string, baseIds: readonly string[]): string => {
   if (baseIds.length === 1) {
@@ -263,13 +263,13 @@ const carriesPermissions = (s: Statement, sets: AuthorityAssociation[][]): strin
  * one of its arms. See docs/spec/access-control.md § Reach.
  */
 const reachConditions = (s: Statement, reach: Reach): void => {
-  if (reach.fence) s.conditions.push(inList(s, 'r.type_id', reach.fence));
+  if (reach.fence) s.conditions.push(inFamilies(s, 'r.type_id', reach.fence));
   const within = reach.within;
   if (within) {
-    const arms = [inList(s, 'r.type_id', within.types)];
+    const arms = [inFamilies(s, 'r.type_id', within.types)];
     if (within.authored) {
       s.params.push(within.authored.subjectId);
-      arms.push(`(r.entity_id = ? AND ${inList(s, 'r.type_id', within.authored.types)})`);
+      arms.push(`(r.entity_id = ? AND ${inFamilies(s, 'r.type_id', within.authored.types)})`);
     }
     arms.push(carriesPermissions(s, within.permissions));
     s.conditions.push(`(${arms.join(' OR ')})`);

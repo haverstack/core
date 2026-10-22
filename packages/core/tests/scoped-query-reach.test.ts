@@ -254,7 +254,7 @@ describe('the reach a scoped query runs within', () => {
     spy.mockRestore();
 
     expect(result.records.map((r) => r.id)).toEqual([note.id]);
-    expect(reach.fence).toEqual([NOTE, NOTE_2]);
+    expect(reach.fence).toEqual(['com.example.test/note']);
   });
 
   test('the owner acting alone has a reach that constrains nothing', async () => {
@@ -273,7 +273,7 @@ describe('the reach a scoped query runs within', () => {
     });
     const spy = vi.spyOn(adapter, 'queryReadable');
     await stack.asActor({ principalId: APP, subjectId: OWNER }).query();
-    expect(spy.mock.calls[0]![1]).toEqual({ fence: [COMMENT] });
+    expect(spy.mock.calls[0]![1]).toEqual({ fence: ['com.example.test/comment'] });
     spy.mockRestore();
   });
 });

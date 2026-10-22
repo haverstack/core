@@ -592,7 +592,9 @@ test('queryReadable answers a reach far past the parameter cap', async () => {
 
   const groups = Array.from({ length: 60 }, (_, i) => `g${i}`);
   const result = await stub.queryReadable(resolveQuery({}), {
-    fence: Array.from({ length: 150 }, (_, i) => (i === 0 ? NOTE_TYPE_V1 : `com.example/t${i}@1`)),
+    fence: Array.from({ length: 150 }, (_, i) =>
+      i === 0 ? 'com.example.test/note' : `com.example/t${i}`,
+    ),
     within: {
       types: [],
       permissions: groups.map((groupId) => [
@@ -605,6 +607,18 @@ test('queryReadable answers a reach far past the parameter cap', async () => {
     },
   });
   expect(result.records.map((r) => r.id)).toEqual([shared.id]);
+});
+
+test('a family filter far past the parameter cap', async () => {
+  const stub = getStub();
+  const note = makeRecord();
+  await stub.createRecord(note);
+  await stub.createRecord(makeRecord({ typeId: 'com.example.test/notes@1' }));
+  const baseId = Array.from({ length: 150 }, (_, i) =>
+    i === 0 ? 'com.example.test/note' : `com.example/t${i}`,
+  );
+  const result = await stub.queryRecords(resolveQuery({ filter: { baseId } }));
+  expect(result.records.map((r) => r.id)).toEqual([note.id]);
 });
 
 test('a tag filter far past the parameter cap', async () => {

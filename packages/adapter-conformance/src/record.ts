@@ -1034,7 +1034,9 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
     // inReach(); see docs/spec/access-control.md § Reach.
     // -----------------------------------------------------------------
     describe('querying within a reach', () => {
-      const OTHER_TYPE_ID = 'org.haverstack.conformance/other@1';
+      const NOTE = 'org.haverstack.conformance/note';
+      const OTHER = 'org.haverstack.conformance/other';
+      const OTHER_TYPE_ID = `${OTHER}@1`;
       const ALICE = 'did:key:conformance-alice';
       const BOB = 'did:key:conformance-bob';
       const anyone: AuthorityAssociation = { kind: 'anyone', label: 'read' };
@@ -1064,6 +1066,11 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
           makeRecord({ createdBy: { subjectId: BOB, principalId: ALICE } }),
           makeRecord({ permissions: [anyone] }),
           makeRecord({ typeId: OTHER_TYPE_ID, permissions: [anyone] }),
+          // A family's other versions are in reach with it; one sharing its
+          // prefix is not.
+          makeRecord({ typeId: `${NOTE}@2` }),
+          makeRecord({ typeId: `${NOTE}@2`, createdBy: { subjectId: ALICE } }),
+          makeRecord({ typeId: `${NOTE}s@1`, createdBy: { subjectId: ALICE } }),
           makeRecord({ permissions: [toAlice] }),
           makeRecord({ permissions: [{ ...toAlice, label: 'write' }] }),
           makeRecord({ permissions: [toMembers] }),
@@ -1078,17 +1085,17 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
       };
 
       // Far past any statement's parameter cap — 100 on Durable Object SQLite.
-      const manyTypes = Array.from({ length: 150 }, (_, i) => `org.haverstack.conformance/t${i}@1`);
+      const manyTypes = Array.from({ length: 150 }, (_, i) => `org.haverstack.conformance/t${i}`);
       const manyGroups = Array.from({ length: 60 }, (_, i) => `conformance-group-${i}`);
       const reaches: [string, Reach][] = [
         ['nothing constrained', {}],
-        ['every Record of a Type', { within: { types: [OTHER_TYPE_ID], permissions: [] } }],
+        ['every Record of a family', { within: { types: [OTHER], permissions: [] } }],
         [
-          'the Records one subject authored at a Type',
+          'the Records one subject authored in a family',
           {
             within: {
               types: [],
-              authored: { subjectId: ALICE, types: [CONFORMANCE_TYPE_ID] },
+              authored: { subjectId: ALICE, types: [NOTE] },
               permissions: [],
             },
           },
@@ -1106,28 +1113,25 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
           'every arm at once',
           {
             within: {
-              types: [OTHER_TYPE_ID],
-              authored: { subjectId: ALICE, types: [CONFORMANCE_TYPE_ID] },
+              types: [OTHER],
+              authored: { subjectId: ALICE, types: [NOTE] },
               permissions: [[anyone], [toMembers]],
             },
           },
         ],
-        ['a fence alone', { fence: [OTHER_TYPE_ID] }],
+        ['a fence alone', { fence: [OTHER] }],
         [
           'arms inside a fence',
           {
-            fence: [CONFORMANCE_TYPE_ID],
+            fence: [NOTE],
             within: {
-              types: [OTHER_TYPE_ID],
-              authored: { subjectId: ALICE, types: [CONFORMANCE_TYPE_ID, OTHER_TYPE_ID] },
+              types: [OTHER],
+              authored: { subjectId: ALICE, types: [NOTE, OTHER] },
               permissions: [[anyone]],
             },
           },
         ],
-        [
-          'an empty fence',
-          { fence: [], within: { types: [CONFORMANCE_TYPE_ID], permissions: [[anyone]] } },
-        ],
+        ['an empty fence', { fence: [], within: { types: [NOTE], permissions: [[anyone]] } }],
         ['no arm at all', { within: { types: [], permissions: [] } }],
         [
           'Records carrying every element of a set',
@@ -1149,10 +1153,10 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         [
           'a reach of any size',
           {
-            fence: [CONFORMANCE_TYPE_ID, ...manyTypes],
+            fence: [NOTE, ...manyTypes],
             within: {
               types: manyTypes,
-              authored: { subjectId: ALICE, types: [CONFORMANCE_TYPE_ID, ...manyTypes] },
+              authored: { subjectId: ALICE, types: [NOTE, ...manyTypes] },
               permissions: [
                 ...manyGroups.flatMap((groupId) => [
                   [{ ...toMembers, grantee: { ...toMembers.grantee, groupId } }],

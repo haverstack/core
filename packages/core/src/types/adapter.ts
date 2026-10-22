@@ -10,7 +10,7 @@ import type {
 } from './associations.js';
 import type { StackCapabilities } from './capabilities.js';
 import type { RecordChange, Unsubscribe, SubscribeOptions } from './events.js';
-import type { RecordId, TypeId, FileId, AppId, EntityId, Actor } from './ids.js';
+import type { RecordId, TypeId, BaseId, FileId, AppId, EntityId, Actor } from './ids.js';
 import type { JournalEntryInput, RecordJournalEntry, JournalQuery } from './journal.js';
 import type { StackQuery, QuerySort, QueryResult } from './query.js';
 import type { StackRecord, RecordVersion, VersionsQuery } from './records.js';
@@ -105,15 +105,15 @@ export type AdapterQuery = Omit<PlainQuery, 'sort' | 'limit'> & {
  * rather than rules applied: inside `fence` and inside `within`, where an
  * absent part constrains nothing. See docs/spec/access-control.md § Reach.
  */
-export type Reach<Type extends string = TypeId> = {
-  /** Only Records at these Types are in reach. */
-  fence?: Type[];
+export type Reach = {
+  /** Only Records in these families are in reach. */
+  fence?: BaseId[];
   /** Records meeting one of these are in reach. */
   within?: {
-    /** Every Record at these Types. */
-    types: Type[];
-    /** Records this subject authored at these Types. */
-    authored?: { subjectId: EntityId; types: Type[] };
+    /** Every Record in these families. */
+    types: BaseId[];
+    /** Records this subject authored in these families. */
+    authored?: { subjectId: EntityId; types: BaseId[] };
     /** Records carrying every element of one of these sets, by association identity. */
     permissions: AuthorityAssociation[][];
   };

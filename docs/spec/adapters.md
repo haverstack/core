@@ -58,16 +58,16 @@ Every adapter stores a record's associations under the [identity](./data-model.m
 
 ```ts
 type Reach = {
-  fence?: TypeId[];
+  fence?: BaseId[];
   within?: {
-    types: TypeId[];
-    authored?: { subjectId: EntityId; types: TypeId[] };
+    types: BaseId[];
+    authored?: { subjectId: EntityId; types: BaseId[] };
     permissions: AuthorityAssociation[][];
   };
 };
 ```
 
-The shape and its reading are [Access control § Reach](./access-control.md#reach)'s, over TypeIds where that section's are over families: `Stack` resolves each family to its registered versions before the call. The reach is one more condition of the query, beside its own `filter`, so it narrows and never widens. Every rule behind it is resolved before the adapter sees it, so the adapter applies none of access control: it matches a description, the way it matches a `filter`. `inReach()` in `@haverstack/core/adapter` is the reference reading, and the [conformance suite](#conformance) holds an adapter to it.
+The shape and its reading are [Access control § Reach](./access-control.md#reach)'s: each family is matched as [`filter.baseId`](./data-model.md#filter) matches one, against the Record's own `typeId`. The reach is one more condition of the query, beside its own `filter`, so it narrows and never widens. Every rule behind it is resolved before the adapter sees it, so the adapter applies none of access control: it matches a description, the way it matches a `filter`. `inReach()` in `@haverstack/core/adapter` is the reference reading, and the [conformance suite](#conformance) holds an adapter to it.
 
 **Every local adapter implements it.** It is optional only so `APIAdapter` can leave it out: a stack whose adapter lacks it [cannot be scoped at all](./access-control.md#enforcement-stackasentity), which a server-backed stack never needs. A reach is sized by the requester's grants and rosters, not by anything the adapter controls, so a SQLite adapter binds each list in it as one parameter, the permission sets included — the rule it holds every part of a query to; see [Statement size](#statement-size). It matches each permission element through an index on the element's identity ending in `record_id`, the same semi-join shape as the association filters.
 

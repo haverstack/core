@@ -13,7 +13,7 @@
 import { Lazy } from '../lazy.js';
 import { SYSTEM_TYPES } from '../types/index.js';
 import type { RosterRoles } from '../access.js';
-import type { BaseId, Reach, StackRecord } from '../types/index.js';
+import type { Reach, StackRecord } from '../types/index.js';
 
 /** The verbs a reach is built for: one per thing a request can do to a Record. */
 export type ReachVerb = 'create' | 'read' | 'update' | 'delete';
@@ -21,13 +21,13 @@ export type ReachVerb = 'create' | 'read' | 'update' | 'delete';
 export type AuthoritySources = {
   grants: () => Promise<StackRecord[]>;
   roles: RosterRoles;
-  reach: (verb: ReachVerb, snapshot: AuthoritySnapshot) => Promise<Reach<BaseId>>;
+  reach: (verb: ReachVerb, snapshot: AuthoritySnapshot) => Promise<Reach>;
 };
 
 export class AuthoritySnapshot {
   private readonly grantSet: Lazy<StackRecord[]>;
   private readonly roleSet: Lazy<Awaited<ReturnType<RosterRoles>>>;
-  private readonly reaches = new Map<ReachVerb, Lazy<Reach<BaseId>>>();
+  private readonly reaches = new Map<ReachVerb, Lazy<Reach>>();
 
   constructor(private readonly sources: AuthoritySources) {
     this.grantSet = new Lazy(sources.grants);
@@ -37,7 +37,7 @@ export class AuthoritySnapshot {
   readonly grants = (): Promise<StackRecord[]> => this.grantSet.get();
   readonly roles: RosterRoles = () => this.roleSet.get();
 
-  reach(verb: ReachVerb): Promise<Reach<BaseId>> {
+  reach(verb: ReachVerb): Promise<Reach> {
     let reach = this.reaches.get(verb);
     if (!reach) {
       reach = new Lazy(() => this.sources.reach(verb, this));

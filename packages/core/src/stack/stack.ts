@@ -413,10 +413,8 @@ export class Stack implements StackClient {
       changes: this.changes,
       assertOpen: () => this.assertOpen(),
       migrations: this.migrations,
-      queryReadable: (split: SplitQuery, reach: Reach<BaseId>) =>
-        this.dispatchQuery(split, async (resolved) =>
-          queryReadable(resolved, await this.resolveReach(reach)),
-        ),
+      queryReadable: (split: SplitQuery, reach: Reach) =>
+        this.dispatchQuery(split, (resolved) => queryReadable(resolved, reach)),
     });
   }
 
@@ -1220,33 +1218,6 @@ export class Stack implements StackClient {
     const result = await read(query);
     if (presentAt !== 'latest') return result;
     return { ...result, records: result.records.map((r) => this.migrations.presentAtLatest(r)) };
-  }
-
-  /**
-   * A reach over families, as the TypeIds an adapter matches. See
-   * docs/spec/adapters.md § Querying within a reach.
-   */
-  private async resolveReach(reach: Reach<BaseId>): Promise<Reach> {
-    const { fence, within } = reach;
-    // A reach naming no family needs no Types.
-    if (!fence && !within) return {};
-    const registered = await this.adapter.listTypes();
-    const resolve = (baseIds: readonly BaseId[]) => typeIdsOfFamilies(registered, baseIds);
-    return {
-      ...(fence && { fence: resolve(fence) }),
-      ...(within && {
-        within: {
-          types: resolve(within.types),
-          ...(within.authored && {
-            authored: {
-              subjectId: within.authored.subjectId,
-              types: resolve(within.authored.types),
-            },
-          }),
-          permissions: within.permissions,
-        },
-      }),
-    };
   }
 
   /**
