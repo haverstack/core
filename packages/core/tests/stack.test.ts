@@ -24,6 +24,7 @@ import {
   IdGenerationError,
 } from '../src/id.js';
 import type { TypeSchema } from '../src/types/index.js';
+import { baseIdOf } from '../src/schema.js';
 import { migration, typeHandle } from '../src/type-handle.js';
 import { add, derive, drop } from '../src/migration-steps.js';
 import type { Migration } from '../src/type-handle.js';
@@ -7192,7 +7193,7 @@ describe('deleteAttachment', () => {
         calls.push('atomic', metadataBaseId);
         const toDelete = [...this.records.values()].filter(
           (r) =>
-            r.typeId.startsWith(`${metadataBaseId}@`) &&
+            baseIdOf(r.typeId) === metadataBaseId &&
             (r.content as Record<string, unknown>).fileId === fileId,
         );
         for (const r of toDelete) {
@@ -7216,8 +7217,7 @@ describe('deleteAttachment', () => {
     } = await atomicStack.putAttachment(new Uint8Array([9]), { mimeType: 'image/png' });
     await atomicStack.deleteAttachment(fileId);
 
-    // The family, not just @1 — core resolves the baseId so the adapter
-    // never has to.
+    // The adapter is handed the family, not one of its versions.
     expect(calls).toEqual(['atomic', '_attachment']);
   });
 });

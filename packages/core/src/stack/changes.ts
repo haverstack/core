@@ -27,6 +27,7 @@ import type {
   Unsubscribe,
 } from '../types/index.js';
 import { StackBadRequestError } from '../errors.js';
+import { baseIdOf } from '../schema.js';
 import { bumpsVersion } from '../record-changes.js';
 import { feedAssociationDelta } from '../associations/identity.js';
 
@@ -60,13 +61,12 @@ export type EmittedChange = {
   previousTypeId?: string;
 };
 
-/** The `baseId@version` split, as grants and query filters read it. */
-const baseIdOf = (typeId: string): string => typeId.split('@')[0]!;
-
 /**
  * Whether an emission matches a subscription's filter. Reads the record
  * for the fields the envelope deliberately omits, so `createdBy` filters on
  * the author and `purged` frames stay filterable without carrying either.
+ * `includeUnlisted` is answered by passesUnlistedBoundary(), which also
+ * reads the state before an unlist.
  */
 export function matchesFilter(emitted: EmittedChange, filter?: ChangeFilter): boolean {
   if (!filter) return true;

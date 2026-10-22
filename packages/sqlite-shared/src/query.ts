@@ -217,25 +217,22 @@ const inList = (s: Statement, column: string, values: readonly string[]): string
 export const familyRange = (baseId: string): [string, string] => [`${baseId}@`, `${baseId}A`];
 
 /**
- * Families as the condition matching a TypeId in any of them: `F@…` is
- * exactly the range from `F@` up to `FA`, since `A` follows `@` in the
- * binary collation. A range keeps the type_id index usable, and never
- * matches a family that merely shares a prefix, as `note` and `notes`.
- * An empty list matches nothing. See docs/spec/data-model.md § Filter.
+ * Families as the condition matching a Record of `record` in any of them:
+ * `F@…` is exactly the range from `F@` up to `FA`, since `A` follows `@`
+ * in the binary collation, so it never matches a family that merely shares
+ * a prefix, as `note` and `notes`. Each family is its own range search of
+ * the type_id index, several joined through rows() of their bounds. An
+ * empty list matches nothing. See docs/spec/data-model.md § Filter.
  */
-const inFamilies = (s: Statement, column: string, baseIds: readonly string[]): string => {
+const inFamilies = (s: Statement, record: string, baseIds: readonly string[]): string => {
   if (baseIds.length === 1) {
     s.params.push(...familyRange(baseIds[0]));
-    return `(${column} >= ? AND ${column} < ?)`;
+    return `(${record}.type_id >= ? AND ${record}.type_id < ?)`;
   }
-  const table = rows(
-    s,
-    ['value'],
-    baseIds.map((value) => [value]),
-  );
+  const table = rows(s, ['lo', 'hi'], baseIds.map(familyRange));
   return (
-    `EXISTS (SELECT 1 FROM ${table} f ` +
-    `WHERE ${column} >= f.value || '@' AND ${column} < f.value || 'A')`
+    `${record}.id IN (SELECT fr.id FROM ${table} f ` +
+    'JOIN records fr ON fr.type_id >= f.lo AND fr.type_id < f.hi)'
   );
 };
 
@@ -266,13 +263,13 @@ const carriesPermissions = (s: Statement, sets: AuthorityAssociation[][]): strin
  * one of its arms. See docs/spec/access-control.md § Reach.
  */
 const reachConditions = (s: Statement, reach: Reach): void => {
-  if (reach.fence) s.conditions.push(inFamilies(s, 'r.type_id', reach.fence));
+  if (reach.fence) s.conditions.push(inFamilies(s, 'r', reach.fence));
   const within = reach.within;
   if (within) {
-    const arms = [inFamilies(s, 'r.type_id', within.types)];
+    const arms = [inFamilies(s, 'r', within.types)];
     if (within.authored) {
       s.params.push(within.authored.subjectId);
-      arms.push(`(r.entity_id = ? AND ${inFamilies(s, 'r.type_id', within.authored.types)})`);
+      arms.push(`(r.entity_id = ? AND ${inFamilies(s, 'r', within.authored.types)})`);
     }
     arms.push(carriesPermissions(s, within.permissions));
     s.conditions.push(`(${arms.join(' OR ')})`);
@@ -325,7 +322,7 @@ const recordConditions = (query: AdapterQuery, reach: Reach | undefined): Statem
 
   inFilter('type_id', f.typeId);
   if (f.baseId !== undefined) {
-    conditions.push(inFamilies(s, 'r.type_id', Array.isArray(f.baseId) ? f.baseId : [f.baseId]));
+    conditions.push(inFamilies(s, 'r', Array.isArray(f.baseId) ? f.baseId : [f.baseId]));
   }
 
   // Not an inFilter: parentId takes an explicit null for "at the root",

@@ -49,10 +49,10 @@ export type RecordFilter = {
   // Native fields
   typeId?: TypeId | TypeId[];
   /**
-   * Match every version of a type family, resolved against registered
-   * Types rather than parsed from typeId strings. Intersects with `typeId`
-   * when both are given. A value carrying an `@version` suffix is refused
-   * with StackValidationError.
+   * Match every version of a type family: a record whose typeId, without
+   * its `@version` suffix, is one of these. Intersects with `typeId` when
+   * both are given. A value carrying an `@version` suffix is refused with
+   * StackValidationError. See docs/spec/data-model.md § Filter.
    */
   baseId?: BaseId | BaseId[];
   parentId?: RecordId | null; // null = root records only
