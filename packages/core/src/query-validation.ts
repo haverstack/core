@@ -27,6 +27,10 @@ import {
 } from './validate.js';
 import { NATIVE_SORT_FIELDS } from './types/index.js';
 import type {
+  AdapterQuery,
+  PlainQuery,
+  AdapterSort,
+  StackQuery,
   JournalQuery,
   QuerySort,
   RecordFilter,
@@ -35,13 +39,22 @@ import type {
 } from './types/index.js';
 
 /**
- * Fail loud rather than silently widen: a filter the adapter can't honor
- * would otherwise be dropped, returning an unfiltered superset presented
- * as the filtered result. Shared by Stack.query() and
- * APIAdapter.queryRecords(). See docs/spec/data-model.md
- * § Capability-gated filters.
+ * Fail loud rather than silently widen or reorder: a filter or sort the
+ * adapter can't honor would otherwise be dropped, answering with some
+ * other result, which a caller reading one bounded page cannot detect.
+ * Every refusal names the capability. The companion to resolveQuery(),
+ * which refuses the query's own shape; every entry point runs both. See
+ * docs/spec/data-model.md § Capability-gated filters.
  */
 export function assertQueryCapabilities(
+  query: AdapterQuery,
+  capabilities: Pick<StackCapabilities, 'filter' | 'sort'>,
+): void {
+  assertFilterCapability(query.filter, capabilities);
+  assertSortCapability(query.sort, capabilities);
+}
+
+function assertFilterCapability(
   filter: RecordFilter | undefined,
   capabilities: Pick<StackCapabilities, 'filter'>,
 ): void {
@@ -224,9 +237,9 @@ export function assertValidSort(sort: QuerySort | undefined): void {
   const named = [sort.field, sort.contentField, sort.contentFieldByType].filter(
     (member) => member !== undefined,
   );
-  if (named.length > 1) {
+  if (named.length !== 1) {
     throw new StackBadRequestError(
-      'A sort names one of a native field, a content field or a content field per type.',
+      'A sort names exactly one of a native field, a content field or a content field per type.',
     );
   }
   if (sort.field !== undefined && !VALID_SORT_FIELDS.has(sort.field)) {
@@ -295,34 +308,79 @@ const assertValidSortByType = (byType: unknown): void => {
   }
 };
 
+/** The page a query reads when it names no `limit`. */
+export const DEFAULT_QUERY_LIMIT = 50;
+
+/** The largest page a query reads, whatever it asks for. */
+export const MAX_QUERY_LIMIT = 1000;
+
 /**
- * The sort every adapter receives: a named sort with no `direction` is
- * ascending, resolved here so no adapter carries its own default. No sort
- * stays absent — the adapter's unsorted order is `createdAt` newest first,
- * and an explicit sort would be re-checked against the server's declared
- * `sort.fields`. See docs/spec/data-model.md § Sorting and pagination.
+ * The query an adapter receives: its shape checked, and every default
+ * resolved so no adapter carries one — a named sort runs ascending, no
+ * sort is `createdAt` newest first, and the page is DEFAULT_QUERY_LIMIT
+ * up to MAX_QUERY_LIMIT. Shape refusals name no capability; see
+ * assertQueryCapabilities() for those that do. See docs/spec/data-model.md
+ * § Sorting and pagination.
  */
-export function normalizeSort(
-  sort: QuerySort | undefined,
-): (QuerySort & { direction: 'asc' | 'desc' }) | undefined {
-  if (!sort) return undefined;
-  return { ...sort, direction: sort.direction ?? 'asc' } as QuerySort & {
-    direction: 'asc' | 'desc';
+export function resolveQuery(query: PlainQuery): AdapterQuery {
+  const { sort, limit, ...rest } = query;
+  assertValidContentByType(query.filter);
+  assertValidSort(sort);
+  assertWindowInteger(limit, 'limit', 1);
+  assertValidAssociationFilters(query.filter);
+  return {
+    ...rest,
+    sort: sort
+      ? ({ ...sort, direction: sort.direction ?? 'asc' } as AdapterSort)
+      : { field: 'createdAt', direction: 'desc' },
+    limit: Math.min(limit ?? DEFAULT_QUERY_LIMIT, MAX_QUERY_LIMIT),
+  };
+}
+
+/** A query split where it enters `Stack`; see splitQuery(). */
+export type SplitQuery = {
+  query: AdapterQuery;
+  presentAt?: StackQuery['presentAt'];
+  baseId?: RecordFilter['baseId'];
+};
+
+/**
+ * Split a query at the door into what an adapter sees, resolved, and the
+ * two directives only `Stack` can apply: `presentAt`, which migrates the
+ * results, and `filter.baseId`, which needs the registered Types. Every
+ * check runs here, before either directive costs a read. See
+ * docs/spec/data-model.md § Sorting and pagination.
+ */
+export function splitQuery(query: StackQuery): SplitQuery {
+  const { presentAt, filter, ...rest } = query;
+  assertValidBaseIdFilter(filter);
+  const { baseId, ...plain } = filter ?? {};
+  return {
+    query: resolveQuery({ ...rest, ...(filter && { filter: plain }) }),
+    ...(presentAt !== undefined && { presentAt }),
+    ...(baseId !== undefined && { baseId }),
   };
 }
 
 /**
- * Fail loud rather than silently reorder: an adapter that can't honor the
- * requested sort would otherwise answer in some other order, which a
- * caller paging a bounded window has no way to notice. The companion to
- * assertQueryCapabilities(), split from it because a sort is not a filter
- * — see docs/spec/data-model.md § Capability-gated filters.
+ * Hold a window bound — a page size, a cursor position — to an integer
+ * at or above `min`, the one shape every adapter reads alike: a negative
+ * `limit` drops entries from a JS slice but empties or lifts a SQL
+ * `LIMIT`. See docs/spec/data-model.md § Sorting and pagination.
  */
-export function assertSortCapability(
-  sort: QuerySort | undefined,
+export function assertWindowInteger(value: number | undefined, label: string, min: 0 | 1): void {
+  if (value === undefined) return;
+  if (!Number.isInteger(value) || value < min) {
+    throw new StackBadRequestError(
+      `Invalid ${label} ${String(value)}: expected ${min === 0 ? 'a non-negative' : 'a positive'} integer.`,
+    );
+  }
+}
+
+function assertSortCapability(
+  sort: AdapterSort,
   capabilities: Pick<StackCapabilities, 'sort'>,
 ): void {
-  if (!sort) return;
   if (sort.contentFieldByType !== undefined) {
     if (!capabilities.sort.contentFieldByType) {
       throw new StackBadRequestError(
@@ -343,7 +401,7 @@ export function assertSortCapability(
     }
     return;
   }
-  const field = sort.field ?? 'createdAt';
+  const { field } = sort;
   if (!capabilities.sort.fields.includes(field)) {
     throw new StackBadRequestError(
       `Query sorts by "${field}", which this adapter does not declare in sort.fields.`,
@@ -407,38 +465,20 @@ export function assertValidBaseIdFilter(filter: { baseId?: string | string[] } |
 }
 
 /**
- * Hold a journal window to a shape both adapters honor identically: a
- * negative `limit` drops the newest entry from a JS slice but reads as no
- * ceiling in SQLite. No ceiling is imposed — omitting `limit` reads the
- * whole log by contract, which a clamp would silently truncate.
+ * A journal window: `afterSeq` 0 is the start of the log. No ceiling is
+ * imposed — omitting `limit` reads the whole log by contract, which a
+ * clamp would silently truncate.
  */
 export function assertValidJournalQuery(query: JournalQuery | undefined): void {
-  if (!query) return;
-  for (const key of ['afterSeq', 'limit'] as const) {
-    const value = query[key];
-    if (value === undefined) continue;
-    if (!Number.isInteger(value) || value < 0) {
-      throw new StackBadRequestError(
-        `Invalid journal ${key} ${String(value)}: expected a non-negative integer.`,
-      );
-    }
-  }
+  assertWindowInteger(query?.afterSeq, 'journal afterSeq', 0);
+  assertWindowInteger(query?.limit, 'journal limit', 1);
 }
 
 /**
- * Refuse a `getVersions()` window the adapters would read differently, as
- * assertValidJournalQuery() does for the journal. No ceiling is imposed:
- * omitting `limit` reads every version by contract.
+ * A `getVersions()` window. No ceiling is imposed: omitting `limit` reads
+ * every version by contract.
  */
 export function assertValidVersionsQuery(query: VersionsQuery | undefined): void {
-  if (!query) return;
-  for (const key of ['beforeVersion', 'limit'] as const) {
-    const value = query[key];
-    if (value === undefined) continue;
-    if (!Number.isInteger(value) || value < 1) {
-      throw new StackBadRequestError(
-        `Invalid versions ${key} ${String(value)}: expected a positive integer.`,
-      );
-    }
-  }
+  assertWindowInteger(query?.beforeVersion, 'versions beforeVersion', 1);
+  assertWindowInteger(query?.limit, 'versions limit', 1);
 }

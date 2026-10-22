@@ -79,19 +79,23 @@ describe('encodeCursor / decodeCursor', () => {
 
 describe('makeCursor', () => {
   test('encodes the native field the query sorts by', () => {
-    expect(decodeCursor(makeCursor(makeRecord(), undefined))).toEqual({
+    expect(
+      decodeCursor(makeCursor(makeRecord(), { field: 'createdAt', direction: 'desc' })),
+    ).toEqual({
       kind: 'native',
       field: 'createdAt',
       value: 1000,
       id: 'rec01',
     });
-    expect(decodeCursor(makeCursor(makeRecord(), { field: 'updatedAt' }))).toEqual({
+    expect(
+      decodeCursor(makeCursor(makeRecord(), { field: 'updatedAt', direction: 'asc' })),
+    ).toEqual({
       kind: 'native',
       field: 'updatedAt',
       value: 2000,
       id: 'rec01',
     });
-    expect(decodeCursor(makeCursor(makeRecord(), { field: 'version' }))).toEqual({
+    expect(decodeCursor(makeCursor(makeRecord(), { field: 'version', direction: 'asc' }))).toEqual({
       kind: 'native',
       field: 'version',
       value: 3,
@@ -103,7 +107,11 @@ describe('makeCursor', () => {
     const record = makeRecord({ content: { publishedAt: '2021-01-01T00:00:00Z' } });
     expect(
       decodeCursor(
-        makeCursor(record, { contentField: 'publishedAt' }, kindOf('publishedAt', 'date')),
+        makeCursor(
+          record,
+          { contentField: 'publishedAt', direction: 'asc' },
+          kindOf('publishedAt', 'date'),
+        ),
       ),
     ).toEqual({
       kind: 'num',
@@ -116,7 +124,13 @@ describe('makeCursor', () => {
   test('a record with no value at the field encodes as the absent partition', () => {
     const record = makeRecord({ content: { title: 'set' } });
     expect(
-      decodeCursor(makeCursor(record, { contentField: 'missing' }, kindOf('title', 'string'))),
+      decodeCursor(
+        makeCursor(
+          record,
+          { contentField: 'missing', direction: 'asc' },
+          kindOf('title', 'string'),
+        ),
+      ),
     ).toEqual({ kind: 'absent', field: 'missing', id: 'rec01' });
   });
 });
@@ -125,7 +139,7 @@ describe('native sort fields', () => {
   test('round-trips a cursor on every field it names', () => {
     const record = makeRecord();
     for (const field of NATIVE_SORT_FIELDS) {
-      expect(decodeCursor(makeCursor(record, { field }))).toEqual({
+      expect(decodeCursor(makeCursor(record, { field, direction: 'asc' }))).toEqual({
         kind: 'native',
         field,
         value: expect.any(Number),

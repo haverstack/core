@@ -22,11 +22,3 @@ export {
   APIAdapterInsecureUrlError,
   APIAdapterAuthUnsupportedError,
 } from './errors.js';
-
-/**
- * Re-exported because APIAdapterCapabilityError carries one: a caller
- * narrowing on `capability` reads the name from here rather than from a
- * second package. Core owns the definition, next to the capabilities it
- * names.
- */
-export type { MissingCapability } from '@haverstack/core';

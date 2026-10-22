@@ -30,9 +30,6 @@ import type {
   StackRecord,
 } from '../types/index.js';
 
-/** The largest page query() returns, whatever the caller asks for. */
-export const MAX_QUERY_LIMIT = 1000;
-
 /**
  * Walks `cursor` to exhaustion for the internal call sites that need every
  * match (grant checks, attachment cleanup) — query() itself always

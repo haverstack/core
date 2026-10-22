@@ -43,6 +43,8 @@ import type {
   AttachmentFilter,
   RelationshipTargetPattern,
   StackQuery,
+  PlainQuery,
+  AdapterFilter,
 } from '../types/index.js';
 
 // -------------------------------------------------------
@@ -56,7 +58,7 @@ export function parseDate(val: unknown): Date | undefined {
   return isNaN(d.getTime()) ? undefined : d;
 }
 
-const POSITIVE_INTEGER = /^\d+$/;
+const UNSIGNED_INTEGER = /^\d+$/;
 const SORT_FIELDS: ReadonlySet<NativeSortField> = new Set(NATIVE_SORT_FIELDS);
 const SORT_DIRECTIONS: ReadonlySet<NonNullable<QuerySort['direction']>> = new Set(['asc', 'desc']);
 const CHANGE_KINDS: ReadonlySet<ChangeKind> = new Set(['created', 'changed', 'removed', 'purged']);
@@ -130,12 +132,13 @@ const CHANGE_PARAMS = [
 ] as const;
 
 /**
- * Strict positive-integer parse for a URL param — rejects "1abc", "2.7",
- * "-5". Also serves the `:version` path params, which share this
- * "malformed, don't silently coerce" requirement.
+ * Strict digits-only parse for a URL param — rejects "1abc", "2.7", "-5".
+ * Shape only: whether 0 is in range is `Stack`'s to judge. Also serves the
+ * `:version` path params, which share this "malformed, don't silently
+ * coerce" requirement.
  */
-export function parsePositiveInt(raw: string, label: string): number {
-  if (!POSITIVE_INTEGER.test(raw)) throw new StackBadRequestError(`Invalid ${label}: "${raw}"`);
+export function parseUnsignedInt(raw: string, label: string): number {
+  if (!UNSIGNED_INTEGER.test(raw)) throw new StackBadRequestError(`Invalid ${label}: "${raw}"`);
   return parseInt(raw, 10);
 }
 
@@ -166,12 +169,13 @@ function buildSort(
   const named = [field, contentField, contentFieldByType].filter(
     (member) => member !== undefined && member !== null,
   );
-  if (named.length > 1)
-    throw new StackBadRequestError(
-      'A sort names one of a native field, a content field or a content field per type.',
-    );
   const dir =
     direction === undefined || direction === null ? undefined : requireSortDirection(direction);
+  // A direction alone names no sort: decoding it would drop the direction.
+  if (named.length > 1 || (named.length === 0 && dir !== undefined))
+    throw new StackBadRequestError(
+      'A sort names exactly one of a native field, a content field or a content field per type.',
+    );
   if (contentFieldByType !== undefined && contentFieldByType !== null) {
     return {
       contentFieldByType: parseSortByTypeBody(contentFieldByType),
@@ -459,17 +463,17 @@ function parseCreatedByParams(url: URL): RecordFilter['createdBy'] {
 }
 
 /**
- * Build a `StackQuery` from `GET /records` search params — the inverse of
+ * Build a `PlainQuery` from `GET /records` search params — the inverse of
  * what `APIAdapter` encodes for a server that reaches no content.
  * `parentId=null` is the literal string, the sentinel for "top level":
  * Crockford base-32 excludes `u` and `l`, so no record ID can collide
  * with it. See docs/spec/wire-format.md § Records.
  */
-export function parseQueryParams(url: URL): StackQuery {
+export function parseQueryParams(url: URL): PlainQuery {
   assertNoUntravelableFields(url.searchParams.has('baseId'), url.searchParams.has('presentAt'));
   requireKnownParams(url, RECORD_QUERY_PARAMS);
 
-  const filter: RecordFilter = {};
+  const filter: AdapterFilter = {};
 
   const typeIds = url.searchParams.getAll('typeId');
   if (typeIds.length) filter.typeId = typeIds.length === 1 ? typeIds[0] : typeIds;
@@ -519,7 +523,7 @@ export function parseQueryParams(url: URL): StackQuery {
   if (booleanParam(url, 'includeDeleted')) filter.includeDeleted = true;
   if (booleanParam(url, 'includeUnlisted')) filter.includeUnlisted = true;
 
-  const query: StackQuery = {};
+  const query: PlainQuery = {};
   if (Object.keys(filter).length) query.filter = filter;
 
   const sort = buildSort(
@@ -530,7 +534,7 @@ export function parseQueryParams(url: URL): StackQuery {
   if (sort) query.sort = sort;
 
   const limit = url.searchParams.get('limit');
-  if (limit) query.limit = parsePositiveInt(limit, 'limit');
+  if (limit) query.limit = parseUnsignedInt(limit, 'limit');
 
   const cursor = url.searchParams.get('cursor');
   if (cursor) query.cursor = cursor;
@@ -542,9 +546,9 @@ export function parseQueryParams(url: URL): StackQuery {
 // POST /records/query
 // -------------------------------------------------------
 
-/** Validate a limit that already arrived as a JSON number. */
+/** A limit's shape in a JSON body: a number. Its range is `Stack`'s to judge. */
 function parseLimitValue(raw: unknown): number {
-  if (typeof raw !== 'number' || !Number.isInteger(raw) || raw <= 0)
+  if (typeof raw !== 'number')
     throw new StackBadRequestError(`Invalid limit: ${JSON.stringify(raw)}`);
   return raw;
 }
@@ -588,12 +592,12 @@ function parseSortByTypeBody(raw: unknown): Record<string, ContentSortKey> {
 }
 
 /**
- * Build a `StackQuery` from a `POST /records/query` body — the superset
+ * Build a `PlainQuery` from a `POST /records/query` body — the superset
  * form, which also carries `filter.content`, with ISO date strings decoded.
  * `undefined` is the absent body; any other non-object is refused.
  * See docs/spec/wire-format.md § Records.
  */
-export function parseQueryBody(raw: unknown): StackQuery {
+export function parseQueryBody(raw: unknown): PlainQuery {
   if (raw === undefined) return {};
   const body = requirePlainObject(raw, 'query body');
   const f = body.filter !== undefined ? requirePlainObject(body.filter, 'filter') : undefined;
@@ -601,10 +605,10 @@ export function parseQueryBody(raw: unknown): StackQuery {
   requireKnownKeys(body, ['filter', 'sort', 'limit', 'cursor'], 'query body');
   if (f) requireKnownKeys(f, QUERY_BODY_FILTER_KEYS, 'filter');
 
-  const query: StackQuery = {};
+  const query: PlainQuery = {};
 
   if (f) {
-    const filter: RecordFilter = {};
+    const filter: AdapterFilter = {};
 
     if (f.typeId !== undefined) filter.typeId = requireStringOrArray(f.typeId, 'filter.typeId');
     if (f.parentId !== undefined)
@@ -737,9 +741,9 @@ export function parseJournalParams(url: URL): JournalQuery {
   requireKnownParams(url, ['afterSeq', 'limit']);
   const query: JournalQuery = {};
   const afterSeq = url.searchParams.get('afterSeq');
-  if (afterSeq !== null) query.afterSeq = parsePositiveInt(afterSeq, 'afterSeq');
+  if (afterSeq !== null) query.afterSeq = parseUnsignedInt(afterSeq, 'afterSeq');
   const limit = url.searchParams.get('limit');
-  if (limit !== null) query.limit = parsePositiveInt(limit, 'limit');
+  if (limit !== null) query.limit = parseUnsignedInt(limit, 'limit');
   return query;
 }
 
@@ -753,10 +757,10 @@ export function parseVersionsParams(url: URL): VersionsQuery {
   const query: VersionsQuery = {};
   const beforeVersion = url.searchParams.get('beforeVersion');
   if (beforeVersion !== null) {
-    query.beforeVersion = parsePositiveInt(beforeVersion, 'beforeVersion');
+    query.beforeVersion = parseUnsignedInt(beforeVersion, 'beforeVersion');
   }
   const limit = url.searchParams.get('limit');
-  if (limit !== null) query.limit = parsePositiveInt(limit, 'limit');
+  if (limit !== null) query.limit = parseUnsignedInt(limit, 'limit');
   return query;
 }
 
@@ -851,7 +855,7 @@ export function parseIfMatch(header: string | undefined): number | undefined {
   if (header === undefined) return undefined;
   const trimmed = header.trim();
   const unquoted = /^"(.*)"$/.exec(trimmed)?.[1] ?? trimmed;
-  return parsePositiveInt(unquoted, 'If-Match');
+  return parseUnsignedInt(unquoted, 'If-Match');
 }
 
 /**

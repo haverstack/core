@@ -24,7 +24,6 @@ import type {
   FileId,
   RecordVersion,
   StackRecord,
-  StackQuery,
   QueryResult,
   AssociationEdit,
   AuthorityAssociation,
@@ -32,6 +31,7 @@ import type {
   StackCapabilities,
 } from '@haverstack/core';
 import type {
+  AdapterQuery,
   StackRecordAdapter,
   AspectWriteOptions,
   ElementWriteOptions,
@@ -133,11 +133,11 @@ export abstract class SharedSqlRecordAdapter implements StackRecordAdapter {
     return this.record.commitMigration(id, toTypeId, content, opts);
   }
 
-  queryRecords(query: StackQuery): Promise<QueryResult> {
+  queryRecords(query: AdapterQuery): Promise<QueryResult> {
     return this.record.queryRecords(query);
   }
 
-  queryReadable(query: StackQuery, reach: Reach): Promise<QueryResult> {
+  queryReadable(query: AdapterQuery, reach: Reach): Promise<QueryResult> {
     return this.record.queryReadable(query, reach);
   }
 

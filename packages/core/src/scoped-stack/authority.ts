@@ -24,7 +24,8 @@ import {
   grantCoversGrantee,
   grantReach,
 } from '../grants.js';
-import { filtersContent } from '../query-validation.js';
+import { filtersContent, splitQuery } from '../query-validation.js';
+import type { SplitQuery } from '../query-validation.js';
 import { baseIdOf, fileRefFields } from '../schema.js';
 import { familyPolicy } from './family-policy.js';
 import { claimedFamilies, familyStanding, INSTALL_APP_LABEL, linkedIds } from '../install.js';
@@ -51,7 +52,6 @@ import type {
   InstallContent,
   QueryResult,
   Reach,
-  StackQuery,
   StackRecord,
   TypeId,
 } from '../types/index.js';
@@ -93,7 +93,7 @@ export class ScopeAuthority {
     readonly subjectId: EntityId | null,
     /** Stack.query() within a reach — see ScopedStack.query(). */
     private readonly queryReadable: (
-      query: StackQuery,
+      split: SplitQuery,
       reach: Reach<BaseId>,
     ) => Promise<QueryResult>,
   ) {}
@@ -345,7 +345,7 @@ export class ScopeAuthority {
   async hasReadableReference(fileId: string, snapshot: AuthoritySnapshot): Promise<boolean> {
     const reach = await snapshot.reach('read');
     const match = await findFirstMatch(
-      (q) => this.queryReadable(q, reach),
+      (q) => this.queryReadable(splitQuery(q), reach),
       // Reach, not enumeration: a record readable by ID conveys the file it
       // references. See docs/spec/unlisted.md.
       { filter: { referencesFileId: fileId, includeUnlisted: true } },

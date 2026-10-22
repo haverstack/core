@@ -23,7 +23,6 @@ import type {
   TypeId,
   RecordVersion,
   Actor,
-  StackQuery,
   QueryResult,
   AssociationEdit,
   RecordId,
@@ -33,6 +32,7 @@ import type {
   StackCapabilities,
 } from '@haverstack/core';
 import type {
+  AdapterQuery,
   StackAdapter,
   BlobInfo,
   StackBlobAdapter,
@@ -173,11 +173,11 @@ export class LocalAdapter implements StackAdapter {
     return this.record.undeleteRecord(id, opts);
   }
 
-  async queryRecords(query: StackQuery): Promise<QueryResult> {
+  async queryRecords(query: AdapterQuery): Promise<QueryResult> {
     return this.record.queryRecords(query);
   }
 
-  async queryReadable(query: StackQuery, reach: Reach): Promise<QueryResult> {
+  async queryReadable(query: AdapterQuery, reach: Reach): Promise<QueryResult> {
     return this.record.queryReadable(query, reach);
   }
 

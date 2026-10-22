@@ -69,12 +69,12 @@ import {
 import { assertAssociationEdits } from '../associations/validation.js';
 import { addsOf, associationEqual } from '../associations/identity.js';
 import {
-  assertSortCapability,
-  assertValidAssociationFilters,
+  assertQueryCapabilities,
   assertValidBaseIdFilter,
-  assertValidSort,
+  splitQuery,
   filtersContent,
 } from '../query-validation.js';
+import type { SplitQuery } from '../query-validation.js';
 import {
   checkFamily,
   storedVersionDiffers,
@@ -139,7 +139,7 @@ export type ScopedStackInit = {
   /** The app's migrations, which collection() migrates records through. */
   migrations: MigrationRegistry;
   /** Stack.query() within a reach over type families — see query(). */
-  queryReadable: (query: StackQuery, reach: Reach<BaseId>) => Promise<QueryResult>;
+  queryReadable: (split: SplitQuery, reach: Reach<BaseId>) => Promise<QueryResult>;
 };
 
 /**
@@ -490,15 +490,13 @@ export class ScopedStack implements StackClient {
    * Records alone. See docs/spec/disclosure.md § What a query reveals.
    */
   async query(query: StackQuery = {}): Promise<QueryResult> {
-    assertValidSort(query.sort);
-    assertSortCapability(query.sort, this.stack.capabilities);
-    assertValidAssociationFilters(query.filter);
-    assertValidBaseIdFilter(query.filter);
+    const split = splitQuery(query);
+    assertQueryCapabilities(split.query, this.stack.capabilities);
     if (query.filter?.includeUnlisted && !this.#authority.ownerActingAlone) {
       throw new StackPermissionError('includeUnlisted is owner-only');
     }
     const reach = await this.#authority.snapshot().reach('read');
-    const page = await this.queryReadable(query, reach);
+    const page = await this.queryReadable(split, reach);
     // Projected here as well as in get(), or `includeDeleted` would be a
     // strictly better read channel than the fetch-by-ID it is supposed to
     // match.

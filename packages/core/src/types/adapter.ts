@@ -12,7 +12,7 @@ import type { StackCapabilities } from './capabilities.js';
 import type { RecordChange, Unsubscribe, SubscribeOptions } from './events.js';
 import type { RecordId, TypeId, FileId, AppId, EntityId, Actor } from './ids.js';
 import type { JournalEntryInput, RecordJournalEntry, JournalQuery } from './journal.js';
-import type { StackQuery, QueryResult } from './query.js';
+import type { StackQuery, QuerySort, QueryResult, RecordFilter } from './query.js';
 import type { StackRecord, RecordVersion, VersionsQuery } from './records.js';
 import type { StackType } from './schema.js';
 
@@ -78,6 +78,31 @@ export type AspectWriteOptions = IfVersionOptions & JournalOptions;
  */
 export type ElementWriteOptions<E extends Association> = AspectWriteOptions & {
   expectSet?: readonly E[];
+};
+
+/** A named sort as an adapter receives it: `Stack` has resolved its `direction`. */
+export type AdapterSort = QuerySort & { direction: 'asc' | 'desc' };
+
+/** A filter as an adapter receives it: `Stack` has resolved `baseId` to `typeId`. */
+export type AdapterFilter = Omit<RecordFilter, 'baseId'> & { baseId?: never };
+
+/**
+ * A query carrying neither directive only `Stack` can apply — no
+ * `presentAt`, no `filter.baseId` — with its defaults still open: what
+ * travels on the wire, and what resolveQuery() takes.
+ */
+export type PlainQuery = Omit<AdapterQuery, 'sort' | 'limit'> & Pick<StackQuery, 'sort' | 'limit'>;
+
+/**
+ * A query as an adapter receives it, from resolveQuery(): every default
+ * resolved, so no adapter carries one, and neither directive only `Stack`
+ * can apply — `presentAt`, `filter.baseId`. See docs/spec/data-model.md
+ * § Sorting and pagination.
+ */
+export type AdapterQuery = Omit<StackQuery, 'sort' | 'limit' | 'presentAt' | 'filter'> & {
+  filter?: AdapterFilter;
+  sort: AdapterSort;
+  limit: number;
 };
 
 /**
@@ -155,11 +180,7 @@ export interface StackRecordAdapter {
   ): Promise<StackRecord | null>;
   /** Reverse a soft delete. Returns the record as it now stands. */
   undeleteRecord(id: RecordId, opts?: MutateOptions): Promise<StackRecord>;
-  /**
-   * `query.sort`, when present, always carries a `direction`: `Stack`
-   * resolves the defaults before any adapter sees the query.
-   */
-  queryRecords(query: StackQuery): Promise<QueryResult>;
+  queryRecords(query: AdapterQuery): Promise<QueryResult>;
   /**
    * queryRecords() over the Records in `reach` alone: the reach is one
    * more condition of the query, so the page, its cursor and whether one
@@ -167,7 +188,7 @@ export interface StackRecordAdapter {
    * whose adapter lacks it cannot be scoped, as a server-backed one never
    * needs to be. See docs/spec/adapters.md § Querying within a reach.
    */
-  queryReadable?(query: StackQuery, reach: Reach): Promise<QueryResult>;
+  queryReadable?(query: AdapterQuery, reach: Reach): Promise<QueryResult>;
 
   // Aspects that never bump `version`
   //

@@ -51,7 +51,8 @@ import type {
   BaseId,
   StackAdapter,
   StackQuery,
-  RecordFilter,
+  AdapterQuery,
+  AdapterFilter,
   QueryResult,
   Reach,
   AssociationEdit,
@@ -102,17 +103,15 @@ import {
 } from '../errors.js';
 import {
   assertQueryCapabilities,
-  assertValidContentByType,
-  assertSortCapability,
-  assertValidAssociationFilters,
   assertValidBaseIdFilter,
   assertValidJournalQuery,
   assertValidVersionsQuery,
-  assertValidSort,
-  normalizeSort,
+  resolveQuery,
+  splitQuery,
   filtersContent,
   assertFamilyId,
 } from '../query-validation.js';
+import type { SplitQuery } from '../query-validation.js';
 import {
   assertAssociationEdits,
   assertAuthorityAssociations,
@@ -132,7 +131,7 @@ import {
   validateIdTimestampSkew,
   DEFAULT_ID_TIMESTAMP_SKEW_MS,
 } from './record-id.js';
-import { queryAllPages, lookupEntityByDid, MAX_QUERY_LIMIT } from './reads.js';
+import { queryAllPages, lookupEntityByDid } from './reads.js';
 import { contentEqual } from '../record-changes.js';
 import {
   assertAssociationSet,
@@ -207,6 +206,9 @@ function normalizeActor(actor: Actor | undefined): Actor | undefined {
     ? { subjectId }
     : { subjectId, principalId };
 }
+
+/** How many Records migrateAll() reads and migrates per page. */
+const MIGRATE_ALL_BATCH = 100;
 
 /** Sentinel: filter.baseId resolved to zero matching types. */
 const EMPTY_FAMILY = Symbol('empty-family');
@@ -416,8 +418,8 @@ export class Stack implements StackClient {
       changes: this.changes,
       assertOpen: () => this.assertOpen(),
       migrations: this.migrations,
-      queryReadable: (query: StackQuery, reach: Reach<BaseId>) =>
-        this.dispatchQuery(query, async (resolved, types) =>
+      queryReadable: (split: SplitQuery, reach: Reach<BaseId>) =>
+        this.dispatchQuery(split, async (resolved, types) =>
           queryReadable(resolved, await this.resolveReach(reach, types)),
         ),
     });
@@ -569,11 +571,13 @@ export class Stack implements StackClient {
 
       let cursor: string | undefined;
       do {
-        const result: QueryResult = await this.adapter.queryRecords({
-          filter: { typeId, includeDeleted: true, includeUnlisted: !listedOnly },
-          limit: 100,
-          cursor,
-        });
+        const result: QueryResult = await this.adapter.queryRecords(
+          resolveQuery({
+            filter: { typeId, includeDeleted: true, includeUnlisted: !listedOnly },
+            limit: MIGRATE_ALL_BATCH,
+            cursor,
+          }),
+        );
 
         for (const record of result.records) {
           if (listedOnly && record.deletedAt) {
@@ -1203,62 +1207,50 @@ export class Stack implements StackClient {
    * docs/spec/data-model.md § Queries.
    */
   async query(query: StackQuery = {}): Promise<QueryResult> {
-    return this.dispatchQuery(query, (resolved) => this.adapter.queryRecords(resolved));
+    this.assertOpen();
+    const split = splitQuery(query);
+    assertQueryCapabilities(split.query, this.adapter.capabilities);
+    return this.dispatchQuery(split, (q) => this.adapter.queryRecords(q));
   }
 
   /**
-   * Everything query() does around the adapter call: the checks, the
-   * family resolution, the migration on the way out. `read` is the call,
-   * so a scoped query within a reach gets the same treatment as any other.
+   * Everything query() does around the adapter call once the query is
+   * split and checked: the family resolution, the migration on the way
+   * out. `read` is the call, so a scoped query within a reach gets the
+   * same treatment as any other.
    */
   private async dispatchQuery(
-    query: StackQuery,
-    read: (resolved: StackQuery, types: Lazy<StackType[]>) => Promise<QueryResult>,
+    { query, presentAt, baseId }: SplitQuery,
+    read: (resolved: AdapterQuery, types: Lazy<StackType[]>) => Promise<QueryResult>,
   ): Promise<QueryResult> {
     this.assertOpen();
-    const { presentAt, filter, limit: rawLimit, ...rest } = query;
-    assertValidContentByType(filter);
-    assertQueryCapabilities(filter, this.adapter.capabilities);
-    assertValidSort(query.sort);
-    assertSortCapability(query.sort, this.adapter.capabilities);
-    assertValidAssociationFilters(filter);
-    assertValidBaseIdFilter(filter);
-    const limit = rawLimit !== undefined ? Math.min(rawLimit, MAX_QUERY_LIMIT) : undefined;
-
-    // Read once whether the filter, the reach or both resolve families.
+    // Read once whether the family, the reach or both need the Types.
     const types = new Lazy(() => this.adapter.listTypes());
-    const resolvedFilter = await this.resolveBaseIdFilter(filter, types);
-    if (resolvedFilter === EMPTY_FAMILY) {
+    const filter = await this.narrowToFamilies(query.filter, baseId, types);
+    if (filter === EMPTY_FAMILY) {
       return { records: [], cursor: null };
     }
 
-    const result = await read(
-      {
-        ...rest,
-        ...(query.sort && { sort: normalizeSort(query.sort) }),
-        ...(resolvedFilter !== undefined && { filter: resolvedFilter }),
-        ...(limit !== undefined && { limit }),
-      },
-      types,
-    );
+    const result = await read({ ...query, ...(filter !== undefined && { filter }) }, types);
 
     if (presentAt !== 'latest') return result;
     return { ...result, records: result.records.map((r) => this.migrations.presentAtLatest(r)) };
   }
 
   /**
-   * Resolve filter.baseId into a concrete typeId set (intersected with
-   * filter.typeId when both are given), so adapters never need their own
-   * baseId concept. Returns EMPTY_FAMILY when the resolved set is empty so
-   * the caller can short-circuit without an adapter round trip.
+   * Narrow the filter's typeId set to the named families' registered
+   * versions (intersected with filter.typeId when both are given), so
+   * adapters never need their own baseId concept. Returns EMPTY_FAMILY
+   * when the resolved set is empty so the caller can short-circuit
+   * without an adapter round trip.
    */
-  private async resolveBaseIdFilter(
-    filter: RecordFilter | undefined,
+  private async narrowToFamilies(
+    filter: AdapterFilter | undefined,
+    baseId: SplitQuery['baseId'],
     types: Lazy<StackType[]>,
-  ): Promise<RecordFilter | undefined | typeof EMPTY_FAMILY> {
-    if (filter?.baseId === undefined) return filter;
-
-    const { baseId, typeId, ...rest } = filter;
+  ): Promise<AdapterFilter | undefined | typeof EMPTY_FAMILY> {
+    if (baseId === undefined) return filter;
+    const { typeId, ...rest } = filter ?? {};
     const requestedBaseIds = Array.isArray(baseId) ? baseId : [baseId];
     const familyTypeIds = typeIdsOfFamilies(await types.get(), requestedBaseIds);
 

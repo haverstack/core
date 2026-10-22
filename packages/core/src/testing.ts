@@ -24,7 +24,8 @@ import type {
   AspectWriteOptions,
   ElementWriteOptions,
   ActorOptions,
-  StackQuery,
+  AdapterQuery,
+  AdapterSort,
   QueryResult,
   RecordFilter,
   Association,
@@ -33,7 +34,6 @@ import type {
   DataAssociation,
   StackCapabilities,
   BlobInfo,
-  QuerySort,
   Reach,
 } from './types/index.js';
 import { SYSTEM_TYPES } from './types/index.js';
@@ -54,13 +54,6 @@ import {
 import { matchesContent } from './content-match.js';
 import { applyAssociationEdits, sameAssociationSet } from './associations/identity.js';
 
-/** Core resolves the default direction; an adapter only ever sees an explicit one. */
-const requireDirection = (sort: QuerySort): 'asc' | 'desc' => {
-  if (sort.direction === undefined) {
-    throw new StackBadRequestError('queryRecords() received a sort without a direction.');
-  }
-  return sort.direction;
-};
 /** A FileId is the SHA-256 hex digest of its bytes — see docs/spec/attachments.md. */
 const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
 
@@ -307,15 +300,15 @@ export class MemoryAdapter implements StackAdapter {
   }
 
   /** The cursor names the last record a page held, by its place in the order. */
-  async queryRecords(query: StackQuery): Promise<QueryResult> {
+  async queryRecords(query: AdapterQuery): Promise<QueryResult> {
     return this.select(query);
   }
 
-  async queryReadable(query: StackQuery, reach: Reach): Promise<QueryResult> {
+  async queryReadable(query: AdapterQuery, reach: Reach): Promise<QueryResult> {
     return this.select(query, reach);
   }
 
-  private select(query: StackQuery, reach?: Reach): QueryResult {
+  private select(query: AdapterQuery, reach?: Reach): QueryResult {
     const f = query.filter ?? {};
     let results = this.order.map((id) => this.records.get(id)!);
     if (reach) results = results.filter((r) => inReach(r, reach));
@@ -396,7 +389,7 @@ export class MemoryAdapter implements StackAdapter {
 
     results = this.sortRecords(results, query.sort);
 
-    const limit = query.limit ?? 50;
+    const { limit } = query;
     // Resume after the record the cursor names, wherever it now falls: a
     // change between pages moves no boundary, as with the real adapters'
     // keyed cursors.
@@ -418,13 +411,9 @@ export class MemoryAdapter implements StackAdapter {
   }
 
   /** The sort a cursor was minted under, as an opaque comparable descriptor. */
-  private sortDescriptor(sort: QuerySort | undefined): string {
-    const content = sort?.contentField ?? sort?.contentFieldByType;
-    return JSON.stringify([
-      content ?? null,
-      content === undefined ? (sort?.field ?? 'createdAt') : null,
-      sort ? requireDirection(sort) : 'desc',
-    ]);
+  private sortDescriptor(sort: AdapterSort): string {
+    const content = sort.contentField ?? sort.contentFieldByType;
+    return JSON.stringify([content ?? null, sort.field ?? null, sort.direction]);
   }
 
   /**
@@ -432,7 +421,7 @@ export class MemoryAdapter implements StackAdapter {
    * minted under — mirroring the real adapters' keyed cursors.
    * See docs/spec/data-model.md § Sorting and pagination.
    */
-  private encodeCursor(sort: QuerySort | undefined, key: OrderKey): string {
+  private encodeCursor(sort: AdapterSort, key: OrderKey): string {
     const json = JSON.stringify({ d: this.sortDescriptor(sort), k: key });
     // Explicit UTF-8 step before btoa, matching sqlite-shared's codec: the
     // descriptor embeds `sort.contentField` verbatim, and a non-Latin-1
@@ -450,7 +439,7 @@ export class MemoryAdapter implements StackAdapter {
    * cursor replayed under a changed sort gets from the real adapters,
    * rather than silently paging through the wrong order.
    */
-  private decodeCursor(cursor: string, sort: QuerySort | undefined): OrderKey {
+  private decodeCursor(cursor: string, sort: AdapterSort): OrderKey {
     let parsed: unknown;
     try {
       const binary = atob(cursor);
@@ -482,15 +471,15 @@ export class MemoryAdapter implements StackAdapter {
    * The comparison itself is core's, not this double's
    * (docs/spec/data-model.md § Sorting by a content field).
    */
-  private sortRecords(records: StackRecord[], sort: QuerySort | undefined): StackRecord[] {
+  private sortRecords(records: StackRecord[], sort: AdapterSort): StackRecord[] {
     const keys = new Map(records.map((r) => [r.id, this.orderKey(r, sort)]));
     return [...records].sort((a, b) => this.compareKeys(keys.get(a.id)!, keys.get(b.id)!, sort));
   }
 
   /** Where a record falls in the order `sort` names: its value there, then its id. */
-  private orderKey(record: StackRecord, sort: QuerySort | undefined): OrderKey {
-    if (sort?.contentField === undefined && sort?.contentFieldByType === undefined) {
-      const field = sort?.field ?? 'createdAt';
+  private orderKey(record: StackRecord, sort: AdapterSort): OrderKey {
+    const { field } = sort;
+    if (field !== undefined) {
       const value =
         field === 'version'
           ? record.version
@@ -500,8 +489,8 @@ export class MemoryAdapter implements StackAdapter {
     return { value: this.sortEntry(record, sort), id: record.id };
   }
 
-  private compareKeys(a: OrderKey, b: OrderKey, sort: QuerySort | undefined): number {
-    const direction = sort ? requireDirection(sort) : 'desc';
+  private compareKeys(a: OrderKey, b: OrderKey, sort: AdapterSort): number {
+    const { direction } = sort;
     const sign = direction === 'asc' ? 1 : -1;
     const byValue =
       typeof a.value === 'number' && typeof b.value === 'number'
@@ -516,7 +505,7 @@ export class MemoryAdapter implements StackAdapter {
    * its type says it is, and an undeclared or non-scalar field orders as
    * nothing at all.
    */
-  private sortEntry(record: StackRecord, sort: QuerySort): SortEntry | null {
+  private sortEntry(record: StackRecord, sort: AdapterSort): SortEntry | null {
     let field = sort.contentField;
     if (sort.contentFieldByType) {
       const key = Object.hasOwn(sort.contentFieldByType, record.typeId)

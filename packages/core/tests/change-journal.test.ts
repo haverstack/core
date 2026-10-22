@@ -614,19 +614,13 @@ describe('JournalQuery is validated at the surface', () => {
   // ceiling", and neither answers the call.
   test.each([
     ['limit', { limit: -1 }],
+    ['limit', { limit: 0 }],
     ['limit', { limit: 1.5 }],
     ['afterSeq', { afterSeq: -1 }],
     ['afterSeq', { afterSeq: 2.5 }],
-  ])('refuses a non-integer or negative %s', async (_key, query) => {
+  ])('refuses %s outside its window', async (_key, query) => {
     const note = await stack.create(NOTE, { text: 'hello' });
     await expect(stack.getJournal(note.id, query)).rejects.toThrow(StackBadRequestError);
-  });
-
-  test('limit 0 is a real window, not an invalid one', async () => {
-    const note = await stack.create(NOTE, { text: 'hello' });
-    await stack.patchContent(note.id, { text: 'edited' });
-    expect(await stack.getJournal(note.id, { limit: 0 })).toEqual([]);
-    expect(await stack.getJournal(note.id, { limit: 1 })).toHaveLength(1);
   });
 
   test('omitting limit reads the whole log — no ceiling is imposed', async () => {

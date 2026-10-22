@@ -15,7 +15,6 @@ import { env } from 'cloudflare:test';
 import { describe, test, expect } from 'vitest';
 import type {
   StackRecord,
-  StackQuery,
   QueryResult,
   AssociationEdit,
   DataAssociation,
@@ -23,7 +22,8 @@ import type {
   StackType,
   StackCapabilities,
 } from '@haverstack/core';
-import type { Reach } from '@haverstack/core/adapter';
+import type { AdapterQuery, Reach } from '@haverstack/core/adapter';
+import { resolveQuery } from '@haverstack/core/adapter';
 
 /**
  * A Durable Object is a separate JS realm from the test file's own — even
@@ -65,8 +65,8 @@ type TestStub = {
     id: string,
     opts?: { purge?: boolean } & Record<string, unknown>,
   ): Promise<StackRecord | null>;
-  queryRecords(query: StackQuery): Promise<QueryResult>;
-  queryReadable(query: StackQuery, reach: Reach): Promise<QueryResult>;
+  queryRecords(query: AdapterQuery): Promise<QueryResult>;
+  queryReadable(query: AdapterQuery, reach: Reach): Promise<QueryResult>;
   getVersions(id: string): Promise<RecordVersion[]>;
   editAssociations(
     id: string,
@@ -284,9 +284,13 @@ describe('ifVersion / transactional rollback', () => {
       .patchContent(record.id, { text: 'rejected update' }, { ifVersion: 999 })
       .catch(() => {});
 
-    const stillFindsOriginal = await stub.queryRecords({ filter: { search: 'original' } });
+    const stillFindsOriginal = await stub.queryRecords(
+      resolveQuery({ filter: { search: 'original' } }),
+    );
     expect(stillFindsOriginal.records.map((r) => r.id)).toEqual([record.id]);
-    const doesNotFindRejected = await stub.queryRecords({ filter: { search: 'rejected' } });
+    const doesNotFindRejected = await stub.queryRecords(
+      resolveQuery({ filter: { search: 'rejected' } }),
+    );
     expect(doesNotFindRejected.records).toEqual([]);
   });
 });
@@ -296,7 +300,7 @@ describe('records — queries', () => {
     const stub = getStub();
     await stub.createRecord(makeRecord({ id: 'r1', content: { text: 'alpha', priority: 1 } }));
     await stub.createRecord(makeRecord({ id: 'r2', content: { text: 'beta', priority: 2 } }));
-    const result = await stub.queryRecords({ filter: { content: { priority: 1 } } });
+    const result = await stub.queryRecords(resolveQuery({ filter: { content: { priority: 1 } } }));
     expect(result.records.map((r) => r.id)).toEqual(['r1']);
   });
 
@@ -317,9 +321,11 @@ describe('records — queries', () => {
         content: { text: 'grace', emails: [{ value: 'grace@example.com', label: 'home' }] },
       }),
     );
-    const result = await stub.queryRecords({
-      filter: { content: { 'emails.value': 'grace@example.com' } },
-    });
+    const result = await stub.queryRecords(
+      resolveQuery({
+        filter: { content: { 'emails.value': 'grace@example.com' } },
+      }),
+    );
     expect(result.records.map((r) => r.id)).toEqual(['r2']);
   });
 
@@ -329,7 +335,9 @@ describe('records — queries', () => {
     await stub.createRecord(
       makeRecord({ id: 'r2', content: { text: 'has one', address: { city: 'Porto' } } }),
     );
-    const result = await stub.queryRecords({ filter: { content: { 'address.city': null } } });
+    const result = await stub.queryRecords(
+      resolveQuery({ filter: { content: { 'address.city': null } } }),
+    );
     expect(result.records.map((r) => r.id)).toEqual(['r1']);
   });
 
@@ -340,12 +348,14 @@ describe('records — queries', () => {
     await stub.createRecord(makeRecord({ id: 'r1', content: { text: 'shallow' } }));
     const deepest = Array.from({ length: 33 }, (_, i) => `s${i}`).join('.');
 
-    const miss = await stub.queryRecords({ filter: { content: { [deepest]: 'x' } } });
+    const miss = await stub.queryRecords(resolveQuery({ filter: { content: { [deepest]: 'x' } } }));
     expect(miss.records).toEqual([]);
-    const absent = await stub.queryRecords({ filter: { content: { [deepest]: null } } });
+    const absent = await stub.queryRecords(
+      resolveQuery({ filter: { content: { [deepest]: null } } }),
+    );
     expect(absent.records.map((r) => r.id)).toEqual(['r1']);
     const err = await stub
-      .queryRecords({ filter: { content: { [`${deepest}.s33`]: 'x' } } })
+      .queryRecords(resolveQuery({ filter: { content: { [`${deepest}.s33`]: 'x' } } }))
       .catch((e: unknown) => e);
     expect((err as { code?: string }).code).toBe('bad_request');
   });
@@ -354,7 +364,9 @@ describe('records — queries', () => {
     const stub = getStub();
     await stub.createRecord(makeRecord({ id: 'r1', content: { text: 'a', a: { b: { k: 'v' } } } }));
 
-    const result = await stub.queryRecords({ filter: { content: { 'a.b': '{"k":"v"}' } } });
+    const result = await stub.queryRecords(
+      resolveQuery({ filter: { content: { 'a.b': '{"k":"v"}' } } }),
+    );
     expect(result.records).toEqual([]);
   });
 
@@ -362,7 +374,7 @@ describe('records — queries', () => {
     const stub = getStub();
     await stub.createRecord(makeRecord({ id: 'r1', content: { text: 'SQLite is great' } }));
     await stub.createRecord(makeRecord({ id: 'r2', content: { text: 'Postgres is also great' } }));
-    const result = await stub.queryRecords({ filter: { search: 'SQLite' } });
+    const result = await stub.queryRecords(resolveQuery({ filter: { search: 'SQLite' } }));
     expect(result.records.map((r) => r.id)).toEqual(['r1']);
   });
 
@@ -373,18 +385,22 @@ describe('records — queries', () => {
         makeRecord({ id: `r${i}`, createdAt: new Date(Date.now() + i * 1000) }),
       );
     }
-    const page1 = await stub.queryRecords({
-      sort: { field: 'createdAt', direction: 'asc' },
-      limit: 3,
-    });
+    const page1 = await stub.queryRecords(
+      resolveQuery({
+        sort: { field: 'createdAt', direction: 'asc' },
+        limit: 3,
+      }),
+    );
     expect(page1.records.length).toBe(3);
     expect(page1.cursor).not.toBeNull();
 
-    const page2 = await stub.queryRecords({
-      sort: { field: 'createdAt', direction: 'asc' },
-      limit: 3,
-      cursor: page1.cursor!,
-    });
+    const page2 = await stub.queryRecords(
+      resolveQuery({
+        sort: { field: 'createdAt', direction: 'asc' },
+        limit: 3,
+        cursor: page1.cursor!,
+      }),
+    );
     expect(page2.records.length).toBe(2);
     expect(page2.cursor).toBeNull();
   });
@@ -392,7 +408,9 @@ describe('records — queries', () => {
   test('malformed cursor throws StackBadRequestError', async () => {
     const stub = getStub();
     await stub.createRecord(makeRecord({ id: 'r1' }));
-    const err = await stub.queryRecords({ cursor: '!!!not-a-cursor!!!' }).catch((e: unknown) => e);
+    const err = await stub
+      .queryRecords(resolveQuery({ cursor: '!!!not-a-cursor!!!' }))
+      .catch((e: unknown) => e);
     expect((err as { code?: string }).code).toBe('bad_request');
   });
 });
@@ -428,9 +446,13 @@ describe('records — sorting by a content field', () => {
       makeRecord({ id: 'r3', typeId: SORTED_TYPE, content: { title: 'none' } }),
     );
 
-    const asc = await stub.queryRecords({ sort: { contentField: 'priority', direction: 'asc' } });
+    const asc = await stub.queryRecords(
+      resolveQuery({ sort: { contentField: 'priority', direction: 'asc' } }),
+    );
     expect(asc.records.map((r) => r.id)).toEqual(['r2', 'r1', 'r3']);
-    const desc = await stub.queryRecords({ sort: { contentField: 'priority', direction: 'desc' } });
+    const desc = await stub.queryRecords(
+      resolveQuery({ sort: { contentField: 'priority', direction: 'desc' } }),
+    );
     expect(desc.records.map((r) => r.id)).toEqual(['r1', 'r2', 'r3']);
   });
 
@@ -448,11 +470,13 @@ describe('records — sorting by a content field', () => {
     const ids: string[] = [];
     let cursor: string | undefined;
     do {
-      const page: QueryResult = await stub.queryRecords({
-        sort: { contentField: 'title', direction: 'asc' },
-        limit: 1,
-        ...(cursor && { cursor }),
-      });
+      const page: QueryResult = await stub.queryRecords(
+        resolveQuery({
+          sort: { contentField: 'title', direction: 'asc' },
+          limit: 1,
+          ...(cursor && { cursor }),
+        }),
+      );
       ids.push(...page.records.map((r) => r.id));
       cursor = page.cursor ?? undefined;
     } while (cursor);
@@ -567,24 +591,19 @@ test('queryReadable answers a reach far past the parameter cap', async () => {
   await stub.createRecord(makeRecord());
 
   const groups = Array.from({ length: 60 }, (_, i) => `g${i}`);
-  const result = await stub.queryReadable(
-    {},
-    {
-      fence: Array.from({ length: 150 }, (_, i) =>
-        i === 0 ? NOTE_TYPE_V1 : `com.example/t${i}@1`,
-      ),
-      within: {
-        types: [],
-        permissions: groups.map((groupId) => [
-          {
-            kind: 'permission',
-            label: 'read',
-            grantee: { kind: 'group', groupId, role: 'member' },
-          },
-        ]),
-      },
+  const result = await stub.queryReadable(resolveQuery({}), {
+    fence: Array.from({ length: 150 }, (_, i) => (i === 0 ? NOTE_TYPE_V1 : `com.example/t${i}@1`)),
+    within: {
+      types: [],
+      permissions: groups.map((groupId) => [
+        {
+          kind: 'permission',
+          label: 'read',
+          grantee: { kind: 'group', groupId, role: 'member' },
+        },
+      ]),
     },
-  );
+  });
   expect(result.records.map((r) => r.id)).toEqual([shared.id]);
 });
 
@@ -594,7 +613,7 @@ test('a tag filter far past the parameter cap', async () => {
   const tagged = makeRecord({ associations: labels.map((label) => ({ kind: 'tag', label })) });
   await stub.createRecord(tagged);
   await stub.createRecord(makeRecord({ associations: [{ kind: 'tag', label: 'tag-0' }] }));
-  const result = await stub.queryRecords({ filter: { tags: labels } });
+  const result = await stub.queryRecords(resolveQuery({ filter: { tags: labels } }));
   expect(result.records.map((r) => r.id)).toEqual([tagged.id]);
 });
 
@@ -616,7 +635,7 @@ describe('per-Type keys far past the statement limits', () => {
         { content: { 'meta.n': 1, 'meta.missing': null }, contentPresent: ['text'] },
       ]),
     );
-    const result = await stub.queryRecords({ filter: { contentByType } });
+    const result = await stub.queryRecords(resolveQuery({ filter: { contentByType } }));
     expect(result.records.map((r) => r.id)).toEqual(['r1']);
   });
 
@@ -639,15 +658,19 @@ describe('per-Type keys far past the statement limits', () => {
     const contentFieldByType = Object.fromEntries(
       typeIds(KEYS).map((typeId, i) => [typeId, i % 2 === 0 ? { field: 'n' } : { value: 2 }]),
     );
-    const result = await stub.queryRecords({
-      sort: { contentFieldByType, direction: 'asc' },
-      limit: 2,
-    });
+    const result = await stub.queryRecords(
+      resolveQuery({
+        sort: { contentFieldByType, direction: 'asc' },
+        limit: 2,
+      }),
+    );
     expect(result.records.map((r) => r.id)).toEqual(['r2', 'r3']);
-    const rest = await stub.queryRecords({
-      sort: { contentFieldByType, direction: 'asc' },
-      cursor: result.cursor!,
-    });
+    const rest = await stub.queryRecords(
+      resolveQuery({
+        sort: { contentFieldByType, direction: 'asc' },
+        cursor: result.cursor!,
+      }),
+    );
     expect(rest.records.map((r) => r.id)).toEqual(['r1', 'r4']);
   });
 });
@@ -664,6 +687,6 @@ test('content conditions far past the statement limits execute', async () => {
     Array.from({ length: 8 }, (_, i) => [`${prefix}.k${i}`, null] as [string, unknown]),
   );
   content.n = 1;
-  const result = await stub.queryRecords({ filter: { content } });
+  const result = await stub.queryRecords(resolveQuery({ filter: { content } }));
   expect(result.records.map((r) => r.id)).toEqual(['r1']);
 });

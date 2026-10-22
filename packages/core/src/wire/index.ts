@@ -65,7 +65,7 @@ export {
   parseAssociationParams,
   parseIfMatch,
   parseUploadFilename,
-  parsePositiveInt,
+  parseUnsignedInt,
 } from './request.js';
 
 // The build-side half of the fields that never travel: adapter-api refuses

@@ -19,17 +19,10 @@ import {
   type ContentArm,
   type ContentSortKey,
   type NativeSortField,
-  type StackQuery,
 } from '@haverstack/core';
 import { constantSortEntry, contentSortKey, parseContentFilterKey } from '@haverstack/core/adapter';
-import type { Reach, SortEntry } from '@haverstack/core/adapter';
-import {
-  byTypeDescriptor,
-  decodeCursor,
-  getSortColumn,
-  getSortField,
-  type DecodedCursor,
-} from './cursor.js';
+import type { AdapterQuery, Reach, SortEntry } from '@haverstack/core/adapter';
+import { byTypeDescriptor, decodeCursor, getSortColumn, type DecodedCursor } from './cursor.js';
 import { sanitizeFts5Query } from './fts5.js';
 import { permissionKeyColumns } from './mappers.js';
 
@@ -49,19 +42,12 @@ export const atBudget = (page: QueryStatement, rows: number): QueryStatement => 
 });
 
 /**
- * Reduce `sort.direction` to a keyword safe to interpolate. Core's
- * assertValidSort() already checks it, but this is where it reaches SQL
- * text, so an unchecked value here would be an injection sink. Core
- * resolves the default direction before any adapter sees the query.
+ * The direction as SQL text. Mapped from a fixed pair rather than
+ * interpolated, as getSortColumn() maps the field, so no value reaches
+ * the statement but `ASC` or `DESC`.
  */
-const sqlDirection = (query: StackQuery): 'ASC' | 'DESC' => {
-  // No sort at all is the unsorted default; a sort always carries its direction.
-  const dir = query.sort ? query.sort.direction : 'desc';
-  if (dir !== 'asc' && dir !== 'desc') {
-    throw new StackBadRequestError(`Invalid sort direction "${dir}": expected "asc" or "desc".`);
-  }
-  return dir === 'asc' ? 'ASC' : 'DESC';
-};
+const sqlDirection = (query: AdapterQuery): 'ASC' | 'DESC' =>
+  query.sort.direction === 'asc' ? 'ASC' : 'DESC';
 
 /**
  * Normalize a json_each row's value so one array element and one bare
@@ -272,7 +258,7 @@ const reachConditions = (s: Statement, reach: Reach): void => {
  * except where in the ordering to resume, which is per-partition and gets
  * appended by the caller.
  */
-const recordConditions = (query: StackQuery, reach: Reach | undefined): Statement => {
+const recordConditions = (query: AdapterQuery, reach: Reach | undefined): Statement => {
   const s = emptyStatement();
   const { conditions, params } = s;
   const f = query.filter ?? {};
@@ -491,18 +477,17 @@ const statement = (s: Statement, from: string, tail: string): QueryStatement => 
  * so the second is never run for a page that doesn't reach it. Each still
  * needs the row budget its `LIMIT ?` binds — see atBudget.
  */
-export const buildQueryPlan = (query: StackQuery, reach?: Reach): QueryStatement[] => {
+export const buildQueryPlan = (query: AdapterQuery, reach?: Reach): QueryStatement[] => {
   const dir = sqlDirection(query);
   const op = dir === 'ASC' ? '>' : '<';
   const decoded = query.cursor ? decodeCursor(query.cursor) : null;
-  if (query.sort?.contentFieldByType) {
+  if (query.sort.contentFieldByType) {
     return byTypePlan(query, reach, query.sort.contentFieldByType, dir, op, decoded);
   }
-  const contentField = query.sort?.contentField;
+  const { contentField, field } = query.sort;
 
-  if (contentField === undefined) {
+  if (field !== undefined) {
     const where = recordConditions(query, reach);
-    const field = getSortField(query);
     const col = getSortColumn(field);
     if (decoded) {
       const cursor = nativeCursor(decoded, field);
@@ -558,7 +543,7 @@ export const buildQueryPlan = (query: StackQuery, reach?: Reach): QueryStatement
  * constants are each rows(). See docs/spec/data-model.md § Sorting by a content field.
  */
 const byTypePlan = (
-  query: StackQuery,
+  query: AdapterQuery,
   reach: Reach | undefined,
   byType: Record<string, ContentSortKey>,
   dir: 'ASC' | 'DESC',

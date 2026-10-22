@@ -1,9 +1,9 @@
 /**
  * A capability refusal names the capability it was refused for, on the
- * error itself. A client reporting the refusal in its own vocabulary —
- * `adapter-api` turns it into APIAdapterCapabilityError — reads that name
- * rather than re-deriving it from the query, so there is one answer to
- * which capability a query needed instead of two that can disagree.
+ * error itself. A client reporting the refusal in its own vocabulary reads
+ * that name rather than re-deriving it from the query, so there is one
+ * answer to which capability a query needed instead of two that can
+ * disagree.
  *
  * The malformed-path cases carry no name: a path no adapter could address
  * is the caller's error at every capability level, and naming one would
@@ -12,7 +12,7 @@
 import { describe, test, expect } from 'vitest';
 import {
   assertQueryCapabilities,
-  assertSortCapability,
+  resolveQuery,
   assertValidContentByType,
   assertValidSort,
 } from '../src/query-validation.js';
@@ -20,7 +20,7 @@ import { StackBadRequestError } from '../src/errors.js';
 import type {
   MissingCapability,
   QuerySort,
-  RecordFilter,
+  AdapterFilter,
   StackCapabilities,
 } from '../src/types/index.js';
 
@@ -58,7 +58,10 @@ describe('a refused query names the capability it needed', () => {
   test('filter.search', () => {
     expect(
       refusalFor(() =>
-        assertQueryCapabilities({ search: 'hello' }, without({ filter: { search: false } })),
+        assertQueryCapabilities(
+          resolveQuery({ filter: { search: 'hello' } }),
+          without({ filter: { search: false } }),
+        ),
       ),
     ).toBe('filter.search');
   });
@@ -68,9 +71,11 @@ describe('a refused query names the capability it needed', () => {
   test.each([
     ['filter.content', { content: { slug: 'x' } }],
     ['filter.contentPresent', { contentPresent: ['slug'] }],
-  ] as [string, RecordFilter][])("reach 'none', asked for by %s", (_label, filter) => {
+  ] as [string, AdapterFilter][])("reach 'none', asked for by %s", (_label, filter) => {
     expect(
-      refusalFor(() => assertQueryCapabilities(filter, without({ filter: { content: 'none' } }))),
+      refusalFor(() =>
+        assertQueryCapabilities(resolveQuery({ filter }), without({ filter: { content: 'none' } })),
+      ),
     ).toBe('filter.content');
   });
 
@@ -78,7 +83,7 @@ describe('a refused query names the capability it needed', () => {
     expect(
       refusalFor(() =>
         assertQueryCapabilities(
-          { contentPresent: ['slug'] },
+          resolveQuery({ filter: { contentPresent: ['slug'] } }),
           without({ filter: { contentPresent: false } }),
         ),
       ),
@@ -89,7 +94,7 @@ describe('a refused query names the capability it needed', () => {
     expect(
       refusalFor(() =>
         assertQueryCapabilities(
-          { content: { 'emails.value': 'a@b.c' } },
+          resolveQuery({ filter: { content: { 'emails.value': 'a@b.c' } } }),
           without({ filter: { content: 'field' } }),
         ),
       ),
@@ -99,37 +104,48 @@ describe('a refused query names the capability it needed', () => {
   test('sort.contentField', () => {
     expect(
       refusalFor(() =>
-        assertSortCapability({ contentField: 'slug' }, without({ sort: { contentField: false } })),
+        assertQueryCapabilities(
+          resolveQuery({ sort: { contentField: 'slug', direction: 'asc' } }),
+          without({ sort: { contentField: false } }),
+        ),
       ),
     ).toBe('sort.contentField');
   });
 
-  const ARMS: RecordFilter = {
+  const ARMS: AdapterFilter = {
     contentByType: { 'com.example/x@1': { content: { a: 1 } }, 'com.example/x@2': {} },
   };
 
   test('filter.contentByType declined', () => {
     expect(
       refusalFor(() =>
-        assertQueryCapabilities(ARMS, without({ filter: { contentByType: false } })),
+        assertQueryCapabilities(
+          resolveQuery({ filter: ARMS }),
+          without({ filter: { contentByType: false } }),
+        ),
       ),
     ).toBe('filter.contentByType');
   });
 
   test("filter.contentByType against reach 'none'", () => {
     expect(
-      refusalFor(() => assertQueryCapabilities(ARMS, without({ filter: { content: 'none' } }))),
+      refusalFor(() =>
+        assertQueryCapabilities(
+          resolveQuery({ filter: ARMS }),
+          without({ filter: { content: 'none' } }),
+        ),
+      ),
     ).toBe('filter.content');
   });
 
   test("an arm's keys are gated as top-level keys are", () => {
-    const arm = (predicate: object): RecordFilter => ({
+    const arm = (predicate: object): AdapterFilter => ({
       contentByType: { 'com.example/x@1': predicate },
     });
     expect(
       refusalFor(() =>
         assertQueryCapabilities(
-          arm({ content: { 'a.b': 1 } }),
+          resolveQuery({ filter: arm({ content: { 'a.b': 1 } }) }),
           without({ filter: { content: 'field' } }),
         ),
       ),
@@ -137,7 +153,7 @@ describe('a refused query names the capability it needed', () => {
     expect(
       refusalFor(() =>
         assertQueryCapabilities(
-          arm({ contentPresent: ['a'] }),
+          resolveQuery({ filter: arm({ contentPresent: ['a'] }) }),
           without({ filter: { contentPresent: false } }),
         ),
       ),
@@ -145,10 +161,16 @@ describe('a refused query names the capability it needed', () => {
   });
 
   test('sort.contentFieldByType declined', () => {
-    const sort = { contentFieldByType: { 'com.example/x@1': { field: 'a' } } };
+    const sort = {
+      contentFieldByType: { 'com.example/x@1': { field: 'a' } },
+      direction: 'asc' as const,
+    };
     expect(
       refusalFor(() =>
-        assertSortCapability(sort, without({ sort: { contentFieldByType: false } })),
+        assertQueryCapabilities(
+          resolveQuery({ sort: sort }),
+          without({ sort: { contentFieldByType: false } }),
+        ),
       ),
     ).toBe('sort.contentFieldByType');
   });
@@ -158,15 +180,19 @@ describe('a refused query names the capability it needed', () => {
     const filter = { contentByType: Object.fromEntries(typeIds.map((id) => [id, {}])) };
     const sort = {
       contentFieldByType: Object.fromEntries(typeIds.map((id) => [id, { field: 'a' }])),
+      direction: 'asc' as const,
     };
-    expect(() => assertQueryCapabilities(filter, ALL)).not.toThrow();
-    expect(() => assertSortCapability(sort, ALL)).not.toThrow();
+    expect(() => assertQueryCapabilities(resolveQuery({ filter }), ALL)).not.toThrow();
+    expect(() => assertQueryCapabilities(resolveQuery({ sort: sort }), ALL)).not.toThrow();
   });
 
   test('sort.fields', () => {
     expect(
       refusalFor(() =>
-        assertSortCapability({ field: 'version' }, without({ sort: { fields: [] } })),
+        assertQueryCapabilities(
+          resolveQuery({ sort: { field: 'version', direction: 'asc' } }),
+          without({ sort: { fields: [] } }),
+        ),
       ),
     ).toBe('sort.fields');
   });
@@ -179,7 +205,10 @@ describe('a query refused for its own shape names no capability', () => {
   ] as const)('a malformed content path at %s', (_label, content) => {
     expect(
       refusalFor(() =>
-        assertQueryCapabilities({ content: { 'a..b': 1 } }, without({ filter: { content } })),
+        assertQueryCapabilities(
+          resolveQuery({ filter: { content: { 'a..b': 1 } } }),
+          without({ filter: { content } }),
+        ),
       ),
     ).toBeUndefined();
   });
@@ -204,7 +233,7 @@ describe('the per-Type shapes are held to a split along Types', () => {
       { contentByType: { 'com.example/x@1': { content: { 'a..b': 1 } } } },
     ],
   ])('filter.contentByType refuses %s', (_label, filter) => {
-    expect(refusalFor(() => assertValidContentByType(filter as RecordFilter))).toBeUndefined();
+    expect(refusalFor(() => assertValidContentByType(filter as AdapterFilter))).toBeUndefined();
   });
 
   test.each([

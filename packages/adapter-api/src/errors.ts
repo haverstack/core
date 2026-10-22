@@ -6,7 +6,6 @@
  * reports travel as core's StackError subclasses instead.
  */
 
-import type { MissingCapability } from '@haverstack/core';
 import type { WireAuthErrorCode } from '@haverstack/wire-types';
 
 export class APIAdapterError extends Error {
@@ -35,18 +34,17 @@ export class APIAdapterConnectionError extends APIAdapterError {
 }
 
 /**
- * Thrown locally — before any request is sent — when a query uses a
- * filter the connected server has declared it doesn't support. Sending it
- * anyway would return an unfiltered superset presented as the filtered
- * result. See docs/spec/wire-format.md § Records.
+ * Thrown locally — before any request is sent — when a call needs an
+ * endpoint discovery does not advertise: the change feed or install
+ * requests, which sit beside `capabilities` rather than in it. A query the
+ * server's `capabilities` cannot answer is `Stack`'s to refuse, with the
+ * `StackBadRequestError` any adapter's would get. See
+ * docs/spec/wire-format.md § Discovery.
  */
 export class APIAdapterCapabilityError extends APIAdapterError {
   constructor(
-    /**
-     * `'changes'` names the feed and `'installs'` the install endpoint,
-     * which discovery advertises beside `capabilities` rather than in it.
-     */
-    public readonly capability: MissingCapability | 'changes' | 'installs',
+    /** `'changes'` names the feed and `'installs'` the install endpoint. */
+    public readonly capability: 'changes' | 'installs',
     message: string,
   ) {
     super(message);

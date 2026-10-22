@@ -4181,16 +4181,6 @@ describe('grantType', () => {
     ).rejects.toThrow(StackValidationError);
   });
 
-  test('listTypeGrants loads on an adapter whose sort.fields omits createdAt', async () => {
-    const bare = await MemoryAdapter.open({ ownerEntityId: 'owner-123', timezone: 'UTC' });
-    (bare as { capabilities: StackAdapter['capabilities'] }).capabilities = {
-      ...bare.capabilities,
-      sort: { fields: [], contentField: false, contentFieldByType: false },
-    };
-    const bareStack = await Stack.open(bare);
-    expect(await bareStack.listTypeGrants()).toEqual([]);
-  });
-
   // A tier that names nobody reaches nobody, so storing one would leave a
   // grant that can only deny while reading as a share that worked.
   test('rejects a group target with an empty groupId', async () => {
@@ -8516,12 +8506,55 @@ describe('query — sort direction defaults', () => {
     );
   });
 
-  test('the adapter receives an explicit direction, or no sort at all', async () => {
+  test('the adapter always receives a complete sort', async () => {
     const spy = vi.spyOn(adapter, 'queryRecords');
     await stack.query();
     await stack.query({ sort: { contentField: 'text' } });
-    expect(spy.mock.calls[0]![0]).not.toHaveProperty('sort');
+    expect(spy.mock.calls[0]![0].sort).toEqual({ field: 'createdAt', direction: 'desc' });
     expect(spy.mock.calls[1]![0].sort).toEqual({ contentField: 'text', direction: 'asc' });
+  });
+
+  test('the adapter receives an explicit limit: the default page, or the ceiling', async () => {
+    const spy = vi.spyOn(adapter, 'queryRecords');
+    await stack.query();
+    await stack.query({ limit: 5 });
+    await stack.query({ limit: 5000 });
+    expect(spy.mock.calls.map(([q]) => q.limit)).toEqual([50, 5, 1000]);
+  });
+
+  test('the adapter receives neither presentAt nor filter.baseId', async () => {
+    const spy = vi.spyOn(adapter, 'queryRecords');
+    await stack.query({ filter: { baseId: fam(NOTE_V1) }, presentAt: 'latest' });
+    const [sent] = spy.mock.calls[0]!;
+    expect(sent).not.toHaveProperty('presentAt');
+    expect(sent.filter).not.toHaveProperty('baseId');
+    expect(sent.filter?.typeId).toEqual([NOTE_V1]);
+  });
+
+  test('a malformed query is refused even when its family has no Types', async () => {
+    await expect(
+      stack.query({ filter: { baseId: 'com.example.none/thing' }, limit: 0 }),
+    ).rejects.toThrow(StackBadRequestError);
+  });
+
+  test('a query refused for a capability never reaches the adapter', async () => {
+    const incapable = await IncapableMemoryAdapter.open({ ownerEntityId: 'owner-x' });
+    const spy = vi.spyOn(incapable, 'queryRecords');
+    const incapableStack = await Stack.open(incapable);
+    await expect(
+      incapableStack.query({ filter: { content: { text: 'a' } } }),
+    ).rejects.toMatchObject({ capability: 'filter.content' });
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  test('refuses a sort that names a direction alone', async () => {
+    await expect(stack.query({ sort: { direction: 'asc' } as never })).rejects.toThrow(
+      /names exactly one/,
+    );
+  });
+
+  test.each([0, -1, 1.5, Number.NaN])('refuses a limit of %s', async (limit) => {
+    await expect(stack.query({ limit })).rejects.toThrow(StackBadRequestError);
   });
 });
 
