@@ -1,9 +1,9 @@
 /**
  * A capability refusal names the capability it was refused for, on the
- * error itself. A client reporting the refusal in its own vocabulary —
- * `adapter-api` turns it into APIAdapterCapabilityError — reads that name
- * rather than re-deriving it from the query, so there is one answer to
- * which capability a query needed instead of two that can disagree.
+ * error itself. A client reporting the refusal in its own vocabulary reads
+ * that name rather than re-deriving it from the query, so there is one
+ * answer to which capability a query needed instead of two that can
+ * disagree.
  *
  * The malformed-path cases carry no name: a path no adapter could address
  * is the caller's error at every capability level, and naming one would

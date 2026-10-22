@@ -416,8 +416,12 @@ export class Stack implements StackClient {
       changes: this.changes,
       assertOpen: () => this.assertOpen(),
       migrations: this.migrations,
-      queryReadable: (query: AdapterQuery, reach: Reach<BaseId>) =>
-        this.dispatchQuery(query, async (resolved, types) =>
+      queryReadable: (
+        query: AdapterQuery,
+        reach: Reach<BaseId>,
+        presentAt?: StackQuery['presentAt'],
+      ) =>
+        this.dispatchQuery(query, presentAt, async (resolved, types) =>
           queryReadable(resolved, await this.resolveReach(reach, types)),
         ),
     });
@@ -1208,7 +1212,7 @@ export class Stack implements StackClient {
     this.assertOpen();
     const resolved = resolveQuery(query);
     assertQueryCapabilities(resolved, this.adapter.capabilities);
-    return this.dispatchQuery(resolved, (q) => this.adapter.queryRecords(q));
+    return this.dispatchQuery(resolved, query.presentAt, (q) => this.adapter.queryRecords(q));
   }
 
   /**
@@ -1219,10 +1223,11 @@ export class Stack implements StackClient {
    */
   private async dispatchQuery(
     query: AdapterQuery,
+    presentAt: StackQuery['presentAt'],
     read: (resolved: AdapterQuery, types: Lazy<StackType[]>) => Promise<QueryResult>,
   ): Promise<QueryResult> {
     this.assertOpen();
-    const { presentAt, filter, ...rest } = query;
+    const { filter, ...rest } = query;
 
     // Read once whether the filter, the reach or both resolve families.
     const types = new Lazy(() => this.adapter.listTypes());

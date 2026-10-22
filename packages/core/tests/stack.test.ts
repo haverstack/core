@@ -8522,6 +8522,16 @@ describe('query — sort direction defaults', () => {
     expect(spy.mock.calls.map(([q]) => q.limit)).toEqual([50, 5, 1000]);
   });
 
+  test('a query refused for a capability never reaches the adapter', async () => {
+    const incapable = await IncapableMemoryAdapter.open({ ownerEntityId: 'owner-x' });
+    const spy = vi.spyOn(incapable, 'queryRecords');
+    const incapableStack = await Stack.open(incapable);
+    await expect(
+      incapableStack.query({ filter: { content: { text: 'a' } } }),
+    ).rejects.toMatchObject({ capability: 'filter.content' });
+    expect(spy).not.toHaveBeenCalled();
+  });
+
   test('refuses a sort that names a direction alone', async () => {
     await expect(stack.query({ sort: { direction: 'asc' } as never })).rejects.toThrow(
       /names exactly one/,

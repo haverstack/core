@@ -88,7 +88,7 @@ export type AdapterSort = QuerySort & { direction: 'asc' | 'desc' };
  * resolved, so no adapter carries one. See docs/spec/data-model.md
  * § Sorting and pagination.
  */
-export type AdapterQuery = Omit<StackQuery, 'sort' | 'limit'> & {
+export type AdapterQuery = Omit<StackQuery, 'sort' | 'limit' | 'presentAt'> & {
   sort: AdapterSort;
   limit: number;
 };

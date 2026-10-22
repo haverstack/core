@@ -24,7 +24,7 @@
  * adapter.
  */
 
-import { StackError, StackBadRequestError } from '@haverstack/core';
+import { StackError } from '@haverstack/core';
 import type {
   JournalQuery,
   VersionsQuery,
@@ -48,14 +48,8 @@ import type {
   InstallContent,
   SubscribeOptions,
 } from '@haverstack/core';
-import {
-  OwnerMismatchError,
-  assertQueryCapabilities,
-  assertValidAssociationFilters,
-  filtersContent,
-} from '@haverstack/core/adapter';
+import { OwnerMismatchError, filtersContent } from '@haverstack/core/adapter';
 import type { AdapterQuery, StackAdapter } from '@haverstack/core/adapter';
-import { assertQueryTravels } from '@haverstack/core/wire';
 import type { DidCredential } from '@haverstack/core/wire';
 import {
   isWireError,
@@ -586,34 +580,12 @@ export class APIAdapter implements StackAdapter {
     });
   }
 
+  /**
+   * `Stack` has already resolved and checked the query, against this
+   * adapter's own capabilities, so it travels as given. See
+   * docs/spec/adapters.md § Interface split.
+   */
   async queryRecords(query: AdapterQuery): Promise<QueryResult> {
-    // Delegates the fail-loud decision to core's shared
-    // assertQueryCapabilities so the wire and local paths enforce one rule
-    // — re-thrown as APIAdapterCapabilityError for this adapter's callers.
-    try {
-      assertQueryCapabilities(query, this.capabilities);
-    } catch (err) {
-      // The refusal names the capability it was refused for. A
-      // StackBadRequestError carrying none is about the query's own shape — a
-      // malformed content path, which is the caller's error at any
-      // capability level — and travels as the StackBadRequestError it is.
-      if (err instanceof StackBadRequestError && err.capability) {
-        throw new APIAdapterCapabilityError(err.capability, err.message);
-      }
-      throw err;
-    }
-    // A malformed association filter is a caller error, not a missing
-    // capability, so this one travels as the StackBadRequestError it is —
-    // refused here rather than encoded into query params a server would
-    // have to reject.
-    assertValidAssociationFilters(query.filter);
-    // Likewise for the two fields with no wire encoding, and before the
-    // branch below rather than inside it: the query body carries them to a
-    // server that answers 400, while the search params have nowhere to put
-    // them, so encoding them here would let the server's content reach
-    // decide whether a family query is refused or silently widened.
-    assertQueryTravels(query);
-
     let body: WireQueryResponse;
     if (filtersContent(this.capabilities)) {
       // POST /records/query supports the full query shape including content field filters

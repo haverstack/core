@@ -322,7 +322,7 @@ export const MAX_QUERY_LIMIT = 1000;
  * § Sorting and pagination.
  */
 export function resolveQuery(query: StackQuery): AdapterQuery {
-  const { sort, limit, ...rest } = query;
+  const { presentAt: _presentAt, sort, limit, ...rest } = query;
   assertValidContentByType(query.filter);
   assertValidSort(sort);
   assertWindowInteger(limit, 'limit', 1);

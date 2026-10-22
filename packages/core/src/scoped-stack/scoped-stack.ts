@@ -139,7 +139,11 @@ export type ScopedStackInit = {
   /** The app's migrations, which collection() migrates records through. */
   migrations: MigrationRegistry;
   /** Stack.query() within a reach over type families — see query(). */
-  queryReadable: (query: AdapterQuery, reach: Reach<BaseId>) => Promise<QueryResult>;
+  queryReadable: (
+    query: AdapterQuery,
+    reach: Reach<BaseId>,
+    presentAt?: StackQuery['presentAt'],
+  ) => Promise<QueryResult>;
 };
 
 /**
@@ -496,7 +500,7 @@ export class ScopedStack implements StackClient {
       throw new StackPermissionError('includeUnlisted is owner-only');
     }
     const reach = await this.#authority.snapshot().reach('read');
-    const page = await this.queryReadable(resolved, reach);
+    const page = await this.queryReadable(resolved, reach, query.presentAt);
     // Projected here as well as in get(), or `includeDeleted` would be a
     // strictly better read channel than the fetch-by-ID it is supposed to
     // match.

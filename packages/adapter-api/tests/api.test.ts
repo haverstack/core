@@ -5,7 +5,6 @@ import {
   APIAdapterAuthError,
   APIAdapterConnectionError,
   APIAdapterError,
-  APIAdapterCapabilityError,
   APIAdapterVersionError,
   APIAdapterAuthUnsupportedError,
   APIAdapterHandshakeError,
@@ -1146,88 +1145,8 @@ describe('queryRecords', () => {
     expect(url).not.toContain('relatedToLabel');
   });
 
-  // A malformed relationship filter is a caller error, not a missing
-  // capability, so it travels as StackBadRequestError — and is refused before a
-  // request the server would only have to reject goes out.
-  test('refuses a relatedTo naming neither a label nor a target without sending', async () => {
-    const adapter = await openAdapter();
-    await expect(
-      adapter.queryRecords({ ...resolveQuery({}), filter: { relatedTo: {} as never } }),
-    ).rejects.toThrow(StackBadRequestError);
-    expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent
-  });
-
-  test('refuses an empty stackUrl rather than encoding relatedToStack=', async () => {
-    const adapter = await openAdapter();
-    await expect(
-      adapter.queryRecords({
-        ...resolveQuery({}),
-        filter: { relatedTo: { target: { kind: 'record', recordId: 'rec-1', stackUrl: '' } } },
-      }),
-    ).rejects.toThrow(StackBadRequestError);
-    expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent
-  });
-
-  // The two fields with no wire encoding, on a direct adapter call:
-  // Stack.query() resolves both first. Refused at both reaches, or the
-  // encoding would decide the answer — the body draws a 400 while search
-  // params would drop them and widen the result.
-  // See docs/spec/wire-format.md § Records.
-  test.each([
-    ["at reach 'path', which queries by body", 'path'],
-    ["at reach 'none', which queries by search params", 'none'],
-  ] as const)('refuses filter.baseId without sending %s', async (_label, reach) => {
-    const adapter = await openAdapter(discoveryWith({ filter: { content: reach } }));
-    await expect(
-      adapter.queryRecords(resolveQuery({ filter: { baseId: 'com.example/note' } })),
-    ).rejects.toThrow(StackBadRequestError);
-    expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent
-  });
-
-  test.each([
-    ["at reach 'path', which queries by body", 'path'],
-    ["at reach 'none', which queries by search params", 'none'],
-  ] as const)('refuses presentAt without sending %s', async (_label, reach) => {
-    const adapter = await openAdapter(discoveryWith({ filter: { content: reach } }));
-    await expect(adapter.queryRecords(resolveQuery({ presentAt: 'latest' }))).rejects.toThrow(
-      StackBadRequestError,
-    );
-    expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent
-  });
-
-  // Absent and explicitly undefined are the same query, as they are to
-  // Stack.query() — a spread that leaves the key behind must still send.
-  test('an explicitly undefined baseId is not a baseId', async () => {
-    const adapter = await openAdapter();
-    mockFetch.mockResolvedValueOnce(jsonResponse(queryEnvelope));
-    await expect(
-      adapter.queryRecords(resolveQuery({ filter: { baseId: undefined }, presentAt: undefined })),
-    ).resolves.toBeDefined();
-  });
-
-  test("throws APIAdapterCapabilityError for filter.content against reach 'none'", async () => {
-    const adapter = await openAdapter(discoveryWith({ filter: { content: 'none' } }));
-    await expect(
-      adapter.queryRecords(resolveQuery({ filter: { content: { slug: 'hello' } } })),
-    ).rejects.toThrow(APIAdapterCapabilityError);
-    expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent
-  });
-
-  test("throws APIAdapterCapabilityError for a nested path against reach 'field'", async () => {
-    const adapter = await openAdapter(discoveryWith({ filter: { content: 'field' } }));
-    // A single-segment key is still served by the 'field' rung.
-    mockFetch.mockResolvedValueOnce(jsonResponse(queryEnvelope));
-    await expect(
-      adapter.queryRecords(resolveQuery({ filter: { content: { slug: 'hello' } } })),
-    ).resolves.toBeDefined();
-    await expect(
-      adapter.queryRecords(resolveQuery({ filter: { content: { 'emails.value': 'a@b.c' } } })),
-    ).rejects.toThrow(APIAdapterCapabilityError);
-  });
-
-  // Silence is not a claim beyond the floor — and an absent sort.fields
-  // must refuse a stated sort as the declared-capability error, rather
-  // than reading through undefined and raising a TypeError.
+  // Silence is not a claim beyond the floor: these are the capabilities
+  // Stack gates every query on.
   test('a server omitting capabilities entirely is treated as having none', async () => {
     const { capabilities: _drop, ...discovery } = DISCOVERY;
     const adapter = await openAdapter(discovery);
@@ -1237,14 +1156,6 @@ describe('queryRecords', () => {
       sort: { fields: ['createdAt'], contentField: false, contentFieldByType: false },
       limits: { attachmentBytes: null, contentBytes: null },
     });
-
-    await expect(
-      adapter.queryRecords(resolveQuery({ sort: { field: 'version' } })),
-    ).rejects.toThrow(APIAdapterCapabilityError);
-    // A query naming no sort reads `createdAt`, newest first, which every
-    // server orders by, so it still runs.
-    mockFetch.mockResolvedValueOnce(jsonResponse(queryEnvelope));
-    await expect(adapter.queryRecords(resolveQuery({}))).resolves.toBeDefined();
   });
 
   // A rung this client has never heard of places nowhere on the ladder, so
@@ -1258,93 +1169,9 @@ describe('queryRecords', () => {
     });
 
     expect(adapter.capabilities.filter.content).toBe('none');
-    await expect(
-      adapter.queryRecords(resolveQuery({ filter: { content: { slug: 'x' } } })),
-    ).rejects.toThrow(APIAdapterCapabilityError);
   });
 
-  // A malformed path is the caller's error, not the server's missing
-  // reach, so it must not be reported as an absent capability.
-  test.each([
-    ["at reach 'path'", 'path'],
-    ["at reach 'field'", 'field'],
-  ] as const)('a malformed content path stays a StackBadRequestError %s', async (_label, reach) => {
-    const adapter = await openAdapter(discoveryWith({ filter: { content: reach } }));
-    await expect(
-      adapter.queryRecords(resolveQuery({ filter: { content: { 'a..b': 1 } } })),
-    ).rejects.toThrow(StackBadRequestError);
-    await expect(
-      adapter.queryRecords(resolveQuery({ filter: { content: { 'a..b': 1 } } })),
-    ).rejects.not.toThrow(APIAdapterCapabilityError);
-  });
-
-  test('throws APIAdapterCapabilityError for contentPresent without the capability', async () => {
-    const adapter = await openAdapter(discoveryWith({ filter: { contentPresent: false } }));
-    await expect(
-      adapter.queryRecords(resolveQuery({ filter: { contentPresent: ['publishedAt'] } })),
-    ).rejects.toThrow(APIAdapterCapabilityError);
-    expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent
-  });
-
-  test('throws APIAdapterCapabilityError for a content sort without sort.contentField', async () => {
-    const adapter = await openAdapter(discoveryWith({ sort: { contentField: false } }));
-    await expect(
-      adapter.queryRecords(resolveQuery({ sort: { contentField: 'publishedAt' } })),
-    ).rejects.toThrow(APIAdapterCapabilityError);
-    expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent
-  });
-
-  test.each([
-    ['filter.contentByType', { filter: { contentByType: { 'com.example/note@1': {} } } }],
-    [
-      'sort.contentFieldByType',
-      { sort: { contentFieldByType: { 'com.example/note@1': { field: 'a' } } } },
-    ],
-  ] as const)('refuses %s locally where the server declines it', async (capability, query) => {
-    const adapter = await openAdapter(
-      discoveryWith({ filter: { contentByType: false }, sort: { contentFieldByType: false } }),
-    );
-    await expect(adapter.queryRecords(resolveQuery(query))).rejects.toMatchObject({ capability });
-    expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent
-  });
-
-  test('throws APIAdapterCapabilityError for a native field outside sort.fields', async () => {
-    const adapter = await openAdapter(discoveryWith({ sort: { fields: ['createdAt'] } }));
-    await expect(
-      adapter.queryRecords(resolveQuery({ sort: { field: 'version' } })),
-    ).rejects.toThrow(APIAdapterCapabilityError);
-  });
-
-  // The reported capability must be the one the query actually asked for.
-  // An unconditional sort.fields check would blame the absent field for a
-  // failure the search filter caused, against every server whose discovery
-  // omits sort.fields.
-  test('names the capability the query asked for, not an unrelated absent sort field', async () => {
-    const adapter = await openAdapter({
-      ...DISCOVERY,
-      capabilities: {
-        ...DISCOVERY.capabilities,
-        filter: { ...DISCOVERY.capabilities.filter, search: false },
-        sort: { contentField: true },
-      },
-    });
-    expect(adapter.capabilities.sort.fields).toEqual(['createdAt']);
-    await expect(
-      adapter.queryRecords(resolveQuery({ filter: { search: 'hello' } })),
-    ).rejects.toMatchObject({
-      capability: 'filter.search',
-    });
-  });
-
-  test('throws APIAdapterCapabilityError for filter.search without the capability', async () => {
-    const adapter = await openAdapter(discoveryWith({ filter: { search: false } }));
-    await expect(
-      adapter.queryRecords(resolveQuery({ filter: { search: 'hello' } })),
-    ).rejects.toThrow(APIAdapterCapabilityError);
-    expect(mockFetch).toHaveBeenCalledTimes(1); // only the discovery call — no request sent
-  });
-
-  test('does not throw for filter.content when the server reaches content', async () => {
+  test('sends filter.content when the server reaches content', async () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(jsonResponse(queryEnvelope));
     await expect(
