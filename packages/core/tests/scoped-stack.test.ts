@@ -1815,7 +1815,7 @@ describe('ScopedStack — group-targeted grants', () => {
     const view = stack.asEntity(MEMBER);
     const result = await view.query({ filter: { typeId: COMMENT } });
     expect(result.records).toHaveLength(5);
-    const rosterReads = querySpy.mock.calls.filter(([q]) => q?.filter?.baseId === '_group');
+    const rosterReads = querySpy.mock.calls.filter(([q]) => q?.baseId === '_group');
     expect(rosterReads).toHaveLength(1);
     expect(getSpy.mock.calls.filter(([id]) => id === group.id)).toHaveLength(0);
   });

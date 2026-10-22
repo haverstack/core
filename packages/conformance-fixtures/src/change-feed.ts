@@ -817,7 +817,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
   {
     name: 'change-feed-baseid-filter-matches-every-version',
     description:
-      'A ?baseId filter matches every version of a type family, so a type version bump never ' +
+      'A ?baseId parameter matches every version of a type family, so a type version bump never ' +
       'silently orphans a subscription: a connection filtered on com.example/note receives ' +
       'note@2 changes as well as note@1 ones. Unlike GET /records, where baseId is resolved ' +
       'client-side and refused on the wire, the feed carries it, because the versions it must ' +

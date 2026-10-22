@@ -90,8 +90,8 @@ export const buildChangeParams = (opts: SubscribeOptions): URLSearchParams => {
   const p = new URLSearchParams();
   const f: ChangeFilter = opts.filter ?? {};
 
+  if (opts.baseId !== undefined) appendEach(p, 'baseId', opts.baseId);
   if (f.typeId !== undefined) appendEach(p, 'typeId', f.typeId);
-  if (f.baseId !== undefined) appendEach(p, 'baseId', f.baseId);
   if (f.parentId !== undefined) setParentId(p, f.parentId);
   appendCreatedBy(p, f.createdBy);
   if (f.kinds !== undefined) for (const kind of f.kinds) p.append('kind', kind);

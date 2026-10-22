@@ -340,25 +340,24 @@ export function resolveQuery(query: PlainQuery): AdapterQuery {
 /** A query split where it enters `Stack`; see splitQuery(). */
 export type SplitQuery = {
   query: AdapterQuery;
+  baseId?: StackQuery['baseId'];
   presentAt?: StackQuery['presentAt'];
-  baseId?: RecordFilter['baseId'];
 };
 
 /**
  * Split a query at the door into what an adapter sees, resolved, and the
- * two directives only `Stack` can apply: `presentAt`, which migrates the
- * results, and `filter.baseId`, which needs the registered Types. Every
+ * two directives only `Stack` can apply: `baseId`, which needs the
+ * registered Types, and `presentAt`, which migrates the results. Every
  * check runs here, before either directive costs a read. See
- * docs/spec/data-model.md § Sorting and pagination.
+ * docs/spec/data-model.md § Directives and conditions.
  */
 export function splitQuery(query: StackQuery): SplitQuery {
-  const { presentAt, filter, ...rest } = query;
-  assertValidBaseIdFilter(filter);
-  const { baseId, ...plain } = filter ?? {};
+  const { baseId, presentAt, ...plain } = query;
+  assertValidFamilies(baseId);
   return {
-    query: resolveQuery({ ...rest, ...(filter && { filter: plain }) }),
-    ...(presentAt !== undefined && { presentAt }),
+    query: resolveQuery(plain),
     ...(baseId !== undefined && { baseId }),
+    ...(presentAt !== undefined && { presentAt }),
   };
 }
 
@@ -451,16 +450,16 @@ export function assertFamilyId(baseId: unknown, surface: string): void {
 }
 
 /**
- * Refuse a `baseId` carrying an `@version` suffix. A family filter resolves
- * against registered families, so a TypeId there would match nothing and
- * say nothing. See docs/spec/data-model.md § Filter.
+ * Refuse a `baseId` directive carrying an `@version` suffix. A family
+ * resolves against registered families, so a TypeId there would match
+ * nothing and say nothing. See docs/spec/data-model.md § Directives and conditions.
  */
-export function assertValidBaseIdFilter(filter: { baseId?: string | string[] } | undefined): void {
-  if (filter?.baseId === undefined) return;
-  const errors = (Array.isArray(filter.baseId) ? filter.baseId : [filter.baseId])
-    .map((b) => familyIdProblem(b, 'filter.baseId'))
+export function assertValidFamilies(baseId: string | string[] | undefined): void {
+  if (baseId === undefined) return;
+  const errors = (Array.isArray(baseId) ? baseId : [baseId])
+    .map((b) => familyIdProblem(b, 'baseId'))
     .filter((m): m is string => m !== null)
-    .map((message) => ({ path: 'filter.baseId', message }));
+    .map((message) => ({ path: 'baseId', message }));
   if (errors.length > 0) throw new StackValidationError(errors, ARGUMENTS_INVALID);
 }
 

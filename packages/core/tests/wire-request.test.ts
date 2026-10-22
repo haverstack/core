@@ -311,8 +311,12 @@ describe('parseQueryBody', () => {
 describe('fields that never travel', () => {
   test('baseId is refused on both query surfaces', () => {
     expect(() => parseQueryParams(url('?baseId=com.example/note'))).toThrow(StackBadRequestError);
+    expect(() => parseQueryBody({ baseId: 'com.example/note' })).toThrow(StackBadRequestError);
+  });
+
+  test('a filter holds no baseId: it is an unknown filter key', () => {
     expect(() => parseQueryBody({ filter: { baseId: 'com.example/note' } })).toThrow(
-      StackBadRequestError,
+      /Unknown|unknown/,
     );
   });
 
@@ -326,11 +330,11 @@ describe('fields that never travel', () => {
   // something over the wire, and it does not.
   test('presentAt is refused by presence, whatever its value', () => {
     expect(() => parseQueryBody({ presentAt: 'stored' })).toThrow(StackBadRequestError);
-    expect(() => parseQueryBody({ filter: { baseId: undefined } })).toThrow(StackBadRequestError);
+    expect(() => parseQueryBody({ baseId: undefined })).toThrow(StackBadRequestError);
   });
 
   test('the refusal names what to send instead', () => {
-    expect(() => parseQueryBody({ filter: { baseId: 'x' } })).toThrow(/typeId/);
+    expect(() => parseQueryBody({ baseId: 'x' })).toThrow(/typeId/);
     expect(() => parseQueryBody({ presentAt: 'latest' })).toThrow(/client-side/);
   });
 
@@ -339,9 +343,7 @@ describe('fields that never travel', () => {
   // that would silently drop the field give one answer, not two.
   describe('assertQueryTravels', () => {
     test('refuses the same two fields, with the same messages', () => {
-      expect(() => assertQueryTravels({ filter: { baseId: 'com.example/note' } })).toThrow(
-        /typeId/,
-      );
+      expect(() => assertQueryTravels({ baseId: 'com.example/note' })).toThrow(/typeId/);
       expect(() => assertQueryTravels({ presentAt: 'latest' })).toThrow(/client-side/);
       expect(() => assertQueryTravels({ presentAt: 'stored' })).toThrow(StackBadRequestError);
     });
@@ -351,7 +353,7 @@ describe('fields that never travel', () => {
     // destructured, and Stack.query() already reads an undefined baseId as
     // no baseId. Refusing it here would refuse queries core builds itself.
     test('reads an explicitly undefined field as absent', () => {
-      expect(() => assertQueryTravels({ filter: { baseId: undefined } })).not.toThrow();
+      expect(() => assertQueryTravels({ baseId: undefined })).not.toThrow();
       expect(() => assertQueryTravels({ presentAt: undefined })).not.toThrow();
     });
 
@@ -386,10 +388,12 @@ describe('parseChangeParams', () => {
     const qs =
       '?typeId=com.example/note@1&baseId=com.example/task&baseId=com.example/memo' +
       '&createdBySubject=entity-a&createdByPrincipal=entity-b&createdByPrincipal=entity-c';
-    expect(parseChangeParams(changes(qs)).filter).toEqual({
-      typeId: 'com.example/note@1',
+    expect(parseChangeParams(changes(qs))).toMatchObject({
       baseId: ['com.example/task', 'com.example/memo'],
-      createdBy: { subjectId: 'entity-a', principalId: ['entity-b', 'entity-c'] },
+      filter: {
+        typeId: 'com.example/note@1',
+        createdBy: { subjectId: 'entity-a', principalId: ['entity-b', 'entity-c'] },
+      },
     });
   });
 

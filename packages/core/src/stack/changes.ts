@@ -18,7 +18,6 @@ import type {
   AssociationChange,
   ChangeActor,
   JournalEntryInput,
-  ChangeFilter,
   ChangeKind,
   ChangeOp,
   RecordChange,
@@ -64,12 +63,15 @@ export type EmittedChange = {
 const baseIdOf = (typeId: string): string => typeId.split('@')[0]!;
 
 /**
- * Whether an emission matches a subscription's filter. Reads the record
- * for the fields the envelope deliberately omits, so `createdBy` filters on
- * the author and `purged` frames stay filterable without carrying either.
+ * Whether an emission matches a subscription's family and filter. Reads
+ * the record for the fields the envelope deliberately omits, so
+ * `createdBy` filters on the author and `purged` frames stay filterable
+ * without carrying either.
  */
-export function matchesFilter(emitted: EmittedChange, filter?: ChangeFilter): boolean {
-  if (!filter) return true;
+export function matchesFilter(
+  emitted: EmittedChange,
+  { baseId, filter = {} }: Pick<SubscribeOptions, 'baseId' | 'filter'>,
+): boolean {
   const { change, record } = emitted;
 
   if (filter.kinds && !filter.kinds.includes(change.kind)) return false;
@@ -79,14 +81,14 @@ export function matchesFilter(emitted: EmittedChange, filter?: ChangeFilter): bo
   const typeIds = [change.typeId];
   if (emitted.previousTypeId !== undefined) typeIds.push(emitted.previousTypeId);
 
+  if (baseId !== undefined) {
+    const wanted = asArray(baseId);
+    if (!typeIds.some((t) => wanted.includes(baseIdOf(t)))) return false;
+  }
+
   if (filter.typeId !== undefined) {
     const wanted = asArray(filter.typeId);
     if (!typeIds.some((t) => wanted.includes(t))) return false;
-  }
-
-  if (filter.baseId !== undefined) {
-    const wanted = asArray(filter.baseId);
-    if (!typeIds.some((t) => wanted.includes(baseIdOf(t)))) return false;
   }
 
   if (filter.parentId !== undefined) {
@@ -231,7 +233,7 @@ export class RelayDelivery {
  */
 class UnscopedSubscription extends Subscription {
   accept(emission: EmittedChange): void {
-    if (!matchesFilter(emission, this.opts.filter)) return;
+    if (!matchesFilter(emission, this.opts)) return;
     if (!passesUnlistedBoundary(emission, this.opts.includeUnlisted)) return;
     this.deliver(emission);
   }

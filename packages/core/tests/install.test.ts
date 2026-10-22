@@ -82,7 +82,7 @@ describe('installApp()', () => {
       requests: [{ baseId: 'com.example.notes/note', actions: ['create', 'read-any'] }],
     });
 
-    const card = (await stack.query({ filter: { baseId: '_app' } })).records[0]!;
+    const card = (await stack.query({ baseId: '_app' })).records[0]!;
     expect(card.content).toMatchObject({ appId: 'com.example.notes', did: APP_DID });
 
     expect(await linkedGrants(record)).toEqual([
@@ -188,7 +188,7 @@ describe('installApp()', () => {
 
   test('a key whose _app card was soft-deleted is new to the plan', async () => {
     await install(manifest());
-    const card = (await stack.query({ filter: { baseId: '_app' } })).records[0]!;
+    const card = (await stack.query({ baseId: '_app' })).records[0]!;
     await stack.delete(card.id);
 
     const plan = await stack.planInstall(manifest(), { did: APP_DID });
@@ -339,9 +339,7 @@ describe('what an installed app sees', () => {
   test('each linked key can read its own install, and no one else can', async () => {
     const record = await install(manifest());
     expect((await stack.asEntity(APP_DID).get(record.id))?.content).toEqual(record.content);
-    expect(
-      (await stack.asEntity(APP_DID).query({ filter: { baseId: '_install' } })).records,
-    ).toHaveLength(1);
+    expect((await stack.asEntity(APP_DID).query({ baseId: '_install' })).records).toHaveLength(1);
     expect(await stack.asEntity(PERSON).get(record.id)).toBeNull();
   });
 
@@ -358,7 +356,7 @@ describe('what an installed app sees', () => {
         },
       },
     ]);
-    const otherCard = (await stack.query({ filter: { baseId: '_app' } })).records.find(
+    const otherCard = (await stack.query({ baseId: '_app' })).records.find(
       (r) => (r.content as AppContent).did === OTHER_DID,
     )!;
     await stack.delete(otherCard.id);
@@ -486,7 +484,7 @@ describe('uninstallApp()', () => {
     const removed = await stack.uninstallApp('com.example.notes');
     expect(removed.deletedAt).toBeDefined();
     expect(await stack.listTypeGrants()).toHaveLength(0);
-    expect((await stack.query({ filter: { baseId: '_app' } })).records).toHaveLength(1);
+    expect((await stack.query({ baseId: '_app' })).records).toHaveLength(1);
 
     const again = await install(manifest());
     expect(again.id).toBe(record.id);
@@ -642,7 +640,7 @@ describe("migrateAll({ sweep: 'listed' })", () => {
 describe('the _app card an install registers', () => {
   test('is the owner’s, carrying the manifest’s name', async () => {
     await install(manifest());
-    const card = (await stack.query({ filter: { baseId: '_app' } })).records[0]!;
+    const card = (await stack.query({ baseId: '_app' })).records[0]!;
     expect((card.content as AppContent).name).toBe('Notes');
     expect(card.createdBy).toBeUndefined();
   });

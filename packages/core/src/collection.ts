@@ -170,10 +170,10 @@ export type SortableFieldOf<C> = string extends keyof C
  * field are checked against `C`, and carried to older versions through the
  * migrations. See docs/spec/data-model.md § Type handles.
  */
-export type CollectionQuery<C> = Omit<StackQuery, 'filter' | 'presentAt' | 'sort'> & {
+export type CollectionQuery<C> = Omit<StackQuery, 'baseId' | 'filter' | 'presentAt' | 'sort'> & {
   filter?: Omit<
     RecordFilter,
-    'typeId' | 'baseId' | 'includeDeleted' | 'content' | 'contentPresent' | 'contentByType'
+    'typeId' | 'includeDeleted' | 'content' | 'contentPresent' | 'contentByType'
   > & {
     content?: { [E in FieldEntry<C, '', 5> as E[0]]?: E[1] | null };
     contentPresent?: ContentPathOf<C>[];
@@ -187,9 +187,9 @@ export type CollectionQuery<C> = Omit<StackQuery, 'filter' | 'presentAt' | 'sort
       };
 };
 
-/** The family is the collection's, so neither `typeId` nor `baseId` is a filter key. */
-export type CollectionSubscribeOptions = Omit<SubscribeOptions, 'filter'> & {
-  filter?: Omit<ChangeFilter, 'typeId' | 'baseId'>;
+/** The family is the collection's, so neither `baseId` nor `typeId` is offered. */
+export type CollectionSubscribeOptions = Omit<SubscribeOptions, 'baseId' | 'filter'> & {
+  filter?: Omit<ChangeFilter, 'typeId'>;
 };
 
 /**
@@ -598,13 +598,9 @@ export const createCollection = <S extends ReadonlyTypeSchema>(
       }
       // Stripped as well as untyped: either would change which records a
       // page holds, or the shape they arrive in.
-      const { presentAt: _presentAt, filter, ...rest } = query as StackQuery;
+      const { baseId: _baseId, presentAt: _presentAt, filter, ...rest } = query as StackQuery;
       // A concrete typeId needs no family lookup; baseId does.
-      const {
-        baseId: _baseId,
-        contentByType: _byType,
-        ...unversioned
-      } = withoutTypeId(filter) as RecordFilter;
+      const { contentByType: _byType, ...unversioned } = withoutTypeId(filter) as RecordFilter;
       const firstPage = rest.cursor === undefined;
       let records: StackRecord[];
       let cursor: string | null;
@@ -612,7 +608,8 @@ export const createCollection = <S extends ReadonlyTypeSchema>(
       if (!contentPredicate(unversioned) && rest.sort?.contentField === undefined) {
         ({ records, cursor } = await client.query({
           ...rest,
-          filter: { ...unversioned, baseId: handle.baseId },
+          baseId: handle.baseId,
+          filter: unversioned,
         }));
         if (firstPage) skipped = { older: false, newer: false };
       } else {
@@ -662,7 +659,7 @@ export const createCollection = <S extends ReadonlyTypeSchema>(
           }
           handler({ ...rest, ...result });
         },
-        { ...opts, filter: { ...withoutTypeId(opts.filter), baseId: handle.baseId } },
+        { ...opts, baseId: handle.baseId, filter: withoutTypeId(opts.filter) },
       );
     },
 

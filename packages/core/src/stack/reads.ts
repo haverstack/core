@@ -105,8 +105,8 @@ export async function lookupEntityByDid(
   const record = await findFirstMatch(
     run,
     {
+      baseId: SYSTEM_TYPES.ENTITY,
       filter: {
-        baseId: SYSTEM_TYPES.ENTITY,
         includeDeleted: true,
         ...(includeUnlisted && { includeUnlisted: true }),
         ...(canFilterContent && { content: { did } }),
@@ -127,8 +127,8 @@ export function findAppCardByDid(stack: Stack, did: EntityId): Promise<StackReco
   return findFirstMatch(
     (q) => stack.query(q),
     {
+      baseId: SYSTEM_TYPES.APP,
       filter: {
-        baseId: SYSTEM_TYPES.APP,
         includeDeleted: true,
         includeUnlisted: true,
         ...(filtersContent(stack.capabilities) && { content: { did } }),
@@ -146,7 +146,8 @@ export async function loadInstallRecords(
   stack: Stack,
 ): Promise<(StackRecord & { content: InstallContent })[]> {
   const records = await queryAllPages((q) => stack.query(q), {
-    filter: { baseId: SYSTEM_TYPES.INSTALL, includeDeleted: true, includeUnlisted: true },
+    baseId: SYSTEM_TYPES.INSTALL,
+    filter: { includeDeleted: true, includeUnlisted: true },
   });
   return records as (StackRecord & { content: InstallContent })[];
 }
@@ -178,8 +179,8 @@ export async function loadRosterRoles(
   entityId: EntityId,
 ): Promise<Map<RecordId, GroupRole>> {
   const groups = await queryAllPages(run, {
+    baseId: SYSTEM_TYPES.GROUP,
     filter: {
-      baseId: SYSTEM_TYPES.GROUP,
       relatedTo: { target: { kind: 'entity', entityId } },
       includeUnlisted: true,
     },

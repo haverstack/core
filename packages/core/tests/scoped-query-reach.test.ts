@@ -358,7 +358,7 @@ describe('an operation reads its authority once', () => {
       },
     );
     const authorityReads = queries.mock.calls.filter(
-      ([q]) => q?.filter?.typeId === '_grant@1' || q?.filter?.baseId === '_group',
+      ([q]) => q?.filter?.typeId === '_grant@1' || q?.baseId === '_group',
     );
     expect(authorityReads).toHaveLength(2);
   });

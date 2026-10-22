@@ -51,8 +51,8 @@ import type {
   BaseId,
   StackAdapter,
   StackQuery,
+  RecordFilter,
   AdapterQuery,
-  AdapterFilter,
   QueryResult,
   Reach,
   AssociationEdit,
@@ -103,7 +103,7 @@ import {
 } from '../errors.js';
 import {
   assertQueryCapabilities,
-  assertValidBaseIdFilter,
+  assertValidFamilies,
   assertValidJournalQuery,
   assertValidVersionsQuery,
   resolveQuery,
@@ -210,7 +210,7 @@ function normalizeActor(actor: Actor | undefined): Actor | undefined {
 /** How many Records migrateAll() reads and migrates per page. */
 const MIGRATE_ALL_BATCH = 100;
 
-/** Sentinel: filter.baseId resolved to zero matching types. */
+/** Sentinel: a query's baseId resolved to zero matching types. */
 const EMPTY_FAMILY = Symbol('empty-family');
 
 /**
@@ -1201,7 +1201,7 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Query records. filter.baseId matches every version of a type family,
+   * Query records. baseId matches every version of a type family,
    * resolved against registered Types. Results come back exactly as
    * stored; pass presentAt: 'latest' to migrate in memory. See
    * docs/spec/data-model.md § Queries.
@@ -1245,10 +1245,10 @@ export class Stack implements StackClient {
    * without an adapter round trip.
    */
   private async narrowToFamilies(
-    filter: AdapterFilter | undefined,
+    filter: RecordFilter | undefined,
     baseId: SplitQuery['baseId'],
     types: Lazy<StackType[]>,
-  ): Promise<AdapterFilter | undefined | typeof EMPTY_FAMILY> {
+  ): Promise<RecordFilter | undefined | typeof EMPTY_FAMILY> {
     if (baseId === undefined) return filter;
     const { typeId, ...rest } = filter ?? {};
     const requestedBaseIds = Array.isArray(baseId) ? baseId : [baseId];
@@ -1267,7 +1267,7 @@ export class Stack implements StackClient {
 
   /**
    * A reach over families, as the TypeIds an adapter matches — the same
-   * resolution filter.baseId gets. See docs/spec/adapters.md § Querying
+   * resolution a query's baseId gets. See docs/spec/adapters.md § Querying
    * within a reach.
    */
   private async resolveReach(reach: Reach<BaseId>, types: Lazy<StackType[]>): Promise<Reach> {
@@ -1547,8 +1547,8 @@ export class Stack implements StackClient {
   ): Promise<(StackRecord & { content: AttachmentContent })[]> {
     this.assertOpen();
     const results = await queryAllPages((q) => this.query(q), {
+      baseId: SYSTEM_TYPES.ATTACHMENT,
       filter: {
-        baseId: SYSTEM_TYPES.ATTACHMENT,
         includeDeleted: true,
         includeUnlisted: true,
         ...(filtersContent(this.capabilities) && { content: { fileId } }),
@@ -1637,7 +1637,7 @@ export class Stack implements StackClient {
   ): Promise<Unsubscribe> {
     this.assertOpen();
     assertSinceUsable(opts.since, this.relaysChanges);
-    assertValidBaseIdFilter(opts.filter);
+    assertValidFamilies(opts.baseId);
     const unsubscribe = this.changes.subscribe(handler, opts);
     let stopRelay: Unsubscribe | undefined;
     try {
@@ -1668,6 +1668,7 @@ export class Stack implements StackClient {
     const delivery = new RelayDelivery(handler, opts);
     const stop = await this.adapter.subscribeChanges(
       {
+        ...(opts.baseId !== undefined && { baseId: opts.baseId }),
         ...(opts.filter !== undefined && { filter: opts.filter }),
         ...(opts.since !== undefined && { since: opts.since }),
         ...(opts.includeRecords !== undefined && { includeRecords: opts.includeRecords }),

@@ -317,7 +317,8 @@ async function reconcileInstallGrants(stack: Stack, install: StackRecord): Promi
   const appKeys = new Set(
     (
       await queryAllPages((q) => stack.query(q), {
-        filter: { baseId: SYSTEM_TYPES.APP, includeDeleted: true, includeUnlisted: true },
+        baseId: SYSTEM_TYPES.APP,
+        filter: { includeDeleted: true, includeUnlisted: true },
       })
     )
       .map((r) => r.content as AppContent)

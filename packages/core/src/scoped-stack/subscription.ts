@@ -41,7 +41,7 @@ export class ScopedSubscription extends Subscription {
     // subscriber may not see: a revocation the subscriber cannot read is
     // exactly the one that must still expire its cache.
     this.invalidateFor(emission);
-    if (!matchesFilter(emission, this.opts.filter)) return;
+    if (!matchesFilter(emission, this.opts)) return;
     this.queue = this.queue.then(() => this.filterAndDeliver(emission));
   }
 

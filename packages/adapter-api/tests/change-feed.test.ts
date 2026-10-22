@@ -196,16 +196,16 @@ describe('opening a connection', () => {
     stop();
   });
 
-  test('sends the filter and include as query parameters', async () => {
+  test('sends the family, filter and include as query parameters', async () => {
     const adapter = await openAdapter();
     const stream = feed();
     mockFetch.mockResolvedValueOnce(stream.response);
 
     const subscription = adapter.subscribeChanges(
       {
+        baseId: 'com.example/task',
         filter: {
           typeId: ['com.example/note@1', 'com.example/memo@1'],
-          baseId: 'com.example/task',
           parentId: null,
           createdBy: { subjectId: EDITOR, principalId: [EDITOR, 'entity-app'] },
           kinds: ['created', 'purged'],
