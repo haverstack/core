@@ -279,12 +279,13 @@ export interface StackRecordAdapter {
    * Atomically verify fileId is unreferenced and purge its metadata
    * records, returning them; StackConflictError if still referenced.
    * Optional — Stack.deleteAttachment() has a non-atomic fallback.
-   * `metadataTypeIds` is the `_attachment` family's registered versions.
-   * See docs/spec/attachments.md § Deleting attachments.
+   * The metadata records are those in the `metadataBaseId` family, matched
+   * as `filter.baseId` matches one. See docs/spec/attachments.md § Deleting
+   * attachments.
    */
   deleteUnreferencedAttachmentRecords?(
     fileId: FileId,
-    metadataTypeIds: TypeId[],
+    metadataBaseId: BaseId,
   ): Promise<StackRecord[]>;
 
   /**

@@ -68,8 +68,8 @@ export function combineAdapters(parts: {
     // absent on the combined adapter, rather than silently becoming
     // "supported" via a wrapper that forwards to a missing method.
     ...(parts.record.deleteUnreferencedAttachmentRecords && {
-      deleteUnreferencedAttachmentRecords: (fileId: string, metadataTypeIds: string[]) =>
-        parts.record.deleteUnreferencedAttachmentRecords!(fileId, metadataTypeIds),
+      deleteUnreferencedAttachmentRecords: (fileId: string, metadataBaseId: string) =>
+        parts.record.deleteUnreferencedAttachmentRecords!(fileId, metadataBaseId),
     }),
     ...(parts.record.queryReadable && {
       queryReadable: (q: AdapterQuery, reach: Reach) => parts.record.queryReadable!(q, reach),

@@ -7187,13 +7187,12 @@ describe('deleteAttachment', () => {
       }
       async deleteUnreferencedAttachmentRecords(
         fileId: string,
-        metadataTypeIds: string[],
+        metadataBaseId: string,
       ): Promise<StackRecord[]> {
-        calls.push('atomic');
-        calls.push(...metadataTypeIds);
+        calls.push('atomic', metadataBaseId);
         const toDelete = [...this.records.values()].filter(
           (r) =>
-            metadataTypeIds.includes(r.typeId) &&
+            r.typeId.startsWith(`${metadataBaseId}@`) &&
             (r.content as Record<string, unknown>).fileId === fileId,
         );
         for (const r of toDelete) {
@@ -7219,7 +7218,7 @@ describe('deleteAttachment', () => {
 
     // The family, not just @1 — core resolves the baseId so the adapter
     // never has to.
-    expect(calls).toEqual(['atomic', '_attachment@1']);
+    expect(calls).toEqual(['atomic', '_attachment']);
   });
 });
 

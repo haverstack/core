@@ -1503,7 +1503,7 @@ export class Stack implements StackClient {
       // hands back, which are the last copies that will ever exist.
       deletedRecords = await this.adapter.deleteUnreferencedAttachmentRecords(
         fileId,
-        await this.familyTypeIds([SYSTEM_TYPES.ATTACHMENT]),
+        SYSTEM_TYPES.ATTACHMENT,
       );
       const at = new Date();
       for (const record of deletedRecords) {

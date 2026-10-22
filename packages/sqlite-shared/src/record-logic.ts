@@ -22,6 +22,7 @@ import type {
   StackRecord,
   StackType,
   TypeId,
+  BaseId,
   FileId,
   RecordVersion,
   QueryResult,
@@ -48,7 +49,7 @@ import type {
 } from '@haverstack/core/adapter';
 import type { SqlExecutor } from './executor.js';
 import { isForeignKeyViolation, isUniqueConstraintViolation } from './executor.js';
-import { buildQueryPlan, atBudget, rowsTable } from './query.js';
+import { buildQueryPlan, atBudget, familyRange, rowsTable } from './query.js';
 import { ContentIndex, SearchIndex } from './indexes.js';
 import {
   rowToRecord,
@@ -545,7 +546,7 @@ export class SharedSqlRecordLogic {
    */
   async deleteUnreferencedAttachmentRecords(
     fileId: FileId,
-    metadataTypeIds: TypeId[],
+    metadataBaseId: BaseId,
   ): Promise<StackRecord[]> {
     return this.exec.transaction(() => {
       const referenced = this.exec.all<{ found: number }>(
@@ -559,16 +560,10 @@ export class SharedSqlRecordLogic {
         throw new StackConflictError('Attachment is still referenced by one or more records');
       }
 
-      // An empty family still owes the caller the reference check above —
-      // the conflict is a fact about the file, not about which metadata
-      // types happen to be defined.
-      if (metadataTypeIds.length === 0) return [];
-
-      const placeholders = metadataTypeIds.map(() => '?').join(', ');
       const metaRows = this.exec.all<{ id: string }>(
         `SELECT id FROM records
-         WHERE type_id IN (${placeholders}) AND json_extract(content, '$.fileId') = ?`,
-        [...metadataTypeIds, fileId],
+         WHERE type_id >= ? AND type_id < ? AND json_extract(content, '$.fileId') = ?`,
+        [...familyRange(metadataBaseId), fileId],
       );
       const deleted: StackRecord[] = [];
       for (const row of metaRows) {

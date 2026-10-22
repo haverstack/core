@@ -213,6 +213,9 @@ const inList = (s: Statement, column: string, values: readonly string[]): string
   return `${column} IN (SELECT value FROM ${table})`;
 };
 
+/** The bounds of one family's TypeIds; see inFamilies(). */
+export const familyRange = (baseId: string): [string, string] => [`${baseId}@`, `${baseId}A`];
+
 /**
  * Families as the condition matching a TypeId in any of them: `F@…` is
  * exactly the range from `F@` up to `FA`, since `A` follows `@` in the
@@ -222,7 +225,7 @@ const inList = (s: Statement, column: string, values: readonly string[]): string
  */
 const inFamilies = (s: Statement, column: string, baseIds: readonly string[]): string => {
   if (baseIds.length === 1) {
-    s.params.push(`${baseIds[0]}@`, `${baseIds[0]}A`);
+    s.params.push(...familyRange(baseIds[0]));
     return `(${column} >= ? AND ${column} < ?)`;
   }
   const table = rows(

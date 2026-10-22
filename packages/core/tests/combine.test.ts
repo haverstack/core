@@ -8,6 +8,7 @@ import type {
   StackRecord,
   FileId,
   TypeId,
+  BaseId,
   SubscribeOptions,
 } from '../src/types/index.js';
 
@@ -253,11 +254,11 @@ describe('combineAdapters', () => {
 
   describe('optional capability forwarding', () => {
     test('deleteUnreferencedAttachmentRecords is present when the record adapter implements it', async () => {
-      let calledWith: [FileId, TypeId[]] | undefined;
+      let calledWith: [FileId, BaseId] | undefined;
       const adapter = combineAdapters({
         record: makeRecordAdapter({
-          deleteUnreferencedAttachmentRecords: async (fileId, metadataTypeIds) => {
-            calledWith = [fileId, metadataTypeIds];
+          deleteUnreferencedAttachmentRecords: async (fileId, metadataBaseId) => {
+            calledWith = [fileId, metadataBaseId];
             return [purgedRecord];
           },
         }),
@@ -265,12 +266,9 @@ describe('combineAdapters', () => {
       });
 
       expect(adapter.deleteUnreferencedAttachmentRecords).toBeDefined();
-      const result = await adapter.deleteUnreferencedAttachmentRecords!('file-1', [
-        '_attachment@1',
-        '_attachment@2',
-      ]);
+      const result = await adapter.deleteUnreferencedAttachmentRecords!('file-1', '_attachment');
       expect(result).toEqual([purgedRecord]);
-      expect(calledWith).toEqual(['file-1', ['_attachment@1', '_attachment@2']]);
+      expect(calledWith).toEqual(['file-1', '_attachment']);
     });
 
     test('deleteUnreferencedAttachmentRecords is absent when the record adapter does not implement it', () => {

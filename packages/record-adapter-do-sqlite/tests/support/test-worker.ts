@@ -22,6 +22,7 @@ import type {
   RecordVersion,
   StackType,
   TypeId,
+  BaseId,
   FileId,
   ActorOptions,
 } from '@haverstack/core';
@@ -138,9 +139,9 @@ export class TestRecordAdapterDO extends DurableObject {
     return this.adapter.queryReadable(query, reach);
   }
 
-  async deleteUnreferencedAttachmentRecords(fileId: FileId, metadataTypeIds: TypeId[]) {
+  async deleteUnreferencedAttachmentRecords(fileId: FileId, metadataBaseId: BaseId) {
     await this.ready;
-    return this.adapter.deleteUnreferencedAttachmentRecords(fileId, metadataTypeIds);
+    return this.adapter.deleteUnreferencedAttachmentRecords(fileId, metadataBaseId);
   }
 
   async getVersions(id: string) {
