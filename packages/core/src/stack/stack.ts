@@ -39,7 +39,7 @@ import {
 } from '../validate.js';
 import { applyMergePatch } from '../merge.js';
 import { compareRecordedAttachments } from '../attachment-records.js';
-import { stampGroupAdmin, validatePermissions } from '../access.js';
+import { createAssociations, validatePermissions } from '../access.js';
 import { ChangeEmitter, RelayDelivery, PendingChange, assertSinceUsable } from './changes.js';
 import { SYSTEM_TYPES } from '../types/index.js';
 import type { ValidationError } from '../validate.js';
@@ -682,10 +682,12 @@ export class Stack implements StackClient {
     }
 
     const createdBy = normalizeActor(opts.createdBy);
-    const associations =
-      baseIdOf(typeId) === SYSTEM_TYPES.GROUP
-        ? stampGroupAdmin(opts.associations, createdBy?.subjectId ?? this.ownerEntityId)
-        : opts.associations;
+    const associations = createAssociations(
+      typeId,
+      opts.associations,
+      createdBy,
+      this.ownerEntityId,
+    );
 
     // createdAt drives the id, so the two agree by construction rather than
     // by coincidence. An explicit one mints via generateIdForTimestamp(),

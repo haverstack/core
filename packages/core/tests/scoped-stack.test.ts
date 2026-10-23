@@ -695,7 +695,14 @@ describe('ScopedStack.setUnlisted', () => {
   });
 
   test('the record creator (not stack owner) may toggle it', async () => {
-    const record = await adapter.createRecord(makeRecord({ createdBy: { subjectId: MEMBER } }));
+    const record = await adapter.createRecord(
+      makeRecord({
+        createdBy: { subjectId: MEMBER },
+        permissions: [
+          { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
+        ],
+      }),
+    );
     await stack.asEntity(MEMBER).setUnlisted(record.id, true);
     expect((await adapter.getRecord(record.id))?.unlistedAt).toBeInstanceOf(Date);
   });
@@ -2525,6 +2532,48 @@ describe('ScopedStack — blind write', () => {
       .create(NOTE, { text: 'hello' }, { parentId: box.id });
     expect(posted.parentId).toBe(box.id);
   });
+
+  test('a contributor cannot reshare a submission, after the create or within it', async () => {
+    await stack.grantType(fam(NOTE), {
+      actions: ['create'],
+      grantee: { kind: 'entity', entityId: MEMBER },
+    });
+    const view = stack.asEntity(MEMBER);
+    const self: AuthorityAssociation = {
+      kind: 'permission',
+      label: 'read',
+      grantee: { kind: 'entity', entityId: MEMBER },
+    };
+    const posted = await view.create(NOTE, { text: 'for the owner' });
+
+    await expect(view.editAccess(posted.id, [{ op: 'add', association: self }])).rejects.toThrow(
+      StackNotFoundError,
+    );
+    await expect(view.setUnlisted(posted.id, true)).rejects.toThrow(StackNotFoundError);
+    await expect(view.create(NOTE, { text: 'x' }, { permissions: [self] })).rejects.toThrow(
+      StackPermissionError,
+    );
+    await expect(view.create(NOTE, { text: 'x' }, { unlisted: true })).rejects.toThrow(
+      StackPermissionError,
+    );
+    expect((await stack.query({ filter: { typeId: NOTE } })).records).toHaveLength(1);
+  });
+
+  test('a contributor who reads their own may set permissions at create', async () => {
+    await stack.grantType(fam(NOTE), {
+      actions: ['create', 'read-own'],
+      grantee: { kind: 'entity', entityId: MEMBER },
+    });
+    const shared = await stack
+      .asEntity(MEMBER)
+      .create(
+        NOTE,
+        { text: 'for everyone' },
+        { permissions: [{ kind: 'anyone', label: 'read' }], unlisted: true },
+      );
+    expect(shared.permissions).toEqual([{ kind: 'anyone', label: 'read' }]);
+    expect(shared.unlistedAt).toBeInstanceOf(Date);
+  });
 });
 
 // -------------------------------------------------------
@@ -3902,6 +3951,74 @@ describe('_group — a deleted Group carries no roster', () => {
   });
 });
 
+describe('_group — removal leaves a creator nothing their roster conveyed', () => {
+  const memberEntry: DataAssociation = {
+    kind: 'relationship',
+    label: 'member',
+    target: { kind: 'entity', entityId: MEMBER },
+  };
+  const readFor = (entityId: string): AuthorityAssociation => ({
+    kind: 'permission',
+    label: 'read',
+    grantee: { kind: 'entity', entityId },
+  });
+
+  const rosteredGroup = async () =>
+    adapter.createRecord(
+      makeRecord({
+        typeId: '_group@1',
+        associations: [
+          { kind: 'relationship', label: 'admin', target: { kind: 'entity', entityId: OWNER } },
+          memberEntry,
+        ],
+      }),
+    );
+
+  // The removed creator is refused as one who cannot read the record, on
+  // every verb that decides who reaches it.
+  const expectNoReshare = async (id: string) => {
+    const removed = stack.asEntity(MEMBER);
+    expect(await removed.get(id)).toBeNull();
+    await expect(
+      removed.editAccess(id, [{ op: 'add', association: readFor(MEMBER) }]),
+    ).rejects.toThrow(StackNotFoundError);
+    await expect(removed.setAccess(id, [readFor(MEMBER)])).rejects.toThrow(StackNotFoundError);
+    await expect(removed.setUnlisted(id, true)).rejects.toThrow(StackNotFoundError);
+    expect((await stack.get(id))?.createdBy?.subjectId).toBe(MEMBER);
+  };
+
+  test('through a group-targeted grant', async () => {
+    const group = await rosteredGroup();
+    await stack.grantType(fam(NOTE), {
+      actions: ['create', 'read-own'],
+      grantee: { kind: 'group', groupId: group.id, role: 'member' },
+    });
+    const record = await stack.asEntity(MEMBER).create(NOTE, { text: 'mine' });
+
+    await stack.editAssociations(group.id, [{ op: 'remove', association: memberEntry }]);
+    await expectNoReshare(record.id);
+  });
+
+  test('through a record-level group grantee', async () => {
+    const group = await rosteredGroup();
+    const record = await adapter.createRecord(
+      makeRecord({
+        createdBy: { subjectId: MEMBER },
+        permissions: [
+          {
+            kind: 'permission',
+            label: 'read',
+            grantee: { kind: 'group', groupId: group.id, role: 'member' },
+          },
+        ],
+      }),
+    );
+
+    await stack.editAssociations(group.id, [{ op: 'remove', association: memberEntry }]);
+    await expectNoReshare(record.id);
+  });
+});
+
 // -------------------------------------------------------
 // A grant confers what it confers, listed or not
 // -------------------------------------------------------
@@ -5238,6 +5355,9 @@ describe('ScopedStack — delegation', () => {
         { permissions: [{ kind: 'anyone', label: 'read' }] },
       ),
     ).rejects.toThrow(StackPermissionError);
+    await expect(
+      view.create(COMMENT, { text: 'meant to stay listed' }, { unlisted: true }),
+    ).rejects.toThrow(StackPermissionError);
 
     // Refused before the write, so there is no record to have leaked.
     const all = await stack.query({ filter: { typeId: COMMENT } });
@@ -5299,6 +5419,66 @@ describe('ScopedStack — delegation', () => {
         .asActor({ principalId: APP, subjectId: MEMBER })
         .patchContent(group.id, { name: 'Hijacked' }),
     ).rejects.toThrow(StackNotFoundError);
+  });
+
+  // A roster entry is roster-derived authority, which never counts on the
+  // principal's side: an app naming itself `admin` gains nothing by it.
+  test('an app on a roster cannot manage the group for its subject', async () => {
+    const appAdmin: DataAssociation = {
+      kind: 'relationship',
+      label: 'admin',
+      target: { kind: 'entity', entityId: APP },
+    };
+    await grantAll({ kind: 'entity', entityId: MEMBER }, '_group@1');
+    await grantAll({ kind: 'entity', entityId: APP }, '_group@1');
+    const group = await stack.asEntity(MEMBER).create(
+      '_group@1',
+      { name: 'Book Club' },
+      {
+        associations: [appAdmin],
+      },
+    );
+    const view = stack.asActor({ principalId: APP, subjectId: MEMBER });
+    await expect(
+      view.editAccess(group.id, [{ op: 'add', association: { kind: 'anyone', label: 'read' } }]),
+    ).rejects.toThrow(StackPermissionError);
+    await expect(view.patchContent(group.id, { name: 'Renamed' })).rejects.toThrow(
+      StackPermissionError,
+    );
+  });
+
+  // Creating a Group writes its roster, so the create is gated as managing
+  // the Group it would make: the subject is stamped admin, the app is not
+  // the owner, and naming itself admin does not count.
+  test('an app cannot create a group for its subject, roster or not', async () => {
+    await grantAll({ kind: 'entity', entityId: APP }, '_group@1');
+    await grantAll({ kind: 'entity', entityId: MEMBER }, '_group@1');
+    const view = stack.asActor({ principalId: APP, subjectId: MEMBER });
+    await expect(view.create('_group@1', { name: 'x' })).rejects.toThrow(StackPermissionError);
+    await expect(
+      view.create(
+        '_group@1',
+        { name: 'x' },
+        {
+          associations: [
+            { kind: 'relationship', label: 'admin', target: { kind: 'entity', entityId: APP } },
+          ],
+          permissions: [{ kind: 'anyone', label: 'read' }],
+        },
+      ),
+    ).rejects.toThrow(StackPermissionError);
+    expect((await stack.query({ filter: { typeId: '_group@1' } })).records).toHaveLength(0);
+  });
+
+  test("the owner's own software may create and manage a group for its subject", async () => {
+    await grantAll({ kind: 'entity', entityId: MEMBER }, '_group@1');
+    const view = stack.asActor({ principalId: OWNER, subjectId: MEMBER });
+    const group = await view.create(
+      '_group@1',
+      { name: 'Book Club' },
+      { permissions: [{ kind: 'anyone', label: 'read' }] },
+    );
+    expect((await view.patchContent(group.id, { name: 'Renamed' })).content.name).toBe('Renamed');
   });
 
   // Default grants say "any authenticated entity" — people who turn up,

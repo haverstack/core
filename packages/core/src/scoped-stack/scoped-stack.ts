@@ -27,6 +27,7 @@
  */
 
 import { baseIdOf } from '../schema.js';
+import { createAssociations } from '../access.js';
 import { validatePatchValues } from '../validate.js';
 import { ChangeEmitter, assertSinceUsable } from '../stack/changes.js';
 import { SYSTEM_TYPES } from '../types/index.js';
@@ -275,17 +276,11 @@ export class ScopedStack implements StackClient {
     const { writers } = familyPolicy(record.typeId);
     // The owner-alone fence is on writes only: reading how a grant came to
     // be is not the escalation it exists to stop.
-    if (fenceGrantRecord) await this.requireOwnerAloneWriter(record, snapshot);
-    if (writers === 'group-managers') {
-      if (!this.#authority.isGroupManager(record)) {
-        throw await this.#authority.denialFor(
-          record,
-          `Cannot change group "${id}": only its admins can manage it`,
-          snapshot,
-        );
-      }
-      return;
+    if (fenceGrantRecord || writers !== 'owner-alone') {
+      await this.requireFamilyWriter(record, snapshot);
     }
+    // Management replaces the write bit and grants for a Group.
+    if (writers === 'group-managers') return;
     if (await this.#authority.may(verb, record, snapshot)) return;
     const what = `Cannot ${verb} "${id}" (${record.typeId})`;
     throw await this.#authority.denialFor(
@@ -382,9 +377,9 @@ export class ScopedStack implements StackClient {
     if (!principal) throw new StackPermissionError('Anonymous requesters cannot create records');
     // A grantee is exactly the untrusted actor the `id` skew check below
     // exists to stop from forging a sort position, and a delegated app
-    // acting for the owner inherits none of the owner's extra trust — same
-    // reasoning as ScopeAuthority.mayGrantAccess(). Asked value-wise, since an
-    // `undefined` carries no date and Stack.create() reads it as absent.
+    // acting for the owner inherits none of the owner's extra trust. Asked
+    // value-wise, since an `undefined` carries no date and Stack.create()
+    // reads it as absent.
     if (
       (opts.createdAt !== undefined || opts.updatedAt !== undefined) &&
       !this.#authority.ownerActingAlone
@@ -411,16 +406,7 @@ export class ScopedStack implements StackClient {
         );
       }
     }
-    if (opts.permissions?.length && !this.#authority.mayGrantAccess()) {
-      throw new StackPermissionError(
-        'A delegated principal cannot set permissions, at create time or after',
-      );
-    }
-    if (opts.unlisted && !this.#authority.mayGrantAccess()) {
-      throw new StackPermissionError(
-        'A delegated principal cannot create an unlisted record, at create time or after',
-      );
-    }
+    await this.requireAuthorityAtCreate(typeId, opts, snapshot);
     this.requireOwnerFields(typeId, undefined, content);
     await this.requireAppIdMatchesPrincipal(opts.appId);
     if (opts.id !== undefined) {
@@ -681,10 +667,41 @@ export class ScopedStack implements StackClient {
     return record;
   }
 
+  /**
+   * Authority a create writes — a Group's roster, the Record's permissions
+   * and listing — gated as a later write of it would be, asked of the
+   * Record the create would make. That Record carries none of the authority
+   * being written, so no call can satisfy its own gate.
+   * See docs/spec/access-control.md § Write implies read.
+   */
+  private async requireAuthorityAtCreate(
+    typeId: TypeId,
+    opts: Pick<BackdatableCreateRecordOptions, 'permissions' | 'unlisted'>,
+    snapshot: AuthoritySnapshot,
+  ): Promise<void> {
+    const createdBy = this.#authority.requester;
+    const record = {
+      typeId,
+      createdBy,
+      associations: createAssociations(typeId, undefined, createdBy, this.stack.ownerEntityId),
+    };
+    if (!this.#authority.passesWriterFence(record)) {
+      throw new StackPermissionError(writerFenceRefusal(typeId));
+    }
+    if (
+      (opts.permissions?.length || opts.unlisted) &&
+      !(await this.#authority.canReshare(record, snapshot))
+    ) {
+      throw new StackPermissionError(
+        `Cannot set permissions or listing on a new ${typeId} record: only its author or the stack owner can decide who else reaches it`,
+      );
+    }
+  }
+
   /** requireReshareable()'s gate, asked of a record already found in its family. */
   private async gateReshare(record: StackRecord, snapshot: AuthoritySnapshot): Promise<void> {
-    await this.requireOwnerAloneWriter(record, snapshot);
-    if (!this.#authority.canReshare(record)) {
+    await this.requireFamilyWriter(record, snapshot);
+    if (!(await this.#authority.canReshare(record, snapshot))) {
       throw await this.#authority.denialFor(
         record,
         `Cannot change permissions on "${record.id}": only its author or the stack owner can reshare it`,
@@ -726,20 +743,18 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Refuse anyone but the owner acting alone a write to a family only the
-   * owner writes — `_grant` and `_install`, which are authority — with the
-   * refusal an unreadable Record answers with. Any other family passes.
-   * See docs/spec/access-control.md § What a grant covers.
+   * Refuse a write its family fences off — see
+   * ScopeAuthority.passesWriterFence() — with the refusal an unreadable
+   * Record answers with.
    */
-  private async requireOwnerAloneWriter(
+  private async requireFamilyWriter(
     record: StackRecord,
     snapshot: AuthoritySnapshot,
   ): Promise<void> {
-    if (familyPolicy(record.typeId).writers !== 'owner-alone') return;
-    if (this.#authority.ownerActingAlone) return;
+    if (this.#authority.passesWriterFence(record)) return;
     throw await this.#authority.denialFor(
       record,
-      `Only the stack owner may write a ${baseIdOf(record.typeId)} record`,
+      writerFenceRefusal(record.typeId, record.id),
       snapshot,
     );
   }
@@ -805,9 +820,12 @@ export class ScopedStack implements StackClient {
    * See docs/spec/journal.md § Reading it.
    */
   async getJournal(id: RecordId, query: JournalQuery = {}): Promise<RecordJournalEntry[]> {
-    const record = await this.requireUpdatable(id, { mutating: false }, this.#authority.snapshot());
+    const snapshot = this.#authority.snapshot();
+    const record = await this.requireUpdatable(id, { mutating: false }, snapshot);
     const entries = await this.stack.getJournal(id, query);
-    return this.#authority.canReshare(record) ? entries : entries.map(withoutAuthorityChanges);
+    return (await this.#authority.canReshare(record, snapshot))
+      ? entries
+      : entries.map(withoutAuthorityChanges);
   }
 
   /** See getVersions() — the same mutate-surface gate. */
@@ -990,4 +1008,12 @@ export class ScopedStack implements StackClient {
       ),
     );
   }
+}
+
+/** Why a family fence refused a write: to `id`, or to a new Record when absent. */
+function writerFenceRefusal(typeId: TypeId, id?: RecordId): string {
+  if (familyPolicy(typeId).writers === 'group-managers') {
+    return `Cannot ${id ? `change group "${id}"` : 'create this group'}: only its admins can manage it`;
+  }
+  return `Only the stack owner may write a ${baseIdOf(typeId)} record`;
 }
