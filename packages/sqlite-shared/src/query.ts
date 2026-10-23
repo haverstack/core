@@ -214,7 +214,17 @@ const inList = (s: Statement, column: string, values: readonly string[]): string
 };
 
 /** The bounds of one family's TypeIds; see inFamilies(). */
-export const familyRange = (baseId: string): [string, string] => [`${baseId}@`, `${baseId}A`];
+const familyRange = (baseId: string): [string, string] => [`${baseId}@`, `${baseId}A`];
+
+/** `column` inside the family bounds `lo` and `hi`; see inFamilies(). */
+const withinFamily = (column: string, lo: string, hi: string): string =>
+  `(${column} >= ${lo} AND ${column} < ${hi})`;
+
+/** One family as a condition on a TypeId `column`, for a statement of its own. */
+export const inFamily = (column: string, baseId: string): QueryStatement => ({
+  sql: withinFamily(column, '?', '?'),
+  params: familyRange(baseId),
+});
 
 /**
  * Families as the condition matching a Record of `record` in any of them:
@@ -226,13 +236,14 @@ export const familyRange = (baseId: string): [string, string] => [`${baseId}@`, 
  */
 const inFamilies = (s: Statement, record: string, baseIds: readonly string[]): string => {
   if (baseIds.length === 1) {
-    s.params.push(...familyRange(baseIds[0]));
-    return `(${record}.type_id >= ? AND ${record}.type_id < ?)`;
+    const one = inFamily(`${record}.type_id`, baseIds[0]);
+    s.params.push(...one.params);
+    return one.sql;
   }
   const table = rows(s, ['lo', 'hi'], baseIds.map(familyRange));
   return (
     `${record}.id IN (SELECT fr.id FROM ${table} f ` +
-    'JOIN records fr ON fr.type_id >= f.lo AND fr.type_id < f.hi)'
+    `JOIN records fr ON ${withinFamily('fr.type_id', 'f.lo', 'f.hi')})`
   );
 };
 

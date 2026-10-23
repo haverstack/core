@@ -8,7 +8,7 @@
  */
 
 import { baseIdOf } from '../schema.js';
-import { Subscription, matchesFilter, passesUnlistedBoundary } from '../stack/changes.js';
+import { Subscription, matchesFilter } from '../stack/changes.js';
 import type { EmittedChange } from '../stack/changes.js';
 import { presentDeleted } from '../record-changes.js';
 import type { RecordChange, StackRecord, SubscribeOptions } from '../types/index.js';
@@ -57,7 +57,6 @@ export class ScopedSubscription extends Subscription {
 
   private async filterAndDeliver(emission: EmittedChange): Promise<void> {
     if (this.isClosed) return;
-    if (!passesUnlistedBoundary(emission, this.opts.filter?.includeUnlisted)) return;
     try {
       if (!(await this.canRead(emission.record, this.snapshot))) return;
     } catch (err) {

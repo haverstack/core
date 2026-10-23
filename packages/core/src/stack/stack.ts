@@ -540,7 +540,7 @@ export class Stack implements StackClient {
   ): Promise<{ migrated: number; skipped: number }> {
     this.assertOpen();
     assertFamilyId(baseId, 'migrateAll');
-    const familyTypeIds = await this.familyTypeIds([baseId]);
+    const familyTypeIds = typeIdsOfFamilies(await this.adapter.listTypes(), [baseId]);
 
     if (familyTypeIds.length === 0) {
       throw new StackMigrationError(`migrateAll: no registered types found for baseId "${baseId}"`);
@@ -1218,14 +1218,6 @@ export class Stack implements StackClient {
     const result = await read(query);
     if (presentAt !== 'latest') return result;
     return { ...result, records: result.records.map((r) => this.migrations.presentAtLatest(r)) };
-  }
-
-  /**
-   * Every registered version of the named families, as concrete typeIds,
-   * for the callers that act on one version at a time.
-   */
-  private async familyTypeIds(baseIds: readonly string[]): Promise<TypeId[]> {
-    return typeIdsOfFamilies(await this.adapter.listTypes(), baseIds);
   }
 
   // -------------------------------------------------------

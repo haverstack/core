@@ -49,7 +49,7 @@ import type {
 } from '@haverstack/core/adapter';
 import type { SqlExecutor } from './executor.js';
 import { isForeignKeyViolation, isUniqueConstraintViolation } from './executor.js';
-import { buildQueryPlan, atBudget, familyRange, rowsTable } from './query.js';
+import { buildQueryPlan, atBudget, inFamily, rowsTable } from './query.js';
 import { ContentIndex, SearchIndex } from './indexes.js';
 import {
   rowToRecord,
@@ -560,10 +560,11 @@ export class SharedSqlRecordLogic {
         throw new StackConflictError('Attachment is still referenced by one or more records');
       }
 
+      const family = inFamily('type_id', metadataBaseId);
       const metaRows = this.exec.all<{ id: string }>(
         `SELECT id FROM records
-         WHERE type_id >= ? AND type_id < ? AND json_extract(content, '$.fileId') = ?`,
-        [...familyRange(metadataBaseId), fileId],
+         WHERE ${family.sql} AND json_extract(content, '$.fileId') = ?`,
+        [...family.params, fileId],
       );
       const deleted: StackRecord[] = [];
       for (const row of metaRows) {

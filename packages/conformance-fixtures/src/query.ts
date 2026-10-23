@@ -394,7 +394,8 @@ export const queryRecordsFixtures: ConformanceFixture<
       "Record's own typeId, never resolved against registered Types, so a server MUST NOT " +
       'match a family that only shares a prefix (com.example/notes for com.example/note). ' +
       'Repeated, it matches any of the families; beside typeId, the two intersect. A value ' +
-      'carrying an @version suffix is refused with 422. GET /changes reads ?baseId= the same ' +
+      'carrying an @version suffix is refused with 422 (error-validation-query-versioned-base-id). ' +
+      'GET /changes reads ?baseId= the same ' +
       'way. See docs/spec/data-model.md § Filter.',
     method: 'GET',
     path: '/records?baseId=com.example%2Fnote&baseId=com.example%2Fmemo',
