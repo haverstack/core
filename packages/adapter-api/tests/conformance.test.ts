@@ -367,9 +367,11 @@ describe('queryRecords fixtures', () => {
     expect(result.cursor).toBe(fixture.responseBody!.cursor);
   });
 
-  // The target kind is implied by which parameters appear, so a client that
-  // dropped one would silently widen the query rather than fail.
+  // A client that dropped one of these parameters would silently widen the
+  // query rather than fail: for a relationship, the target kind is implied
+  // by which parameters appear.
   for (const [name, filter] of [
+    ['query-by-type-family', { baseId: ['com.example/note', 'com.example/memo'] as string[] }],
     [
       'query-related-to-record-target',
       {

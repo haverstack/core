@@ -10,9 +10,9 @@ import type {
 } from './associations.js';
 import type { StackCapabilities } from './capabilities.js';
 import type { RecordChange, Unsubscribe, SubscribeOptions } from './events.js';
-import type { RecordId, TypeId, FileId, AppId, EntityId, Actor } from './ids.js';
+import type { RecordId, TypeId, BaseId, FileId, AppId, EntityId, Actor } from './ids.js';
 import type { JournalEntryInput, RecordJournalEntry, JournalQuery } from './journal.js';
-import type { StackQuery, QuerySort, QueryResult, RecordFilter } from './query.js';
+import type { StackQuery, QuerySort, QueryResult } from './query.js';
 import type { StackRecord, RecordVersion, VersionsQuery } from './records.js';
 import type { StackType } from './schema.js';
 
@@ -83,24 +83,19 @@ export type ElementWriteOptions<E extends Association> = AspectWriteOptions & {
 /** A named sort as an adapter receives it: `Stack` has resolved its `direction`. */
 export type AdapterSort = QuerySort & { direction: 'asc' | 'desc' };
 
-/** A filter as an adapter receives it: `Stack` has resolved `baseId` to `typeId`. */
-export type AdapterFilter = Omit<RecordFilter, 'baseId'> & { baseId?: never };
-
 /**
- * A query carrying neither directive only `Stack` can apply — no
- * `presentAt`, no `filter.baseId` — with its defaults still open: what
- * travels on the wire, and what resolveQuery() takes.
+ * A query without `presentAt`, which applies migrations — app code no
+ * adapter or server holds — with its defaults still open: what travels
+ * on the wire, and what resolveQuery() takes.
  */
-export type PlainQuery = Omit<AdapterQuery, 'sort' | 'limit'> & Pick<StackQuery, 'sort' | 'limit'>;
+export type PlainQuery = Omit<StackQuery, 'presentAt'>;
 
 /**
  * A query as an adapter receives it, from resolveQuery(): every default
- * resolved, so no adapter carries one, and neither directive only `Stack`
- * can apply — `presentAt`, `filter.baseId`. See docs/spec/data-model.md
+ * resolved, so no adapter carries one. See docs/spec/data-model.md
  * § Sorting and pagination.
  */
-export type AdapterQuery = Omit<StackQuery, 'sort' | 'limit' | 'presentAt' | 'filter'> & {
-  filter?: AdapterFilter;
+export type AdapterQuery = Omit<PlainQuery, 'sort' | 'limit'> & {
   sort: AdapterSort;
   limit: number;
 };
@@ -110,15 +105,15 @@ export type AdapterQuery = Omit<StackQuery, 'sort' | 'limit' | 'presentAt' | 'fi
  * rather than rules applied: inside `fence` and inside `within`, where an
  * absent part constrains nothing. See docs/spec/access-control.md § Reach.
  */
-export type Reach<Type extends string = TypeId> = {
-  /** Only Records at these Types are in reach. */
-  fence?: Type[];
+export type Reach = {
+  /** Only Records in these families are in reach. */
+  fence?: BaseId[];
   /** Records meeting one of these are in reach. */
   within?: {
-    /** Every Record at these Types. */
-    types: Type[];
-    /** Records this subject authored at these Types. */
-    authored?: { subjectId: EntityId; types: Type[] };
+    /** Every Record in these families. */
+    baseIds: BaseId[];
+    /** Records this subject authored in these families. */
+    authored?: { subjectId: EntityId; baseIds: BaseId[] };
     /** Records carrying every element of one of these sets, by association identity. */
     permissions: AuthorityAssociation[][];
   };
@@ -284,12 +279,13 @@ export interface StackRecordAdapter {
    * Atomically verify fileId is unreferenced and purge its metadata
    * records, returning them; StackConflictError if still referenced.
    * Optional — Stack.deleteAttachment() has a non-atomic fallback.
-   * `metadataTypeIds` is the resolved `_attachment` family, so an adapter
-   * needs no baseId concept. See docs/spec/attachments.md § Deleting attachments.
+   * The metadata records are those in the `metadataBaseId` family, matched
+   * as `filter.baseId` matches one. See docs/spec/attachments.md § Deleting
+   * attachments.
    */
   deleteUnreferencedAttachmentRecords?(
     fileId: FileId,
-    metadataTypeIds: TypeId[],
+    metadataBaseId: BaseId,
   ): Promise<StackRecord[]>;
 
   /**

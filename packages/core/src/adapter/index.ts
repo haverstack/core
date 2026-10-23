@@ -9,7 +9,6 @@
  */
 
 export type {
-  AdapterFilter,
   AdapterQuery,
   PlainQuery,
   AdapterSort,

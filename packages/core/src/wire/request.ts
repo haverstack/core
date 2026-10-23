@@ -44,7 +44,6 @@ import type {
   RelationshipTargetPattern,
   StackQuery,
   PlainQuery,
-  AdapterFilter,
 } from '../types/index.js';
 
 // -------------------------------------------------------
@@ -68,6 +67,7 @@ const TARGET_KINDS: ReadonlySet<string> = new Set(['record', 'entity', 'external
 /** Every param `GET /records` defines. See docs/spec/wire-format.md § Records. */
 const RECORD_QUERY_PARAMS = [
   'typeId',
+  'baseId',
   'parentId',
   'appId',
   'createdBySubject',
@@ -98,6 +98,7 @@ const RECORD_QUERY_PARAMS = [
 
 const QUERY_BODY_FILTER_KEYS = [
   'typeId',
+  'baseId',
   'parentId',
   'appId',
   'createdBy',
@@ -290,12 +291,8 @@ function optionalBoolean(raw: unknown, label: string): boolean | undefined {
 }
 
 // -------------------------------------------------------
-// Filter fields that never travel
+// The query field that never travels
 // -------------------------------------------------------
-
-const BASE_ID_REFUSAL =
-  'baseId is resolved client-side against registered Types and never travels — send the ' +
-  'concrete typeId set it resolves to. See docs/spec/data-model.md § Filter.';
 
 const PRESENT_AT_REFUSAL =
   'presentAt applies migrations, which are app code rather than server code, so no ' +
@@ -303,26 +300,24 @@ const PRESENT_AT_REFUSAL =
   'docs/spec/data-model.md § Type migrations.';
 
 /**
- * Refuse the two `StackQuery` fields with no wire encoding, rather than
- * dropping them. Both would otherwise return a result the caller believes
- * is narrower (`baseId`) or migrated (`presentAt`) than what it holds —
- * the same silent degradation `assertQueryCapabilities()` refuses for a
+ * Refuse `presentAt`, which has no wire encoding, rather than dropping it:
+ * the caller would believe records as stored had been migrated — the same
+ * silent degradation `assertQueryCapabilities()` refuses for a
  * capability-gated filter. See docs/spec/wire-format.md § Records.
  */
-function assertNoUntravelableFields(hasBaseId: boolean, hasPresentAt: boolean): void {
-  if (hasBaseId) throw new StackBadRequestError(BASE_ID_REFUSAL);
+function assertNoPresentAt(hasPresentAt: boolean): void {
   if (hasPresentAt) throw new StackBadRequestError(PRESENT_AT_REFUSAL);
 }
 
 /**
  * The client half of the same refusal, before a request is built.
- * `Stack.query()` resolves `baseId` and `presentAt` itself, so this catches
- * the direct adapter call, where search params would drop them into a wider
- * result. Absent and `undefined` are one here; the parsers test presence,
- * since over the wire a written key is one the client meant to send.
+ * `Stack.query()` applies `presentAt` itself, so this catches the direct
+ * adapter call, where search params would drop it. Absent and `undefined`
+ * are one here; the parsers test presence, since over the wire a written
+ * key is one the client meant to send.
  */
 export function assertQueryTravels(query: StackQuery): void {
-  assertNoUntravelableFields(query.filter?.baseId !== undefined, query.presentAt !== undefined);
+  assertNoPresentAt(query.presentAt !== undefined);
 }
 
 // -------------------------------------------------------
@@ -470,13 +465,16 @@ function parseCreatedByParams(url: URL): RecordFilter['createdBy'] {
  * with it. See docs/spec/wire-format.md § Records.
  */
 export function parseQueryParams(url: URL): PlainQuery {
-  assertNoUntravelableFields(url.searchParams.has('baseId'), url.searchParams.has('presentAt'));
+  assertNoPresentAt(url.searchParams.has('presentAt'));
   requireKnownParams(url, RECORD_QUERY_PARAMS);
 
-  const filter: AdapterFilter = {};
+  const filter: RecordFilter = {};
 
   const typeIds = url.searchParams.getAll('typeId');
   if (typeIds.length) filter.typeId = typeIds.length === 1 ? typeIds[0] : typeIds;
+
+  const baseIds = url.searchParams.getAll('baseId');
+  if (baseIds.length) filter.baseId = baseIds.length === 1 ? baseIds[0] : baseIds;
 
   const parentId = url.searchParams.get('parentId');
   if (parentId !== null) filter.parentId = parentId === 'null' ? null : parentId;
@@ -601,16 +599,17 @@ export function parseQueryBody(raw: unknown): PlainQuery {
   if (raw === undefined) return {};
   const body = requirePlainObject(raw, 'query body');
   const f = body.filter !== undefined ? requirePlainObject(body.filter, 'filter') : undefined;
-  assertNoUntravelableFields(f !== undefined && 'baseId' in f, 'presentAt' in body);
+  assertNoPresentAt('presentAt' in body);
   requireKnownKeys(body, ['filter', 'sort', 'limit', 'cursor'], 'query body');
   if (f) requireKnownKeys(f, QUERY_BODY_FILTER_KEYS, 'filter');
 
   const query: PlainQuery = {};
 
   if (f) {
-    const filter: AdapterFilter = {};
+    const filter: RecordFilter = {};
 
     if (f.typeId !== undefined) filter.typeId = requireStringOrArray(f.typeId, 'filter.typeId');
+    if (f.baseId !== undefined) filter.baseId = requireStringOrArray(f.baseId, 'filter.baseId');
     if (f.parentId !== undefined)
       filter.parentId = f.parentId === null ? null : requireString(f.parentId, 'filter.parentId');
     if (f.appId !== undefined) filter.appId = requireStringOrArray(f.appId, 'filter.appId');
@@ -679,15 +678,14 @@ export function parseQueryBody(raw: unknown): PlainQuery {
 // -------------------------------------------------------
 
 /**
- * What `GET /changes`' query params carry. One object rather than three
- * exports because `includeUnlisted` sits on `SubscribeOptions` rather than
- * `ChangeFilter`, and a server needs it before the stream opens to answer
- * the owner-only 403. See docs/spec/change-feed.md.
+ * What `GET /changes`' query params carry: the filter, and `includeRecords`,
+ * which sits on `SubscribeOptions` beside it. A server reads
+ * `filter.includeUnlisted` before the stream opens to answer the
+ * owner-only 403. See docs/spec/change-feed.md.
  */
 export type ParsedChangeParams = {
   filter: ChangeFilter;
   includeRecords: boolean;
-  includeUnlisted: boolean;
 };
 
 /**
@@ -711,6 +709,8 @@ export function parseChangeParams(url: URL): ParsedChangeParams {
   const createdBy = parseCreatedByParams(url);
   if (createdBy) filter.createdBy = createdBy;
 
+  if (booleanParam(url, 'includeUnlisted')) filter.includeUnlisted = true;
+
   const kinds = url.searchParams.getAll('kind');
   if (kinds.length) {
     for (const kind of kinds) {
@@ -727,7 +727,6 @@ export function parseChangeParams(url: URL): ParsedChangeParams {
   return {
     filter,
     includeRecords: include === 'record',
-    includeUnlisted: booleanParam(url, 'includeUnlisted'),
   };
 }
 

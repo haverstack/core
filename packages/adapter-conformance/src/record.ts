@@ -25,6 +25,7 @@ import { SYSTEM_TYPES } from '@haverstack/core';
 import type {
   AuthorityAssociation,
   DataAssociation,
+  RecordFilter,
   StackCapabilities,
   StackQuery,
   StackRecord,
@@ -1033,7 +1034,9 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
     // inReach(); see docs/spec/access-control.md § Reach.
     // -----------------------------------------------------------------
     describe('querying within a reach', () => {
-      const OTHER_TYPE_ID = 'org.haverstack.conformance/other@1';
+      const NOTE = 'org.haverstack.conformance/note';
+      const OTHER = 'org.haverstack.conformance/other';
+      const OTHER_TYPE_ID = `${OTHER}@1`;
       const ALICE = 'did:key:conformance-alice';
       const BOB = 'did:key:conformance-bob';
       const anyone: AuthorityAssociation = { kind: 'anyone', label: 'read' };
@@ -1063,6 +1066,11 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
           makeRecord({ createdBy: { subjectId: BOB, principalId: ALICE } }),
           makeRecord({ permissions: [anyone] }),
           makeRecord({ typeId: OTHER_TYPE_ID, permissions: [anyone] }),
+          // A family's other versions are in reach with it; one sharing its
+          // prefix is not.
+          makeRecord({ typeId: `${NOTE}@2` }),
+          makeRecord({ typeId: `${NOTE}@2`, createdBy: { subjectId: ALICE } }),
+          makeRecord({ typeId: `${NOTE}s@1`, createdBy: { subjectId: ALICE } }),
           makeRecord({ permissions: [toAlice] }),
           makeRecord({ permissions: [{ ...toAlice, label: 'write' }] }),
           makeRecord({ permissions: [toMembers] }),
@@ -1077,66 +1085,66 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
       };
 
       // Far past any statement's parameter cap — 100 on Durable Object SQLite.
-      const manyTypes = Array.from({ length: 150 }, (_, i) => `org.haverstack.conformance/t${i}@1`);
+      const manyFamilies = Array.from(
+        { length: 150 },
+        (_, i) => `org.haverstack.conformance/t${i}`,
+      );
       const manyGroups = Array.from({ length: 60 }, (_, i) => `conformance-group-${i}`);
       const reaches: [string, Reach][] = [
         ['nothing constrained', {}],
-        ['every Record of a Type', { within: { types: [OTHER_TYPE_ID], permissions: [] } }],
+        ['every Record of a family', { within: { baseIds: [OTHER], permissions: [] } }],
         [
-          'the Records one subject authored at a Type',
+          'the Records one subject authored in a family',
           {
             within: {
-              types: [],
-              authored: { subjectId: ALICE, types: [CONFORMANCE_TYPE_ID] },
+              baseIds: [],
+              authored: { subjectId: ALICE, baseIds: [NOTE] },
               permissions: [],
             },
           },
         ],
-        ['Records carrying `anyone`', { within: { types: [], permissions: [[anyone]] } }],
+        ['Records carrying `anyone`', { within: { baseIds: [], permissions: [[anyone]] } }],
         [
           'Records carrying a read naming an entity',
-          { within: { types: [], permissions: [[toAlice]] } },
+          { within: { baseIds: [], permissions: [[toAlice]] } },
         ],
         [
           'Records carrying a read naming a group at one role',
-          { within: { types: [], permissions: [[toAdmins]] } },
+          { within: { baseIds: [], permissions: [[toAdmins]] } },
         ],
         [
           'every arm at once',
           {
             within: {
-              types: [OTHER_TYPE_ID],
-              authored: { subjectId: ALICE, types: [CONFORMANCE_TYPE_ID] },
+              baseIds: [OTHER],
+              authored: { subjectId: ALICE, baseIds: [NOTE] },
               permissions: [[anyone], [toMembers]],
             },
           },
         ],
-        ['a fence alone', { fence: [OTHER_TYPE_ID] }],
+        ['a fence alone', { fence: [OTHER] }],
         [
           'arms inside a fence',
           {
-            fence: [CONFORMANCE_TYPE_ID],
+            fence: [NOTE],
             within: {
-              types: [OTHER_TYPE_ID],
-              authored: { subjectId: ALICE, types: [CONFORMANCE_TYPE_ID, OTHER_TYPE_ID] },
+              baseIds: [OTHER],
+              authored: { subjectId: ALICE, baseIds: [NOTE, OTHER] },
               permissions: [[anyone]],
             },
           },
         ],
-        [
-          'an empty fence',
-          { fence: [], within: { types: [CONFORMANCE_TYPE_ID], permissions: [[anyone]] } },
-        ],
-        ['no arm at all', { within: { types: [], permissions: [] } }],
+        ['an empty fence', { fence: [], within: { baseIds: [NOTE], permissions: [[anyone]] } }],
+        ['no arm at all', { within: { baseIds: [], permissions: [] } }],
         [
           'Records carrying every element of a set',
-          { within: { types: [], permissions: [[toAlice, { ...toAlice, label: 'write' }]] } },
+          { within: { baseIds: [], permissions: [[toAlice, { ...toAlice, label: 'write' }]] } },
         ],
         [
           'Records carrying one whole set of several',
           {
             within: {
-              types: [],
+              baseIds: [],
               permissions: [
                 [{ ...toAlice, label: 'write' }, anyone],
                 [toMembers, toAdmins],
@@ -1144,14 +1152,14 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
             },
           },
         ],
-        ['an empty set, which no Record carries', { within: { types: [], permissions: [[]] } }],
+        ['an empty set, which no Record carries', { within: { baseIds: [], permissions: [[]] } }],
         [
           'a reach of any size',
           {
-            fence: [CONFORMANCE_TYPE_ID, ...manyTypes],
+            fence: [NOTE, ...manyFamilies],
             within: {
-              types: manyTypes,
-              authored: { subjectId: ALICE, types: [CONFORMANCE_TYPE_ID, ...manyTypes] },
+              baseIds: manyFamilies,
+              authored: { subjectId: ALICE, baseIds: [NOTE, ...manyFamilies] },
               permissions: [
                 ...manyGroups.flatMap((groupId) => [
                   [{ ...toMembers, grantee: { ...toMembers.grantee, groupId } }],
@@ -1189,7 +1197,7 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         await adapter.createRecord(makeRecord({ associations: [pinned] }));
 
         const result = await adapter.queryReadable(resolveQuery({ filter: { tags: ['pinned'] } }), {
-          within: { types: [], permissions: [[anyone]] },
+          within: { baseIds: [], permissions: [[anyone]] },
         });
         expect(result.records.map((r) => r.id)).toEqual([tagged.id]);
       });
@@ -1199,7 +1207,7 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
       // many Records outside the reach remain.
       const pagesWithin = async (sort: StackQuery['sort']): Promise<void> => {
         if (!adapter.queryReadable) return;
-        const reach: Reach = { within: { types: [], permissions: [[anyone]] } };
+        const reach: Reach = { within: { baseIds: [], permissions: [[anyone]] } };
         const inside: string[] = [];
         for (let i = 0; i < 9; i++) {
           const visible = i % 3 === 1;
@@ -1231,6 +1239,52 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
           await pagesWithin({ contentField: 'priority', direction: 'desc' });
         });
       }
+    });
+
+    // -----------------------------------------------------------------
+    // Type families
+    // -----------------------------------------------------------------
+    describe('filter.baseId', () => {
+      const NOTE = 'org.haverstack.conformance/note';
+      const ids = async (filter: RecordFilter): Promise<string[]> =>
+        (await adapter.queryRecords(resolveQuery({ filter }))).records.map((r) => r.id).sort();
+
+      /** One record per TypeId, keyed by it. */
+      const seed = async (typeIds: string[]): Promise<Record<string, string>> => {
+        const seeded: Record<string, string> = {};
+        for (const typeId of typeIds) {
+          const record = makeRecord({ typeId });
+          await adapter.createRecord(record);
+          seeded[typeId] = record.id;
+        }
+        return seeded;
+      };
+
+      test('matches every version of the family and nothing that only shares its prefix', async () => {
+        const r = await seed([`${NOTE}@1`, `${NOTE}@2`, `${NOTE}s@1`, `${NOTE}-x@1`, `${NOTE}@10`]);
+        expect(await ids({ baseId: NOTE })).toEqual(
+          [r[`${NOTE}@1`], r[`${NOTE}@2`], r[`${NOTE}@10`]].sort(),
+        );
+      });
+
+      test('matches any of several families', async () => {
+        const r = await seed([`${NOTE}@1`, `${NOTE}s@1`, 'org.haverstack.conformance/other@1']);
+        expect(await ids({ baseId: [NOTE, `${NOTE}s`] })).toEqual(
+          [r[`${NOTE}@1`], r[`${NOTE}s@1`]].sort(),
+        );
+      });
+
+      test('intersects with filter.typeId', async () => {
+        const r = await seed([`${NOTE}@1`, `${NOTE}@2`, `${NOTE}s@1`]);
+        expect(await ids({ baseId: NOTE, typeId: [`${NOTE}@2`, `${NOTE}s@1`] })).toEqual([
+          r[`${NOTE}@2`],
+        ]);
+      });
+
+      test('an unknown family matches nothing', async () => {
+        await seed([`${NOTE}@1`]);
+        expect(await ids({ baseId: 'org.haverstack.conformance/none' })).toEqual([]);
+      });
     });
 
     // -----------------------------------------------------------------

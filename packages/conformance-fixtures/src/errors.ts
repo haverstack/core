@@ -593,6 +593,32 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
     },
   },
   {
+    name: 'error-validation-query-versioned-base-id',
+    description:
+      'A query whose filter.baseId carries an @version suffix returns 422 with code ' +
+      '"validation", the refusal naming the family to use — on POST /records/query as here, ' +
+      'and equally for ?baseId= on GET /records or GET /changes. A family is matched exactly, ' +
+      'so a versioned value would match nothing and say nothing; it names one version, which ' +
+      "is typeId's job. See docs/spec/data-model.md § Filter.",
+    method: 'POST',
+    path: '/records/query',
+    requestBody: { filter: { baseId: 'com.example/note@1' } },
+    responseStatus: 422,
+    responseBody: {
+      error: {
+        code: 'validation',
+        message: 'Invalid arguments',
+        details: [
+          {
+            path: 'filter.baseId',
+            message:
+              'filter.baseId: "com.example/note@1" names one version; pass the family "com.example/note"',
+          },
+        ],
+      },
+    },
+  },
+  {
     name: 'error-validation-grant-versioned-base-id',
     description:
       'POST /records creating a _grant@1 record whose `baseId` carries an `@version` suffix ' +

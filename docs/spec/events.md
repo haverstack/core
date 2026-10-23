@@ -204,14 +204,16 @@ type Unsubscribe = () => void;
 type SubscribeOptions = {
   filter?: ChangeFilter;
   includeRecords?: boolean;
-  includeUnlisted?: boolean; // owner-only under ScopedStack — see Unlisted records
   since?: string; // resume cursor — the last `cursor` present on a delivered RecordChange
   onError?: (err: unknown) => void;
   onReset?: () => void;
 };
 
 // Every key means what it means on RecordFilter
-type ChangeFilter = Pick<RecordFilter, 'typeId' | 'baseId' | 'parentId' | 'createdBy'> & {
+type ChangeFilter = Pick<
+  RecordFilter,
+  'typeId' | 'baseId' | 'parentId' | 'createdBy' | 'includeUnlisted' // owner-only under ScopedStack — see Unlisted records
+> & {
   kinds?: ChangeKind[];
 };
 
@@ -223,7 +225,7 @@ interface StackClient {
 - **It lives on `StackClient`**, so both `Stack` and `ScopedStack` implement it, and plugin code written against `StackClient` gets reactivity without learning the backend.
 - **`subscribe()` is async and resolves when the subscription is live** — immediately for a local stack, after a server's ready signal for a remote one. This makes the no-gap startup pattern the natural one: `await subscribe()`, _then_ `query()` for initial state, and let the consumer's own version comparison absorb the overlap. A synchronous `subscribe()` would leave every remote consumer to discover that race alone.
 - **It returns an unsubscribe function**, not `off(name, handler)`: handler identity is a bad key once closures are involved.
-- **`ChangeFilter` is a subset of [`RecordFilter`](./data-model.md#filter), and every key means the same thing in both.** `typeId` is an exact match, `baseId` matches the whole family, and `createdBy` names the record's author — never the actor — with the same `subjectId` / `principalId` lists. The app that loads a set with `query()` and then follows it with `subscribe()` passes one value to both and sees the same records in each. A subscriber that wants to survive a type version bump says `baseId`, which is matched by family exactly as [grants are](./access-control.md#type-level-grants) — and, unlike in `query()`, covers versions registered after the subscription opened, since it is matched against each change's `typeId` rather than resolved against registered Types up front.
+- **`ChangeFilter` is a subset of [`RecordFilter`](./data-model.md#filter), and every key means the same thing in both.** `typeId` is an exact match, `baseId` matches the whole family, and `createdBy` names the record's author — never the actor — with the same `subjectId` / `principalId` lists. The app that loads a set with `query()` and then follows it with `subscribe()` passes one value to both and sees the same records in each. A subscriber that wants to survive a type version bump says `baseId`, which is matched by family exactly as [grants are](./access-control.md#type-level-grants) — against each change's `typeId`, so it covers versions registered after the subscription opened.
 - **Filtering is exact, not advisory.** A filtered subscription never receives an event outside its filter; a consumer that filters again is doing redundant work, not defensive work.
 - **`onReset` is the one control signal an app must handle.** A reconnect that resumes cleanly is the adapter's business and the app never hears about it; `onReset` means a gap opened that resumption could not close, and reconciling by query is the repair — the same work as startup. It never fires on a local stack, which has one writing process and so no gap to open. Passing a `since` the far end refuses (a `resume: false` server, an expired cursor) fires it on the very first connection — that is a gap too, and the one an app most needs to hear about: the difference between "you are current" and "you are missing an unknown amount."
 - **`since` resumes a subscription; it does not restart one.** It is forwarded to the adapter's `subscribeChanges()` unchanged — see [Where events come from](#where-events-come-from) — so it means something only where a relay exists. A stack with no relay has no third party whose writes could have been missed, and so no cursor it could ever have minted; passing `since` there throws `StackBadRequestError` rather than silently starting from the present, which would let the caller believe it resumed when it did not. `ScopedStack.subscribe()` refuses it for the same reason it refuses a relay outright — see [Permission scoping](#permission-scoping) — a scoped view never has a relay of its own to resume. A cursor outside the [framable charset](./change-feed.md#frames) is refused the same way and by the same layer, so a malformed one reports identically whatever adapter is underneath; the value is otherwise opaque, checked for whether it can be framed and never for what it means.
@@ -259,7 +261,7 @@ An unlisted record that emits a change event to a default subscriber is not unli
 | Unlisted → listed (`list`)   |            **Yes**             | The publish moment                                                  |
 | Purge while unlisted         |               No               | Same reasoning as row 1 — nothing was ever announced to un-announce |
 
-Only the second row needs special-casing. Every other row falls out of checking the record's **current** `unlistedAt` against the subscriber's `includeUnlisted`, the same check `query()`'s default filter makes: a just-created or still-unlisted record's current state already excludes it, with no need to know which ops produced the event. The `unlist` transition is the one case where that check would give the wrong answer, because the record's post-change state is exactly what it is announcing — so the exclusion is asked of the **pre**-change state there, which is why `unlist` gets a dedicated op (mapped to `kind: 'removed'`, per [The event shape](#the-event-shape)) rather than reusing `reshare`'s pattern of one op for both directions.
+Only the second row needs special-casing. Every other row falls out of checking the record's **current** `unlistedAt` against the subscriber's `filter.includeUnlisted`, the same check `query()`'s default filter makes: a just-created or still-unlisted record's current state already excludes it, with no need to know which ops produced the event. The `unlist` transition is the one case where that check would give the wrong answer, because the record's post-change state is exactly what it is announcing — so the exclusion is asked of the **pre**-change state there, which is why `unlist` gets a dedicated op (mapped to `kind: 'removed'`, per [The event shape](#the-event-shape)) rather than reusing `reshare`'s pattern of one op for both directions.
 
 **`list` needs no new semantics.** Kind `changed` is already an upsert a subscriber may never have seen before — the same case [gaining access](#known-limitations) already covers — so a record created silently, edited silently any number of times while unlisted, and finally relisted reaches a default subscriber as a single `changed` event it upserts as if seeing the record for the first time.
 

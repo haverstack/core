@@ -24,6 +24,7 @@ import {
   IdGenerationError,
 } from '../src/id.js';
 import type { TypeSchema } from '../src/types/index.js';
+import { baseIdOf } from '../src/schema.js';
 import { migration, typeHandle } from '../src/type-handle.js';
 import { add, derive, drop } from '../src/migration-steps.js';
 import type { Migration } from '../src/type-handle.js';
@@ -7187,13 +7188,12 @@ describe('deleteAttachment', () => {
       }
       async deleteUnreferencedAttachmentRecords(
         fileId: string,
-        metadataTypeIds: string[],
+        metadataBaseId: string,
       ): Promise<StackRecord[]> {
-        calls.push('atomic');
-        calls.push(...metadataTypeIds);
+        calls.push('atomic', metadataBaseId);
         const toDelete = [...this.records.values()].filter(
           (r) =>
-            metadataTypeIds.includes(r.typeId) &&
+            baseIdOf(r.typeId) === metadataBaseId &&
             (r.content as Record<string, unknown>).fileId === fileId,
         );
         for (const r of toDelete) {
@@ -7217,9 +7217,8 @@ describe('deleteAttachment', () => {
     } = await atomicStack.putAttachment(new Uint8Array([9]), { mimeType: 'image/png' });
     await atomicStack.deleteAttachment(fileId);
 
-    // The family, not just @1 — core resolves the baseId so the adapter
-    // never has to.
-    expect(calls).toEqual(['atomic', '_attachment@1']);
+    // The adapter is handed the family, not one of its versions.
+    expect(calls).toEqual(['atomic', '_attachment']);
   });
 });
 
@@ -8383,7 +8382,7 @@ describe('Stack — each write verb moves one aspect', () => {
 
   test('an unlist is kind removed', async () => {
     const seen: RecordChange[] = [];
-    await stack.subscribe((c) => seen.push(c), { includeUnlisted: true });
+    await stack.subscribe((c) => seen.push(c), { filter: { includeUnlisted: true } });
     await stack.setUnlisted(note.id, true);
 
     expect(seen[0]!.kind).toBe('removed');
@@ -8522,13 +8521,12 @@ describe('query — sort direction defaults', () => {
     expect(spy.mock.calls.map(([q]) => q.limit)).toEqual([50, 5, 1000]);
   });
 
-  test('the adapter receives neither presentAt nor filter.baseId', async () => {
+  test('the adapter receives filter.baseId as given, and no presentAt', async () => {
     const spy = vi.spyOn(adapter, 'queryRecords');
     await stack.query({ filter: { baseId: fam(NOTE_V1) }, presentAt: 'latest' });
     const [sent] = spy.mock.calls[0]!;
     expect(sent).not.toHaveProperty('presentAt');
-    expect(sent.filter).not.toHaveProperty('baseId');
-    expect(sent.filter?.typeId).toEqual([NOTE_V1]);
+    expect(sent.filter).toEqual({ baseId: fam(NOTE_V1) });
   });
 
   test('a malformed query is refused even when its family has no Types', async () => {

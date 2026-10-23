@@ -21,6 +21,7 @@ import type {
   RecordJournalEntry,
   StackType,
   TypeId,
+  BaseId,
   FileId,
   RecordVersion,
   StackRecord,
@@ -143,9 +144,9 @@ export abstract class SharedSqlRecordAdapter implements StackRecordAdapter {
 
   deleteUnreferencedAttachmentRecords(
     fileId: FileId,
-    metadataTypeIds: TypeId[],
+    metadataBaseId: BaseId,
   ): Promise<StackRecord[]> {
-    return this.record.deleteUnreferencedAttachmentRecords(fileId, metadataTypeIds);
+    return this.record.deleteUnreferencedAttachmentRecords(fileId, metadataBaseId);
   }
 
   // -------------------------------------------------------

@@ -33,6 +33,11 @@ describe('parseQueryParams', () => {
     expect(parseQueryParams(url('?typeId=a&typeId=b')).filter?.typeId).toEqual(['a', 'b']);
   });
 
+  test('baseId reads as typeId does, one family or many', () => {
+    expect(parseQueryParams(url('?baseId=a')).filter?.baseId).toBe('a');
+    expect(parseQueryParams(url('?baseId=a&baseId=b')).filter?.baseId).toEqual(['a', 'b']);
+  });
+
   test('parentId="null" is the top-level sentinel, distinct from an unset parentId', () => {
     expect(parseQueryParams(url('?parentId=null')).filter?.parentId).toBeNull();
     expect(parseQueryParams(url('?parentId=rec-1')).filter?.parentId).toBe('rec-1');
@@ -169,6 +174,11 @@ describe('parseQueryParams', () => {
 // -------------------------------------------------------
 
 describe('parseQueryBody', () => {
+  test('filter.baseId reads as filter.typeId does', () => {
+    expect(parseQueryBody({ filter: { baseId: ['a', 'b'] } }).filter?.baseId).toEqual(['a', 'b']);
+    expect(() => parseQueryBody({ filter: { baseId: 1 } })).toThrow(StackBadRequestError);
+  });
+
   test('an absent body is an empty query, and a non-object body is refused', () => {
     expect(parseQueryBody(undefined)).toEqual({});
     expect(() => parseQueryBody(null)).toThrow(StackBadRequestError);
@@ -302,21 +312,14 @@ describe('parseQueryBody', () => {
 });
 
 // -------------------------------------------------------
-// Fields with no wire encoding
+// The field with no wire encoding
 // -------------------------------------------------------
 
-// Dropping either would answer with a result set the caller believes is
-// narrower (baseId) or migrated (presentAt) than what it holds — the
-// silent degradation a capability-gated filter is already refused for.
-describe('fields that never travel', () => {
-  test('baseId is refused on both query surfaces', () => {
-    expect(() => parseQueryParams(url('?baseId=com.example/note'))).toThrow(StackBadRequestError);
-    expect(() => parseQueryBody({ filter: { baseId: 'com.example/note' } })).toThrow(
-      StackBadRequestError,
-    );
-  });
-
-  test('presentAt is refused on both query surfaces', () => {
+// Dropping it would answer with records as stored to a caller who believes
+// they were migrated — the silent degradation a capability-gated filter is
+// already refused for.
+describe('presentAt never travels', () => {
+  test('is refused on both query surfaces', () => {
     expect(() => parseQueryParams(url('?presentAt=latest'))).toThrow(StackBadRequestError);
     expect(() => parseQueryBody({ presentAt: 'latest' })).toThrow(StackBadRequestError);
   });
@@ -324,13 +327,12 @@ describe('fields that never travel', () => {
   // Judged by key, not by value: "stored" is presentAt's default and asks
   // for nothing, but a client sending it still believes the field means
   // something over the wire, and it does not.
-  test('presentAt is refused by presence, whatever its value', () => {
+  test('is refused by presence, whatever its value', () => {
     expect(() => parseQueryBody({ presentAt: 'stored' })).toThrow(StackBadRequestError);
-    expect(() => parseQueryBody({ filter: { baseId: undefined } })).toThrow(StackBadRequestError);
+    expect(() => parseQueryBody({ presentAt: undefined })).toThrow(StackBadRequestError);
   });
 
-  test('the refusal names what to send instead', () => {
-    expect(() => parseQueryBody({ filter: { baseId: 'x' } })).toThrow(/typeId/);
+  test('the refusal names what to do instead', () => {
     expect(() => parseQueryBody({ presentAt: 'latest' })).toThrow(/client-side/);
   });
 
@@ -338,27 +340,23 @@ describe('fields that never travel', () => {
   // encoding — so a query body that would be refused and search params
   // that would silently drop the field give one answer, not two.
   describe('assertQueryTravels', () => {
-    test('refuses the same two fields, with the same messages', () => {
-      expect(() => assertQueryTravels({ filter: { baseId: 'com.example/note' } })).toThrow(
-        /typeId/,
-      );
+    test('refuses presentAt, with the same message', () => {
       expect(() => assertQueryTravels({ presentAt: 'latest' })).toThrow(/client-side/);
       expect(() => assertQueryTravels({ presentAt: 'stored' })).toThrow(StackBadRequestError);
     });
 
     // Where it parts company with the parsers above, and deliberately: a
     // request body is written key by key, but a StackQuery is spread and
-    // destructured, and Stack.query() already reads an undefined baseId as
-    // no baseId. Refusing it here would refuse queries core builds itself.
-    test('reads an explicitly undefined field as absent', () => {
-      expect(() => assertQueryTravels({ filter: { baseId: undefined } })).not.toThrow();
+    // destructured. Refusing an undefined field would refuse queries core
+    // builds itself.
+    test('reads an explicitly undefined presentAt as absent', () => {
       expect(() => assertQueryTravels({ presentAt: undefined })).not.toThrow();
     });
 
-    test('passes a query carrying neither', () => {
+    test('passes a query without it', () => {
       expect(() => assertQueryTravels({})).not.toThrow();
       expect(() =>
-        assertQueryTravels({ filter: { typeId: 'com.example/note@1' }, limit: 10 }),
+        assertQueryTravels({ filter: { baseId: 'com.example/note' }, limit: 10 }),
       ).not.toThrow();
     });
   });
@@ -369,11 +367,10 @@ describe('fields that never travel', () => {
 // -------------------------------------------------------
 
 describe('parseChangeParams', () => {
-  test('no params yields an empty filter with both flags off', () => {
+  test('no params yields an empty filter and no records', () => {
     expect(parseChangeParams(changes(''))).toEqual({
       filter: {},
       includeRecords: false,
-      includeUnlisted: false,
     });
   });
 
@@ -404,9 +401,11 @@ describe('parseChangeParams', () => {
     expect(() => parseChangeParams(changes('?include=everything'))).toThrow(StackBadRequestError);
   });
 
-  test('includeUnlisted takes only "true" or "false"', () => {
-    expect(parseChangeParams(changes('?includeUnlisted=true')).includeUnlisted).toBe(true);
-    expect(parseChangeParams(changes('?includeUnlisted=false')).includeUnlisted).toBe(false);
+  test('includeUnlisted takes only "true" or "false", as on GET /records', () => {
+    expect(parseChangeParams(changes('?includeUnlisted=true')).filter.includeUnlisted).toBe(true);
+    expect(
+      parseChangeParams(changes('?includeUnlisted=false')).filter.includeUnlisted,
+    ).toBeUndefined();
     expect(() => parseChangeParams(changes('?includeUnlisted=1'))).toThrow(StackBadRequestError);
   });
 

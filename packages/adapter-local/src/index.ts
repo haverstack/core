@@ -21,6 +21,7 @@ import type {
   StackRecord,
   StackType,
   TypeId,
+  BaseId,
   RecordVersion,
   Actor,
   QueryResult,
@@ -183,9 +184,9 @@ export class LocalAdapter implements StackAdapter {
 
   async deleteUnreferencedAttachmentRecords(
     fileId: FileId,
-    metadataTypeIds: TypeId[],
+    metadataBaseId: BaseId,
   ): Promise<StackRecord[]> {
-    return this.record.deleteUnreferencedAttachmentRecords(fileId, metadataTypeIds);
+    return this.record.deleteUnreferencedAttachmentRecords(fileId, metadataBaseId);
   }
 
   async editAssociations(

@@ -1398,7 +1398,8 @@ describe('file-ref indexing', () => {
 
   test('deleteUnreferencedAttachmentRecords is blocked by a content-held file-ref field', async () => {
     const adapter = await initAdapter();
-    const ATTACHMENT_TYPE = 'com.example.test/_attachment@1';
+    const ATTACHMENT_FAMILY = 'com.example.test/_attachment';
+    const ATTACHMENT_TYPE = `${ATTACHMENT_FAMILY}@1`;
     await adapter.saveType(FILE_REF_TYPE);
     await adapter.createRecord(
       makeRecord({ id: 'meta1', typeId: ATTACHMENT_TYPE, content: { fileId: 'file-1' } }),
@@ -1408,7 +1409,7 @@ describe('file-ref indexing', () => {
     );
 
     await expect(
-      adapter.deleteUnreferencedAttachmentRecords('file-1', [ATTACHMENT_TYPE]),
+      adapter.deleteUnreferencedAttachmentRecords('file-1', ATTACHMENT_FAMILY),
     ).rejects.toThrow(StackConflictError);
     expect(await adapter.getRecord('meta1')).not.toBeNull();
   });
@@ -2509,7 +2510,8 @@ describe('commitMigration', () => {
 // -------------------------------------------------------
 
 describe('deleteUnreferencedAttachmentRecords', () => {
-  const ATTACHMENT_TYPE = 'com.example.test/_attachment@1';
+  const ATTACHMENT_FAMILY = 'com.example.test/_attachment';
+  const ATTACHMENT_TYPE = `${ATTACHMENT_FAMILY}@1`;
 
   test('throws StackConflictError when a record still references the file', async () => {
     const adapter = await initAdapter();
@@ -2527,7 +2529,7 @@ describe('deleteUnreferencedAttachmentRecords', () => {
     ]);
 
     await expect(
-      adapter.deleteUnreferencedAttachmentRecords('file-1', [ATTACHMENT_TYPE]),
+      adapter.deleteUnreferencedAttachmentRecords('file-1', ATTACHMENT_FAMILY),
     ).rejects.toThrow(StackConflictError);
   });
 
@@ -2537,7 +2539,7 @@ describe('deleteUnreferencedAttachmentRecords', () => {
       makeRecord({ id: 'meta1', typeId: ATTACHMENT_TYPE, content: { fileId: 'file-1' } }),
     );
 
-    const deleted = await adapter.deleteUnreferencedAttachmentRecords('file-1', [ATTACHMENT_TYPE]);
+    const deleted = await adapter.deleteUnreferencedAttachmentRecords('file-1', ATTACHMENT_FAMILY);
     // The last copy that will ever exist: after this call there is nothing
     // left to read the record's type or version back from.
     expect(deleted).toHaveLength(1);
@@ -2556,13 +2558,14 @@ describe('deleteUnreferencedAttachmentRecords', () => {
       makeRecord({ id: 'meta2', typeId: ATTACHMENT_TYPE, content: { fileId: 'shared-file' } }),
     );
 
-    const deleted = await adapter.deleteUnreferencedAttachmentRecords('shared-file', [
-      ATTACHMENT_TYPE,
-    ]);
+    const deleted = await adapter.deleteUnreferencedAttachmentRecords(
+      'shared-file',
+      ATTACHMENT_FAMILY,
+    );
     expect(deleted.map((r) => r.id).sort()).toEqual(['meta1', 'meta2']);
   });
 
-  test('deletes metadata records across every typeId it is given', async () => {
+  test('deletes metadata records at every version of the family, and only that family', async () => {
     const adapter = await initAdapter();
     const ATTACHMENT_TYPE_V2 = 'com.example.test/_attachment@2';
     await adapter.createRecord(
@@ -2571,33 +2574,37 @@ describe('deleteUnreferencedAttachmentRecords', () => {
     await adapter.createRecord(
       makeRecord({ id: 'meta2', typeId: ATTACHMENT_TYPE_V2, content: { fileId: 'file-1' } }),
     );
-
-    const deleted = await adapter.deleteUnreferencedAttachmentRecords('file-1', [
-      ATTACHMENT_TYPE,
-      ATTACHMENT_TYPE_V2,
-    ]);
-    expect(deleted.map((r) => r.id).sort()).toEqual(['meta1', 'meta2']);
-    expect(await adapter.getRecord('meta2')).toBeNull();
-  });
-
-  test('leaves a record of a typeId outside the given set intact', async () => {
-    const adapter = await initAdapter();
     await adapter.createRecord(
       makeRecord({
-        id: 'meta1',
-        typeId: 'com.example.test/_attachment@2',
+        id: 'other',
+        typeId: 'com.example.test/_attachments@1',
         content: { fileId: 'file-1' },
       }),
     );
 
-    const deleted = await adapter.deleteUnreferencedAttachmentRecords('file-1', [ATTACHMENT_TYPE]);
+    const deleted = await adapter.deleteUnreferencedAttachmentRecords('file-1', ATTACHMENT_FAMILY);
+    expect(deleted.map((r) => r.id).sort()).toEqual(['meta1', 'meta2']);
+    expect(await adapter.getRecord('meta2')).toBeNull();
+  });
+
+  test('leaves a record outside the given family intact', async () => {
+    const adapter = await initAdapter();
+    await adapter.createRecord(
+      makeRecord({
+        id: 'meta1',
+        typeId: 'com.example.test/other@1',
+        content: { fileId: 'file-1' },
+      }),
+    );
+
+    const deleted = await adapter.deleteUnreferencedAttachmentRecords('file-1', ATTACHMENT_FAMILY);
     expect(deleted).toEqual([]);
     expect(await adapter.getRecord('meta1')).not.toBeNull();
   });
 
-  // The conflict is a fact about the file, not about which metadata types
-  // happen to be defined, so the reference check still runs.
-  test('an empty typeId set still throws when the file is referenced', async () => {
+  // The conflict is a fact about the file, not about which metadata records
+  // happen to exist, so the reference check still runs.
+  test('a family holding no metadata records still throws when the file is referenced', async () => {
     const adapter = await initAdapter();
     const record = makeRecord();
     await adapter.createRecord(record);
@@ -2612,17 +2619,20 @@ describe('deleteUnreferencedAttachmentRecords', () => {
       },
     ]);
 
-    await expect(adapter.deleteUnreferencedAttachmentRecords('file-1', [])).rejects.toThrow(
-      StackConflictError,
+    await expect(
+      adapter.deleteUnreferencedAttachmentRecords('file-1', ATTACHMENT_FAMILY),
+    ).rejects.toThrow(StackConflictError);
+    expect(await adapter.deleteUnreferencedAttachmentRecords('file-2', ATTACHMENT_FAMILY)).toEqual(
+      [],
     );
-    expect(await adapter.deleteUnreferencedAttachmentRecords('file-2', [])).toEqual([]);
   });
 
   test('returns an empty array when no metadata records exist for the file', async () => {
     const adapter = await initAdapter();
-    const deleted = await adapter.deleteUnreferencedAttachmentRecords('nonexistent-file', [
-      ATTACHMENT_TYPE,
-    ]);
+    const deleted = await adapter.deleteUnreferencedAttachmentRecords(
+      'nonexistent-file',
+      ATTACHMENT_FAMILY,
+    );
     expect(deleted).toEqual([]);
   });
 
@@ -2645,7 +2655,7 @@ describe('deleteUnreferencedAttachmentRecords', () => {
     ]);
 
     await expect(
-      adapter.deleteUnreferencedAttachmentRecords('file-1', [ATTACHMENT_TYPE]),
+      adapter.deleteUnreferencedAttachmentRecords('file-1', ATTACHMENT_FAMILY),
     ).rejects.toThrow(StackConflictError);
     expect(await adapter.getRecord('meta1')).not.toBeNull();
   });

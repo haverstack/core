@@ -38,7 +38,7 @@ import type {
 } from './types/index.js';
 import { SYSTEM_TYPES } from './types/index.js';
 import { applyMergePatch } from './merge.js';
-import { fileRefFields } from './schema.js';
+import { baseIdOf, fileRefFields } from './schema.js';
 import { compareSortEntries, constantSortEntry, contentSortEntry } from './adapter/sort.js';
 import type { SortEntry } from './adapter/sort.js';
 import { inReach } from './adapter/reach.js';
@@ -320,6 +320,10 @@ export class MemoryAdapter implements StackAdapter {
     if (f.typeId) {
       const ids = Array.isArray(f.typeId) ? f.typeId : [f.typeId];
       results = results.filter((r) => ids.includes(r.typeId));
+    }
+    if (f.baseId) {
+      const families = Array.isArray(f.baseId) ? f.baseId : [f.baseId];
+      results = results.filter((r) => families.includes(baseIdOf(r.typeId)));
     }
     if (f.parentId !== undefined) {
       results =

@@ -387,6 +387,22 @@ export const queryRecordsFixtures: ConformanceFixture<
     responseBody: { records: [], cursor: null },
   },
   {
+    name: 'query-by-type-family',
+    description:
+      'baseId matches every version of a type family: a Record matches when its typeId, with ' +
+      'the @version suffix stripped, equals one of the values. It is matched against each ' +
+      "Record's own typeId, never resolved against registered Types, so a server MUST NOT " +
+      'match a family that only shares a prefix (com.example/notes for com.example/note). ' +
+      'Repeated, it matches any of the families; beside typeId, the two intersect. A value ' +
+      'carrying an @version suffix is refused with 422 (error-validation-query-versioned-base-id). ' +
+      'GET /changes reads ?baseId= the same ' +
+      'way. See docs/spec/data-model.md § Filter.',
+    method: 'GET',
+    path: '/records?baseId=com.example%2Fnote&baseId=com.example%2Fmemo',
+    responseStatus: 200,
+    responseBody: { records: [], cursor: null },
+  },
+  {
     name: 'query-related-to-record-target',
     description:
       'A relationship filter naming a Record in this Stack travels as relatedTo, with ' +

@@ -43,6 +43,7 @@ export const buildQueryParams = (query: AdapterQuery): URLSearchParams => {
   const f = query.filter ?? {};
 
   if (f.typeId !== undefined) appendEach(p, 'typeId', f.typeId);
+  if (f.baseId !== undefined) appendEach(p, 'baseId', f.baseId);
   if (f.parentId !== undefined) setParentId(p, f.parentId);
   if (f.appId !== undefined) appendEach(p, 'appId', f.appId);
   appendCreatedBy(p, f.createdBy);
@@ -96,7 +97,7 @@ export const buildChangeParams = (opts: SubscribeOptions): URLSearchParams => {
   appendCreatedBy(p, f.createdBy);
   if (f.kinds !== undefined) for (const kind of f.kinds) p.append('kind', kind);
   if (opts.includeRecords) p.set('include', 'record');
-  if (opts.includeUnlisted) p.set('includeUnlisted', 'true');
+  if (f.includeUnlisted) p.set('includeUnlisted', 'true');
 
   return p;
 };

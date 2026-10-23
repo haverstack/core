@@ -52,7 +52,6 @@ import type {
   StackAdapter,
   StackQuery,
   AdapterQuery,
-  AdapterFilter,
   QueryResult,
   Reach,
   AssociationEdit,
@@ -140,7 +139,6 @@ import {
   assertUnlistedArgument,
 } from './arguments.js';
 import { ScopedStack, scopeToken } from '../scoped-stack/scoped-stack.js';
-import { Lazy } from '../lazy.js';
 import { MigrationRegistry } from './migrations.js';
 import * as apps from './install-app.js';
 import * as typeGrants from './type-grants.js';
@@ -209,9 +207,6 @@ function normalizeActor(actor: Actor | undefined): Actor | undefined {
 
 /** How many Records migrateAll() reads and migrates per page. */
 const MIGRATE_ALL_BATCH = 100;
-
-/** Sentinel: filter.baseId resolved to zero matching types. */
-const EMPTY_FAMILY = Symbol('empty-family');
 
 /**
  * One refusal for every problem a call carries, content and arguments alike,
@@ -418,10 +413,8 @@ export class Stack implements StackClient {
       changes: this.changes,
       assertOpen: () => this.assertOpen(),
       migrations: this.migrations,
-      queryReadable: (split: SplitQuery, reach: Reach<BaseId>) =>
-        this.dispatchQuery(split, async (resolved, types) =>
-          queryReadable(resolved, await this.resolveReach(reach, types)),
-        ),
+      queryReadable: (split: SplitQuery, reach: Reach) =>
+        this.dispatchQuery(split, (resolved) => queryReadable(resolved, reach)),
     });
   }
 
@@ -547,7 +540,7 @@ export class Stack implements StackClient {
   ): Promise<{ migrated: number; skipped: number }> {
     this.assertOpen();
     assertFamilyId(baseId, 'migrateAll');
-    const familyTypeIds = await this.familyTypeIds([baseId]);
+    const familyTypeIds = typeIdsOfFamilies(await this.adapter.listTypes(), [baseId]);
 
     if (familyTypeIds.length === 0) {
       throw new StackMigrationError(`migrateAll: no registered types found for baseId "${baseId}"`);
@@ -1201,10 +1194,9 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Query records. filter.baseId matches every version of a type family,
-   * resolved against registered Types. Results come back exactly as
-   * stored; pass presentAt: 'latest' to migrate in memory. See
-   * docs/spec/data-model.md § Queries.
+   * Query records. filter.baseId matches every version of a type family.
+   * Results come back exactly as stored; pass presentAt: 'latest' to
+   * migrate in memory. See docs/spec/data-model.md § Queries.
    */
   async query(query: StackQuery = {}): Promise<QueryResult> {
     this.assertOpen();
@@ -1215,90 +1207,17 @@ export class Stack implements StackClient {
 
   /**
    * Everything query() does around the adapter call once the query is
-   * split and checked: the family resolution, the migration on the way
-   * out. `read` is the call, so a scoped query within a reach gets the
-   * same treatment as any other.
+   * split and checked: the migration on the way out. `read` is the call,
+   * so a scoped query within a reach gets the same treatment as any other.
    */
   private async dispatchQuery(
-    { query, presentAt, baseId }: SplitQuery,
-    read: (resolved: AdapterQuery, types: Lazy<StackType[]>) => Promise<QueryResult>,
+    { query, presentAt }: SplitQuery,
+    read: (resolved: AdapterQuery) => Promise<QueryResult>,
   ): Promise<QueryResult> {
     this.assertOpen();
-    // Read once whether the family, the reach or both need the Types.
-    const types = new Lazy(() => this.adapter.listTypes());
-    const filter = await this.narrowToFamilies(query.filter, baseId, types);
-    if (filter === EMPTY_FAMILY) {
-      return { records: [], cursor: null };
-    }
-
-    const result = await read({ ...query, ...(filter !== undefined && { filter }) }, types);
-
+    const result = await read(query);
     if (presentAt !== 'latest') return result;
     return { ...result, records: result.records.map((r) => this.migrations.presentAtLatest(r)) };
-  }
-
-  /**
-   * Narrow the filter's typeId set to the named families' registered
-   * versions (intersected with filter.typeId when both are given), so
-   * adapters never need their own baseId concept. Returns EMPTY_FAMILY
-   * when the resolved set is empty so the caller can short-circuit
-   * without an adapter round trip.
-   */
-  private async narrowToFamilies(
-    filter: AdapterFilter | undefined,
-    baseId: SplitQuery['baseId'],
-    types: Lazy<StackType[]>,
-  ): Promise<AdapterFilter | undefined | typeof EMPTY_FAMILY> {
-    if (baseId === undefined) return filter;
-    const { typeId, ...rest } = filter ?? {};
-    const requestedBaseIds = Array.isArray(baseId) ? baseId : [baseId];
-    const familyTypeIds = typeIdsOfFamilies(await types.get(), requestedBaseIds);
-
-    const resolvedTypeIds =
-      typeId === undefined
-        ? familyTypeIds
-        : familyTypeIds.filter((id) =>
-            Array.isArray(typeId) ? typeId.includes(id) : typeId === id,
-          );
-
-    if (resolvedTypeIds.length === 0) return EMPTY_FAMILY;
-    return { ...rest, typeId: resolvedTypeIds };
-  }
-
-  /**
-   * A reach over families, as the TypeIds an adapter matches — the same
-   * resolution filter.baseId gets. See docs/spec/adapters.md § Querying
-   * within a reach.
-   */
-  private async resolveReach(reach: Reach<BaseId>, types: Lazy<StackType[]>): Promise<Reach> {
-    const { fence, within } = reach;
-    // A reach naming no family needs no Types.
-    if (!fence && !within) return {};
-    const registered = await types.get();
-    const resolve = (baseIds: readonly BaseId[]) => typeIdsOfFamilies(registered, baseIds);
-    return {
-      ...(fence && { fence: resolve(fence) }),
-      ...(within && {
-        within: {
-          types: resolve(within.types),
-          ...(within.authored && {
-            authored: {
-              subjectId: within.authored.subjectId,
-              types: resolve(within.authored.types),
-            },
-          }),
-          permissions: within.permissions,
-        },
-      }),
-    };
-  }
-
-  /**
-   * Every registered version of the named families, as concrete typeIds —
-   * resolved here because an adapter has no baseId concept of its own.
-   */
-  private async familyTypeIds(baseIds: readonly string[]): Promise<TypeId[]> {
-    return typeIdsOfFamilies(await this.adapter.listTypes(), baseIds);
   }
 
   // -------------------------------------------------------
@@ -1576,7 +1495,7 @@ export class Stack implements StackClient {
       // hands back, which are the last copies that will ever exist.
       deletedRecords = await this.adapter.deleteUnreferencedAttachmentRecords(
         fileId,
-        await this.familyTypeIds([SYSTEM_TYPES.ATTACHMENT]),
+        SYSTEM_TYPES.ATTACHMENT,
       );
       const at = new Date();
       for (const record of deletedRecords) {
@@ -1671,7 +1590,6 @@ export class Stack implements StackClient {
         ...(opts.filter !== undefined && { filter: opts.filter }),
         ...(opts.since !== undefined && { since: opts.since }),
         ...(opts.includeRecords !== undefined && { includeRecords: opts.includeRecords }),
-        ...(opts.includeUnlisted !== undefined && { includeUnlisted: opts.includeUnlisted }),
         ...(opts.onError !== undefined && { onError: opts.onError }),
         ...(opts.onReset !== undefined && { onReset: opts.onReset }),
       },

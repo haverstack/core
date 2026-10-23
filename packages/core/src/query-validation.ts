@@ -324,6 +324,7 @@ export const MAX_QUERY_LIMIT = 1000;
  */
 export function resolveQuery(query: PlainQuery): AdapterQuery {
   const { sort, limit, ...rest } = query;
+  assertValidBaseIdFilter(query.filter);
   assertValidContentByType(query.filter);
   assertValidSort(sort);
   assertWindowInteger(limit, 'limit', 1);
@@ -341,24 +342,19 @@ export function resolveQuery(query: PlainQuery): AdapterQuery {
 export type SplitQuery = {
   query: AdapterQuery;
   presentAt?: StackQuery['presentAt'];
-  baseId?: RecordFilter['baseId'];
 };
 
 /**
- * Split a query at the door into what an adapter sees, resolved, and the
- * two directives only `Stack` can apply: `presentAt`, which migrates the
- * results, and `filter.baseId`, which needs the registered Types. Every
- * check runs here, before either directive costs a read. See
- * docs/spec/data-model.md § Sorting and pagination.
+ * Split a query at the door into what an adapter sees, resolved, and
+ * `presentAt`, which `Stack` applies to the results. Every check runs
+ * here, before the adapter is asked. See docs/spec/data-model.md
+ * § Sorting and pagination.
  */
 export function splitQuery(query: StackQuery): SplitQuery {
-  const { presentAt, filter, ...rest } = query;
-  assertValidBaseIdFilter(filter);
-  const { baseId, ...plain } = filter ?? {};
+  const { presentAt, ...plain } = query;
   return {
-    query: resolveQuery({ ...rest, ...(filter && { filter: plain }) }),
+    query: resolveQuery(plain),
     ...(presentAt !== undefined && { presentAt }),
-    ...(baseId !== undefined && { baseId }),
   };
 }
 

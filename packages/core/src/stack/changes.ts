@@ -27,6 +27,7 @@ import type {
   Unsubscribe,
 } from '../types/index.js';
 import { StackBadRequestError } from '../errors.js';
+import { baseIdOf } from '../schema.js';
 import { bumpsVersion } from '../record-changes.js';
 import { feedAssociationDelta } from '../associations/identity.js';
 
@@ -60,15 +61,14 @@ export type EmittedChange = {
   previousTypeId?: string;
 };
 
-/** The `baseId@version` split, as grants and query filters read it. */
-const baseIdOf = (typeId: string): string => typeId.split('@')[0]!;
-
 /**
- * Whether an emission matches a subscription's filter. Reads the record
- * for the fields the envelope deliberately omits, so `createdBy` filters on
- * the author and `purged` frames stay filterable without carrying either.
+ * Whether an emission matches a subscription's filter, every key of it.
+ * Reads the record for the fields the envelope deliberately omits, so
+ * `createdBy` filters on the author and `purged` frames stay filterable
+ * without carrying either.
  */
 export function matchesFilter(emitted: EmittedChange, filter?: ChangeFilter): boolean {
+  if (!passesUnlistedBoundary(emitted, filter?.includeUnlisted)) return false;
   if (!filter) return true;
   const { change, record } = emitted;
 
@@ -118,7 +118,7 @@ const asArray = <T>(value: T | T[]): T[] => (Array.isArray(value) ? value : [val
  * without it a subscriber who already holds the record would never be told
  * to drop it. See docs/spec/events.md § The unlisted transition.
  */
-export function passesUnlistedBoundary(emitted: EmittedChange, includeUnlisted?: boolean): boolean {
+function passesUnlistedBoundary(emitted: EmittedChange, includeUnlisted?: boolean): boolean {
   if (includeUnlisted) return true;
   if (emitted.change.ops.includes('unlist')) return true;
   return !emitted.record.unlistedAt;
@@ -232,7 +232,6 @@ export class RelayDelivery {
 class UnscopedSubscription extends Subscription {
   accept(emission: EmittedChange): void {
     if (!matchesFilter(emission, this.opts.filter)) return;
-    if (!passesUnlistedBoundary(emission, this.opts.includeUnlisted)) return;
     this.deliver(emission);
   }
 }

@@ -34,7 +34,6 @@ import type {
   ActorOptions,
   AppContent,
   AppId,
-  BaseId,
   PutAttachmentOptions,
   Association,
   AssociationEdit,
@@ -139,7 +138,7 @@ export type ScopedStackInit = {
   /** The app's migrations, which collection() migrates records through. */
   migrations: MigrationRegistry;
   /** Stack.query() within a reach over type families — see query(). */
-  queryReadable: (split: SplitQuery, reach: Reach<BaseId>) => Promise<QueryResult>;
+  queryReadable: (split: SplitQuery, reach: Reach) => Promise<QueryResult>;
 };
 
 /**
@@ -979,7 +978,7 @@ export class ScopedStack implements StackClient {
     // `since` never has a cursor to mean anything by.
     assertSinceUsable(opts.since, false);
     assertValidBaseIdFilter(opts.filter);
-    if (opts.includeUnlisted && !this.#authority.ownerActingAlone) {
+    if (opts.filter?.includeUnlisted && !this.#authority.ownerActingAlone) {
       throw new StackPermissionError('includeUnlisted is owner-only');
     }
     return this.changes.add(
