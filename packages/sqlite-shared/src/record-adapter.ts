@@ -39,6 +39,7 @@ import type {
   JournalOptions,
   MutateOptions,
   Reach,
+  RecordHistory,
 } from '@haverstack/core/adapter';
 import type { SqlExecutor } from './executor.js';
 import type { StackConfig } from './config.js';
@@ -88,6 +89,10 @@ export abstract class SharedSqlRecordAdapter implements StackRecordAdapter {
 
   createRecord(record: StackRecord, opts?: JournalOptions): Promise<StackRecord> {
     return this.record.createRecord(record, opts);
+  }
+
+  importRecord(record: StackRecord, history: RecordHistory): Promise<void> {
+    return this.record.importRecord(record, history);
   }
 
   getRecord(id: string): Promise<StackRecord | null> {
@@ -159,10 +164,6 @@ export abstract class SharedSqlRecordAdapter implements StackRecordAdapter {
 
   getVersion(id: string, version: number): Promise<RecordVersion | null> {
     return this.record.getVersion(id, version);
-  }
-
-  saveVersion(id: string, version: RecordVersion): Promise<void> {
-    return this.record.saveVersion(id, version);
   }
 
   // -------------------------------------------------------

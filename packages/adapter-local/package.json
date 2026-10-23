@@ -44,6 +44,7 @@
     "@haverstack/blob-adapter-disk": "workspace:^"
   },
   "devDependencies": {
+    "@haverstack/adapter-conformance": "workspace:*",
     "@types/node": "^22.0.0",
     "typescript": "^5.5.0",
     "vitest": "^4.1.11"

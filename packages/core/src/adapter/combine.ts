@@ -9,6 +9,8 @@
 import type {
   Reach,
   RecordChange,
+  RecordHistory,
+  StackRecord,
   StackAdapter,
   StackRecordAdapter,
   StackBlobAdapter,
@@ -54,7 +56,6 @@ export function combineAdapters(parts: {
 
     getVersions: (id, query) => parts.record.getVersions(id, query),
     getVersion: (id, v) => parts.record.getVersion(id, v),
-    saveVersion: (id, v) => parts.record.saveVersion(id, v),
     getJournal: (id, query) => parts.record.getJournal(id, query),
     restoreVersion: (id, v, opts) => parts.record.restoreVersion(id, v, opts),
     commitMigration: (id, toTypeId, content, opts) =>
@@ -70,6 +71,10 @@ export function combineAdapters(parts: {
     ...(parts.record.deleteUnreferencedAttachmentRecords && {
       deleteUnreferencedAttachmentRecords: (fileId: string, metadataBaseId: string) =>
         parts.record.deleteUnreferencedAttachmentRecords!(fileId, metadataBaseId),
+    }),
+    ...(parts.record.importRecord && {
+      importRecord: (r: StackRecord, history: RecordHistory) =>
+        parts.record.importRecord!(r, history),
     }),
     ...(parts.record.queryReadable && {
       queryReadable: (q: AdapterQuery, reach: Reach) => parts.record.queryReadable!(q, reach),

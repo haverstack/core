@@ -97,6 +97,9 @@ importers:
         specifier: workspace:^
         version: link:../record-adapter-sqlite
     devDependencies:
+      '@haverstack/adapter-conformance':
+        specifier: workspace:*
+        version: link:../adapter-conformance
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.17

@@ -35,6 +35,7 @@ import type {
   StackCapabilities,
   BlobInfo,
   Reach,
+  RecordHistory,
 } from './types/index.js';
 import { SYSTEM_TYPES } from './types/index.js';
 import { applyMergePatch } from './merge.js';
@@ -120,6 +121,19 @@ export class MemoryAdapter implements StackAdapter {
     this.order.push(record.id);
     this.appendJournal(record.id, opts.journal, stored);
     return stored;
+  }
+
+  async importRecord(record: StackRecord, history: RecordHistory) {
+    await this.createRecord(record);
+    // Held oldest first, as the writes leave them, whatever order they came in.
+    this.versions.set(
+      record.id,
+      [...history.versions].sort((a, b) => a.version - b.version),
+    );
+    this.journals.set(
+      record.id,
+      [...history.journal].sort((a, b) => a.seq - b.seq),
+    );
   }
 
   async getRecord(id: string) {
@@ -534,31 +548,6 @@ export class MemoryAdapter implements StackAdapter {
   }
   async getVersion(id: string, version: number) {
     return (this.versions.get(id) ?? []).find((v) => v.version === version) ?? null;
-  }
-
-  /**
-   * Loud on a (record, version) collision, mirroring the real adapters'
-   * UNIQUE constraint.
-   */
-  private insertVersionRow(id: string, version: RecordVersion): void {
-    const existing = this.versions.get(id) ?? [];
-    if (existing.some((v) => v.version === version.version)) {
-      throw new StackConflictError(
-        `Version ${version.version} already exists for record "${id}" — a concurrent ` +
-          `writer raced past this version. Use ifVersion to detect this before it happens.`,
-      );
-    }
-    this.versions.set(id, [...existing, version]);
-  }
-
-  /**
-   * Standalone snapshot write for tooling and tests — loud on any
-   * collision, since nothing here is about to bump the record's version.
-   * Mutating methods take a `snapshot` option instead; see
-   * snapshotBeforeMutation.
-   */
-  async saveVersion(id: string, version: RecordVersion) {
-    this.insertVersionRow(id, version);
   }
 
   /**

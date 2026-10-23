@@ -47,7 +47,7 @@ type RecordVersion = {
 
 ## Snapshot atomicity
 
-**A snapshot is written as part of the same atomic write as the mutation it precedes**, never as a separate call before it. Adapters accept the snapshot as an option on every mutating method and fold the insert into their own transaction; `Stack` builds it from the record it has already read and passes it through. A standalone `saveVersion()` exists for tooling, but no mutation path uses it — and it is a deliberate no-op over `APIAdapter`, where the server is the only snapshot writer.
+**A snapshot is written as part of the same atomic write as the mutation it precedes**, never as a separate call before it. Adapters accept the snapshot as an option on every mutating method and fold the insert into their own transaction; `Stack` builds it from the record it has already read and passes it through. The one other write of a snapshot is [`importRecord()`](./portability.md#writing-history), which writes a Record and its whole history together and which `APIAdapter` does not have: the server is the only snapshot writer there.
 
 The reason is recoverability of the history mechanism itself. Were the snapshot a separate call preceding the mutation, a crash in between would leave a `versions` row at the record's own current version — a version number no legitimate snapshot can carry, since a snapshot is written in the same breath as the bump past it. That orphan would then collide with every future mutation's snapshot attempt, permanently blocking writes to the record.
 
@@ -136,7 +136,7 @@ This is not a precondition a caller can hold. `version` is unchanged by these wr
 
 - JSON _(planned)_: sibling files `{id}.versions.json` and `{id}.journal.json`
 - SQLite: `versions` and `journal` tables
-- API: **the server is the only writer of both tiers** — `saveVersion()` is a deliberate no-op over `APIAdapter` and a journal entry travels on no request, so a server implementing anything less than the full list of version-bumping endpoints silently loses rollback history for the ones it skipped. Both tiers are read back over the wire: [Wire format § Versions](./wire-format.md#versions) for that list, and [§ Journal](./wire-format.md#journal) for the endpoint serving this one.
+- API: **the server is the only writer of both tiers** — no request writes a snapshot or carries a journal entry, and `APIAdapter` has no [`importRecord()`](./portability.md#writing-history), so a server implementing anything less than the full list of version-bumping endpoints silently loses rollback history for the ones it skipped. Both tiers are read back over the wire: [Wire format § Versions](./wire-format.md#versions) for that list, and [§ Journal](./wire-format.md#journal) for the endpoint serving this one.
 
 ## Deletion
 

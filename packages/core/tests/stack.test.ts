@@ -23,7 +23,7 @@ import {
   MAX_ID_TIMESTAMP,
   IdGenerationError,
 } from '../src/id.js';
-import type { TypeSchema } from '../src/types/index.js';
+import type { RecordVersion, TypeSchema } from '../src/types/index.js';
 import { baseIdOf } from '../src/schema.js';
 import { migration, typeHandle } from '../src/type-handle.js';
 import { add, derive, drop } from '../src/migration-steps.js';
@@ -86,6 +86,13 @@ const EntityV1 = typeHandle({
 });
 
 let adapter: MemoryAdapter;
+
+/**
+ * A version row written behind Stack's back: the state an interrupted
+ * write or a hand-edited store leaves.
+ */
+const plantVersion = (id: string, version: RecordVersion) =>
+  adapter.versions.set(id, [...(adapter.versions.get(id) ?? []), version]);
 let stack: Stack;
 
 /** Replace `stack` with one over the same adapter that knows `migrations`. */
@@ -2253,7 +2260,7 @@ describe('migrateAll', () => {
     const record = await stack.create(NOTE_V1, { text: 'original' }); // v1
     // Simulate a migrateAll() interrupted between its snapshot and its
     // commitMigration() call, leaving an orphan row at v1.
-    await adapter.saveVersion(record.id, {
+    plantVersion(record.id, {
       version: 1,
       typeId: NOTE_V1,
       content: { text: 'original' },
@@ -3007,7 +3014,7 @@ describe('restoreVersion — typeId and validation', () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
     // Simulate schema drift or adapter corruption: a stored snapshot whose
     // content no longer satisfies its own claimed type's schema.
-    await adapter.saveVersion(record.id, {
+    plantVersion(record.id, {
       version: 1,
       typeId: NOTE_V1,
       content: {}, // missing required "text"
@@ -3337,7 +3344,7 @@ describe('orphan version row recovery', () => {
     // Simulate an interrupted write: the v1 snapshot committed, but the
     // mutation that should have bumped past it never did — an orphan row
     // sitting at the record's own current version.
-    await adapter.saveVersion(record.id, {
+    plantVersion(record.id, {
       version: 1,
       typeId: NOTE_V1,
       content: { text: 'hello' },
@@ -3358,7 +3365,7 @@ describe('orphan version row recovery', () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
     await stack.patchContent(record.id, { text: 'v2' }); // v2, snapshots v1
 
-    await adapter.saveVersion(record.id, {
+    plantVersion(record.id, {
       version: 2,
       typeId: NOTE_V1,
       content: { text: 'v2' },
@@ -3639,7 +3646,7 @@ describe('_config protections', () => {
     // Simulates a snapshot that predates this guard, or a bypassed
     // direct-adapter write — either way, a stored version whose entityId
     // disagrees with the live record's must not be restorable.
-    await adapter.saveVersion(CONFIG_ID, {
+    plantVersion(CONFIG_ID, {
       version: 1,
       typeId: CONFIG_TYPE,
       content: { entityId: 'someone-else', timezone: 'UTC' },

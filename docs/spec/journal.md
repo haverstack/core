@@ -76,7 +76,7 @@ A permission element's delta rides in that same list, on the same terms as a tag
 
 It is one rule rather than two lists because the two halves are built from one object: `Stack` names a change once — its ops, its kind, its actor, what it moved — and hands the durable half to the adapter and the live half to the emitter. A verb cannot journal one thing and announce another, and the [purge exception](#a-purge-destroys-the-journal) below is a property of that object rather than a rule each call site remembers.
 
-**`putAttachment()` over an adapter that writes bytes and metadata together is the one emission with no local entry**, exactly as [`saveVersion()` is the one snapshot `APIAdapter` does not write](./versioning.md#snapshot-atomicity): the record was created on the far side, so the entry was appended there, in that same write. The division is the same one the whole adapter draws — a server is the only writer of its own durable tiers — and no adapter that stores records locally has a case like it.
+**`putAttachment()` over an adapter that writes bytes and metadata together is the one emission with no local entry**, exactly as [`APIAdapter` writes no snapshot](./versioning.md#snapshot-atomicity): the record was created on the far side, so the entry was appended there, in that same write. The division is the same one the whole adapter draws — a server is the only writer of its own durable tiers — and no adapter that stores records locally has a case like it.
 
 ## Ordering
 

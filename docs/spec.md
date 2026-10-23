@@ -21,6 +21,7 @@ The spec is split into focused documents:
 | [Attachments](./spec/attachments.md)          | Content-addressed binary storage, metadata records, garbage collection       |
 | [Change events](./spec/events.md)             | Subscribing to record changes, event shape, permission scoping, delivery     |
 | [Adapters](./spec/adapters.md)                | Adapter contract, backends, capabilities, concurrency & storage ownership    |
+| [Portability](./spec/portability.md)          | Copying a stack whole, history included, and the portable export format      |
 | [Wire format](./spec/wire-format.md)          | The HTTP API stack servers implement and `adapter-api` consumes              |
 | [Change feed](./spec/change-feed.md)          | The wire encoding of the change events above — `GET /changes` over SSE       |
 

@@ -885,13 +885,18 @@ describe('ScopedStack — versions', () => {
   test('restoreVersion enforces write access', async () => {
     // version: 2 — the live record already moved past the v1 snapshot
     // below (simulating a prior edit), so restoreVersion()'s own
-    // saveVersion(existing) snapshots version 2, not a colliding version 1.
-    const record = await adapter.createRecord(makeRecord({ version: 2 }));
-    await adapter.saveVersion(record.id, {
-      version: 1,
-      typeId: NOTE,
-      content: { text: 'old' },
-      updatedAt: new Date(),
+    // snapshot of the live record is version 2, not a colliding version 1.
+    const record = makeRecord({ version: 2 });
+    await adapter.importRecord(record, {
+      versions: [
+        {
+          version: 1,
+          typeId: NOTE,
+          content: { text: 'old' },
+          updatedAt: new Date(),
+        },
+      ],
+      journal: [],
     });
     await expect(stack.asEntity(STRANGER).restoreVersion(record.id, 1)).rejects.toThrow(
       StackNotFoundError,
@@ -904,18 +909,22 @@ describe('ScopedStack — versions', () => {
   // plain reader (read access but no write) must be denied, matching
   // patchContent()/editAssociations()'s gate exactly.
   test('getVersions/getVersion deny a read-only requester', async () => {
-    const record = await adapter.createRecord(
-      makeRecord({
-        permissions: [
-          { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
-        ],
-      }),
-    );
-    await adapter.saveVersion(record.id, {
-      version: 1,
-      typeId: NOTE,
-      content: {},
-      updatedAt: new Date(),
+    const record = makeRecord({
+      version: 2,
+      permissions: [
+        { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
+      ],
+    });
+    await adapter.importRecord(record, {
+      versions: [
+        {
+          version: 1,
+          typeId: NOTE,
+          content: {},
+          updatedAt: new Date(),
+        },
+      ],
+      journal: [],
     });
     await expect(stack.asEntity(MEMBER).getVersions(record.id)).rejects.toThrow(
       StackPermissionError,
@@ -926,39 +935,47 @@ describe('ScopedStack — versions', () => {
   });
 
   test('getVersions/getVersion allow a write-holder', async () => {
-    const record = await adapter.createRecord(
-      makeRecord({
-        permissions: [
-          { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
-          { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
-        ],
-      }),
-    );
-    await adapter.saveVersion(record.id, {
-      version: 1,
-      typeId: NOTE,
-      content: {},
-      updatedAt: new Date(),
+    const record = makeRecord({
+      version: 2,
+      permissions: [
+        { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
+        { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
+      ],
+    });
+    await adapter.importRecord(record, {
+      versions: [
+        {
+          version: 1,
+          typeId: NOTE,
+          content: {},
+          updatedAt: new Date(),
+        },
+      ],
+      journal: [],
     });
     await expect(stack.asEntity(MEMBER).getVersions(record.id)).resolves.toHaveLength(1);
     await expect(stack.asEntity(MEMBER).getVersion(record.id, 1)).resolves.not.toBeNull();
   });
 
   test('getVersions/getVersion serve the same rows to a write-holder and to the owner', async () => {
-    const record = await adapter.createRecord(
-      makeRecord({
-        permissions: [
-          { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
-          { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
-        ],
-      }),
-    );
-    await adapter.saveVersion(record.id, {
-      version: 1,
-      typeId: NOTE,
-      content: { title: 'snapshotted' },
-      updatedAt: new Date(0),
-      createdBy: { subjectId: 'someone-else' },
+    const record = makeRecord({
+      version: 2,
+      permissions: [
+        { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
+        { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
+      ],
+    });
+    await adapter.importRecord(record, {
+      versions: [
+        {
+          version: 1,
+          typeId: NOTE,
+          content: { title: 'snapshotted' },
+          updatedAt: new Date(0),
+          createdBy: { subjectId: 'someone-else' },
+        },
+      ],
+      journal: [],
     });
 
     const [memberList, memberSingle] = await Promise.all([
@@ -977,20 +994,24 @@ describe('ScopedStack — versions', () => {
 
   test('getVersions/getVersion on a group require admin, not just membership', async () => {
     const ADMIN = 'group-version-admin';
-    const group = await adapter.createRecord(
-      makeRecord({
-        typeId: '_group@1',
-        associations: [
-          { kind: 'relationship', label: 'admin', target: { kind: 'entity', entityId: ADMIN } },
-          { kind: 'relationship', label: 'member', target: { kind: 'entity', entityId: MEMBER } },
-        ],
-      }),
-    );
-    await adapter.saveVersion(group.id, {
-      version: 1,
+    const group = makeRecord({
+      version: 2,
       typeId: '_group@1',
-      content: {},
-      updatedAt: new Date(),
+      associations: [
+        { kind: 'relationship', label: 'admin', target: { kind: 'entity', entityId: ADMIN } },
+        { kind: 'relationship', label: 'member', target: { kind: 'entity', entityId: MEMBER } },
+      ],
+    });
+    await adapter.importRecord(group, {
+      versions: [
+        {
+          version: 1,
+          typeId: '_group@1',
+          content: {},
+          updatedAt: new Date(),
+        },
+      ],
+      journal: [],
     });
     await expect(stack.asEntity(MEMBER).getVersions(group.id)).rejects.toThrow(StackNotFoundError);
     await expect(stack.asEntity(ADMIN).getVersions(group.id)).resolves.toHaveLength(1);
@@ -1016,21 +1037,24 @@ describe('ScopedStack — versions', () => {
         actions: ['read-any', 'update-any'],
         grantee: { kind: 'entity', entityId: MEMBER },
       });
-      const record = await adapter.createRecord(
-        makeRecord({
-          typeId: PHOTO_NOTE,
-          version: 2,
-          permissions: [
-            { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
-            { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
-          ],
-        }),
-      );
-      await adapter.saveVersion(record.id, {
-        version: 1,
+      const record = makeRecord({
         typeId: PHOTO_NOTE,
-        content: { coverFileId: 'unreachable-file' },
-        updatedAt: new Date(),
+        version: 2,
+        permissions: [
+          { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
+        ],
+      });
+      await adapter.importRecord(record, {
+        versions: [
+          {
+            version: 1,
+            typeId: PHOTO_NOTE,
+            content: { coverFileId: 'unreachable-file' },
+            updatedAt: new Date(),
+          },
+        ],
+        journal: [],
       });
       await expect(stack.asEntity(MEMBER).restoreVersion(record.id, 1)).rejects.toThrow(
         StackPermissionError,
@@ -1053,21 +1077,24 @@ describe('ScopedStack — versions', () => {
         actions: ['read-any', 'update-any'],
         grantee: { kind: 'entity', entityId: MEMBER },
       });
-      const record = await adapter.createRecord(
-        makeRecord({
-          typeId: PHOTO_NOTE,
-          version: 2,
-          permissions: [
-            { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
-            { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
-          ],
-        }),
-      );
-      await adapter.saveVersion(record.id, {
-        version: 1,
+      const record = makeRecord({
         typeId: PHOTO_NOTE,
-        content: { coverFileId: UNREACHABLE_FILE },
-        updatedAt: new Date(),
+        version: 2,
+        permissions: [
+          { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
+        ],
+      });
+      await adapter.importRecord(record, {
+        versions: [
+          {
+            version: 1,
+            typeId: PHOTO_NOTE,
+            content: { coverFileId: UNREACHABLE_FILE },
+            updatedAt: new Date(),
+          },
+        ],
+        journal: [],
       });
       return record;
     };
@@ -1093,21 +1120,24 @@ describe('ScopedStack — versions', () => {
     // back. See docs/spec/versioning.md § Restore semantics.
     test('containment is not gated, whatever container the record sits in', async () => {
       const box = await adapter.createRecord(makeRecord());
-      const record = await adapter.createRecord(
-        makeRecord({
-          version: 2,
-          parentId: box.id,
-          permissions: [
-            { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
-            { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
-          ],
-        }),
-      );
-      await adapter.saveVersion(record.id, {
-        version: 1,
-        typeId: NOTE,
-        content: { text: 'older' },
-        updatedAt: new Date(),
+      const record = makeRecord({
+        version: 2,
+        parentId: box.id,
+        permissions: [
+          { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
+        ],
+      });
+      await adapter.importRecord(record, {
+        versions: [
+          {
+            version: 1,
+            typeId: NOTE,
+            content: { text: 'older' },
+            updatedAt: new Date(),
+          },
+        ],
+        journal: [],
       });
       const restored = await stack.asEntity(MEMBER).restoreVersion(record.id, 1);
       expect(restored.content).toEqual({ text: 'older' });
@@ -1118,21 +1148,24 @@ describe('ScopedStack — versions', () => {
     // either: the record keeps its dangling parent and its rollback.
     test('a purged container blocks no restore', async () => {
       const box = await adapter.createRecord(makeRecord());
-      const record = await adapter.createRecord(
-        makeRecord({
-          version: 2,
-          parentId: box.id,
-          permissions: [
-            { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
-            { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
-          ],
-        }),
-      );
-      await adapter.saveVersion(record.id, {
-        version: 1,
-        typeId: NOTE,
-        content: { text: 'older' },
-        updatedAt: new Date(),
+      const record = makeRecord({
+        version: 2,
+        parentId: box.id,
+        permissions: [
+          { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
+          { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
+        ],
+      });
+      await adapter.importRecord(record, {
+        versions: [
+          {
+            version: 1,
+            typeId: NOTE,
+            content: { text: 'older' },
+            updatedAt: new Date(),
+          },
+        ],
+        journal: [],
       });
       await stack.delete(box.id, { purge: true });
 
@@ -2292,14 +2325,17 @@ describe('ScopedStack — grant-based update/delete', () => {
 describe('ScopedStack — write implies read', () => {
   /** A record with one prior version, whose permissions bypass validation. */
   async function recordWithHistory(permissions: AuthorityAssociation[]): Promise<StackRecord> {
-    const record = await adapter.createRecord(
-      makeRecord({ version: 2, content: { text: 'current' }, permissions }),
-    );
-    await adapter.saveVersion(record.id, {
-      version: 1,
-      typeId: NOTE,
-      content: { text: 'draft-secret' },
-      updatedAt: new Date(),
+    const record = makeRecord({ version: 2, content: { text: 'current' }, permissions });
+    await adapter.importRecord(record, {
+      versions: [
+        {
+          version: 1,
+          typeId: NOTE,
+          content: { text: 'draft-secret' },
+          updatedAt: new Date(),
+        },
+      ],
+      journal: [],
     });
     return record;
   }

@@ -735,12 +735,6 @@ export class APIAdapter implements StackAdapter {
     return raw ? parseVersion(raw) : null;
   }
 
-  async saveVersion(_id: RecordId, _version: RecordVersion): Promise<void> {
-    // The server snapshots versions automatically as a side effect of every
-    // mutating endpoint. There is no client-initiated saveVersion endpoint
-    // in the wire protocol.
-  }
-
   /**
    * Never restores `associations` — no snapshot carries them, so there is
    * nothing the server could restore associations *from*. See

@@ -6,7 +6,7 @@ Two questions next to this one have their own documents: whether a Record is _en
 
 ## Refused at the write, and again at evaluation
 
-`grantType()` and the access verbs are not the only ways authority-bearing state reaches storage. An unscoped `Stack`, a JSON import, a server mapping a request body, an adapter write and a foreign server's response all produce permission elements and `_grant` Records that no helper vetted and no compiler saw.
+`grantType()` and the access verbs are not the only ways authority-bearing state reaches storage. An unscoped `Stack`, a [copied stack](./portability.md#copying-a-stack), a server mapping a request body, an adapter write and a foreign server's response all produce permission elements and `_grant` Records that no helper vetted and no compiler saw.
 
 So every rule below that decides reach is enforced twice: **refused at the write**, and **read as conferring nothing at evaluation**. A rule held only at the writing helper would hold only for what went through it, and what it was meant to refuse would instead store, answer 200, and deny forever — a share that looks like it worked and never did. Where a rule below says it is enforced "again at evaluation", this is what it means; the argument is not restated at each one.
 
