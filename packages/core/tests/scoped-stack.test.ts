@@ -695,7 +695,14 @@ describe('ScopedStack.setUnlisted', () => {
   });
 
   test('the record creator (not stack owner) may toggle it', async () => {
-    const record = await adapter.createRecord(makeRecord({ createdBy: { subjectId: MEMBER } }));
+    const record = await adapter.createRecord(
+      makeRecord({
+        createdBy: { subjectId: MEMBER },
+        permissions: [
+          { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
+        ],
+      }),
+    );
     await stack.asEntity(MEMBER).setUnlisted(record.id, true);
     expect((await adapter.getRecord(record.id))?.unlistedAt).toBeInstanceOf(Date);
   });
@@ -3899,6 +3906,74 @@ describe('_group — a deleted Group carries no roster', () => {
     await stack.asEntity(ADMIN).delete(group.id);
     const restored = await stack.asEntity(ADMIN).undelete(group.id);
     expect(restored.deletedAt).toBeUndefined();
+  });
+});
+
+describe('_group — removal leaves a creator nothing their roster conveyed', () => {
+  const memberEntry: DataAssociation = {
+    kind: 'relationship',
+    label: 'member',
+    target: { kind: 'entity', entityId: MEMBER },
+  };
+  const readFor = (entityId: string): AuthorityAssociation => ({
+    kind: 'permission',
+    label: 'read',
+    grantee: { kind: 'entity', entityId },
+  });
+
+  const rosteredGroup = async () =>
+    adapter.createRecord(
+      makeRecord({
+        typeId: '_group@1',
+        associations: [
+          { kind: 'relationship', label: 'admin', target: { kind: 'entity', entityId: OWNER } },
+          memberEntry,
+        ],
+      }),
+    );
+
+  // The removed creator is refused as one who cannot read the record, on
+  // every verb that decides who reaches it.
+  const expectNoReshare = async (id: string) => {
+    const removed = stack.asEntity(MEMBER);
+    expect(await removed.get(id)).toBeNull();
+    await expect(
+      removed.editAccess(id, [{ op: 'add', association: readFor(MEMBER) }]),
+    ).rejects.toThrow(StackNotFoundError);
+    await expect(removed.setAccess(id, [readFor(MEMBER)])).rejects.toThrow(StackNotFoundError);
+    await expect(removed.setUnlisted(id, true)).rejects.toThrow(StackNotFoundError);
+    expect((await stack.get(id))?.createdBy?.subjectId).toBe(MEMBER);
+  };
+
+  test('through a group-targeted grant', async () => {
+    const group = await rosteredGroup();
+    await stack.grantType(fam(NOTE), {
+      actions: ['create', 'read-own'],
+      grantee: { kind: 'group', groupId: group.id, role: 'member' },
+    });
+    const record = await stack.asEntity(MEMBER).create(NOTE, { text: 'mine' });
+
+    await stack.editAssociations(group.id, [{ op: 'remove', association: memberEntry }]);
+    await expectNoReshare(record.id);
+  });
+
+  test('through a record-level group grantee', async () => {
+    const group = await rosteredGroup();
+    const record = await adapter.createRecord(
+      makeRecord({
+        createdBy: { subjectId: MEMBER },
+        permissions: [
+          {
+            kind: 'permission',
+            label: 'read',
+            grantee: { kind: 'group', groupId: group.id, role: 'member' },
+          },
+        ],
+      }),
+    );
+
+    await stack.editAssociations(group.id, [{ op: 'remove', association: memberEntry }]);
+    await expectNoReshare(record.id);
   });
 });
 

@@ -684,7 +684,7 @@ export class ScopedStack implements StackClient {
   /** requireReshareable()'s gate, asked of a record already found in its family. */
   private async gateReshare(record: StackRecord, snapshot: AuthoritySnapshot): Promise<void> {
     await this.requireOwnerAloneWriter(record, snapshot);
-    if (!this.#authority.canReshare(record)) {
+    if (!(await this.#authority.canReshare(record, snapshot))) {
       throw await this.#authority.denialFor(
         record,
         `Cannot change permissions on "${record.id}": only its author or the stack owner can reshare it`,
@@ -805,9 +805,12 @@ export class ScopedStack implements StackClient {
    * See docs/spec/journal.md § Reading it.
    */
   async getJournal(id: RecordId, query: JournalQuery = {}): Promise<RecordJournalEntry[]> {
-    const record = await this.requireUpdatable(id, { mutating: false }, this.#authority.snapshot());
+    const snapshot = this.#authority.snapshot();
+    const record = await this.requireUpdatable(id, { mutating: false }, snapshot);
     const entries = await this.stack.getJournal(id, query);
-    return this.#authority.canReshare(record) ? entries : entries.map(withoutAuthorityChanges);
+    return (await this.#authority.canReshare(record, snapshot))
+      ? entries
+      : entries.map(withoutAuthorityChanges);
   }
 
   /** See getVersions() — the same mutate-surface gate. */

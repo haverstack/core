@@ -472,14 +472,15 @@ export class ScopeAuthority {
   /**
    * Whether this request may decide who else reaches `record`: management
    * for a `_group`, so a demoted creator keeps no side door; otherwise the
-   * owner-or-author rule, asked of both sides of a delegation.
-   * See docs/spec/access-control.md § Record-level permissions.
+   * owner-or-author rule, asked of both sides of a delegation, of a record
+   * the request can read. See docs/spec/access-control.md § Write implies read.
    */
-  canReshare(record: StackRecord): boolean {
+  async canReshare(record: StackRecord, snapshot: AuthoritySnapshot): Promise<boolean> {
     if (familyPolicy(record.typeId).writers === 'group-managers') {
       return this.isGroupManager(record);
     }
     if (!this.mayReshare(this.principalId, record)) return false;
-    return !this.delegated || this.mayReshare(this.subjectId, record);
+    if (this.delegated && !this.mayReshare(this.subjectId, record)) return false;
+    return this.canRead(record, snapshot);
   }
 }

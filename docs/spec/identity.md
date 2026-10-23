@@ -195,6 +195,16 @@ What this does **not** promise: that an `admin` is _reachable_. An admin who los
 
 **Open question, deliberately not resolved here:** the roles above describe who may manage the Group _Record_. A Group that holds its own key will eventually need to answer "who may act _as_ the Group" — accept grants on its behalf, speak for it to other stacks. That's a distinct question from record management and isn't foreclosed by this definition.
 
+### Governing a group stack
+
+A collaborative group's stack is a stack like any other, so it has an owner, and the roster sits beneath it. Three defaults follow from rules stated elsewhere; they are gathered here because anyone deciding whether to join a group stack needs them.
+
+**The owner is whoever holds the group's key, and the owner's access is unconditional.** A group stack's `_config.entityId` is the group's DID, so the key's holders are its owner. No Record in the stack is withheld from them, and they manage any Group whatever its roster says — see [Access control § Enforcement](./access-control.md#enforcement-stackasentity). The roster's `admin` manages the roster; it does not bound the owner.
+
+**The owner's reads are not recorded anywhere.** The [journal](./journal.md#reading-it) records writes only. A member trusts the key's holders with everything the stack holds.
+
+**Removal cuts a member's reach to what they wrote.** Authorship confers no read: a member reaches Records, their own included, through record-level permissions or type grants, and a grant naming the group stops reaching them once they are off the roster. `createdBy` still names them, but a creator's standing to reshare lapses with their read — [resharing needs read](./access-control.md#write-implies-read) like every other mutation — so they cannot grant their way back in. A member who wants their contributions copies them out while still a member; a group that wants a gentler exit grants the person individual read before removing them.
+
 ## Authentication: challenge–response
 
 Token issuance is not an out-of-band secret handoff, and the handshake that replaces one is a **normative wire contract** — [Wire format § Authentication](./wire-format.md#authentication) pins the endpoints, the signed payload, and the error vocabulary. It has to be normative to be worth anything: a client that must be handed a token by some server-specific means is back to an out-of-band handoff, for every server. In outline:
