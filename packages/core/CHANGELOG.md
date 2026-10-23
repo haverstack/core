@@ -1,5 +1,14 @@
 # @haverstack/core
 
+## 0.44.0
+
+### Minor Changes
+
+- [#468](https://github.com/haverstack/core/pull/468) [`7f3d108`](https://github.com/haverstack/core/commit/7f3d108100dbb7a358fdc8d1bb6e3edb2455ec45) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Authority is gated the same way whenever it is written.
+  - Resharing needs read on the Record: `editAccess()`, `setAccess()` and `setUnlisted()` refuse a creator who cannot read their Record, such as one removed from the roster that conveyed it, or a drop-box contributor.
+  - `permissions` and `unlisted` at `create()` pass the same gate, asked of the Record the create would make.
+  - A roster entry no longer counts on the principal's side of a delegated request, so a delegated app neither manages a `_group` nor creates one, even with its own DID on the roster. The owner's own software acting for a subject still can.
+
 ## 0.43.0
 
 ### Minor Changes
