@@ -14,7 +14,7 @@ It travels on the wire like any other key: `?baseId=` on `GET /records` (repeata
 
 Every other family an adapter is handed is matched the same way:
 
-- A `Reach` is over families: `fence`, `within.types` and `within.authored.types` hold `BaseId`s, and `queryReadable()` receives the reach as `ScopedStack` built it. `Reach` no longer takes a type parameter, and `inReach(record, reach)` matches by the record's family.
+- A `Reach` is over families: `fence`, `within.baseIds` and `within.authored.baseIds` (renamed from `types`) hold `BaseId`s, and `queryReadable()` receives the reach as `ScopedStack` built it. `Reach` no longer takes a type parameter, and `inReach(record, reach)` matches by the record's family.
 - `deleteUnreferencedAttachmentRecords(fileId, metadataBaseId)` takes the `_attachment` family rather than its registered versions.
 
 `includeUnlisted` moves from `SubscribeOptions` into `ChangeFilter`, so a subscription writes `subscribe(handler, { filter: { includeUnlisted: true } })` as a query writes `filter.includeUnlisted`. `?includeUnlisted=` on `GET /changes` is unchanged; `parseChangeParams()` returns it as `filter.includeUnlisted`, and `ParsedChangeParams` no longer has an `includeUnlisted` field.

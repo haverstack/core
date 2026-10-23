@@ -358,16 +358,16 @@ Every gate on a Record that rests on grants or permissions asks one question: is
 type Reach = {
   fence?: BaseId[]; // only Records in these families
   within?: {
-    types: BaseId[]; // every Record in these families
-    authored?: { subjectId: EntityId; types: BaseId[] }; // Records this subject authored in these families
+    baseIds: BaseId[]; // every Record in these families
+    authored?: { subjectId: EntityId; baseIds: BaseId[] }; // Records this subject authored in these families
     permissions: AuthorityAssociation[][]; // Records carrying every element of one of these sets
   };
 };
 ```
 
-A Record is in reach when its family is inside `fence` and it is inside `within`: its family is in `types`; or its family is in `authored.types` and its `createdBy.subjectId` is `authored.subjectId`; or its `permissions` hold every element of one set, by [association identity](./data-model.md#associations). An absent part constrains nothing and an empty list matches nothing, as in a `filter` — an empty set among `permissions` included, since it names no element a Record could carry.
+A Record is in reach when its family is inside `fence` and it is inside `within`: its family is in `baseIds`; or its family is in `authored.baseIds` and its `createdBy.subjectId` is `authored.subjectId`; or its `permissions` hold every element of one set, by [association identity](./data-model.md#associations). An absent part constrains nothing and an empty list matches nothing, as in a `filter` — an empty set among `permissions` included, since it names no element a Record could carry.
 
-| Verb     | `fence` — the principal's grants convey | `types`      | `authored`   | `permissions`, for each grantee `g` the subject is |
+| Verb     | `fence` — the principal's grants convey | `baseIds`    | `authored`   | `permissions`, for each grantee `g` the subject is |
 | -------- | --------------------------------------- | ------------ | ------------ | -------------------------------------------------- |
 | `create` | `create`                                | `create`     | —            | —                                                  |
 | `read`   | `read-own` or `read-any`                | `read-any`   | `read-own`   | `[anyone]`, and `[read g]`                         |

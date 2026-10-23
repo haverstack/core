@@ -20,11 +20,11 @@ export function inReach(record: ReachedRecord, reach: Reach): boolean {
   if (reach.fence && !reach.fence.includes(family)) return false;
   const within = reach.within;
   if (!within) return true;
-  if (within.types.includes(family)) return true;
+  if (within.baseIds.includes(family)) return true;
   const authored = within.authored;
   if (
     authored &&
-    authored.types.includes(family) &&
+    authored.baseIds.includes(family) &&
     record.createdBy?.subjectId === authored.subjectId
   ) {
     return true;

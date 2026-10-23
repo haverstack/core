@@ -1085,36 +1085,39 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
       };
 
       // Far past any statement's parameter cap — 100 on Durable Object SQLite.
-      const manyTypes = Array.from({ length: 150 }, (_, i) => `org.haverstack.conformance/t${i}`);
+      const manyFamilies = Array.from(
+        { length: 150 },
+        (_, i) => `org.haverstack.conformance/t${i}`,
+      );
       const manyGroups = Array.from({ length: 60 }, (_, i) => `conformance-group-${i}`);
       const reaches: [string, Reach][] = [
         ['nothing constrained', {}],
-        ['every Record of a family', { within: { types: [OTHER], permissions: [] } }],
+        ['every Record of a family', { within: { baseIds: [OTHER], permissions: [] } }],
         [
           'the Records one subject authored in a family',
           {
             within: {
-              types: [],
-              authored: { subjectId: ALICE, types: [NOTE] },
+              baseIds: [],
+              authored: { subjectId: ALICE, baseIds: [NOTE] },
               permissions: [],
             },
           },
         ],
-        ['Records carrying `anyone`', { within: { types: [], permissions: [[anyone]] } }],
+        ['Records carrying `anyone`', { within: { baseIds: [], permissions: [[anyone]] } }],
         [
           'Records carrying a read naming an entity',
-          { within: { types: [], permissions: [[toAlice]] } },
+          { within: { baseIds: [], permissions: [[toAlice]] } },
         ],
         [
           'Records carrying a read naming a group at one role',
-          { within: { types: [], permissions: [[toAdmins]] } },
+          { within: { baseIds: [], permissions: [[toAdmins]] } },
         ],
         [
           'every arm at once',
           {
             within: {
-              types: [OTHER],
-              authored: { subjectId: ALICE, types: [NOTE] },
+              baseIds: [OTHER],
+              authored: { subjectId: ALICE, baseIds: [NOTE] },
               permissions: [[anyone], [toMembers]],
             },
           },
@@ -1125,23 +1128,23 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
           {
             fence: [NOTE],
             within: {
-              types: [OTHER],
-              authored: { subjectId: ALICE, types: [NOTE, OTHER] },
+              baseIds: [OTHER],
+              authored: { subjectId: ALICE, baseIds: [NOTE, OTHER] },
               permissions: [[anyone]],
             },
           },
         ],
-        ['an empty fence', { fence: [], within: { types: [NOTE], permissions: [[anyone]] } }],
-        ['no arm at all', { within: { types: [], permissions: [] } }],
+        ['an empty fence', { fence: [], within: { baseIds: [NOTE], permissions: [[anyone]] } }],
+        ['no arm at all', { within: { baseIds: [], permissions: [] } }],
         [
           'Records carrying every element of a set',
-          { within: { types: [], permissions: [[toAlice, { ...toAlice, label: 'write' }]] } },
+          { within: { baseIds: [], permissions: [[toAlice, { ...toAlice, label: 'write' }]] } },
         ],
         [
           'Records carrying one whole set of several',
           {
             within: {
-              types: [],
+              baseIds: [],
               permissions: [
                 [{ ...toAlice, label: 'write' }, anyone],
                 [toMembers, toAdmins],
@@ -1149,14 +1152,14 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
             },
           },
         ],
-        ['an empty set, which no Record carries', { within: { types: [], permissions: [[]] } }],
+        ['an empty set, which no Record carries', { within: { baseIds: [], permissions: [[]] } }],
         [
           'a reach of any size',
           {
-            fence: [NOTE, ...manyTypes],
+            fence: [NOTE, ...manyFamilies],
             within: {
-              types: manyTypes,
-              authored: { subjectId: ALICE, types: [NOTE, ...manyTypes] },
+              baseIds: manyFamilies,
+              authored: { subjectId: ALICE, baseIds: [NOTE, ...manyFamilies] },
               permissions: [
                 ...manyGroups.flatMap((groupId) => [
                   [{ ...toMembers, grantee: { ...toMembers.grantee, groupId } }],
@@ -1194,7 +1197,7 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         await adapter.createRecord(makeRecord({ associations: [pinned] }));
 
         const result = await adapter.queryReadable(resolveQuery({ filter: { tags: ['pinned'] } }), {
-          within: { types: [], permissions: [[anyone]] },
+          within: { baseIds: [], permissions: [[anyone]] },
         });
         expect(result.records.map((r) => r.id)).toEqual([tagged.id]);
       });
@@ -1204,7 +1207,7 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
       // many Records outside the reach remain.
       const pagesWithin = async (sort: StackQuery['sort']): Promise<void> => {
         if (!adapter.queryReadable) return;
-        const reach: Reach = { within: { types: [], permissions: [[anyone]] } };
+        const reach: Reach = { within: { baseIds: [], permissions: [[anyone]] } };
         const inside: string[] = [];
         for (let i = 0; i < 9; i++) {
           const visible = i % 3 === 1;

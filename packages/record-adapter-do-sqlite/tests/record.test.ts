@@ -596,7 +596,7 @@ test('queryReadable answers a reach far past the parameter cap', async () => {
       i === 0 ? 'com.example.test/note' : `com.example/t${i}`,
     ),
     within: {
-      types: [],
+      baseIds: [],
       permissions: groups.map((groupId) => [
         {
           kind: 'permission',

@@ -221,9 +221,9 @@ export class ScopeAuthority {
     const families = (action: GrantAction) =>
       this.familiesConveying(subject, SUBJECT_SIDE, [action], snapshot);
     reach.within = {
-      types: await families(any),
+      baseIds: await families(any),
       ...(subject !== null &&
-        own && { authored: { subjectId: subject, types: await families(own) } }),
+        own && { authored: { subjectId: subject, baseIds: await families(own) } }),
       permissions: bit ? await this.elementSets(bit, snapshot) : [],
     };
     return reach;

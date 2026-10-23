@@ -60,8 +60,8 @@ Every adapter stores a record's associations under the [identity](./data-model.m
 type Reach = {
   fence?: BaseId[];
   within?: {
-    types: BaseId[];
-    authored?: { subjectId: EntityId; types: BaseId[] };
+    baseIds: BaseId[];
+    authored?: { subjectId: EntityId; baseIds: BaseId[] };
     permissions: AuthorityAssociation[][];
   };
 };

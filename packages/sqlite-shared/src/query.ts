@@ -266,10 +266,10 @@ const reachConditions = (s: Statement, reach: Reach): void => {
   if (reach.fence) s.conditions.push(inFamilies(s, 'r', reach.fence));
   const within = reach.within;
   if (within) {
-    const arms = [inFamilies(s, 'r', within.types)];
+    const arms = [inFamilies(s, 'r', within.baseIds)];
     if (within.authored) {
       s.params.push(within.authored.subjectId);
-      arms.push(`(r.entity_id = ? AND ${inFamilies(s, 'r', within.authored.types)})`);
+      arms.push(`(r.entity_id = ? AND ${inFamilies(s, 'r', within.authored.baseIds)})`);
     }
     arms.push(carriesPermissions(s, within.permissions));
     s.conditions.push(`(${arms.join(' OR ')})`);

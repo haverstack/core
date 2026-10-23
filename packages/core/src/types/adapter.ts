@@ -111,9 +111,9 @@ export type Reach = {
   /** Records meeting one of these are in reach. */
   within?: {
     /** Every Record in these families. */
-    types: BaseId[];
+    baseIds: BaseId[];
     /** Records this subject authored in these families. */
-    authored?: { subjectId: EntityId; types: BaseId[] };
+    authored?: { subjectId: EntityId; baseIds: BaseId[] };
     /** Records carrying every element of one of these sets, by association identity. */
     permissions: AuthorityAssociation[][];
   };
