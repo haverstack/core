@@ -1,5 +1,5 @@
 ---
-'@haverstack/core': patch
+'@haverstack/core': minor
 ---
 
-Resharing (`editAccess()`, `setAccess()`, `setUnlisted()`) needs read on the Record, like every other mutation, so a creator removed from the roster that conveyed their read can no longer reshare their Record to grant themselves back in.
+Resharing needs read on the Record. `editAccess()`, `setAccess()` and `setUnlisted()` refuse a creator who cannot read their Record — one removed from the roster that conveyed it, or a drop-box contributor. `permissions` and `unlisted` at `create()` are refused to a non-owner creator whose type grants would not let them read the Record.

@@ -2532,6 +2532,48 @@ describe('ScopedStack — blind write', () => {
       .create(NOTE, { text: 'hello' }, { parentId: box.id });
     expect(posted.parentId).toBe(box.id);
   });
+
+  test('a contributor cannot reshare a submission, after the create or within it', async () => {
+    await stack.grantType(fam(NOTE), {
+      actions: ['create'],
+      grantee: { kind: 'entity', entityId: MEMBER },
+    });
+    const view = stack.asEntity(MEMBER);
+    const self: AuthorityAssociation = {
+      kind: 'permission',
+      label: 'read',
+      grantee: { kind: 'entity', entityId: MEMBER },
+    };
+    const posted = await view.create(NOTE, { text: 'for the owner' });
+
+    await expect(view.editAccess(posted.id, [{ op: 'add', association: self }])).rejects.toThrow(
+      StackNotFoundError,
+    );
+    await expect(view.setUnlisted(posted.id, true)).rejects.toThrow(StackNotFoundError);
+    await expect(view.create(NOTE, { text: 'x' }, { permissions: [self] })).rejects.toThrow(
+      StackPermissionError,
+    );
+    await expect(view.create(NOTE, { text: 'x' }, { unlisted: true })).rejects.toThrow(
+      StackPermissionError,
+    );
+    expect((await stack.query({ filter: { typeId: NOTE } })).records).toHaveLength(1);
+  });
+
+  test('a contributor who reads their own may set permissions at create', async () => {
+    await stack.grantType(fam(NOTE), {
+      actions: ['create', 'read-own'],
+      grantee: { kind: 'entity', entityId: MEMBER },
+    });
+    const shared = await stack
+      .asEntity(MEMBER)
+      .create(
+        NOTE,
+        { text: 'for everyone' },
+        { permissions: [{ kind: 'anyone', label: 'read' }], unlisted: true },
+      );
+    expect(shared.permissions).toEqual([{ kind: 'anyone', label: 'read' }]);
+    expect(shared.unlistedAt).toBeInstanceOf(Date);
+  });
 });
 
 // -------------------------------------------------------

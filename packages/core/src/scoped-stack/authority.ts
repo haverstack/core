@@ -275,7 +275,7 @@ export class ScopeAuthority {
     return inReach(record, within ? { within } : {});
   }
 
-  canRead(record: StackRecord, snapshot: AuthoritySnapshot): Promise<boolean> {
+  canRead(record: ReachedRecord, snapshot: AuthoritySnapshot): Promise<boolean> {
     return this.may('read', record, snapshot);
   }
 
@@ -482,5 +482,18 @@ export class ScopeAuthority {
     if (!this.mayReshare(this.principalId, record)) return false;
     if (this.delegated && !this.mayReshare(this.subjectId, record)) return false;
     return this.canRead(record, snapshot);
+  }
+
+  /**
+   * canReshare() asked of the Record a create would make, before it exists:
+   * its type alone must reach the requester, so the `permissions` being
+   * written cannot supply the read that writing them needs. A `_group`'s
+   * creator is stamped its first admin. See docs/spec/access-control.md
+   * § Write implies read.
+   */
+  async canReshareAtCreate(typeId: TypeId, snapshot: AuthoritySnapshot): Promise<boolean> {
+    if (!this.mayGrantAccess()) return false;
+    if (familyPolicy(typeId).writers === 'group-managers') return true;
+    return this.canRead({ typeId, createdBy: this.requester }, snapshot);
   }
 }

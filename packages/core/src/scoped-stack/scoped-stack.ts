@@ -421,6 +421,14 @@ export class ScopedStack implements StackClient {
         'A delegated principal cannot create an unlisted record, at create time or after',
       );
     }
+    if (
+      (opts.permissions?.length || opts.unlisted) &&
+      !(await this.#authority.canReshareAtCreate(typeId, snapshot))
+    ) {
+      throw new StackPermissionError(
+        `Cannot set permissions or listing on a new ${typeId} record: only a creator who can read it may decide who else reaches it`,
+      );
+    }
     this.requireOwnerFields(typeId, undefined, content);
     await this.requireAppIdMatchesPrincipal(opts.appId);
     if (opts.id !== undefined) {
