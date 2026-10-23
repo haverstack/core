@@ -57,6 +57,9 @@ import type {
 } from '../types/index.js';
 import type { Stack } from '../stack/stack.js';
 
+/** What a reshare decision reads: reach, plus the roster for a `_group`. */
+export type ReshareTarget = ReachedRecord & Pick<StackRecord, 'associations'>;
+
 /**
  * How each side of a request reads a grant. The subject is the entity a
  * grant is written about, so every tier counts; on the principal's side
@@ -305,13 +308,16 @@ export class ScopeAuthority {
    * grants don't apply. Asked of both identities under delegation, like
    * a reshare. See docs/spec/identity.md § Group.
    */
-  isGroupManager(record: StackRecord): boolean {
+  isGroupManager(record: Pick<StackRecord, 'associations'>): boolean {
     if (!this.managesGroup(this.principalId, record)) return false;
     return !this.delegated || this.managesGroup(this.subjectId, record);
   }
 
   /** Whether one identity, on its own, manages `record` — see isGroupManager(). */
-  private managesGroup(entityId: EntityId | null, record: StackRecord): boolean {
+  private managesGroup(
+    entityId: EntityId | null,
+    record: Pick<StackRecord, 'associations'>,
+  ): boolean {
     if (!entityId) return false;
     if (entityId === this.stack.ownerEntityId) return true;
     return groupRoleFromAssociations(record.associations, entityId) === 'admin';
@@ -449,22 +455,12 @@ export class ScopeAuthority {
   }
 
   /**
-   * Whether this request may widen who reaches a record, at create time or
-   * after. A delegated app may not, unless the owner is its principal:
-   * widening access is what containment most needs to hold.
-   * See docs/spec/access-control.md § Delegation: principal and subject.
-   */
-  mayGrantAccess(): boolean {
-    return this.principalUnbounded;
-  }
-
-  /**
    * Whether one identity, on its own, may decide who else reaches `record`
    * — the owner-or-creator rule a reshare enforces, asked of one
    * side at a time. See
    * docs/spec/access-control.md § Delegation: principal and subject.
    */
-  private mayReshare(entityId: EntityId | null, record: StackRecord): boolean {
+  private mayReshare(entityId: EntityId | null, record: ReachedRecord): boolean {
     if (!entityId) return false;
     return entityId === this.stack.ownerEntityId || entityId === record.createdBy?.subjectId;
   }
@@ -473,27 +469,15 @@ export class ScopeAuthority {
    * Whether this request may decide who else reaches `record`: management
    * for a `_group`, so a demoted creator keeps no side door; otherwise the
    * owner-or-author rule, asked of both sides of a delegation, of a record
-   * the request can read. See docs/spec/access-control.md § Write implies read.
+   * the request can read. Asked of a create's Record before it exists too.
+   * See docs/spec/access-control.md § Write implies read.
    */
-  async canReshare(record: StackRecord, snapshot: AuthoritySnapshot): Promise<boolean> {
+  async canReshare(record: ReshareTarget, snapshot: AuthoritySnapshot): Promise<boolean> {
     if (familyPolicy(record.typeId).writers === 'group-managers') {
       return this.isGroupManager(record);
     }
     if (!this.mayReshare(this.principalId, record)) return false;
     if (this.delegated && !this.mayReshare(this.subjectId, record)) return false;
     return this.canRead(record, snapshot);
-  }
-
-  /**
-   * canReshare() asked of the Record a create would make, before it exists:
-   * its type alone must reach the requester, so the `permissions` being
-   * written cannot supply the read that writing them needs. A `_group`'s
-   * creator is stamped its first admin. See docs/spec/access-control.md
-   * § Write implies read.
-   */
-  async canReshareAtCreate(typeId: TypeId, snapshot: AuthoritySnapshot): Promise<boolean> {
-    if (!this.mayGrantAccess()) return false;
-    if (familyPolicy(typeId).writers === 'group-managers') return true;
-    return this.canRead({ typeId, createdBy: this.requester }, snapshot);
   }
 }

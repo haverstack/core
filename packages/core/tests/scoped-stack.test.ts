@@ -5355,6 +5355,9 @@ describe('ScopedStack — delegation', () => {
         { permissions: [{ kind: 'anyone', label: 'read' }] },
       ),
     ).rejects.toThrow(StackPermissionError);
+    await expect(
+      view.create(COMMENT, { text: 'meant to stay listed' }, { unlisted: true }),
+    ).rejects.toThrow(StackPermissionError);
 
     // Refused before the write, so there is no record to have leaked.
     const all = await stack.query({ filter: { typeId: COMMENT } });

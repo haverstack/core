@@ -163,6 +163,8 @@ This gives roles for free via association labels, and membership is queryable li
 - **`member`** — counted by group ACLs (a permission element whose grantee is `{ kind: 'group', groupId, role: 'member' }`).
 - **`admin`** — everything `member` gets, plus may manage the Group Record itself: update its content, add or remove roster (`member`/`admin`) associations, and delete it. An `admin` association implies `member` for every purpose, which is why `role: 'member'` on a grantee is the wider set and `role: 'admin'` the narrower.
 
+**Removal from a roster withdraws what the roster conveyed**, a creator's standing to reshare what they wrote included, since that [needs read](./access-control.md#write-implies-read).
+
 **A roster entry and a permission element are the same shape of edge.** Both are elements on the Record they govern, journalled and delta'd identically — see [Access control § Record-level permissions](./access-control.md#record-level-permissions). What separates them is the aspect: a roster is the Group's associations, moving through `editAssociations()`/`setAssociations()` under the Group's admin rule, and an ACL is its permissions, moving through `editAccess()`/`setAccess()` under the reshare rule.
 
 **Role-gated group management.** Mutating a `_group` Record — `patchContent`, `setParent`, `setUnlisted`, `editAssociations`/`setAssociations` of roster associations, `editAccess`/`setAccess`, `delete`, `undelete` — requires the requester to be an `admin` of that Group, or the stack owner. This replaces the ordinary write-bit/grant check for `_group` Records specifically: membership rosters live on the very Record that write access would otherwise let a write-holder rewrite, so "can write this record" is deliberately not sufficient to add or remove members. `ScopedStack` enforces this — _who_ may write a `_group`; the invariant below is a separate question about _what_ a write may leave behind, and `Stack` enforces that for every requester including the owner. Under [delegation](./access-control.md#delegation-principal-and-subject) the rule is asked of both identities: the principal and the subject must each be an `admin` or the owner, so neither a contained app nor the owner's own software seizes a Group on the other's behalf.
@@ -194,14 +196,6 @@ What this does **not** promise: that an `admin` is _reachable_. An admin who los
 **Roster resolution is `ScopedStack`'s**: it fetches the `_group` Record and walks its `relationship` associations, so a server built on it inherits the rule. A `_group` Record in a different stack from the Record it governs is not resolved — see [Access control § Known limitation](./access-control.md#known-limitation).
 
 **Open question, deliberately not resolved here:** the roles above describe who may manage the Group _Record_. A Group that holds its own key will eventually need to answer "who may act _as_ the Group" — accept grants on its behalf, speak for it to other stacks. That's a distinct question from record management and isn't foreclosed by this definition.
-
-### Governing a group stack
-
-**The owner is whoever holds the group's key.** A group stack's `_config.entityId` is the group's DID, and the owner's access is [unconditional](./access-control.md#enforcement-stackasentity): the roster's `admin` manages the roster, it does not bound the owner.
-
-**The owner's reads are not recorded.** The [journal](./journal.md#reading-it) records writes only.
-
-**Removal ends what the roster conveyed, and nothing else.** Authorship confers no read, so a removed member keeps only what reaches them as an individual — a `read` element naming them, or a grant to them directly — and with their read goes their standing to [reshare](./access-control.md#write-implies-read). A member who could read their own Records could also name themselves on them, and that survives removal; one who never could, cannot. A group that wants a gentler exit grants the person individual read before removing them.
 
 ## Authentication: challenge–response
 

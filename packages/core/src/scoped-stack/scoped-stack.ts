@@ -27,6 +27,7 @@
  */
 
 import { baseIdOf } from '../schema.js';
+import { stampGroupAdmin } from '../access.js';
 import { validatePatchValues } from '../validate.js';
 import { ChangeEmitter, assertSinceUsable } from '../stack/changes.js';
 import { SYSTEM_TYPES } from '../types/index.js';
@@ -382,9 +383,9 @@ export class ScopedStack implements StackClient {
     if (!principal) throw new StackPermissionError('Anonymous requesters cannot create records');
     // A grantee is exactly the untrusted actor the `id` skew check below
     // exists to stop from forging a sort position, and a delegated app
-    // acting for the owner inherits none of the owner's extra trust — same
-    // reasoning as ScopeAuthority.mayGrantAccess(). Asked value-wise, since an
-    // `undefined` carries no date and Stack.create() reads it as absent.
+    // acting for the owner inherits none of the owner's extra trust. Asked
+    // value-wise, since an `undefined` carries no date and Stack.create()
+    // reads it as absent.
     if (
       (opts.createdAt !== undefined || opts.updatedAt !== undefined) &&
       !this.#authority.ownerActingAlone
@@ -411,23 +412,8 @@ export class ScopedStack implements StackClient {
         );
       }
     }
-    if (opts.permissions?.length && !this.#authority.mayGrantAccess()) {
-      throw new StackPermissionError(
-        'A delegated principal cannot set permissions, at create time or after',
-      );
-    }
-    if (opts.unlisted && !this.#authority.mayGrantAccess()) {
-      throw new StackPermissionError(
-        'A delegated principal cannot create an unlisted record, at create time or after',
-      );
-    }
-    if (
-      (opts.permissions?.length || opts.unlisted) &&
-      !(await this.#authority.canReshareAtCreate(typeId, snapshot))
-    ) {
-      throw new StackPermissionError(
-        `Cannot set permissions or listing on a new ${typeId} record: only a creator who can read it may decide who else reaches it`,
-      );
+    if (opts.permissions?.length || opts.unlisted) {
+      await this.requireReshareableAtCreate(typeId, opts.associations, snapshot);
     }
     this.requireOwnerFields(typeId, undefined, content);
     await this.requireAppIdMatchesPrincipal(opts.appId);
@@ -687,6 +673,33 @@ export class ScopedStack implements StackClient {
     checkFamily(record, expect);
     await this.gateReshare(record, snapshot);
     return record;
+  }
+
+  /**
+   * The reshare gate, asked of the Record a create would make: stamped as
+   * `Stack.create()` stamps it, and without the `permissions` being
+   * written, so they cannot supply the read that writing them needs.
+   * See docs/spec/access-control.md § Write implies read.
+   */
+  private async requireReshareableAtCreate(
+    typeId: TypeId,
+    associations: DataAssociation[] | undefined,
+    snapshot: AuthoritySnapshot,
+  ): Promise<void> {
+    const createdBy = this.#authority.requester;
+    const record = {
+      typeId,
+      createdBy,
+      associations:
+        createdBy && baseIdOf(typeId) === SYSTEM_TYPES.GROUP
+          ? stampGroupAdmin(associations, createdBy.subjectId)
+          : associations,
+    };
+    if (!(await this.#authority.canReshare(record, snapshot))) {
+      throw new StackPermissionError(
+        `Cannot set permissions or listing on a new ${typeId} record: only its author, holding read, or the stack owner can decide who else reaches it`,
+      );
+    }
   }
 
   /** requireReshareable()'s gate, asked of a record already found in its family. */
