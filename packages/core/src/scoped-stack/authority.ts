@@ -57,8 +57,8 @@ import type {
 } from '../types/index.js';
 import type { Stack } from '../stack/stack.js';
 
-/** What a reshare decision reads: reach, plus the roster for a `_group`. */
-export type ReshareTarget = ReachedRecord & Pick<StackRecord, 'associations'>;
+/** What a fence or reshare decision reads: reach, plus a `_group`'s roster. */
+export type GatedRecord = ReachedRecord & Pick<StackRecord, 'associations'>;
 
 /**
  * How each side of a request reads a grant. The subject is the entity a
@@ -315,6 +315,23 @@ export class ScopeAuthority {
     return this.principalUnbounded && this.managesGroup(this.subjectId, record);
   }
 
+  /**
+   * Whether this request passes `record`'s family fence: none for an
+   * ordinary family, the owner acting alone for `_grant` and `_install`, the
+   * Group's managers for `_group`. Asked of the Record a create would make
+   * as of a stored one. See docs/spec/access-control.md § Per-verb gates.
+   */
+  passesWriterFence(record: GatedRecord): boolean {
+    switch (familyPolicy(record.typeId).writers) {
+      case 'owner-alone':
+        return this.ownerActingAlone;
+      case 'group-managers':
+        return this.isGroupManager(record);
+      case 'ordinary':
+        return true;
+    }
+  }
+
   /** Whether one identity, on its own, manages `record` — see isGroupManager(). */
   private managesGroup(
     entityId: EntityId | null,
@@ -474,7 +491,7 @@ export class ScopeAuthority {
    * the request can read. Asked of a create's Record before it exists too.
    * See docs/spec/access-control.md § Write implies read.
    */
-  async canReshare(record: ReshareTarget, snapshot: AuthoritySnapshot): Promise<boolean> {
+  async canReshare(record: GatedRecord, snapshot: AuthoritySnapshot): Promise<boolean> {
     if (familyPolicy(record.typeId).writers === 'group-managers') {
       return this.isGroupManager(record);
     }
