@@ -125,8 +125,11 @@ export class MemoryAdapter implements StackAdapter {
 
   async importRecord(record: StackRecord, history: RecordHistory) {
     await this.createRecord(record);
-    this.versions.set(record.id, [...history.versions]);
-    // Held oldest first, as appendJournal() leaves it, whatever order it came in.
+    // Held oldest first, as the writes leave them, whatever order they came in.
+    this.versions.set(
+      record.id,
+      [...history.versions].sort((a, b) => a.version - b.version),
+    );
     this.journals.set(
       record.id,
       [...history.journal].sort((a, b) => a.seq - b.seq),

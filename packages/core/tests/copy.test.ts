@@ -53,13 +53,6 @@ describe('copyStack', () => {
     );
   });
 
-  test('refuses a target with another timezone', async () => {
-    const source = await sourceWith(1);
-    await expect(copyStack(source, await fresh(OWNER, 'Europe/Paris'))).rejects.toThrow(
-      InvalidAdapterError,
-    );
-  });
-
   test('refuses a target that already holds records', async () => {
     const source = await sourceWith(1);
     const target = await sourceWith(1);

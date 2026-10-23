@@ -41,12 +41,6 @@ export async function copyStack(from: StackAdapter, to: StackAdapter): Promise<v
   if (to.ownerEntityId !== from.ownerEntityId) {
     throw new OwnerMismatchError(from.ownerEntityId, to.ownerEntityId, 'the copy target');
   }
-  if (to.timezone !== from.timezone) {
-    throw new InvalidAdapterError(
-      `Cannot copy into this adapter: its timezone is ${JSON.stringify(to.timezone)}, ` +
-        `but the stack being copied has ${JSON.stringify(from.timezone)}.`,
-    );
-  }
   const occupied = await to.queryRecords(resolveQuery({ ...EVERYTHING, limit: 1 }));
   if (occupied.records.length) {
     throw new StackConflictError('Cannot copy into a store that already holds records.');

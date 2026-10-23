@@ -910,6 +910,7 @@ describe('ScopedStack — versions', () => {
   // patchContent()/editAssociations()'s gate exactly.
   test('getVersions/getVersion deny a read-only requester', async () => {
     const record = makeRecord({
+      version: 2,
       permissions: [
         { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
       ],
@@ -935,6 +936,7 @@ describe('ScopedStack — versions', () => {
 
   test('getVersions/getVersion allow a write-holder', async () => {
     const record = makeRecord({
+      version: 2,
       permissions: [
         { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
         { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
@@ -957,6 +959,7 @@ describe('ScopedStack — versions', () => {
 
   test('getVersions/getVersion serve the same rows to a write-holder and to the owner', async () => {
     const record = makeRecord({
+      version: 2,
       permissions: [
         { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: MEMBER } },
         { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: MEMBER } },
@@ -992,6 +995,7 @@ describe('ScopedStack — versions', () => {
   test('getVersions/getVersion on a group require admin, not just membership', async () => {
     const ADMIN = 'group-version-admin';
     const group = makeRecord({
+      version: 2,
       typeId: '_group@1',
       associations: [
         { kind: 'relationship', label: 'admin', target: { kind: 'entity', entityId: ADMIN } },

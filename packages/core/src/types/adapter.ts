@@ -162,12 +162,10 @@ export interface StackRecordAdapter {
   createRecord(record: StackRecord, opts?: JournalOptions): Promise<StackRecord>;
   getRecord(id: RecordId): Promise<StackRecord | null>;
   /**
-   * createRecord() for a record that already has a past: writes it exactly
-   * as given — authorship, dates and version included — beside its version
-   * snapshots and journal entries as recorded, in one atomic write, and
-   * appends no entry of its own. StackConflictError if `record.id` exists.
-   * Optional — a stack whose adapter lacks it cannot be copied into, as a
-   * server-backed one cannot. See docs/spec/portability.md § Writing history.
+   * createRecord() for a record with a past: written exactly as given, beside
+   * its snapshots and journal entries as recorded, in one atomic write that
+   * appends no entry of its own. Optional: a stack whose adapter lacks it
+   * cannot be copied into. See docs/spec/portability.md § Writing history.
    */
   importRecord?(record: StackRecord, history: RecordHistory): Promise<void>;
 

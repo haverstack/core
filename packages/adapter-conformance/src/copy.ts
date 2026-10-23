@@ -12,7 +12,7 @@
 import { describe, test, expect } from 'vitest';
 import { Stack, SYSTEM_TYPES } from '@haverstack/core';
 import type { StackRecord } from '@haverstack/core';
-import { copyStack, resolveQuery } from '@haverstack/core/adapter';
+import { baseIdOf, copyStack, resolveQuery } from '@haverstack/core/adapter';
 import type { StackAdapter } from '@haverstack/core/adapter';
 import { MemoryAdapter } from '@haverstack/core/testing';
 
@@ -56,7 +56,7 @@ async function contentsOf(adapter: StackAdapter) {
 
   const blobs: Record<string, Uint8Array> = {};
   for (const record of records) {
-    if (record.typeId.startsWith(`${SYSTEM_TYPES.ATTACHMENT}@`)) {
+    if (baseIdOf(record.typeId) === SYSTEM_TYPES.ATTACHMENT) {
       const fileId = (record.content as { fileId: string }).fileId;
       blobs[fileId] = await adapter.getBlob(fileId);
     }

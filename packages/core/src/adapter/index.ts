@@ -30,6 +30,7 @@ export { ElementSetMovedError, OwnerMismatchError, softDeletedRefusal } from '..
 export { combineAdapters } from './combine.js';
 export { copyStack } from './copy.js';
 export { inReach } from './reach.js';
+export { baseIdOf } from '../schema.js';
 export type { ReachedRecord } from './reach.js';
 export {
   assertQueryCapabilities,

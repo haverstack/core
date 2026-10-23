@@ -11,7 +11,7 @@ import {
   StackBadRequestError,
 } from '@haverstack/core';
 import { OwnerMismatchError, resolveQuery } from '@haverstack/core/adapter';
-import type { AuthorityAssociation, StackRecord } from '@haverstack/core';
+import type { AuthorityAssociation, RecordVersion, StackRecord } from '@haverstack/core';
 
 // -------------------------------------------------------
 // Test helpers
@@ -29,6 +29,27 @@ beforeEach(() => {
 afterEach(() => {
   rmSync(testDir, { recursive: true, force: true });
 });
+
+/**
+ * A versions row written behind the adapter's back, through a connection of
+ * its own: the state an interrupted write leaves, which no adapter call can.
+ */
+const plantVersionRow = (recordId: string, v: RecordVersion): void => {
+  const db = new DatabaseSync(dbPath);
+  db.prepare(
+    `INSERT INTO versions (record_id, version, type_id, content, updated_at, updated_by, updated_via)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    recordId,
+    v.version,
+    v.typeId,
+    JSON.stringify(v.content),
+    v.updatedAt.getTime(),
+    v.updatedBy?.subjectId ?? null,
+    v.updatedBy?.principalId ?? null,
+  );
+  db.close();
+};
 
 const initAdapter = (opts?: { timezone?: string; ownerEntityId?: string }) =>
   NativeSQLiteRecordAdapter.open({
@@ -436,7 +457,7 @@ describe('records — CRUD', () => {
 
   test('purging deleteRecord removes version history', async () => {
     const adapter = await initAdapter();
-    const record = makeRecord();
+    const record = makeRecord({ version: 2 });
     await adapter.importRecord(record, {
       versions: [
         {
@@ -641,7 +662,7 @@ describe('ifVersion', () => {
 
   test('restoreVersion enforces ifVersion', async () => {
     const adapter = await initAdapter();
-    const record = makeRecord({ content: { text: 'original' } });
+    const record = makeRecord({ version: 2, content: { text: 'v2' } });
     await adapter.importRecord(record, {
       versions: [
         {
@@ -653,7 +674,6 @@ describe('ifVersion', () => {
       ],
       journal: [],
     });
-    await adapter.patchContent(record.id, { text: 'v2' }); // -> v2
 
     await expect(adapter.restoreVersion(record.id, 1, { ifVersion: 1 })).rejects.toBeInstanceOf(
       StackVersionConflictError,
@@ -685,7 +705,7 @@ describe('ifVersion', () => {
 describe('ifVersion holds between concurrent writes', () => {
   test('restoreVersion: one of two racing restores wins', async () => {
     const adapter = await initAdapter();
-    const record = makeRecord({ content: { text: 'original' } });
+    const record = makeRecord({ version: 2, content: { text: 'v2' } });
     await adapter.importRecord(record, {
       versions: [
         {
@@ -697,7 +717,6 @@ describe('ifVersion holds between concurrent writes', () => {
       ],
       journal: [],
     });
-    await adapter.patchContent(record.id, { text: 'v2' }); // -> v2
 
     const results = await Promise.allSettled([
       adapter.restoreVersion(record.id, 1, { ifVersion: 2 }),
@@ -2177,7 +2196,7 @@ describe('setParent', () => {
 describe('versions', () => {
   test('an imported version reads back through getVersion, actors included', async () => {
     const adapter = await initAdapter();
-    const record = makeRecord();
+    const record = makeRecord({ version: 2 });
     const version = {
       version: 1,
       typeId: record.typeId,
@@ -2196,7 +2215,7 @@ describe('versions', () => {
   // and docs/spec/versioning.md § Version history.
   test('a snapshot carries no containment, however one is handed in', async () => {
     const adapter = await initAdapter();
-    const record = makeRecord();
+    const record = makeRecord({ version: 3 });
     const base = { typeId: record.typeId, content: {}, updatedAt: new Date('2024-01-01') };
     await adapter.importRecord(record, {
       versions: [
@@ -2257,15 +2276,12 @@ describe('versions', () => {
     ).toHaveLength(2);
   });
 
-  test('an import naming one version twice is refused and writes nothing', async () => {
+  // Two snapshots at one version are outside the contract; they are here
+  // only to make the engine fail after the record row is written.
+  test('an import that fails part-way leaves no row behind', async () => {
     const adapter = await initAdapter();
-    const record = makeRecord();
-    const v = {
-      version: 1,
-      typeId: record.typeId,
-      content: { text: 'original' },
-      updatedAt: new Date(),
-    };
+    const record = makeRecord({ version: 2 });
+    const v = { version: 1, typeId: record.typeId, content: {}, updatedAt: new Date() };
     await expect(adapter.importRecord(record, { versions: [v, v], journal: [] })).rejects.toThrow(
       StackConflictError,
     );
@@ -2281,18 +2297,14 @@ describe('versions', () => {
     test("a mutating call's snapshot heals a pre-existing orphan at the record's current version instead of colliding with it forever", async () => {
       const adapter = await initAdapter();
       const record = makeRecord({ version: 1, content: { text: 'original' } });
-      // The state an interrupted write leaves: the v1 snapshot committed,
-      // but the mutation that should have bumped past it never did.
-      await adapter.importRecord(record, {
-        versions: [
-          {
-            version: 1,
-            typeId: record.typeId,
-            content: { text: 'original' },
-            updatedAt: record.updatedAt,
-          },
-        ],
-        journal: [],
+      await adapter.createRecord(record);
+      // Simulate an interrupted write: the v1 snapshot committed, but the
+      // mutation that should have bumped past it never did.
+      plantVersionRow(record.id, {
+        version: 1,
+        typeId: record.typeId,
+        content: { text: 'original' },
+        updatedAt: record.updatedAt,
       });
 
       const updated = await adapter.patchContent(
@@ -2321,18 +2333,14 @@ describe('versions', () => {
     test('healing an orphan replaces every snapshot field, not just content', async () => {
       const adapter = await initAdapter();
       const record = makeRecord({ version: 1, content: { text: 'original' } });
+      await adapter.createRecord(record);
       // The orphan carries an actor trail of its own alongside its content.
-      await adapter.importRecord(record, {
-        versions: [
-          {
-            version: 1,
-            typeId: record.typeId,
-            content: { text: 'stale' },
-            updatedAt: record.updatedAt,
-            updatedBy: { subjectId: 'entity-stale', principalId: 'app-stale' },
-          },
-        ],
-        journal: [],
+      plantVersionRow(record.id, {
+        version: 1,
+        typeId: record.typeId,
+        content: { text: 'stale' },
+        updatedAt: record.updatedAt,
+        updatedBy: { subjectId: 'entity-stale', principalId: 'app-stale' },
       });
 
       await adapter.patchContent(
@@ -2408,7 +2416,7 @@ describe('versions', () => {
 describe('restoreVersion', () => {
   test('restores content and bumps version', async () => {
     const adapter = await initAdapter();
-    const record = makeRecord();
+    const record = makeRecord({ version: 2, content: { text: 'changed' } });
     await adapter.importRecord(record, {
       versions: [
         {
@@ -2420,7 +2428,6 @@ describe('restoreVersion', () => {
       ],
       journal: [],
     });
-    await adapter.patchContent(record.id, { text: 'changed' });
 
     const restored = await adapter.restoreVersion(record.id, 1);
     expect(restored.content).toEqual({ text: 'original' });
@@ -2429,7 +2436,7 @@ describe('restoreVersion', () => {
 
   test('restored content is searchable and the pre-restore content is not', async () => {
     const adapter = await initAdapter();
-    const record = makeRecord({ content: { text: 'original searchable text' } });
+    const record = makeRecord({ version: 2, content: { text: 'changed unrelated text' } });
     await adapter.importRecord(record, {
       versions: [
         {
@@ -2441,7 +2448,6 @@ describe('restoreVersion', () => {
       ],
       journal: [],
     });
-    await adapter.patchContent(record.id, { text: 'changed unrelated text' });
 
     await adapter.restoreVersion(record.id, 1);
 
@@ -2469,7 +2475,7 @@ describe('restoreVersion', () => {
   // § Version history.
   test('restoreVersion never touches associations — the current set survives untouched', async () => {
     const adapter = await initAdapter();
-    const record = makeRecord();
+    const record = makeRecord({ version: 2 });
     await adapter.importRecord(record, {
       versions: [
         {
@@ -2492,7 +2498,7 @@ describe('restoreVersion', () => {
   // it never touches associations for any record.
   test('rolls content back while leaving associations in place', async () => {
     const adapter = await initAdapter();
-    const record = makeRecord({ content: { text: 'original' } });
+    const record = makeRecord({ version: 2, content: { text: 'changed' } });
     await adapter.importRecord(record, {
       versions: [
         {
@@ -2504,7 +2510,6 @@ describe('restoreVersion', () => {
       ],
       journal: [],
     });
-    await adapter.patchContent(record.id, { text: 'changed' });
     await adapter.setAssociations(record.id, [{ kind: 'tag', label: 'current' }]);
 
     const restored = await adapter.restoreVersion(record.id, 1);
@@ -2514,7 +2519,7 @@ describe('restoreVersion', () => {
 
   test('restores typeId from the snapshot, even when it differs from the record’s current typeId', async () => {
     const adapter = await initAdapter();
-    const record = makeRecord({ typeId: 'com.example.test/note@1' });
+    const record = makeRecord({ typeId: 'com.example.test/note@1', version: 2 });
     await adapter.importRecord(record, {
       versions: [
         {

@@ -742,9 +742,11 @@ describe('importRecord', () => {
     expect(await stub.getJournal(record.id)).toEqual(journal);
   });
 
-  test('a refused import writes nothing', async () => {
+  // Two snapshots at one version are outside the contract; they are here
+  // only to make the engine fail after the record row is written.
+  test('an import that fails part-way leaves no row behind', async () => {
     const stub = getStub();
-    const record = makeRecord();
+    const record = makeRecord({ version: 2 });
     const v = { version: 1, typeId: record.typeId, content: {}, updatedAt: new Date(0) };
     const err = await stub
       .importRecord(record, { versions: [v, v], journal: [] })
