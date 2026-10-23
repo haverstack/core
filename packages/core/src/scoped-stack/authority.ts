@@ -305,12 +305,14 @@ export class ScopeAuthority {
   /**
    * `_group` records are managed, not merely written: only the owner or an
    * `admin` roster holder may mutate them — ordinary write permissions and
-   * grants don't apply. Asked of both identities under delegation, like
-   * a reshare. See docs/spec/identity.md § Group.
+   * grants don't apply. Under delegation the subject must manage the Group
+   * and the principal must be the owner: a roster entry, like a group
+   * grant, never counts on the principal's side.
+   * See docs/spec/access-control.md § Delegation: principal and subject.
    */
   isGroupManager(record: Pick<StackRecord, 'associations'>): boolean {
-    if (!this.managesGroup(this.principalId, record)) return false;
-    return !this.delegated || this.managesGroup(this.subjectId, record);
+    if (!this.delegated) return this.managesGroup(this.principalId, record);
+    return this.principalUnbounded && this.managesGroup(this.subjectId, record);
   }
 
   /** Whether one identity, on its own, manages `record` — see isGroupManager(). */

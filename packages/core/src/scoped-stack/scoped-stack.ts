@@ -27,7 +27,7 @@
  */
 
 import { baseIdOf } from '../schema.js';
-import { stampGroupAdmin } from '../access.js';
+import { createAssociations } from '../access.js';
 import { validatePatchValues } from '../validate.js';
 import { ChangeEmitter, assertSinceUsable } from '../stack/changes.js';
 import { SYSTEM_TYPES } from '../types/index.js';
@@ -412,9 +412,7 @@ export class ScopedStack implements StackClient {
         );
       }
     }
-    if (opts.permissions?.length || opts.unlisted) {
-      await this.requireReshareableAtCreate(typeId, opts.associations, snapshot);
-    }
+    await this.requireAuthorityAtCreate(typeId, opts, snapshot);
     this.requireOwnerFields(typeId, undefined, content);
     await this.requireAppIdMatchesPrincipal(opts.appId);
     if (opts.id !== undefined) {
@@ -676,28 +674,42 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * The reshare gate, asked of the Record a create would make: stamped as
-   * `Stack.create()` stamps it, and without the `permissions` being
-   * written, so they cannot supply the read that writing them needs.
+   * Authority a create writes — a Group's roster, the Record's permissions
+   * and listing — gated as a later write of it would be, asked of the
+   * Record the create would make. That Record carries no `permissions`, so
+   * the ones being written cannot supply the read that writing them needs.
    * See docs/spec/access-control.md § Write implies read.
    */
-  private async requireReshareableAtCreate(
+  private async requireAuthorityAtCreate(
     typeId: TypeId,
-    associations: DataAssociation[] | undefined,
+    opts: BackdatableCreateRecordOptions,
     snapshot: AuthoritySnapshot,
   ): Promise<void> {
     const createdBy = this.#authority.requester;
     const record = {
       typeId,
       createdBy,
-      associations:
-        createdBy && baseIdOf(typeId) === SYSTEM_TYPES.GROUP
-          ? stampGroupAdmin(associations, createdBy.subjectId)
-          : associations,
+      associations: createAssociations(
+        typeId,
+        opts.associations,
+        createdBy,
+        this.stack.ownerEntityId,
+      ),
     };
-    if (!(await this.#authority.canReshare(record, snapshot))) {
+    if (
+      familyPolicy(typeId).writers === 'group-managers' &&
+      !this.#authority.isGroupManager(record)
+    ) {
       throw new StackPermissionError(
-        `Cannot set permissions or listing on a new ${typeId} record: only its author, holding read, or the stack owner can decide who else reaches it`,
+        `Cannot create a ${baseIdOf(typeId)} record: only its admins can manage it, and an app acting for someone is not one`,
+      );
+    }
+    if (
+      (opts.permissions?.length || opts.unlisted) &&
+      !(await this.#authority.canReshare(record, snapshot))
+    ) {
+      throw new StackPermissionError(
+        `Cannot set permissions or listing on a new ${typeId} record: only its author or the stack owner can decide who else reaches it`,
       );
     }
   }

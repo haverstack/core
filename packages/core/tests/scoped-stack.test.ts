@@ -5421,6 +5421,66 @@ describe('ScopedStack — delegation', () => {
     ).rejects.toThrow(StackNotFoundError);
   });
 
+  // A roster entry is roster-derived authority, which never counts on the
+  // principal's side: an app naming itself `admin` gains nothing by it.
+  test('an app on a roster cannot manage the group for its subject', async () => {
+    const appAdmin: DataAssociation = {
+      kind: 'relationship',
+      label: 'admin',
+      target: { kind: 'entity', entityId: APP },
+    };
+    await grantAll({ kind: 'entity', entityId: MEMBER }, '_group@1');
+    await grantAll({ kind: 'entity', entityId: APP }, '_group@1');
+    const group = await stack.asEntity(MEMBER).create(
+      '_group@1',
+      { name: 'Book Club' },
+      {
+        associations: [appAdmin],
+      },
+    );
+    const view = stack.asActor({ principalId: APP, subjectId: MEMBER });
+    await expect(
+      view.editAccess(group.id, [{ op: 'add', association: { kind: 'anyone', label: 'read' } }]),
+    ).rejects.toThrow(StackPermissionError);
+    await expect(view.patchContent(group.id, { name: 'Renamed' })).rejects.toThrow(
+      StackPermissionError,
+    );
+  });
+
+  // Creating a Group writes its roster, so the create is gated as managing
+  // the Group it would make: the subject is stamped admin, the app is not
+  // the owner, and naming itself admin does not count.
+  test('an app cannot create a group for its subject, roster or not', async () => {
+    await grantAll({ kind: 'entity', entityId: APP }, '_group@1');
+    await grantAll({ kind: 'entity', entityId: MEMBER }, '_group@1');
+    const view = stack.asActor({ principalId: APP, subjectId: MEMBER });
+    await expect(view.create('_group@1', { name: 'x' })).rejects.toThrow(StackPermissionError);
+    await expect(
+      view.create(
+        '_group@1',
+        { name: 'x' },
+        {
+          associations: [
+            { kind: 'relationship', label: 'admin', target: { kind: 'entity', entityId: APP } },
+          ],
+          permissions: [{ kind: 'anyone', label: 'read' }],
+        },
+      ),
+    ).rejects.toThrow(StackPermissionError);
+    expect((await stack.query({ filter: { typeId: '_group@1' } })).records).toHaveLength(0);
+  });
+
+  test("the owner's own software may create and manage a group for its subject", async () => {
+    await grantAll({ kind: 'entity', entityId: MEMBER }, '_group@1');
+    const view = stack.asActor({ principalId: OWNER, subjectId: MEMBER });
+    const group = await view.create(
+      '_group@1',
+      { name: 'Book Club' },
+      { permissions: [{ kind: 'anyone', label: 'read' }] },
+    );
+    expect((await view.patchContent(group.id, { name: 'Renamed' })).content.name).toBe('Renamed');
+  });
+
   // Default grants say "any authenticated entity" — people who turn up,
   // not software the owner installed. An app reaches only what it is named
   // in, which is the whole of what containment promises.

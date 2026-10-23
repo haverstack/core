@@ -15,6 +15,7 @@
 
 import { SYSTEM_TYPES } from './types/index.js';
 import type {
+  Actor,
   Association,
   AuthorityAssociation,
   DataAssociation,
@@ -25,6 +26,7 @@ import type {
   RecordId,
   RelationshipAssociation,
   StackRecord,
+  TypeId,
 } from './types/index.js';
 import { associationKey } from './associations/identity.js';
 import { baseIdOf } from './schema.js';
@@ -164,8 +166,22 @@ function isGroupAdminAssociation(
   );
 }
 
-/** Bootstraps a `_group` record's first admin at create time. */
-export function stampGroupAdmin(
+/**
+ * The associations a create stores: as given, plus a `_group`'s creator —
+ * the owner when none is named — stamped as its first admin.
+ * See docs/spec/identity.md § Group.
+ */
+export function createAssociations(
+  typeId: TypeId,
+  associations: DataAssociation[] | undefined,
+  createdBy: Actor | undefined,
+  ownerEntityId: EntityId,
+): DataAssociation[] | undefined {
+  if (baseIdOf(typeId) !== SYSTEM_TYPES.GROUP) return associations;
+  return stampGroupAdmin(associations, createdBy?.subjectId ?? ownerEntityId);
+}
+
+function stampGroupAdmin(
   associations: DataAssociation[] | undefined,
   creator: EntityId,
 ): DataAssociation[] {
