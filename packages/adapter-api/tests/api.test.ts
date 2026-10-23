@@ -24,10 +24,11 @@ import {
   useFetchMock,
 } from './helpers.js';
 import { OwnerMismatchError, resolveQuery } from '@haverstack/core/adapter';
+import type { StackAdapter } from '@haverstack/core/adapter';
 import { buildAuthChallengePayload } from '@haverstack/core/wire';
 import { WIRE_PROTOCOL_VERSION } from '@haverstack/wire-types';
 import type { DiscoveryCapabilities } from '@haverstack/wire-types';
-import type { StackRecord, StackType, RecordVersion, DataAssociation } from '@haverstack/core';
+import type { StackRecord, StackType, DataAssociation } from '@haverstack/core';
 import {
   StackPermissionError,
   StackNotFoundError,
@@ -1581,18 +1582,10 @@ describe('open() reading a success body that is empty or not JSON', () => {
   });
 });
 
-describe('saveVersion', () => {
-  test('is a no-op — does not make any HTTP requests', async () => {
-    const adapter = await openAdapter();
-    const callsBefore = mockFetch.mock.calls.length;
-    const v: RecordVersion = {
-      version: 1,
-      typeId: 'com.example/note@1',
-      content: { text: 'v1' },
-      updatedAt: new Date(),
-    };
-    await expect(adapter.saveVersion('rec-abc123', v)).resolves.toBeUndefined();
-    expect(mockFetch.mock.calls.length).toBe(callsBefore);
+describe('importRecord', () => {
+  test('is absent: a server is the only writer of its own history tiers', async () => {
+    const adapter: StackAdapter = await openAdapter();
+    expect(adapter.importRecord).toBeUndefined();
   });
 });
 

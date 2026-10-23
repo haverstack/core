@@ -26,6 +26,7 @@ import type {
   AuthorityAssociation,
   DataAssociation,
   RecordFilter,
+  RecordJournalEntry,
   StackCapabilities,
   StackQuery,
   StackRecord,
@@ -35,7 +36,13 @@ import type { Reach, StackRecordAdapter } from '@haverstack/core/adapter';
 
 type PermissionElement = Extract<AuthorityAssociation, { kind: 'permission' }>;
 import { expectStackErrorCode } from './errors.js';
-import { CONFORMANCE_TYPE_ID, conformanceType, makeRecord, uniqueId } from './helpers.js';
+import {
+  CONFORMANCE_TYPE_ID,
+  conformanceType,
+  makeRecord,
+  snapshotOf,
+  uniqueId,
+} from './helpers.js';
 
 export interface RecordAdapterConformanceOptions {
   /** Used in describe() titles, so pick something that reads well there. */
@@ -75,6 +82,22 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
       opened = false;
       await close?.(adapter);
     });
+
+    /**
+     * Patch `record` `count` times, each patch snapshotting the version it
+     * replaces, as Stack does: versions 1 through `count` end up stored.
+     */
+    const patchWithSnapshots = async (record: StackRecord, count: number) => {
+      let current = record;
+      for (let i = 0; i < count; i++) {
+        current = await adapter.patchContent(
+          current.id,
+          { title: `v${current.version + 1}` },
+          { snapshot: snapshotOf(current) },
+        );
+      }
+      return current;
+    };
 
     // -----------------------------------------------------------------
     // Capabilities
@@ -264,28 +287,14 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
       test('getVersions returns snapshots newest first', async () => {
         const record = makeRecord();
         await adapter.createRecord(record);
-        for (const version of [1, 2, 3]) {
-          await adapter.saveVersion(record.id, {
-            version,
-            typeId: record.typeId,
-            content: record.content,
-            updatedAt: record.updatedAt,
-          });
-        }
+        await patchWithSnapshots(record, 3);
         expect((await adapter.getVersions(record.id)).map((v) => v.version)).toEqual([3, 2, 1]);
       });
 
       test('getVersions pages walk every version exactly once, newest first', async () => {
         const record = makeRecord();
         await adapter.createRecord(record);
-        for (const version of [1, 2, 3, 4, 5]) {
-          await adapter.saveVersion(record.id, {
-            version,
-            typeId: record.typeId,
-            content: record.content,
-            updatedAt: record.updatedAt,
-          });
-        }
+        await patchWithSnapshots(record, 5);
         const seen: number[] = [];
         let beforeVersion: number | undefined;
         for (;;) {
@@ -301,14 +310,7 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
       test('getVersions beforeVersion is exclusive and limit bounds the result', async () => {
         const record = makeRecord();
         await adapter.createRecord(record);
-        for (const version of [1, 2, 3]) {
-          await adapter.saveVersion(record.id, {
-            version,
-            typeId: record.typeId,
-            content: record.content,
-            updatedAt: record.updatedAt,
-          });
-        }
+        await patchWithSnapshots(record, 3);
         const versionsOf = async (query: { beforeVersion?: number; limit?: number }) =>
           (await adapter.getVersions(record.id, query)).map((v) => v.version);
         expect(await versionsOf({ beforeVersion: 3 })).toEqual([2, 1]);
@@ -321,12 +323,7 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
       test('purging deleteRecord removes the record and its version history', async () => {
         const record = makeRecord();
         await adapter.createRecord(record);
-        await adapter.saveVersion(record.id, {
-          version: record.version,
-          typeId: record.typeId,
-          content: record.content,
-          updatedAt: record.updatedAt,
-        });
+        await patchWithSnapshots(record, 1);
 
         await adapter.deleteRecord(record.id, { purge: true });
         expect(await adapter.getRecord(record.id)).toBeNull();
@@ -648,15 +645,10 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
     // Versions — snapshots and restore
     // -----------------------------------------------------------------
     describe('versions', () => {
-      test('saveVersion and getVersion roundtrip', async () => {
+      test("a patch's snapshot reads back through getVersion", async () => {
         const record = makeRecord();
         await adapter.createRecord(record);
-        await adapter.saveVersion(record.id, {
-          version: record.version,
-          typeId: record.typeId,
-          content: record.content,
-          updatedAt: record.updatedAt,
-        });
+        await patchWithSnapshots(record, 1);
         const version = await adapter.getVersion(record.id, record.version);
         expect(version?.content).toEqual(record.content);
       });
@@ -666,13 +658,7 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         await adapter.createRecord(parent);
         const record = makeRecord({ content: { title: 'v1' } });
         await adapter.createRecord(record);
-        await adapter.saveVersion(record.id, {
-          version: record.version,
-          typeId: record.typeId,
-          content: record.content,
-          updatedAt: record.updatedAt,
-        });
-        await adapter.patchContent(record.id, { title: 'v2' });
+        await adapter.patchContent(record.id, { title: 'v2' }, { snapshot: snapshotOf(record) });
         await adapter.setParent(record.id, parent.id);
         await adapter.editAssociations(record.id, [
           { op: 'add', association: { kind: 'tag', label: 'keep-me' } },
@@ -689,6 +675,147 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         const record = makeRecord();
         await adapter.createRecord(record);
         await expectStackErrorCode(adapter.restoreVersion(record.id, 999), 'not_found');
+      });
+    });
+
+    // -----------------------------------------------------------------
+    // Importing a record — optional, so each test asks whether the adapter
+    // has importRecord() at all. See docs/spec/portability.md § Writing
+    // history.
+    // -----------------------------------------------------------------
+    describe('importing a record', () => {
+      const AUTHOR = { subjectId: 'did:key:conformance-author' };
+      const EDITOR = { subjectId: 'did:key:conformance-editor', principalId: 'did:key:app' };
+      const at = (day: number) => new Date(Date.UTC(2024, 0, day));
+      const pinned: DataAssociation = { kind: 'tag', label: 'pinned' };
+
+      /** A record with a past: two versions, four journal entries, every optional field set. */
+      const withPast = (parentId: string) => {
+        const record = makeRecord({
+          content: { title: 'v2' },
+          createdAt: at(1),
+          updatedAt: at(2),
+          version: 2,
+          parentId,
+          appId: 'org.haverstack.conformance',
+          createdBy: AUTHOR,
+          updatedBy: EDITOR,
+          unlistedAt: at(3),
+          associations: [pinned],
+          permissions: [{ kind: 'anyone', label: 'read' }],
+        });
+        const versions = [
+          {
+            version: 1,
+            typeId: record.typeId,
+            content: { title: 'v1' },
+            updatedAt: at(1),
+            createdBy: AUTHOR,
+            updatedBy: AUTHOR,
+          },
+        ];
+        const journal: RecordJournalEntry[] = [
+          {
+            seq: 1,
+            at: at(1),
+            kind: 'created',
+            ops: ['create'],
+            version: 1,
+            typeId: record.typeId,
+            actor: AUTHOR,
+          },
+          {
+            seq: 2,
+            at: at(2),
+            kind: 'changed',
+            ops: ['patch'],
+            version: 2,
+            typeId: record.typeId,
+            actor: EDITOR,
+          },
+          {
+            seq: 3,
+            at: at(3),
+            kind: 'changed',
+            ops: ['reparent'],
+            version: 2,
+            typeId: record.typeId,
+            parentId,
+            previousParentId: null,
+            actor: EDITOR,
+          },
+          {
+            seq: 4,
+            at: at(3),
+            kind: 'changed',
+            ops: ['associate', 'unlist'],
+            version: 2,
+            typeId: record.typeId,
+            parentId,
+            associations: [{ op: 'add', association: pinned }],
+          },
+        ];
+        return { record, versions, journal };
+      };
+
+      test('writes the record, its versions and its journal exactly as recorded', async () => {
+        if (!adapter.importRecord) return;
+        const parent = makeRecord();
+        await adapter.createRecord(parent);
+        const { record, versions, journal } = withPast(parent.id);
+        await adapter.importRecord(record, { versions, journal });
+
+        expect(await adapter.getRecord(record.id)).toEqual(record);
+        expect(await adapter.getVersions(record.id)).toEqual(versions);
+        expect(await adapter.getJournal(record.id)).toEqual(journal);
+      });
+
+      test('appends no journal entry of its own', async () => {
+        if (!adapter.importRecord) return;
+        const record = makeRecord();
+        await adapter.importRecord(record, { versions: [], journal: [] });
+        expect(await adapter.getJournal(record.id)).toEqual([]);
+      });
+
+      test('refuses an id that already exists', async () => {
+        if (!adapter.importRecord) return;
+        const record = makeRecord();
+        await adapter.createRecord(record);
+        await expectStackErrorCode(
+          adapter.importRecord(record, { versions: [], journal: [] }),
+          'conflict',
+        );
+      });
+
+      test('an imported record answers queries as a created one does', async () => {
+        if (!adapter.importRecord) return;
+        const record = makeRecord({ content: { title: 'imported' }, associations: [pinned] });
+        await adapter.importRecord(record, { versions: [], journal: [] });
+        const byTag = await adapter.queryRecords(resolveQuery({ filter: { tags: ['pinned'] } }));
+        expect(byTag.records.map((r) => r.id)).toEqual([record.id]);
+        if (capabilities.filter.content !== 'none') {
+          const byContent = await adapter.queryRecords(
+            resolveQuery({ filter: { content: { title: 'imported' } } }),
+          );
+          expect(byContent.records.map((r) => r.id)).toEqual([record.id]);
+        }
+      });
+
+      test('a write after an import continues its history', async () => {
+        if (!adapter.importRecord) return;
+        const parent = makeRecord();
+        await adapter.createRecord(parent);
+        const { record, versions, journal } = withPast(parent.id);
+        await adapter.importRecord(record, { versions, journal });
+
+        const patched = await adapter.patchContent(
+          record.id,
+          { title: 'v3' },
+          { snapshot: snapshotOf(record), journal: { ops: ['patch'], kind: 'changed' } },
+        );
+        expect(patched.version).toBe(3);
+        expect((await adapter.getVersions(record.id)).map((v) => v.version)).toEqual([2, 1]);
+        expect((await adapter.getJournal(record.id)).map((e) => e.seq)).toEqual([1, 2, 3, 4, 5]);
       });
     });
 

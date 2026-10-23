@@ -10,6 +10,7 @@ import type {
   TypeId,
   BaseId,
   SubscribeOptions,
+  RecordHistory,
 } from '../src/types/index.js';
 
 const purgedRecord: StackRecord = {
@@ -80,7 +81,6 @@ function makeRecordAdapter(overrides: Partial<StackRecordAdapter> = {}): StackRe
     },
     getVersions: async () => [],
     getVersion: async () => null,
-    saveVersion: async () => {},
     restoreVersion: async () => {
       throw new Error('not implemented');
     },
@@ -277,6 +277,29 @@ describe('combineAdapters', () => {
         blob: makeBlobAdapter(),
       });
       expect(adapter.deleteUnreferencedAttachmentRecords).toBeUndefined();
+    });
+
+    test('importRecord is present when the record adapter implements it', async () => {
+      let calledWith: [StackRecord, RecordHistory] | undefined;
+      const adapter = combineAdapters({
+        record: makeRecordAdapter({
+          importRecord: async (record, history) => {
+            calledWith = [record, history];
+          },
+        }),
+        blob: makeBlobAdapter(),
+      });
+      const history: RecordHistory = { versions: [], journal: [] };
+      await adapter.importRecord!(purgedRecord, history);
+      expect(calledWith).toEqual([purgedRecord, history]);
+    });
+
+    test('importRecord is absent when the record adapter does not implement it', () => {
+      const adapter = combineAdapters({
+        record: makeRecordAdapter(),
+        blob: makeBlobAdapter(),
+      });
+      expect(adapter.importRecord).toBeUndefined();
     });
 
     test('listBlobs is present when the blob adapter implements it', async () => {

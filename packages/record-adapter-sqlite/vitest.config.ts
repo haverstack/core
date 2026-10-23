@@ -5,6 +5,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@haverstack/core/wire': resolve(__dirname, '../core/src/wire/index.ts'),
+      '@haverstack/core/testing': resolve(__dirname, '../core/src/testing.ts'),
       '@haverstack/core/adapter': resolve(__dirname, '../core/src/adapter/index.ts'),
       '@haverstack/core': resolve(__dirname, '../core/src/index.ts'),
       '@haverstack/sqlite-shared': resolve(__dirname, '../sqlite-shared/src/index.ts'),

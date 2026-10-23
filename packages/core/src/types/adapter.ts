@@ -119,6 +119,15 @@ export type Reach = {
   };
 };
 
+/**
+ * A record's two durable history tiers as an adapter reads them back:
+ * every version snapshot, and every journal entry with its `seq` and `at`.
+ */
+export type RecordHistory = {
+  versions: RecordVersion[];
+  journal: RecordJournalEntry[];
+};
+
 /** The metadata an upload's `_attachment@1` record carries beside its bytes. */
 export type PutAttachmentOptions = {
   mimeType: string;
@@ -152,6 +161,16 @@ export interface StackRecordAdapter {
    */
   createRecord(record: StackRecord, opts?: JournalOptions): Promise<StackRecord>;
   getRecord(id: RecordId): Promise<StackRecord | null>;
+  /**
+   * createRecord() for a record that already has a past: writes it exactly
+   * as given — authorship, dates and version included — beside its version
+   * snapshots and journal entries as recorded, in one atomic write, and
+   * appends no entry of its own. StackConflictError if `record.id` exists.
+   * Optional — a stack whose adapter lacks it cannot be copied into, as a
+   * server-backed one cannot. See docs/spec/portability.md § Writing history.
+   */
+  importRecord?(record: StackRecord, history: RecordHistory): Promise<void>;
+
   /**
    * Merge a content patch, one level deep, into the content as it stands
    * when the write lands. Bumps `version` and snapshots. Never touches
@@ -233,13 +252,6 @@ export interface StackRecordAdapter {
    */
   getVersions(id: RecordId, query?: VersionsQuery): Promise<RecordVersion[]>;
   getVersion(id: RecordId, version: number): Promise<RecordVersion | null>;
-  /**
-   * Standalone snapshot write, outside of a mutation's own atomic path.
-   * Mutating methods above take a `snapshot` option instead, so the
-   * snapshot and the mutation land in one write — see SnapshotOptions.
-   */
-  saveVersion(id: RecordId, version: RecordVersion): Promise<void>;
-
   /**
    * Read a record's change journal, oldest first — required, on the same
    * footing as getVersions(). A recovery mechanism an app cannot rely on is

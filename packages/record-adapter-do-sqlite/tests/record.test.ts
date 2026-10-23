@@ -19,10 +19,11 @@ import type {
   AssociationEdit,
   DataAssociation,
   RecordVersion,
+  RecordJournalEntry,
   StackType,
   StackCapabilities,
 } from '@haverstack/core';
-import type { AdapterQuery, Reach } from '@haverstack/core/adapter';
+import type { AdapterQuery, Reach, RecordHistory } from '@haverstack/core/adapter';
 import { resolveQuery } from '@haverstack/core/adapter';
 
 /**
@@ -68,6 +69,8 @@ type TestStub = {
   queryRecords(query: AdapterQuery): Promise<QueryResult>;
   queryReadable(query: AdapterQuery, reach: Reach): Promise<QueryResult>;
   getVersions(id: string): Promise<RecordVersion[]>;
+  getJournal(id: string): Promise<RecordJournalEntry[]>;
+  importRecord(record: StackRecord, history: RecordHistory): Promise<void>;
   editAssociations(
     id: string,
     edits: AssociationEdit[],
@@ -703,4 +706,50 @@ test('content conditions far past the statement limits execute', async () => {
   content.n = 1;
   const result = await stub.queryRecords(resolveQuery({ filter: { content } }));
   expect(result.records.map((r) => r.id)).toEqual(['r1']);
+});
+
+// importRecord() runs inside transactionSync() like every other write here,
+// so a refused import leaves nothing behind. See docs/spec/portability.md
+// § Writing history.
+describe('importRecord', () => {
+  test('writes the record and its history as recorded', async () => {
+    const stub = getStub();
+    const record = makeRecord({ version: 2, createdBy: { subjectId: 'did:key:author' } });
+    const versions = [
+      { version: 1, typeId: record.typeId, content: { text: 'v1' }, updatedAt: new Date(0) },
+    ];
+    const journal: RecordJournalEntry[] = [
+      {
+        seq: 1,
+        at: new Date(0),
+        kind: 'created',
+        ops: ['create'],
+        version: 1,
+        typeId: record.typeId,
+      },
+      {
+        seq: 2,
+        at: new Date(1),
+        kind: 'changed',
+        ops: ['patch'],
+        version: 2,
+        typeId: record.typeId,
+      },
+    ];
+    await stub.importRecord(record, { versions, journal });
+    expect(await stub.getRecord(record.id)).toEqual(record);
+    expect(await stub.getVersions(record.id)).toEqual(versions);
+    expect(await stub.getJournal(record.id)).toEqual(journal);
+  });
+
+  test('a refused import writes nothing', async () => {
+    const stub = getStub();
+    const record = makeRecord();
+    const v = { version: 1, typeId: record.typeId, content: {}, updatedAt: new Date(0) };
+    const err = await stub
+      .importRecord(record, { versions: [v, v], journal: [] })
+      .catch((e: unknown) => e);
+    expect((err as { code?: string }).code).toBe('conflict');
+    expect(await stub.getRecord(record.id)).toBeNull();
+  });
 });

@@ -12,6 +12,7 @@ import type {
   ElementWriteOptions,
   OwnerMismatchError,
   Reach,
+  RecordHistory,
 } from '@haverstack/core/adapter';
 import { DoSQLiteRecordAdapter } from '../../src/index.js';
 import type {
@@ -154,9 +155,14 @@ export class TestRecordAdapterDO extends DurableObject {
     return this.adapter.getVersion(id, version);
   }
 
-  async saveVersion(id: string, version: RecordVersion) {
+  async getJournal(id: string) {
     await this.ready;
-    return this.adapter.saveVersion(id, version);
+    return this.adapter.getJournal(id);
+  }
+
+  async importRecord(record: StackRecord, history: RecordHistory) {
+    await this.ready;
+    return this.adapter.importRecord(record, history);
   }
 
   async saveType(type: StackType) {

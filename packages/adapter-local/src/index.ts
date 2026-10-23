@@ -42,6 +42,7 @@ import type {
   JournalOptions,
   MutateOptions,
   Reach,
+  RecordHistory,
 } from '@haverstack/core/adapter';
 import type { TokenSession, TokenInfo } from '@haverstack/core/wire';
 import {
@@ -133,6 +134,10 @@ export class LocalAdapter implements StackAdapter {
 
   async createRecord(record: StackRecord, opts?: JournalOptions): Promise<StackRecord> {
     return this.record.createRecord(record, opts);
+  }
+
+  async importRecord(record: StackRecord, history: RecordHistory): Promise<void> {
+    return this.record.importRecord(record, history);
   }
 
   async getRecord(id: RecordId): Promise<StackRecord | null> {
@@ -231,10 +236,6 @@ export class LocalAdapter implements StackAdapter {
 
   async getVersion(id: RecordId, version: number): Promise<RecordVersion | null> {
     return this.record.getVersion(id, version);
-  }
-
-  async saveVersion(id: RecordId, version: RecordVersion): Promise<void> {
-    return this.record.saveVersion(id, version);
   }
 
   async restoreVersion(id: RecordId, version: number, opts?: MutateOptions): Promise<StackRecord> {
