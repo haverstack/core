@@ -173,7 +173,7 @@ The convention this codebase follows, in order of how often it comes up:
 
 ```ts
 // Don't:
-// The old two-call design could crash between saveVersion() and the
+// The old two-call design could crash between the snapshot write and the
 // mutation, leaving an orphan row that collided with every future snapshot.
 
 // Do:

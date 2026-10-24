@@ -321,9 +321,10 @@ export const fileRefFields = (schema: ReadonlyTypeSchema): string[] =>
     .map(([field]) => field);
 
 /**
- * The files a record references, by the one definition deleteAttachment(),
- * the garbage sweep and copyStack() share: attachment associations and
- * top-level `file-ref` fields under `schema`, the record's own Type's.
+ * The files a record references, by the one definition deleteAttachment()
+ * and the garbage sweep share: attachment associations and top-level
+ * `file-ref` fields under `schema`, the record's own Type's. An
+ * `_attachment` record's own `fileId` is not one.
  */
 export const referencedFileIds = (record: StackRecord, schema: ReadonlyTypeSchema): FileId[] => {
   const fromAssociations = (record.associations ?? []).flatMap((a) =>

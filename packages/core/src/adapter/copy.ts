@@ -33,8 +33,6 @@ const EVERYTHING: PlainQuery = {
   limit: PAGE_SIZE,
 };
 
-const SYSTEM_BASE_IDS = new Set<string>(Object.values(SYSTEM_TYPES));
-
 /**
  * Copy everything `from` holds into the store `create` makes with `from`'s
  * identity, and return that store, open. Not atomic: a failure closes the
@@ -55,9 +53,9 @@ export async function copyStack(from: StackAdapter, create: CreateStore): Promis
 }
 
 /**
- * The one rule a target is held to: it is what creating a store with
- * `identity` produces — that owner and timezone, no Record, no Type but the
- * system ones — on an adapter that can write history.
+ * The one rule a target is held to: it is a store as its adapter creates
+ * one with `identity` — that owner and timezone, holding nothing — on an
+ * adapter that can write history.
  */
 async function assertNewStore(to: StackAdapter, identity: StackIdentity): Promise<void> {
   const refuse = (why: string) => {
@@ -75,9 +73,7 @@ async function assertNewStore(to: StackAdapter, identity: StackIdentity): Promis
   if ((await to.queryRecords(resolveQuery({ ...EVERYTHING, limit: 1 }))).records.length) {
     refuse('it already holds Records');
   }
-  if ((await to.listTypes()).some((type) => !SYSTEM_BASE_IDS.has(type.baseId))) {
-    refuse('it already holds Types of its own');
-  }
+  if ((await to.listTypes()).length) refuse('it already holds Types');
 }
 
 async function copyInto(from: StackAdapter, to: StackAdapter): Promise<void> {
@@ -85,9 +81,9 @@ async function copyInto(from: StackAdapter, to: StackAdapter): Promise<void> {
   for (const type of types) await to.saveType(type);
   const schemas = new Map(types.map((type) => [type.id, type.schema]));
 
-  // Without listBlobs(), the blobs a store holds are the ones its Records
-  // name, as far as anything can enumerate them.
-  const named = new Set<FileId>();
+  // The blobs a stack holds: those its blob store lists, and those its
+  // Records name. See docs/spec/attachments.md § The blobs a stack holds.
+  const fileIds = new Set<FileId>((await from.listBlobs?.())?.map((blob) => blob.fileId));
   let cursor: string | undefined;
   do {
     const page = await from.queryRecords(resolveQuery({ ...EVERYTHING, cursor }));
@@ -97,18 +93,16 @@ async function copyInto(from: StackAdapter, to: StackAdapter): Promise<void> {
         from.getJournal(record.id),
       ]);
       await to.importRecord!(record, { versions, journal });
-      if (from.listBlobs) continue;
       if (baseIdOf(record.typeId) === SYSTEM_TYPES.ATTACHMENT) {
-        named.add((record.content as { fileId: FileId }).fileId);
+        fileIds.add((record.content as { fileId: FileId }).fileId);
       }
       for (const fileId of referencedFileIds(record, schemas.get(record.typeId) ?? {})) {
-        named.add(fileId);
+        fileIds.add(fileId);
       }
     }
     cursor = page.cursor ?? undefined;
   } while (cursor);
 
-  const fileIds = from.listBlobs ? (await from.listBlobs()).map((blob) => blob.fileId) : named;
   for (const fileId of fileIds) {
     try {
       await to.putBlob(await from.getBlob(fileId));

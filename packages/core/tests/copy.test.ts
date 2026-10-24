@@ -50,7 +50,7 @@ describe('copyStack', () => {
     expect([...target.records.keys()].sort()).toEqual([...source.records.keys()].sort());
   });
 
-  test('carries every blob the source lists, referenced or not', async () => {
+  test('carries every blob the source lists, named by a Record or not', async () => {
     const source = await sourceWith(0);
     const stack = await Stack.open(source);
     const named = await stack.putAttachment(new Uint8Array([1, 2, 3]), { mimeType: 'image/png' });
@@ -59,7 +59,7 @@ describe('copyStack', () => {
     expect([...target.blobs.keys()].sort()).toEqual([named.content.fileId, bare].sort());
   });
 
-  test('without listBlobs(), carries every blob a Record names, by any of the three ways', async () => {
+  test('carries every blob a Record names, by any of the three ways, with no listing to go on', async () => {
     const source = await sourceWith(0);
     source.listBlobs = undefined;
     const stack = await Stack.open(source);
@@ -91,20 +91,10 @@ describe('copyStack', () => {
     expect(target.records.size).toBe(source.records.size);
   });
 
-  test('accepts a store Stack.open() has seeded with system Types alone', async () => {
-    const source = await sourceWith(1);
-    const target = await copyStack(source, async (identity) => {
-      const store = await create(identity);
-      await Stack.open(store);
-      return store;
-    });
-    expect((target as MemoryAdapter).records.size).toBe(source.records.size);
-  });
-
   // One rule for every way the store create() returns can differ from a new
   // store with the source's identity. See docs/spec/portability.md
   // § Copying a stack.
-  describe('refuses a store that is not a new one with the source identity, and closes it', () => {
+  describe('refuses a store that is not a new, empty one with the source identity, and closes it', () => {
     const cases: [string, (identity: StackIdentity) => Promise<StackAdapter>][] = [
       [
         'no importRecord()',
@@ -123,6 +113,14 @@ describe('copyStack', () => {
         async ({ ownerEntityId }) => create({ ownerEntityId, timezone: 'Asia/Tokyo' }),
       ],
       ['a Record already in it', async () => sourceWith(1)],
+      [
+        'the system Types Stack.open() seeds',
+        async (identity) => {
+          const store = await create(identity);
+          await Stack.open(store);
+          return store;
+        },
+      ],
       [
         'a Type of its own',
         async (identity) => {

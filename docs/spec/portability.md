@@ -18,13 +18,13 @@ What it carries is everything the source holds:
 
 - **Every Type**, through `listTypes()` and `saveType()`.
 - **Every Record but `_config`**, soft-deleted and unlisted ones included, each with every version snapshot and every journal entry, through [`importRecord()`](#writing-history). `_config` is the store's own: no query reaches it, and `create` made the target with what it holds.
-- **Every blob**, through `listBlobs()`. A source without it enumerates its blobs the one way left: every file a Record names, by an `_attachment` family record's `fileId` or by a [reference](./attachments.md#garbage-collection). A reference whose bytes are gone stays dangling, as it was.
+- **[Every blob the stack holds](./attachments.md#the-blobs-a-stack-holds)**: every one its blob store lists, and every file a Record names. A name whose bytes are gone stays dangling, as it was.
 
 Nothing is filtered on the way: deciding what is garbage is the target's own [collection](./attachments.md#garbage-collection), run when its owner chooses, and nothing a purge destroyed is carried, because the source no longer holds it.
 
 **It is a full-trust operation, like any direct adapter access.** It writes authorship and history as recorded, which no write through `Stack` may: a scoped create is stamped with its requester, and nothing outside a write appends a snapshot or a journal entry. It takes adapters rather than stacks because those are where that trust already lives ([Adapters § Concurrency & storage ownership](./adapters.md#concurrency--storage-ownership)). It emits no [change events](./events.md) and appends no journal entry: it reproduces changes that already happened, each of which was announced and journaled when it did.
 
-**The target is created with the source's identity, so the identity travels by construction.** `create` receives the source's `ownerEntityId` and `timezone`, as any new store is opened with them ([Adapters § Construction](./adapters.md#construction)). What it returns is held to one rule: it is what creating a store with that identity produces — that owner and timezone, no Record, no Type but the [system ones](./data-model.md#system-types) — on an adapter with `importRecord()`. A store `Stack.open()` has opened holds the system Types alone, so it qualifies unless `ownerProfile` created the owner's card in it. Anything else is a mistake in `create`, refused with `InvalidAdapterError` before anything is written.
+**The target is created with the source's identity, so the identity travels by construction.** `create` receives the source's `ownerEntityId` and `timezone`, as any new store is opened with them ([Adapters § Construction](./adapters.md#construction)). What it returns is held to one rule: it is a store as its adapter creates one with that identity — that owner and timezone, holding nothing — on an adapter with `importRecord()`. Anything else is a mistake in `create`, refused with `InvalidAdapterError` before anything is written. A store `Stack.open()` has opened is not one: it holds the [system Types](./data-model.md#system-types). The copy brings the source's own, which are part of what it holds, and a later `Stack.open()` of the target meets them as it meets any store's.
 
 **It is not atomic.** A failure part-way, the refusal included, closes the target; it is discarded and the copy run again into a new one, never resumed.
 
@@ -33,7 +33,7 @@ Nothing is filtered on the way: deciding what is garbage is the target's own [co
 ## Writing history
 
 ```ts
-importRecord?(record: StackRecord, history: RecordHistory): Promise<void>;
+importRecord?(record: StackRecord, history: RecordHistory): Promise<StackRecord>;
 
 type RecordHistory = {
   versions: RecordVersion[];
@@ -44,11 +44,11 @@ type RecordHistory = {
 `StackRecordAdapter.importRecord()` is `createRecord()` for a Record that already has a past, and the adapter contract's only write of a whole history. It writes the Record exactly as given — `version`, `createdAt`, `updatedAt`, `createdBy`, `updatedBy`, `deletedAt`, `unlistedAt`, its associations and its permissions — beside each version snapshot and each journal entry as recorded, `seq` and `at` included.
 
 - **One atomic write**, under [the rule every mutating record method follows](./adapters.md#interface-split): a refused import leaves no row behind.
-- **`StackConflictError` when `record.id` exists**, as `createRecord()` throws.
+- **It answers with the Record it wrote**, as `createRecord()` does, and throws `StackConflictError` when `record.id` exists, as `createRecord()` throws.
 - **It appends no journal entry of its own.** The entries it is handed are the log.
 - **Writes after it continue the history it wrote.** The next bump snapshots the version the import left and moves past it, and the next entry's `seq` is [allocated from the log's maximum](./journal.md#ordering) as always.
 
-**It is handed history a Record can have**, as every adapter method is held only to what its caller produces ([Adapters § Interface split](./adapters.md#interface-split)): every snapshot's `version` is below `record.version` — one at the record's own version is [an orphan](./versioning.md#snapshot-atomicity) — and every entry's `seq` is distinct. What an adapter does with anything else is unspecified. Order is not part of the input: snapshots are keyed by `version` and entries by `seq`, and reading them back orders them as `getVersions()` and `getJournal()` always do.
+**It is handed history a Record can have**, as every adapter method is held only to what its caller produces ([Adapters § Interface split](./adapters.md#interface-split)): every snapshot's `version` is below `record.version` — one at the record's own version is [an orphan](./versioning.md#snapshot-atomicity) — and the entries' `seq` values run [dense from 1](./journal.md#ordering), as every log's do. What an adapter does with anything else is unspecified. Order is not part of the input: snapshots are keyed by `version` and entries by `seq`, and reading them back orders them as `getVersions()` and `getJournal()` always do.
 
 `RecordHistory` is what `getVersions()` and `getJournal()` return, so an adapter reads a Record's history out in the shape another writes it in.
 

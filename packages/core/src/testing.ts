@@ -630,7 +630,9 @@ export class MemoryAdapter implements StackAdapter {
     const log = this.journals.get(id) ?? [];
     log.push({
       ...entry,
-      seq: log.length + 1,
+      // From the log's maximum, as every adapter allocates it.
+      // See docs/spec/journal.md § Ordering.
+      seq: (log.at(-1)?.seq ?? 0) + 1,
       at: new Date(),
       version: record.version,
       typeId: record.typeId,
