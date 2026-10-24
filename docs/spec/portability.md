@@ -26,7 +26,7 @@ What it carries is everything the source holds:
 
 **The target is created with the source's identity, so the identity travels by construction.** `create` receives the source's `ownerEntityId` and `timezone`, as any new store is opened with them ([Adapters § Construction](./adapters.md#construction)). What it returns is held to one rule: it is the store its adapter creates with that identity — that owner and timezone, no Record and no Type — on an adapter with `importRecord()`. Anything else is a mistake in `create`, refused with `InvalidAdapterError` before anything is written. Blobs are content-addressed, so one already there conflicts with nothing. A store `Stack.open()` has opened does not qualify: it holds the [system Types](./data-model.md#system-types). The copy brings the source's own, which are part of what it holds, and a later `Stack.open()` of the target meets them as it meets any store's.
 
-**It is not atomic.** A failure part-way, the refusal included, closes the target; it is discarded and the copy run again into a new one, never resumed.
+**It is not atomic, and the target is the caller's.** Whatever `create` makes belongs to whoever passed `create`: on success it comes back open, theirs to close; on a failure part-way, the refusal included, `copyStack()` closes it, holding the only handle, and the caller removes it, having chosen where it lives. The copy is then run again into a new store, never resumed.
 
 **The source needs `listBlobs()`**, as the target needs `importRecord()`, and a source without it is refused with `InvalidAdapterError` before `create` is called. Every blob adapter has it. `APIAdapter` does not, because the wire has no endpoint that lists blobs, so a stack behind one cannot yet be copied out through it.
 
@@ -92,7 +92,7 @@ Their columns follow four encoding rules:
 
 - **Times are integers**, milliseconds since the Unix epoch.
 - **Structured values are JSON text**: `records.content`, `versions.content`, `types.schema`, `journal.ops`, `journal.actor` (a `ChangeActor`) and `journal.associations` (an `AssociationChange[]`).
-- **SQL `NULL` is an absent optional field**, except in the two element tables, where every column is `NOT NULL` and `''` marks one that does not apply to the element; and in `journal.previous_parent_id`, where `NULL` is an entry naming no origin and `''` the root, as [the entry](./journal.md#the-entry) distinguishes them.
+- **SQL `NULL` is an absent optional field**, with two exceptions, each because `NULL` alone cannot carry what the column must. In the two element tables every column is `NOT NULL` and `''` marks one that does not apply to the element: those columns are the primary key, and SQLite holds two keys differing only by a `NULL` distinct, so two identical tags would both be stored. In `journal.previous_parent_id`, `NULL` is an entry naming no origin and `''` the root: the column has three states to carry — no move, off the root, out of a container — as [the entry](./journal.md#the-entry) distinguishes them.
 - **An actor is two columns**, a subject and a principal: `createdBy` is `entity_id` and `principal_id`, and `updatedBy` is `updated_by` and `updated_via`, on both `records` and `versions`.
 
 An association's `attachment_record_id` sits outside its key, as [Attachments § Naming the upload a reference came from](./attachments.md#naming-the-upload-a-reference-came-from) requires.

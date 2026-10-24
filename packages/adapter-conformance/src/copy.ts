@@ -2,10 +2,11 @@
  * Stack copy conformance suite
  * -------------------------------------------------------
  * The copy a move between hosts makes: a stack with a past is written
- * through Stack into one store the adapter under test creates, then copied
- * with copyStack() into a second. Every Record, version snapshot, journal
- * entry, Type and blob must arrive as it was, so the adapter is held to
- * both halves of a copy, the read and the write. Point it at a full
+ * through Stack into a source store, then copied with copyStack() into one
+ * the adapter under test creates. Every Record, version snapshot, journal
+ * entry, Type and blob must arrive as it was. The source is the adapter
+ * under test too unless `source` names another engine, so a suite can hold
+ * an adapter to the read half, the write half, or both. Point it at a full
  * StackAdapter that implements importRecord(). See docs/spec/portability.md.
  */
 
@@ -18,9 +19,11 @@ import type { CreateStore, StackAdapter } from '@haverstack/core/adapter';
 export interface CopyConformanceOptions {
   /** Used in describe() titles, so pick something that reads well there. */
   name: string;
-  /** Create a new, empty store with this identity; called twice per copy. */
+  /** Create a new, empty store with this identity: the copy's target. */
   create: CreateStore;
-  /** Release what `create()` acquired. Called on every store it made. */
+  /** Create the store the stack is written into and copied from. Defaults to `create`. */
+  source?: CreateStore;
+  /** Release what either factory acquired. Called on every store they made. */
   close?: (adapter: StackAdapter) => Promise<void> | void;
 }
 
@@ -110,7 +113,7 @@ async function writePast(adapter: StackAdapter): Promise<FileId[]> {
 }
 
 export function runCopyConformance(options: CopyConformanceOptions): void {
-  const { name, create, close } = options;
+  const { name, create, source: createSource = create, close } = options;
 
   describe(`stack copy conformance: ${name}`, () => {
     test('implements importRecord()', async () => {
@@ -123,7 +126,7 @@ export function runCopyConformance(options: CopyConformanceOptions): void {
     });
 
     test('a copy carries every Record, version, journal entry, Type and blob unchanged', async () => {
-      const source = await create(IDENTITY);
+      const source = await createSource(IDENTITY);
       let target: StackAdapter | undefined;
       try {
         const fileIds = await writePast(source);

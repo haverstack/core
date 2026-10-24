@@ -14,10 +14,10 @@
 
 import { InvalidAdapterError } from '../errors.js';
 import { resolveQuery } from '../query-validation.js';
-import type { EntityId, PlainQuery, StackAdapter } from '../types/index.js';
+import type { PlainQuery, StackAdapter, StackRecordAdapter } from '../types/index.js';
 
-/** What a store is created with: the identity `_config` holds. */
-export type StackIdentity = { ownerEntityId: EntityId; timezone: string | undefined };
+/** What a store is created with: the identity `_config` holds, as an adapter reports it. */
+export type StackIdentity = Pick<StackRecordAdapter, 'ownerEntityId' | 'timezone'>;
 
 /** Creates a new, empty store with `identity` — `LocalAdapter.open({ create: 'exclusive', ...identity })`, say. */
 export type CreateStore = (identity: StackIdentity) => Promise<StackAdapter> | StackAdapter;
@@ -35,7 +35,7 @@ const EVERYTHING: PlainQuery = {
 /**
  * Copy everything `from` holds into the store `create` makes with `from`'s
  * identity, and return that store, open. Not atomic: a failure closes the
- * store part-written, to be discarded rather than resumed.
+ * store part-written, and the caller, whose store it is, removes it.
  * See docs/spec/portability.md § Copying a stack.
  */
 export async function copyStack(from: StackAdapter, create: CreateStore): Promise<StackAdapter> {

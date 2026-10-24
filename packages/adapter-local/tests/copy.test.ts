@@ -1,34 +1,52 @@
 /**
- * Runs @haverstack/adapter-conformance's stack copy suite against
- * LocalAdapter: the portable form a stack is exported to and imported
- * from. See docs/spec/portability.md.
+ * Runs @haverstack/adapter-conformance's stack copy suite with LocalAdapter,
+ * the portable form a stack is exported to and imported from, on each side
+ * of a copy and on both: one primitive across engines, in either direction.
+ * See docs/spec/portability.md.
  */
 import { mkdirSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { runCopyConformance } from '@haverstack/adapter-conformance';
-import type { StackAdapter } from '@haverstack/core/adapter';
+import type { CreateStore, StackAdapter } from '@haverstack/core/adapter';
+import { MemoryAdapter } from '@haverstack/core/testing';
 import { LocalAdapter } from '../src/index.js';
 
 const dirs = new Map<StackAdapter, string>();
 
+const local: CreateStore = async ({ ownerEntityId, timezone }) => {
+  const dir = join(tmpdir(), `copy-local-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  mkdirSync(dir, { recursive: true });
+  const adapter = await LocalAdapter.open({
+    create: 'exclusive',
+    path: join(dir, 'stack.db'),
+    ownerEntityId,
+    timezone,
+  });
+  dirs.set(adapter, dir);
+  return adapter;
+};
+
+const memory: CreateStore = ({ ownerEntityId, timezone }) =>
+  MemoryAdapter.open({ ownerEntityId, timezone });
+
+const close = async (adapter: StackAdapter) => {
+  await adapter.close?.();
+  const dir = dirs.get(adapter);
+  if (dir) rmSync(dir, { recursive: true, force: true });
+  dirs.delete(adapter);
+};
+
+runCopyConformance({ name: 'LocalAdapter', create: local, close });
 runCopyConformance({
-  name: 'LocalAdapter',
-  create: async ({ ownerEntityId, timezone }) => {
-    const dir = join(tmpdir(), `copy-local-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-    mkdirSync(dir, { recursive: true });
-    const adapter = await LocalAdapter.open({
-      create: 'exclusive',
-      path: join(dir, 'stack.db'),
-      ownerEntityId,
-      timezone,
-    });
-    dirs.set(adapter, dir);
-    return adapter;
-  },
-  close: async (adapter) => {
-    await adapter.close?.();
-    rmSync(dirs.get(adapter)!, { recursive: true, force: true });
-    dirs.delete(adapter);
-  },
+  name: 'MemoryAdapter into LocalAdapter',
+  create: local,
+  source: memory,
+  close,
+});
+runCopyConformance({
+  name: 'LocalAdapter into MemoryAdapter',
+  create: memory,
+  source: local,
+  close,
 });

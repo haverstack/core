@@ -678,8 +678,7 @@ export class SharedSqlRecordLogic {
     } catch (err) {
       if (isUniqueConstraintViolation(err)) {
         throw new StackConflictError(
-          `Version ${version.version} already exists for record "${id}" — a concurrent ` +
-            `writer raced past this version. Use ifVersion to detect this before it happens.`,
+          `Version ${version.version} already exists for record "${id}"`,
         );
       }
       throw err;
@@ -714,7 +713,12 @@ export class SharedSqlRecordLogic {
     } catch (err) {
       if (!(err instanceof StackConflictError)) throw err;
 
-      if (this.currentVersion(id) !== version.version) throw err;
+      if (this.currentVersion(id) !== version.version) {
+        throw new StackConflictError(
+          `Version ${version.version} already exists for record "${id}" — a concurrent ` +
+            `writer raced past this version. Use ifVersion to detect this before it happens.`,
+        );
+      }
 
       this.overwriteVersionRow(id, version);
     }
