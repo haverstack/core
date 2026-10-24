@@ -286,12 +286,14 @@ export class SharedSqlRecordLogic {
    * transaction. Appends no entry of its own. See
    * docs/spec/portability.md § Writing history.
    */
-  async importRecord(record: StackRecord, history: RecordHistory): Promise<void> {
+  async importRecord(record: StackRecord, history: RecordHistory): Promise<StackRecord> {
     this.exec.transaction(() => {
       this.insertRecord(record);
       for (const version of history.versions) this.insertVersionRow(record.id, version);
       for (const entry of history.journal) this.insertJournalRow(record.id, entry);
     });
+
+    return record;
   }
 
   /**

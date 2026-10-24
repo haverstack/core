@@ -285,12 +285,13 @@ describe('combineAdapters', () => {
         record: makeRecordAdapter({
           importRecord: async (record, history) => {
             calledWith = [record, history];
+            return record;
           },
         }),
         blob: makeBlobAdapter(),
       });
       const history: RecordHistory = { versions: [], journal: [] };
-      await adapter.importRecord!(purgedRecord, history);
+      expect(await adapter.importRecord!(purgedRecord, history)).toBe(purgedRecord);
       expect(calledWith).toEqual([purgedRecord, history]);
     });
 

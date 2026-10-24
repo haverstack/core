@@ -70,7 +70,7 @@ type TestStub = {
   queryReadable(query: AdapterQuery, reach: Reach): Promise<QueryResult>;
   getVersions(id: string): Promise<RecordVersion[]>;
   getJournal(id: string): Promise<RecordJournalEntry[]>;
-  importRecord(record: StackRecord, history: RecordHistory): Promise<void>;
+  importRecord(record: StackRecord, history: RecordHistory): Promise<StackRecord>;
   editAssociations(
     id: string,
     edits: AssociationEdit[],

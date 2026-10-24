@@ -1,30 +1,26 @@
 /**
  * Stack copy conformance suite
  * -------------------------------------------------------
- * The round trip a move between hosts makes: a stack with a past is
- * written through Stack, copied into the adapter under test with
- * copyStack(), and copied back out into a fresh MemoryAdapter. Every
- * Record, version snapshot, journal entry, Type and blob must come back
- * as it went in, at both hops. Point it at a full StackAdapter that
- * implements importRecord(). See docs/spec/portability.md.
+ * The copy a move between hosts makes: a stack with a past is written
+ * through Stack into one store the adapter under test creates, then copied
+ * with copyStack() into a second. Every Record, version snapshot, journal
+ * entry, Type and blob must arrive as it was, so the adapter is held to
+ * both halves of a copy, the read and the write. Point it at a full
+ * StackAdapter that implements importRecord(). See docs/spec/portability.md.
  */
 
 import { describe, test, expect } from 'vitest';
-import { Stack, SYSTEM_TYPES } from '@haverstack/core';
-import type { StackRecord } from '@haverstack/core';
-import { baseIdOf, copyStack, resolveQuery } from '@haverstack/core/adapter';
-import type { StackAdapter } from '@haverstack/core/adapter';
-import { MemoryAdapter } from '@haverstack/core/testing';
-
-/** The identity a copy target is created with: the source stack's own. */
-export type CopyTargetIdentity = { ownerEntityId: string; timezone: string | undefined };
+import { Stack } from '@haverstack/core';
+import type { FileId, StackRecord } from '@haverstack/core';
+import { copyStack, resolveQuery } from '@haverstack/core/adapter';
+import type { CreateStore, StackAdapter } from '@haverstack/core/adapter';
 
 export interface CopyConformanceOptions {
   /** Used in describe() titles, so pick something that reads well there. */
   name: string;
-  /** Produce a fresh, empty adapter created with this identity. */
-  open: (identity: CopyTargetIdentity) => Promise<StackAdapter> | StackAdapter;
-  /** Release what `open()` acquired. Called after every test. */
+  /** Create a new, empty store with this identity; called twice per copy. */
+  create: CreateStore;
+  /** Release what `create()` acquired. Called on every store it made. */
   close?: (adapter: StackAdapter) => Promise<void> | void;
 }
 
@@ -32,13 +28,14 @@ const OWNER = 'did:key:conformance-owner';
 const ALICE = { subjectId: 'did:key:conformance-alice' };
 const BOB = { subjectId: 'did:key:conformance-bob', principalId: 'did:key:conformance-app' };
 const NOTE = 'org.haverstack.conformance/copied-note@1';
+const IDENTITY = { ownerEntityId: OWNER, timezone: 'Europe/Paris' };
 
 /** Set order aside: an element set has no order to preserve. */
 const bySerialized = <T>(list: T[] | undefined): T[] | undefined =>
   list && [...list].sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
 
 /** Everything a copy must carry, in a shape that compares with toEqual(). */
-async function contentsOf(adapter: StackAdapter) {
+async function contentsOf(adapter: StackAdapter, fileIds: FileId[]) {
   const records: StackRecord[] = [];
   let cursor: string | undefined;
   do {
@@ -55,12 +52,7 @@ async function contentsOf(adapter: StackAdapter) {
   records.sort((a, b) => a.id.localeCompare(b.id));
 
   const blobs: Record<string, Uint8Array> = {};
-  for (const record of records) {
-    if (baseIdOf(record.typeId) === SYSTEM_TYPES.ATTACHMENT) {
-      const fileId = (record.content as { fileId: string }).fileId;
-      blobs[fileId] = await adapter.getBlob(fileId);
-    }
-  }
+  for (const fileId of fileIds) blobs[fileId] = await adapter.getBlob(fileId);
 
   return {
     types: (await adapter.listTypes()).sort((a, b) => a.id.localeCompare(b.id)),
@@ -82,12 +74,16 @@ async function contentsOf(adapter: StackAdapter) {
 /**
  * A stack touched by every kind of write: foreign authorship, edits by an
  * app acting for someone, containment, tags, sharing, listing, an
- * attachment, a soft delete and a purge.
+ * attachment, bytes a content field names with no metadata record, a soft
+ * delete and a purge. Answers with the blobs it wrote.
  */
-async function stackWithAPast(): Promise<MemoryAdapter> {
-  const adapter = await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'Europe/Paris' });
+async function writePast(adapter: StackAdapter): Promise<FileId[]> {
   const stack = await Stack.open(adapter, { ownerProfile: { name: 'Conformance Owner' } });
-  await stack.defineType({ id: NOTE, name: 'Note', schema: { title: { kind: 'text' } } });
+  await stack.defineType({
+    id: NOTE,
+    name: 'Note',
+    schema: { title: { kind: 'text' }, cover: { kind: 'file-ref' } },
+  });
 
   const box = await stack.create(NOTE, { title: 'box' });
   const note = await stack.create(NOTE, { title: 'v1' }, { createdBy: ALICE });
@@ -99,49 +95,46 @@ async function stackWithAPast(): Promise<MemoryAdapter> {
   await stack.editAccess(note.id, [{ op: 'add', association: { kind: 'anyone', label: 'read' } }]);
   await stack.setUnlisted(note.id, true);
 
-  await stack.putAttachment(new TextEncoder().encode('attached bytes'), {
+  const attached = await stack.putAttachment(new TextEncoder().encode('attached bytes'), {
     mimeType: 'text/plain',
     filename: 'notes.txt',
   });
+  const bare = await adapter.putBlob(new TextEncoder().encode('bytes with no metadata'));
+  await stack.create(NOTE, { title: 'covered', cover: bare });
 
   const removed = await stack.create(NOTE, { title: 'removed' }, { createdBy: ALICE });
   await stack.delete(removed.id);
   const purged = await stack.create(NOTE, { title: 'purged' });
   await stack.delete(purged.id, { purge: true });
-  return adapter;
+  return [attached.content.fileId, bare];
 }
 
 export function runCopyConformance(options: CopyConformanceOptions): void {
-  const { name, open, close } = options;
+  const { name, create, close } = options;
 
   describe(`stack copy conformance: ${name}`, () => {
-    const identity = { ownerEntityId: OWNER, timezone: 'Europe/Paris' };
-
     test('implements importRecord()', async () => {
-      const target = await open(identity);
+      const store = await create(IDENTITY);
       try {
-        expect(target.importRecord).toBeTypeOf('function');
+        expect(store.importRecord).toBeTypeOf('function');
       } finally {
-        await close?.(target);
+        await close?.(store);
       }
     });
 
-    test('a copy in and back out carries every Record, version, journal entry, Type and blob unchanged', async () => {
-      const source = await stackWithAPast();
-      const expected = await contentsOf(source);
-      expect(expected.records.length).toBeGreaterThan(3);
-      expect(Object.keys(expected.blobs)).toHaveLength(1);
-
-      const target = await open(identity);
+    test('a copy carries every Record, version, journal entry, Type and blob unchanged', async () => {
+      const source = await create(IDENTITY);
+      let target: StackAdapter | undefined;
       try {
-        await copyStack(source, target);
-        expect(await contentsOf(target)).toEqual(expected);
+        const fileIds = await writePast(source);
+        const expected = await contentsOf(source, fileIds);
+        expect(expected.records.length).toBeGreaterThan(3);
 
-        const back = await MemoryAdapter.open(identity);
-        await copyStack(target, back);
-        expect(await contentsOf(back)).toEqual(expected);
+        target = await copyStack(source, create);
+        expect(await contentsOf(target, fileIds)).toEqual(expected);
       } finally {
-        await close?.(target);
+        await close?.(source);
+        if (target) await close?.(target);
       }
     });
   });

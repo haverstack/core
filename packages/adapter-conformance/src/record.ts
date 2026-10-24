@@ -763,8 +763,7 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         const parent = makeRecord();
         await adapter.createRecord(parent);
         const { record, versions, journal } = withPast(parent.id);
-        await adapter.importRecord(record, { versions, journal });
-
+        expect(await adapter.importRecord(record, { versions, journal })).toEqual(record);
         expect(await adapter.getRecord(record.id)).toEqual(record);
         expect(await adapter.getVersions(record.id)).toEqual(versions);
         expect(await adapter.getJournal(record.id)).toEqual(journal);

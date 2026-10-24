@@ -29,8 +29,8 @@ export { sameAssociationSet } from '../associations/identity.js';
 export { ElementSetMovedError, OwnerMismatchError, softDeletedRefusal } from '../errors.js';
 export { combineAdapters } from './combine.js';
 export { copyStack } from './copy.js';
+export type { CreateStore, StackIdentity } from './copy.js';
 export { inReach } from './reach.js';
-export { baseIdOf } from '../schema.js';
 export type { ReachedRecord } from './reach.js';
 export {
   assertQueryCapabilities,

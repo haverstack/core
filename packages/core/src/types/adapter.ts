@@ -167,7 +167,7 @@ export interface StackRecordAdapter {
    * appends no entry of its own. Optional: a stack whose adapter lacks it
    * cannot be copied into. See docs/spec/portability.md § Writing history.
    */
-  importRecord?(record: StackRecord, history: RecordHistory): Promise<void>;
+  importRecord?(record: StackRecord, history: RecordHistory): Promise<StackRecord>;
 
   /**
    * Merge a content patch, one level deep, into the content as it stands

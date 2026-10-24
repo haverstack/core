@@ -91,7 +91,7 @@ export abstract class SharedSqlRecordAdapter implements StackRecordAdapter {
     return this.record.createRecord(record, opts);
   }
 
-  importRecord(record: StackRecord, history: RecordHistory): Promise<void> {
+  importRecord(record: StackRecord, history: RecordHistory): Promise<StackRecord> {
     return this.record.importRecord(record, history);
   }
 

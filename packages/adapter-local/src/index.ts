@@ -136,7 +136,7 @@ export class LocalAdapter implements StackAdapter {
     return this.record.createRecord(record, opts);
   }
 
-  async importRecord(record: StackRecord, history: RecordHistory): Promise<void> {
+  async importRecord(record: StackRecord, history: RecordHistory): Promise<StackRecord> {
     return this.record.importRecord(record, history);
   }
 
