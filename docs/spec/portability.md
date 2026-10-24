@@ -71,22 +71,23 @@ const exportedStack = await LocalAdapter.open({ path: './my-stack.db' });
 await copyStack(exportedStack, createHostStore);
 ```
 
-The layout is specified here so an export stays readable without the tool that wrote it, and a change to it changes this section in the same change; a test compares the tables below with the schema the SQLite adapters create. **It carries no version marker**, because only one layout exists: the first change that needs to tell two apart adds one, and an export without it is this layout.
+The layout is specified here so an export stays readable without the tool that wrote it, and a change to it changes this section in the same change; a test compares the tables below with the schema the SQLite adapters create. **Every store names its layout** in the one row of its `format` table: `version` is `1` for the layout below. A change to the layout bumps it, so a reader tells which layout it holds before reading anything else. The row is the store's own, like `_config`: a copy writes its target in the target's layout, which is how a stack moves to a newer one.
 
 **`attachments/<fileId>`** holds a blob's bytes, named by the [64-character lowercase hex SHA-256](./attachments.md) of its contents.
 
-**The database** holds six tables that are sources of truth and two that are [derived](./adapters.md#sqlite-backed-adapters):
+**The database** holds its `format`, six tables that are sources of truth, and two that are [derived](./adapters.md#sqlite-backed-adapters):
 
-| Table           | One row per                     | Key                                                                                                   |
-| --------------- | ------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `records`       | Record, `_config` included      | `id`                                                                                                  |
-| `associations`  | data association                | `record_id`, `kind`, `label`, `file_id`, `related_scope`, `related_id`, `related_ns`, `related_stack` |
-| `permissions`   | permission element              | `record_id`, `kind`, `label`, `grantee_kind`, `grantee_id`, `role`                                    |
-| `versions`      | version snapshot                | `record_id`, `version`                                                                                |
-| `journal`       | journal entry                   | `record_id`, `seq`                                                                                    |
-| `types`         | Type                            | `id`                                                                                                  |
-| `content_index` | derived: top-level scalar field | `record_id`, `field`                                                                                  |
-| `records_fts`   | derived: full-text index entry  | `rowid` of the `records` row                                                                          |
+| Table           | One row per                              | Key                                                                                                   |
+| --------------- | ---------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `format`        | the store's layout version, one row only | none                                                                                                  |
+| `records`       | Record, `_config` included               | `id`                                                                                                  |
+| `associations`  | data association                         | `record_id`, `kind`, `label`, `file_id`, `related_scope`, `related_id`, `related_ns`, `related_stack` |
+| `permissions`   | permission element                       | `record_id`, `kind`, `label`, `grantee_kind`, `grantee_id`, `role`                                    |
+| `versions`      | version snapshot                         | `record_id`, `version`                                                                                |
+| `journal`       | journal entry                            | `record_id`, `seq`                                                                                    |
+| `types`         | Type                                     | `id`                                                                                                  |
+| `content_index` | derived: top-level scalar field          | `record_id`, `field`                                                                                  |
+| `records_fts`   | derived: full-text index entry           | `rowid` of the `records` row                                                                          |
 
 Their columns follow four encoding rules:
 
@@ -103,6 +104,7 @@ Every column of every table but `records_fts`, an FTS5 index over `records.conte
 
 | Table           | Columns                                                                                                                                                                         |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `format`        | `version`                                                                                                                                                                       |
 | `records`       | `id`, `type_id`, `created_at`, `updated_at`, `content`, `version`, `parent_id`, `entity_id`, `app_id`, `principal_id`, `updated_by`, `updated_via`, `deleted_at`, `unlisted_at` |
 | `associations`  | `record_id`, `kind`, `label`, `file_id`, `related_scope`, `related_id`, `related_ns`, `related_stack`, `attachment_record_id`                                                   |
 | `permissions`   | `record_id`, `kind`, `label`, `grantee_kind`, `grantee_id`, `role`                                                                                                              |

@@ -28,7 +28,7 @@ afterEach(() => {
   if (dir) rmSync(dir, { recursive: true, force: true });
 });
 
-test('every table and column a new store holds is the one the spec documents', async () => {
+test('every table and column a new store holds is the one the spec documents, at format version 1', async () => {
   dir = join(tmpdir(), `portable-format-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   mkdirSync(dir, { recursive: true });
   const path = join(dir, 'stack.db');
@@ -55,7 +55,9 @@ test('every table and column a new store holds is the one the spec documents', a
       (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name),
     ]),
   );
+  const format = db.prepare('SELECT version FROM format').all();
   db.close();
 
   expect(actual).toEqual(documentedColumns());
+  expect(format).toEqual([{ version: 1 }]);
 });

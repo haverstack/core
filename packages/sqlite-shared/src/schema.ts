@@ -8,7 +8,17 @@ import type { SqlExecutor } from './executor.js';
  * (docs/spec/wire-format.md § Authentication).
  */
 
+/** The layout version every store's `format` table names. */
+export const FORMAT_VERSION = 1;
+
 export const RECORD_SCHEMA_SQL = `
+  -- Which layout this store is, in one row, so an export names the one a
+  -- reader holds. See docs/spec/portability.md § The portable format.
+  CREATE TABLE IF NOT EXISTS format (
+    version INTEGER NOT NULL
+  ) STRICT;
+  INSERT INTO format (version) SELECT ${FORMAT_VERSION} WHERE NOT EXISTS (SELECT 1 FROM format);
+
   CREATE TABLE IF NOT EXISTS records (
     id          TEXT PRIMARY KEY,
     type_id     TEXT NOT NULL,
