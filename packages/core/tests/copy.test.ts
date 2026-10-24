@@ -59,36 +59,28 @@ describe('copyStack', () => {
     expect([...target.blobs.keys()].sort()).toEqual([named.content.fileId, bare].sort());
   });
 
-  test('carries every blob a Record names, by any of the three ways, with no listing to go on', async () => {
-    const source = await sourceWith(0);
+  test('refuses a source with no listBlobs(), before creating anything', async () => {
+    const source = await sourceWith(1);
     source.listBlobs = undefined;
-    const stack = await Stack.open(source);
-    const meta = await stack.putAttachment(new Uint8Array([1]), { mimeType: 'image/png' });
-    const viaField = await source.putBlob(new Uint8Array([2]));
-    const viaAssociation = await source.putBlob(new Uint8Array([3]));
-    const unnamed = await source.putBlob(new Uint8Array([4]));
-    await stack.create(NOTE, { text: 'cover', cover: viaField });
-    const tagged = await stack.create(NOTE, { text: 'attached' });
-    await stack.editAssociations(tagged.id, [
-      { op: 'add', association: { kind: 'attachment', label: 'file', fileId: viaAssociation } },
-    ]);
-
-    const target = (await copyStack(source, create)) as MemoryAdapter;
-    expect([...target.blobs.keys()].sort()).toEqual(
-      [meta.content.fileId, viaField, viaAssociation].sort(),
-    );
-    expect(target.blobs.has(unnamed)).toBe(false);
+    let created = false;
+    await expect(
+      copyStack(source, (identity) => {
+        created = true;
+        return create(identity);
+      }),
+    ).rejects.toThrow(InvalidAdapterError);
+    expect(created).toBe(false);
   });
 
-  test('a reference whose bytes are gone copies as it stands, dangling', async () => {
+  test('a blob already in the target conflicts with nothing', async () => {
     const source = await sourceWith(0);
-    source.listBlobs = undefined;
-    const gone = await source.putBlob(new Uint8Array([7]));
-    await (await Stack.open(source)).create(NOTE, { text: 'cover', cover: gone });
-    await source.deleteBlob(gone);
-    const target = (await copyStack(source, create)) as MemoryAdapter;
-    expect(target.blobs.size).toBe(0);
-    expect(target.records.size).toBe(source.records.size);
+    const fileId = await source.putBlob(new Uint8Array([5]));
+    const target = (await copyStack(source, async (identity) => {
+      const store = await create(identity);
+      await store.putBlob(new Uint8Array([5]));
+      return store;
+    })) as MemoryAdapter;
+    expect([...target.blobs.keys()]).toEqual([fileId]);
   });
 
   // One rule for every way the store create() returns can differ from a new

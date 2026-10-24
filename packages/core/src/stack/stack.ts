@@ -24,8 +24,8 @@ import {
   parseTypeId,
   baseIdOf,
   diffSchemas,
+  fileRefFields,
   lineageProblem,
-  referencedFileIds,
 } from '../schema.js';
 import {
   dropAbsentFields,
@@ -1152,13 +1152,22 @@ export class Stack implements StackClient {
   }
 
   /**
-   * The files a record references, under its own Type. An `_attachment`
-   * record's own `fileId` is a plain string by design and is not one, which
-   * is why purging a metadata record reports nothing — see
-   * systemTypeDefinitions().
+   * The files a record references, by the same definition
+   * deleteAttachment() and the garbage sweep use: attachment associations
+   * and top-level `file-ref` content fields. An `_attachment` record's own
+   * `fileId` is a plain string by design and is not one, which is why
+   * purging a metadata record reports nothing — see systemTypeDefinitions().
    */
   private async referencedFileIds(record: StackRecord): Promise<FileId[]> {
-    return referencedFileIds(record, (await this.getType(record.typeId))?.schema ?? {});
+    const fromAssociations = (record.associations ?? []).flatMap((a) =>
+      a.kind === 'attachment' ? [a.fileId] : [],
+    );
+    const type = await this.getType(record.typeId);
+    const content = record.content as Record<string, unknown>;
+    const fromContent = fileRefFields(type?.schema ?? {}).flatMap((field) =>
+      typeof content[field] === 'string' ? [content[field]] : [],
+    );
+    return [...new Set([...fromAssociations, ...fromContent])];
   }
 
   /**

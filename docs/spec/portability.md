@@ -1,6 +1,6 @@
 # Portability
 
-**A stack can leave its host whole.** Every Record, soft-deleted and unlisted ones included, keeps its authorship, its version history and its journal, and every Type and attachment comes with it. Moving needs nothing from the host beyond what it already serves its owner. Identity moves with the stack and the address does not: the new host serves the same owner DID, which a client confirms with `APIAdapter`'s `ownerEntityId` option ([Wire format § Identity is trusted on transport](./wire-format.md#identity-is-trusted-on-transport)). References to the old `stackUrl`, a Group's or a relationship target's, are updated by hand.
+**A stack can leave its host whole.** Every Record, soft-deleted and unlisted ones included, keeps its authorship, its version history and its journal, and every Type and attachment comes with it. Identity moves with the stack and the address does not: the new host serves the same owner DID, which a client confirms with `APIAdapter`'s `ownerEntityId` option ([Wire format § Identity is trusted on transport](./wire-format.md#identity-is-trusted-on-transport)). References to the old `stackUrl`, a Group's or a relationship target's, are updated by hand.
 
 ## Copying a stack
 
@@ -12,23 +12,23 @@ const target = await copyStack(from, (identity) => createStore(identity));
 type StackIdentity = { ownerEntityId: EntityId; timezone: string | undefined };
 ```
 
-**One primitive carries export, import and every move between storage engines.** `copyStack()` reads a whole stack from one `StackAdapter` and writes it into a new store, which it asks `create` to make with the source's identity and returns open. Which source it is given, and what kind of store `create` makes, is the only difference between exporting to [the portable format](#the-portable-format), importing from it, and moving a stack from one SQLite engine to another. No adapter has an export or import method of its own, so N adapters need N implementations of the [write below](#writing-history), not one converter per pair of formats.
+**One primitive carries export, import and every move between storage engines.** `copyStack()` reads a whole stack from one `StackAdapter` and writes it into a new store, which it asks `create` to make with the source's identity and returns open. Which source it is given, and what kind of store `create` makes, is the only difference between exporting to [the portable format](#the-portable-format), importing from it, and moving a stack from one SQLite engine to another. No adapter has a format-conversion method of its own, so N adapters need N implementations of the [write below](#writing-history), not one converter per pair of formats.
 
 What it carries is everything the source holds:
 
 - **Every Type**, through `listTypes()` and `saveType()`.
 - **Every Record but `_config`**, soft-deleted and unlisted ones included, each with every version snapshot and every journal entry, through [`importRecord()`](#writing-history). `_config` is the store's own: no query reaches it, and `create` made the target with what it holds.
-- **[Every blob the stack holds](./attachments.md#the-blobs-a-stack-holds)**: every one its blob store lists, and every file a Record names. A name whose bytes are gone stays dangling, as it was.
+- **Every blob**, through `listBlobs()`, which a source must have.
 
-Nothing is filtered on the way: deciding what is garbage is the target's own [collection](./attachments.md#garbage-collection), run when its owner chooses, and nothing a purge destroyed is carried, because the source no longer holds it.
+**Each is read as the store enumerates it**, never by what a Record says, so nothing is filtered on the way: what is garbage is the target's own [collection](./attachments.md#garbage-collection) to decide, run when its owner chooses. Nothing a purge destroyed is carried, because the source no longer holds it.
 
 **It is a full-trust operation, like any direct adapter access.** It writes authorship and history as recorded, which no write through `Stack` may: a scoped create is stamped with its requester, and nothing outside a write appends a snapshot or a journal entry. It takes adapters rather than stacks because those are where that trust already lives ([Adapters § Concurrency & storage ownership](./adapters.md#concurrency--storage-ownership)). It emits no [change events](./events.md) and appends no journal entry: it reproduces changes that already happened, each of which was announced and journaled when it did.
 
-**The target is created with the source's identity, so the identity travels by construction.** `create` receives the source's `ownerEntityId` and `timezone`, as any new store is opened with them ([Adapters § Construction](./adapters.md#construction)). What it returns is held to one rule: it is a store as its adapter creates one with that identity — that owner and timezone, holding nothing — on an adapter with `importRecord()`. Anything else is a mistake in `create`, refused with `InvalidAdapterError` before anything is written. A store `Stack.open()` has opened is not one: it holds the [system Types](./data-model.md#system-types). The copy brings the source's own, which are part of what it holds, and a later `Stack.open()` of the target meets them as it meets any store's.
+**The target is created with the source's identity, so the identity travels by construction.** `create` receives the source's `ownerEntityId` and `timezone`, as any new store is opened with them ([Adapters § Construction](./adapters.md#construction)). What it returns is held to one rule: it is the store its adapter creates with that identity — that owner and timezone, no Record and no Type — on an adapter with `importRecord()`. Anything else is a mistake in `create`, refused with `InvalidAdapterError` before anything is written. Blobs are content-addressed, so one already there conflicts with nothing. A store `Stack.open()` has opened does not qualify: it holds the [system Types](./data-model.md#system-types). The copy brings the source's own, which are part of what it holds, and a later `Stack.open()` of the target meets them as it meets any store's.
 
 **It is not atomic.** A failure part-way, the refusal included, closes the target; it is discarded and the copy run again into a new one, never resumed.
 
-**The source is read only through methods every adapter has**, so it may be an `APIAdapter` opened as the owner, who reads every Record, every version and every journal entry in full.
+**The source needs `listBlobs()`**, as the target needs `importRecord()`, and a source without it is refused with `InvalidAdapterError` before `create` is called. Every blob adapter has it. `APIAdapter` does not, because the wire has no endpoint that lists blobs, so a stack behind one cannot yet be copied out through it.
 
 ## Writing history
 
@@ -71,7 +71,7 @@ const exportedStack = await LocalAdapter.open({ path: './my-stack.db' });
 await copyStack(exportedStack, createHostStore);
 ```
 
-The layout is specified here so an export stays readable without the tool that wrote it, and a change to it changes this section in the same change.
+The layout is specified here so an export stays readable without the tool that wrote it, and a change to it changes this section in the same change; a test compares the tables below with the schema the SQLite adapters create. **It carries no version marker**, because only one layout exists: the first change that needs to tell two apart adds one, and an export without it is this layout.
 
 **`attachments/<fileId>`** holds a blob's bytes, named by the [64-character lowercase hex SHA-256](./attachments.md) of its contents.
 
@@ -95,7 +95,21 @@ Their columns follow four encoding rules:
 - **SQL `NULL` is an absent optional field**, except in the two element tables, where every column is `NOT NULL` and `''` marks one that does not apply to the element; and in `journal.previous_parent_id`, where `NULL` is an entry naming no origin and `''` the root, as [the entry](./journal.md#the-entry) distinguishes them.
 - **An actor is two columns**, a subject and a principal: `createdBy` is `entity_id` and `principal_id`, and `updatedBy` is `updated_by` and `updated_via`, on both `records` and `versions`.
 
-The remaining columns are the fields they name: `records` holds `type_id`, `created_at`, `updated_at`, `content`, `version`, `parent_id`, `app_id`, `deleted_at` and `unlisted_at`; `versions` holds `type_id`, `content` and `updated_at`; `journal` holds `at`, `kind`, `version`, `type_id` and `parent_id`; `types` holds `base_id`, `version`, `name`, `schema`, `schema_hash`, `migrates_from` and `created_at`. An association's `attachment_record_id` sits outside its key, as [Attachments § Naming the upload a reference came from](./attachments.md#naming-the-upload-a-reference-came-from) requires.
+An association's `attachment_record_id` sits outside its key, as [Attachments § Naming the upload a reference came from](./attachments.md#naming-the-upload-a-reference-came-from) requires.
+
+### Columns
+
+Every column of every table but `records_fts`, an FTS5 index over `records.content` whose own tables are the engine's. Each column is the field it names, under the rules above.
+
+| Table           | Columns                                                                                                                                                                         |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `records`       | `id`, `type_id`, `created_at`, `updated_at`, `content`, `version`, `parent_id`, `entity_id`, `app_id`, `principal_id`, `updated_by`, `updated_via`, `deleted_at`, `unlisted_at` |
+| `associations`  | `record_id`, `kind`, `label`, `file_id`, `related_scope`, `related_id`, `related_ns`, `related_stack`, `attachment_record_id`                                                   |
+| `permissions`   | `record_id`, `kind`, `label`, `grantee_kind`, `grantee_id`, `role`                                                                                                              |
+| `versions`      | `record_id`, `version`, `type_id`, `content`, `updated_at`, `entity_id`, `principal_id`, `updated_by`, `updated_via`                                                            |
+| `journal`       | `record_id`, `seq`, `at`, `kind`, `ops`, `version`, `type_id`, `parent_id`, `previous_parent_id`, `actor`, `associations`                                                       |
+| `types`         | `id`, `base_id`, `version`, `name`, `schema`, `schema_hash`, `migrates_from`, `created_at`                                                                                      |
+| `content_index` | `record_id`, `field`, `value_rank`, `num_value`, `text_key`, `text_value`, `file_id`                                                                                            |
 
 The `_config` row carries `{ entityId, timezone }` as its content: the stack's owner and timezone, which a store is created with and `copyStack()` hands to `create`.
 

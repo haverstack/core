@@ -12,7 +12,7 @@
  * the namespaced ID controlled by the app author.
  */
 
-import type { TypeSchema, FieldDef, ScalarFieldKind, FileId, StackRecord } from './types/index.js';
+import type { TypeSchema, FieldDef, ScalarFieldKind } from './types/index.js';
 import type { ReadonlyTypeSchema } from './type-handle.js';
 import { formatEnumValues } from './validate.js';
 
@@ -319,23 +319,6 @@ export const fileRefFields = (schema: ReadonlyTypeSchema): string[] =>
   Object.entries(schema)
     .filter(([, def]) => def.kind === 'file-ref')
     .map(([field]) => field);
-
-/**
- * The files a record references, by the one definition deleteAttachment()
- * and the garbage sweep share: attachment associations and top-level
- * `file-ref` fields under `schema`, the record's own Type's. An
- * `_attachment` record's own `fileId` is not one.
- */
-export const referencedFileIds = (record: StackRecord, schema: ReadonlyTypeSchema): FileId[] => {
-  const fromAssociations = (record.associations ?? []).flatMap((a) =>
-    a.kind === 'attachment' ? [a.fileId] : [],
-  );
-  const content = record.content as Record<string, unknown>;
-  const fromContent = fileRefFields(schema).flatMap((field) =>
-    typeof content[field] === 'string' ? [content[field]] : [],
-  );
-  return [...new Set([...fromAssociations, ...fromContent])];
-};
 
 // -------------------------------------------------------
 // Type ID parsing

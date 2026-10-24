@@ -146,10 +146,6 @@ const { record, referencedFileIds } = await stack.delete(recordId, { purge: true
 
 **Until the follow-up `deleteAttachment()` call, the bytes remain reachable** to anyone who can name the hash — the [uploader](#stack-vs-scopedstack-methods) in particular, whose access does not lapse. That is what makes the second step part of the erasure rather than tidying after it.
 
-## The blobs a stack holds
-
-**A stack holds every blob its blob store lists, and every file one of its Records names.** A Record names a file by an [`_attachment` family](#finding-a-fileids-metadata-records) record's `fileId`, or by a reference: an `attachment` association or a top-level `file-ref` field (below). The halves overlap and neither covers the other: a store's listing is the only way to find bytes nothing names, and `listBlobs()` is [optional](./adapters.md#interface-split), while a name can outlive its bytes. Every operation that walks a stack's blobs walks this one set — [garbage collection](#garbage-collection) weighs it, and [`copyStack()`](./portability.md#copying-a-stack) carries it.
-
 ## Garbage collection
 
 Attachment bytes are only ever removed by an explicit `deleteAttachment(fileId)` call — normal app flows delete _records_, and nothing notices when the last record referencing a file goes away. `collectAttachmentGarbage()` is an explicit, owner-invoked sweep that finds and removes those orphans. It is **not** automatic reference-counting: auto-delete on last dissociate/record-delete would couple every record write to blob lifecycle and would race without a transactional adapter.
@@ -161,7 +157,7 @@ stack.collectAttachmentGarbage(opts?: {
 }): Promise<{ deletedFileIds: FileId[]; reclaimedBytes: number }>
 ```
 
-**What counts as garbage:** the candidates are [the blobs the stack holds](#the-blobs-a-stack-holds), and a file is collectable only when _no_ record — live or soft-deleted — references it via an `attachment` Association or a `file-ref` content field. This is the same reference definition `deleteAttachment()` uses, and the same recoverability principle: nothing reachable from a soft-deleted (undelete-able) state gets destroyed.
+**What counts as garbage:** a file is collectable only when _no_ record — live or soft-deleted — references it via an `attachment` Association or a `file-ref` content field. This is the same reference definition `deleteAttachment()` uses, and the same recoverability principle: nothing reachable from a soft-deleted (undelete-able) state gets destroyed.
 
 **Version history is not a reference.** A `file-ref` field sitting in a snapshot does not hold bytes alive, for either the sweep or `deleteAttachment()`: counting it would make a file undeletable for the lifetime of any snapshot that ever mentioned it, which is exactly the intentional delete this model exists to keep possible. The consequence is that [`restoreVersion()`](./versioning.md#restore-semantics) can put back a `file-ref` naming bytes that have since been deleted — a **dangling file reference**, and the one kind of dangle a restore can produce: history is put back, not re-litigated against what is true now. (A [dangling parent](./data-model.md#reparenting) comes from a container being deleted out from under its children, never from a restore, which settles no containment at all.) Consumers handle one the way they handle any `fileId` that resolves to nothing, and `getAttachment()` answers `StackNotFoundError`.
 
