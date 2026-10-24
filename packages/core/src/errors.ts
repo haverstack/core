@@ -265,6 +265,28 @@ export class OwnerMismatchError extends Error {
 }
 
 /**
+ * Thrown by an adapter's open() when an existing store names a layout other
+ * than the one the adapter reads: a store moves to a new layout only by
+ * being copied into one. `actual` is undefined when the store names none.
+ * Outside the StackError taxonomy for the same reason as OwnerMismatchError.
+ * See docs/spec/portability.md § The portable format.
+ */
+export class FormatMismatchError extends Error {
+  constructor(
+    public readonly expected: number,
+    public readonly actual: number | undefined,
+    public readonly where: string,
+  ) {
+    super(
+      actual === undefined
+        ? `Cannot open ${where}: it names no format version, and this adapter reads version ${expected}.`
+        : `Cannot open ${where}: it is format version ${actual}, and this adapter reads version ${expected}.`,
+    );
+    this.name = 'FormatMismatchError';
+  }
+}
+
+/**
  * Thrown by an adapter's element-set write when the stored set no longer
  * matches the `expectSet` it was handed. Outside the StackError taxonomy:
  * Stack catches it and reads again, so no request ever answers with it.

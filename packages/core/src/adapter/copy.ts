@@ -14,7 +14,7 @@
 
 import { InvalidAdapterError } from '../errors.js';
 import { resolveQuery } from '../query-validation.js';
-import type { PlainQuery, StackAdapter, StackRecordAdapter } from '../types/index.js';
+import type { PlainQuery, StackAdapter, StackRecordAdapter, StackType } from '../types/index.js';
 
 /** What a store is created with: the identity `_config` holds, as an adapter reports it. */
 export type StackIdentity = Pick<StackRecordAdapter, 'ownerEntityId' | 'timezone'>;
@@ -48,24 +48,31 @@ export async function copyStack(from: StackAdapter, create: CreateStore): Promis
   const identity = { ownerEntityId: from.ownerEntityId, timezone: from.timezone };
   const to = await create(identity);
   try {
-    await assertNewStore(to, identity);
-    for (const type of await from.listTypes()) await to.saveType(type);
-    await copyRecords(from, to);
+    const types = await from.listTypes();
+    await assertNewStore(to, identity, types);
+    for (const type of types) await to.saveType(type);
+    // Bytes before the Records that name them, as every upload writes them.
     for (const { fileId } of await listBlobs()) await to.putBlob(await from.getBlob(fileId));
+    await copyRecords(from, to);
     return to;
   } catch (err) {
-    await to.close?.();
+    // The failure that stopped the copy is the one to report.
+    await to.close?.().catch(() => {});
     throw err;
   }
 }
 
 /**
- * The one rule a target is held to: the store its adapter creates with
- * `identity` — that owner and timezone, no Record and no Type — on an
- * adapter that can write history. Blobs are content-addressed, so one
- * already there conflicts with nothing.
+ * The one rule a target is held to: a store with `identity` holding no
+ * Record, on an adapter that can write history. Whatever is named by what
+ * it is — a blob by its bytes, a Type by its `id` and `schemaHash` — may
+ * already be there if it is the same; a Type under another schema is refused.
  */
-async function assertNewStore(to: StackAdapter, identity: StackIdentity): Promise<void> {
+async function assertNewStore(
+  to: StackAdapter,
+  identity: StackIdentity,
+  types: StackType[],
+): Promise<void> {
   const refuse = (why: string) => {
     throw new InvalidAdapterError(`Cannot copy into the store create() returned: ${why}.`);
   };
@@ -81,7 +88,13 @@ async function assertNewStore(to: StackAdapter, identity: StackIdentity): Promis
   if ((await to.queryRecords(resolveQuery({ ...EVERYTHING, limit: 1 }))).records.length) {
     refuse('it already holds Records');
   }
-  if ((await to.listTypes()).length) refuse('it already holds Types');
+  const hashes = new Map(types.map((type) => [type.id, type.schemaHash]));
+  for (const held of await to.listTypes()) {
+    const hash = hashes.get(held.id);
+    if (hash !== undefined && hash !== held.schemaHash) {
+      refuse(`it holds Type "${held.id}" under another schema`);
+    }
+  }
 }
 
 async function copyRecords(from: StackAdapter, to: StackAdapter): Promise<void> {

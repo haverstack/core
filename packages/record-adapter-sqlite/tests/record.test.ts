@@ -10,7 +10,7 @@ import {
   StackNotFoundError,
   StackBadRequestError,
 } from '@haverstack/core';
-import { OwnerMismatchError, resolveQuery } from '@haverstack/core/adapter';
+import { FormatMismatchError, OwnerMismatchError, resolveQuery } from '@haverstack/core/adapter';
 import type { AuthorityAssociation, RecordVersion, StackRecord } from '@haverstack/core';
 
 // -------------------------------------------------------
@@ -238,6 +238,26 @@ describe('open create modes', () => {
       expect((err as OwnerMismatchError).expected).toBe('owner-xyz');
       expect((err as OwnerMismatchError).actual).toBe('owner-abc');
       expect((err as OwnerMismatchError).where).toContain(dbPath);
+      expect(existsSync(`${dbPath}.lock`)).toBe(false);
+    },
+  );
+
+  // A store moves to a new layout only by being copied into one.
+  // See docs/spec/portability.md § The portable format.
+  test.each([
+    ['another version', 'UPDATE format SET version = 2', 2],
+    ['no version at all', 'DELETE FROM format', undefined],
+  ] as const)(
+    'a store naming %s throws FormatMismatchError and releases the lock',
+    async (_name, sql, actual) => {
+      await (await initAdapter()).close();
+      const db = new DatabaseSync(dbPath);
+      db.exec(sql);
+      db.close();
+      const err = await NativeSQLiteRecordAdapter.open({ path: dbPath }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(FormatMismatchError);
+      expect((err as FormatMismatchError).expected).toBe(1);
+      expect((err as FormatMismatchError).actual).toBe(actual);
       expect(existsSync(`${dbPath}.lock`)).toBe(false);
     },
   );

@@ -24,6 +24,7 @@
 
 import {
   applyRecordSchema,
+  assertFormatVersion,
   insertConfigRecord,
   tryReadStackConfig,
   SharedSqlRecordAdapter,
@@ -75,6 +76,7 @@ export class DoSQLiteRecordAdapter extends SharedSqlRecordAdapter {
     applyRecordSchema(exec, { wal: false });
     let config = tryReadStackConfig(exec);
     if (config) {
+      assertFormatVersion(exec, 'the Durable Object storage');
       if (typeof opts.ownerEntityId === 'string' && opts.ownerEntityId !== config.entityId) {
         throw new OwnerMismatchError(
           opts.ownerEntityId,

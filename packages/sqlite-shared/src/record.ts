@@ -20,6 +20,8 @@ export { applyRecordSchema } from './schema.js';
 export { sanitizeFts5Query } from './fts5.js';
 export { type SqlExecutor } from './executor.js';
 export {
+  assertFormatVersion,
+  FORMAT_VERSION,
   insertConfigRecord,
   readStackConfig,
   tryReadStackConfig,

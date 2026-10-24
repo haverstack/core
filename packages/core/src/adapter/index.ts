@@ -26,7 +26,12 @@ export type {
   RecordHistory,
 } from '../types/index.js';
 export { sameAssociationSet } from '../associations/identity.js';
-export { ElementSetMovedError, OwnerMismatchError, softDeletedRefusal } from '../errors.js';
+export {
+  ElementSetMovedError,
+  FormatMismatchError,
+  OwnerMismatchError,
+  softDeletedRefusal,
+} from '../errors.js';
 export { combineAdapters } from './combine.js';
 export { copyStack } from './copy.js';
 export type { CreateStore, StackIdentity } from './copy.js';

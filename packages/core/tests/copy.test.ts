@@ -83,6 +83,21 @@ describe('copyStack', () => {
     expect([...target.blobs.keys()]).toEqual([fileId]);
   });
 
+  test('accepts Types already in the target under the same schema, the system ones included', async () => {
+    const source = await sourceWith(1);
+    const target = (await copyStack(source, async (identity) => {
+      const store = await create(identity);
+      const stack = await Stack.open(store);
+      await stack.defineType({
+        id: NOTE,
+        name: 'Note',
+        schema: { text: { kind: 'text' }, cover: { kind: 'file-ref' } },
+      });
+      return store;
+    })) as MemoryAdapter;
+    expect(target.records.size).toBe(source.records.size);
+  });
+
   // One rule for every way the store create() returns can differ from a new
   // store with the source's identity. See docs/spec/portability.md
   // § Copying a stack.
@@ -106,20 +121,16 @@ describe('copyStack', () => {
       ],
       ['a Record already in it', async () => sourceWith(1)],
       [
-        'the system Types Stack.open() seeds',
-        async (identity) => {
-          const store = await create(identity);
-          await Stack.open(store);
-          return store;
-        },
-      ],
-      [
-        'a Type of its own',
+        'a Type under another schema',
         async (identity) => {
           const store = await create(identity);
           await (
             await Stack.open(store)
-          ).defineType({ id: 'com.example.other/x@1', name: 'X', schema: {} });
+          ).defineType({
+            id: NOTE,
+            name: 'Note',
+            schema: { text: { kind: 'string' } },
+          });
           return store;
         },
       ],

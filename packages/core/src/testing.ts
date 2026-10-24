@@ -568,10 +568,7 @@ export class MemoryAdapter implements StackAdapter {
 
     const record = this.records.get(id);
     if (!record || record.version !== version.version) {
-      throw new StackConflictError(
-        `Version ${version.version} already exists for record "${id}" — a concurrent ` +
-          `writer raced past this version. Use ifVersion to detect this before it happens.`,
-      );
+      throw new StackConflictError(`Version ${version.version} already exists for record "${id}"`);
     }
 
     this.versions.set(

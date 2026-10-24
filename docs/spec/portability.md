@@ -24,7 +24,9 @@ What it carries is everything the source holds:
 
 **It is a full-trust operation, like any direct adapter access.** It writes authorship and history as recorded, which no write through `Stack` may: a scoped create is stamped with its requester, and nothing outside a write appends a snapshot or a journal entry. It takes adapters rather than stacks because those are where that trust already lives ([Adapters § Concurrency & storage ownership](./adapters.md#concurrency--storage-ownership)). It emits no [change events](./events.md) and appends no journal entry: it reproduces changes that already happened, each of which was announced and journaled when it did.
 
-**The target is created with the source's identity, so the identity travels by construction.** `create` receives the source's `ownerEntityId` and `timezone`, as any new store is opened with them ([Adapters § Construction](./adapters.md#construction)). What it returns is held to one rule: it is the store its adapter creates with that identity — that owner and timezone, no Record and no Type — on an adapter with `importRecord()`. Anything else is a mistake in `create`, refused with `InvalidAdapterError` before anything is written. Blobs are content-addressed, so one already there conflicts with nothing. A store `Stack.open()` has opened does not qualify: it holds the [system Types](./data-model.md#system-types). The copy brings the source's own, which are part of what it holds, and a later `Stack.open()` of the target meets them as it meets any store's.
+**The target is created with the source's identity, so the identity travels by construction.** `create` receives the source's `ownerEntityId` and `timezone`, as any new store is opened with them ([Adapters § Construction](./adapters.md#construction)). What it returns is held to one rule: a store with that identity holding no Record, on an adapter with `importRecord()`. What is named by what it is may already be there if it is the same: a blob is named by its bytes, and a Type by its `id`, checked by its `schemaHash`. So a Type already there under another schema is refused, and one under the same schema — the [system Types](./data-model.md#system-types) a `Stack.open()` seeds, say — is no conflict. Whatever else the target already holds is its own, as a blob no Record names is. Anything the rule refuses is a mistake in `create`, refused with `InvalidAdapterError` before anything is written.
+
+**The source is not written during the copy.** Records are read a page at a time and each one's history separately, so a write landing partway through yields a target matching no moment of the source. Nothing enforces this: a local source's only writer is the process that owns it, which is the one copying.
 
 **It is not atomic, and the target is the caller's.** Whatever `create` makes belongs to whoever passed `create`: on success it comes back open, theirs to close; on a failure part-way, the refusal included, `copyStack()` closes it, holding the only handle, and the caller removes it, having chosen where it lives. The copy is then run again into a new store, never resumed.
 
@@ -71,7 +73,7 @@ const exportedStack = await LocalAdapter.open({ path: './my-stack.db' });
 await copyStack(exportedStack, createHostStore);
 ```
 
-The layout is specified here so an export stays readable without the tool that wrote it, and a change to it changes this section in the same change; a test compares the tables below with the schema the SQLite adapters create. **Every store names its layout** in the one row of its `format` table: `version` is `1` for the layout below. A change to the layout bumps it, so a reader tells which layout it holds before reading anything else. The row is the store's own, like `_config`: a copy writes its target in the target's layout, which is how a stack moves to a newer one.
+The layout is specified here so an export stays readable without the tool that wrote it, and a change to it changes this section in the same change; a test compares the tables below with the schema the SQLite adapters create. **Every store names its layout** in the one row of its `format` table, `id` `1`: `version` is `1` for the layout below. A change to the layout bumps it, so a reader tells which layout it holds before reading anything else, and an adapter opening an existing store refuses one in any layout but its own with `FormatMismatchError` (`expected`, `actual`, `where`), released as an `OwnerMismatchError` is. The row is the store's own, like `_config`: a copy writes its target in the target's layout, which is how a stack moves to a newer one.
 
 **`attachments/<fileId>`** holds a blob's bytes, named by the [64-character lowercase hex SHA-256](./attachments.md) of its contents.
 
@@ -79,7 +81,7 @@ The layout is specified here so an export stays readable without the tool that w
 
 | Table           | One row per                              | Key                                                                                                   |
 | --------------- | ---------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `format`        | the store's layout version, one row only | none                                                                                                  |
+| `format`        | the store's layout version, one row only | `id`                                                                                                  |
 | `records`       | Record, `_config` included               | `id`                                                                                                  |
 | `associations`  | data association                         | `record_id`, `kind`, `label`, `file_id`, `related_scope`, `related_id`, `related_ns`, `related_stack` |
 | `permissions`   | permission element                       | `record_id`, `kind`, `label`, `grantee_kind`, `grantee_id`, `role`                                    |
@@ -104,7 +106,7 @@ Every column of every table but `records_fts`, an FTS5 index over `records.conte
 
 | Table           | Columns                                                                                                                                                                         |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `format`        | `version`                                                                                                                                                                       |
+| `format`        | `id`, `version`                                                                                                                                                                 |
 | `records`       | `id`, `type_id`, `created_at`, `updated_at`, `content`, `version`, `parent_id`, `entity_id`, `app_id`, `principal_id`, `updated_by`, `updated_via`, `deleted_at`, `unlisted_at` |
 | `associations`  | `record_id`, `kind`, `label`, `file_id`, `related_scope`, `related_id`, `related_ns`, `related_stack`, `attachment_record_id`                                                   |
 | `permissions`   | `record_id`, `kind`, `label`, `grantee_kind`, `grantee_id`, `role`                                                                                                              |
