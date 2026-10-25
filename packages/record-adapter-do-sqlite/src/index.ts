@@ -25,11 +25,11 @@
 import {
   applyRecordSchema,
   insertConfigRecord,
-  tryReadStackConfig,
+  readStoredIdentity,
   SharedSqlRecordAdapter,
-  type StackConfig,
 } from '@haverstack/sqlite-shared/record';
 import { OwnerMismatchError } from '@haverstack/core/adapter';
+import type { StackIdentity } from '@haverstack/core/adapter';
 import { DurableObjectSqliteExecutor } from './executor.js';
 
 // -------------------------------------------------------
@@ -52,8 +52,8 @@ export type DoSQLiteRecordAdapterOpenOptions = {
 // -------------------------------------------------------
 
 export class DoSQLiteRecordAdapter extends SharedSqlRecordAdapter {
-  private constructor(exec: DurableObjectSqliteExecutor, config: StackConfig) {
-    super(exec, config);
+  private constructor(exec: DurableObjectSqliteExecutor, identity: StackIdentity) {
+    super(exec, identity);
   }
 
   /**
@@ -72,22 +72,19 @@ export class DoSQLiteRecordAdapter extends SharedSqlRecordAdapter {
     opts: DoSQLiteRecordAdapterOpenOptions,
   ): Promise<DoSQLiteRecordAdapter> {
     const exec = new DurableObjectSqliteExecutor(storage);
-    applyRecordSchema(exec, { wal: false, where: 'the Durable Object storage' });
-    let config = tryReadStackConfig(exec);
-    if (config) {
-      if (typeof opts.ownerEntityId === 'string' && opts.ownerEntityId !== config.entityId) {
-        throw new OwnerMismatchError(
-          opts.ownerEntityId,
-          config.entityId,
-          'the Durable Object storage',
-        );
+    const where = 'the Durable Object storage';
+    let identity = readStoredIdentity(exec, where);
+    applyRecordSchema(exec, { wal: false });
+    if (identity) {
+      if (typeof opts.ownerEntityId === 'string' && opts.ownerEntityId !== identity.ownerEntityId) {
+        throw new OwnerMismatchError(opts.ownerEntityId, identity.ownerEntityId, where);
       }
     } else {
       const ownerEntityId =
         typeof opts.ownerEntityId === 'function' ? await opts.ownerEntityId() : opts.ownerEntityId;
-      config = insertConfigRecord(exec, ownerEntityId, opts.timezone);
+      identity = insertConfigRecord(exec, { ownerEntityId, timezone: opts.timezone });
     }
-    return new DoSQLiteRecordAdapter(exec, config);
+    return new DoSQLiteRecordAdapter(exec, identity);
   }
 
   // -------------------------------------------------------

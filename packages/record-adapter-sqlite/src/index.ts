@@ -32,11 +32,11 @@ import {
   acquireLock,
   releaseLock,
   insertConfigRecord,
-  readStackConfig,
+  readStoredIdentity,
   SharedSqlRecordAdapter,
-  type StackConfig,
 } from '@haverstack/sqlite-shared';
 import { OwnerMismatchError } from '@haverstack/core/adapter';
+import type { StackIdentity } from '@haverstack/core/adapter';
 import { NativeSqliteExecutor } from './executor.js';
 
 // -------------------------------------------------------
@@ -88,9 +88,9 @@ export class NativeSQLiteRecordAdapter extends SharedSqlRecordAdapter {
     private readonly path: string,
     private readonly db: DatabaseSync,
     exec: NativeSqliteExecutor,
-    config: StackConfig,
+    identity: StackIdentity,
   ) {
-    super(exec, config);
+    super(exec, identity);
   }
 
   /**
@@ -140,18 +140,29 @@ export class NativeSQLiteRecordAdapter extends SharedSqlRecordAdapter {
       checkMode(exists);
       db = new DatabaseSync(opts.path);
       const exec = new NativeSqliteExecutor(db);
-      applyRecordSchema(exec, { wal: true, where: `"${opts.path}"` });
-      let config: StackConfig;
-      if (exists) {
-        config = readStackConfig(exec);
-        if (typeof opts.ownerEntityId === 'string' && opts.ownerEntityId !== config.entityId) {
-          throw new OwnerMismatchError(opts.ownerEntityId, config.entityId, `"${opts.path}"`);
+      const stored = exists ? readStoredIdentity(exec, `"${opts.path}"`) : null;
+      if (exists && !stored) {
+        throw new Error('Stack database is missing its config record.');
+      }
+      applyRecordSchema(exec, { wal: true });
+      let identity: StackIdentity;
+      if (stored) {
+        identity = stored;
+        if (
+          typeof opts.ownerEntityId === 'string' &&
+          opts.ownerEntityId !== identity.ownerEntityId
+        ) {
+          throw new OwnerMismatchError(
+            opts.ownerEntityId,
+            identity.ownerEntityId,
+            `"${opts.path}"`,
+          );
         }
       } else {
         if (!newOwner) throw new Error(`Cannot create: "${opts.path}" vanished while opening.`);
-        config = insertConfigRecord(exec, newOwner, opts.timezone);
+        identity = insertConfigRecord(exec, { ownerEntityId: newOwner, timezone: opts.timezone });
       }
-      return new NativeSQLiteRecordAdapter(opts.path, db, exec, config);
+      return new NativeSQLiteRecordAdapter(opts.path, db, exec, identity);
     } catch (err) {
       db?.close();
       releaseLock(opts.path);

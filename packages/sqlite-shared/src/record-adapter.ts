@@ -40,9 +40,9 @@ import type {
   MutateOptions,
   Reach,
   RecordHistory,
+  StackIdentity,
 } from '@haverstack/core/adapter';
 import type { SqlExecutor } from './executor.js';
-import type { StackConfig } from './config.js';
 import { SharedSqlRecordLogic } from './record-logic.js';
 
 /**
@@ -77,10 +77,10 @@ export abstract class SharedSqlRecordAdapter implements StackRecordAdapter {
 
   private readonly record: SharedSqlRecordLogic;
 
-  protected constructor(exec: SqlExecutor, config: StackConfig) {
+  protected constructor(exec: SqlExecutor, identity: StackIdentity) {
     this.record = new SharedSqlRecordLogic({ exec });
-    this.ownerEntityId = config.entityId;
-    this.timezone = config.timezone;
+    this.ownerEntityId = identity.ownerEntityId;
+    this.timezone = identity.timezone;
   }
 
   // -------------------------------------------------------

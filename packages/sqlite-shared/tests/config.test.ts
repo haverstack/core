@@ -1,70 +1,97 @@
 import { describe, test, expect } from 'vitest';
-import {
-  insertConfigRecord,
-  readStackConfig,
-  tryReadStackConfig,
-  type StackConfig,
-} from '../src/config.js';
+import { DatabaseSync } from 'node:sqlite';
+import { FormatMismatchError } from '@haverstack/core/adapter';
+import { insertConfigRecord, readStoredIdentity } from '../src/config.js';
 import type { SqlExecutor } from '../src/executor.js';
+import { applyRecordSchema, FORMAT_VERSION } from '../src/schema.js';
 
-/**
- * A SqlExecutor over a single nullable row, which is all of storage the
- * config functions touch: one INSERT and one SELECT of the `_config`
- * record's content. Keeping it this narrow lets these tests run with no
- * SQLite binding at all — the engines' own suites cover the real SQL.
- */
-const stubExecutor = (): SqlExecutor & { row: { content: string } | undefined } => ({
-  row: undefined as { content: string } | undefined,
-  exec() {},
-  run(_sql, params = []) {
-    this.row = { content: params[2] as string };
-    return 1;
-  },
-  get<T>() {
-    return this.row as T | undefined;
-  },
-  all<T>() {
-    return [] as T[];
-  },
-  transaction<T>(fn: () => T) {
-    return fn();
+const executor = (db: DatabaseSync): SqlExecutor => ({
+  exec: (sql) => db.exec(sql),
+  run: (sql, params = []) => Number(db.prepare(sql).run(...(params as never[])).changes),
+  get: <T>(sql: string, params: readonly unknown[] = []) =>
+    db.prepare(sql).get(...(params as never[])) as T | undefined,
+  all: <T>(sql: string, params: readonly unknown[] = []) =>
+    db.prepare(sql).all(...(params as never[])) as T[],
+  transaction<T>(fn: () => T): T {
+    db.exec('BEGIN');
+    try {
+      const result = fn();
+      db.exec('COMMIT');
+      return result;
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
   },
 });
 
-describe('tryReadStackConfig', () => {
-  test('returns null when the database has no config record', () => {
-    expect(tryReadStackConfig(stubExecutor())).toBeNull();
+/** A schema-applied, empty database: what a store looks like before it is created. */
+const blank = () => {
+  const exec = executor(new DatabaseSync(':memory:'));
+  applyRecordSchema(exec, { wal: false });
+  return exec;
+};
+
+const tables = (exec: SqlExecutor) =>
+  exec.all<{ name: string }>(`SELECT name FROM sqlite_master WHERE type = 'table'`).length;
+
+describe('readStoredIdentity', () => {
+  test('is null for a database with no tables at all', () => {
+    expect(readStoredIdentity(executor(new DatabaseSync(':memory:')), 'here')).toBeNull();
   });
 
-  test('returns the stored config once one is written', () => {
-    const exec = stubExecutor();
-    insertConfigRecord(exec, 'did:key:owner', 'America/New_York');
-    expect(tryReadStackConfig(exec)).toEqual({
-      entityId: 'did:key:owner',
-      timezone: 'America/New_York',
-    });
+  // A store exists exactly when it has its _config record, so one left with
+  // tables and no record by an interrupted create is created afresh.
+  test('is null for a store with tables but no config record', () => {
+    expect(readStoredIdentity(blank(), 'here')).toBeNull();
   });
 
-  test('reports an absent timezone as undefined rather than omitting it', () => {
-    const exec = stubExecutor();
-    insertConfigRecord(exec, 'did:key:owner', undefined);
-    const config = tryReadStackConfig(exec) as StackConfig;
-    expect(config.timezone).toBeUndefined();
-    expect('timezone' in config).toBe(true);
+  test('reads back the identity a create wrote, an absent timezone kept as a key', () => {
+    const exec = blank();
+    insertConfigRecord(exec, { ownerEntityId: 'did:key:owner', timezone: undefined });
+    const identity = readStoredIdentity(exec, 'here');
+    expect(identity).toEqual({ ownerEntityId: 'did:key:owner', timezone: undefined });
+    expect('timezone' in identity!).toBe(true);
+  });
+
+  test.each([
+    ['another version', 'UPDATE format SET version = 2', 2],
+    ['no version', 'DELETE FROM format', undefined],
+    ['no format table', 'DROP TABLE format', undefined],
+  ] as const)('refuses a store naming %s, writing nothing', (_name, sql, actual) => {
+    const exec = blank();
+    insertConfigRecord(exec, { ownerEntityId: 'did:key:owner', timezone: 'UTC' });
+    exec.exec(sql);
+    const before = tables(exec);
+    const err = (() => {
+      try {
+        return readStoredIdentity(exec, 'here');
+      } catch (e) {
+        return e;
+      }
+    })();
+    expect(err).toBeInstanceOf(FormatMismatchError);
+    expect(err).toMatchObject({ expected: FORMAT_VERSION, actual, where: 'here' });
+    expect(tables(exec)).toBe(before);
   });
 });
 
 describe('insertConfigRecord', () => {
-  test('returns the config it wrote, matching what a later read yields', () => {
-    const exec = stubExecutor();
-    const written = insertConfigRecord(exec, 'did:key:owner', 'UTC');
-    expect(written).toEqual({ entityId: 'did:key:owner', timezone: 'UTC' });
-    expect(written).toEqual(tryReadStackConfig(exec));
+  test('returns the identity it wrote, matching what a later read yields', () => {
+    const exec = blank();
+    const written = insertConfigRecord(exec, { ownerEntityId: 'did:key:owner', timezone: 'UTC' });
+    expect(written).toEqual(readStoredIdentity(exec, 'here'));
   });
-});
 
-describe('readStackConfig', () => {
-  test('throws when the database has no config record', () => {
-    expect(() => readStackConfig(stubExecutor())).toThrow(/missing its config record/);
+  test('writes the format row and the config record together, or neither', () => {
+    const exec = blank();
+    exec.run(
+      `INSERT INTO records (id, type_id, created_at, updated_at, content, version)
+       VALUES ('_config', '_config@1', 0, 0, '{}', 1)`,
+    );
+    expect(() =>
+      insertConfigRecord(exec, { ownerEntityId: 'did:key:owner', timezone: 'UTC' }),
+    ).toThrow();
+    expect(exec.get('SELECT 1 FROM format')).toBeUndefined();
   });
 });
