@@ -35,7 +35,8 @@ const EVERYTHING: PlainQuery = {
 /**
  * Copy everything `from` holds into the store `create` makes with `from`'s
  * identity, and return that store, open. Not atomic: a failure closes the
- * store part-written, and the caller, whose store it is, removes it.
+ * store part-written, and the caller, whose store it is, removes it. The
+ * source must not be written meanwhile; nothing here can check that.
  * See docs/spec/portability.md § Copying a stack.
  */
 export async function copyStack(from: StackAdapter, create: CreateStore): Promise<StackAdapter> {

@@ -279,6 +279,42 @@ describe('open create modes', () => {
     expect(table).toBeUndefined();
   });
 
+  // A stack exists exactly when its file holds _config, so a file an
+  // interrupted create left without one is a stack not yet created.
+  // See docs/spec/portability.md § The portable format.
+  describe('a file holding tables but no config record', () => {
+    const halfMade = async () => {
+      await (await initAdapter()).close();
+      const db = new DatabaseSync(dbPath);
+      db.exec(`DELETE FROM records WHERE id = '_config'; DELETE FROM format;`);
+      db.close();
+    };
+
+    test.each(['ifMissing', 'exclusive'] as const)("is created under '%s'", async (create) => {
+      await halfMade();
+      const provider = vi.fn(() => 'owner-new');
+      const adapter = await NativeSQLiteRecordAdapter.open({
+        path: dbPath,
+        create,
+        ownerEntityId: provider,
+      });
+      expect(adapter.ownerEntityId).toBe('owner-new');
+      expect(provider).toHaveBeenCalledOnce();
+      await adapter.close();
+      expect((await NativeSQLiteRecordAdapter.open({ path: dbPath })).ownerEntityId).toBe(
+        'owner-new',
+      );
+    });
+
+    test("is refused as missing under 'never', and releases the lock", async () => {
+      await halfMade();
+      await expect(NativeSQLiteRecordAdapter.open({ path: dbPath })).rejects.toThrow(
+        /no database found/,
+      );
+      expect(existsSync(`${dbPath}.lock`)).toBe(false);
+    });
+  });
+
   test('a matching plain-string owner opens an existing store', async () => {
     await (await initAdapter({ ownerEntityId: 'owner-abc' })).close();
     const adapter = await NativeSQLiteRecordAdapter.open({

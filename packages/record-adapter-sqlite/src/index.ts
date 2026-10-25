@@ -103,6 +103,8 @@ export class NativeSQLiteRecordAdapter extends SharedSqlRecordAdapter {
     opts: NativeSQLiteRecordAdapterOpenOptions,
   ): Promise<NativeSQLiteRecordAdapter> {
     const mode: StoreCreateMode = opts.create ?? 'never';
+    // `exists` is whether a stack is there: a file holding its _config
+    // record. See docs/spec/portability.md § The portable format.
     const checkMode = (exists: boolean): void => {
       if (!exists && mode === 'never') {
         throw new Error(
@@ -117,33 +119,34 @@ export class NativeSQLiteRecordAdapter extends SharedSqlRecordAdapter {
         );
       }
     };
-    const existedBeforeLock = existsSync(opts.path);
-    checkMode(existedBeforeLock);
-
-    // Resolved before the lock is taken so a failing provider leaves nothing held.
-    let newOwner: string | undefined;
-    if (!existedBeforeLock) {
-      newOwner =
+    const resolveOwner = async (): Promise<string> => {
+      const owner =
         typeof opts.ownerEntityId === 'function' ? await opts.ownerEntityId() : opts.ownerEntityId;
-      if (!newOwner) {
+      if (!owner) {
         throw new Error(
           `Cannot create: no ownerEntityId given for the new database at "${opts.path}".`,
         );
       }
+      return owner;
+    };
+
+    // No file is certainly no stack, so that case is judged before the lock,
+    // and its provider resolved there so a failing one leaves nothing held.
+    let newOwner: string | undefined;
+    if (!existsSync(opts.path)) {
+      checkMode(false);
+      newOwner = await resolveOwner();
     }
 
     acquireLock(opts.path, opts.force);
     let db: DatabaseSync | undefined;
     try {
-      // Re-checked under the lock: another process may have created the file meanwhile.
-      const exists = existsSync(opts.path);
-      checkMode(exists);
+      // Re-read under the lock: another process may have created it meanwhile.
+      const file = existsSync(opts.path);
       db = new DatabaseSync(opts.path);
       const exec = new NativeSqliteExecutor(db);
-      const stored = exists ? readStoredIdentity(exec, `"${opts.path}"`) : null;
-      if (exists && !stored) {
-        throw new Error('Stack database is missing its config record.');
-      }
+      const stored = file ? readStoredIdentity(exec, `"${opts.path}"`) : null;
+      checkMode(stored !== null);
       applyRecordSchema(exec, { wal: true });
       let identity: StackIdentity;
       if (stored) {
@@ -159,7 +162,9 @@ export class NativeSQLiteRecordAdapter extends SharedSqlRecordAdapter {
           );
         }
       } else {
-        if (!newOwner) throw new Error(`Cannot create: "${opts.path}" vanished while opening.`);
+        // A file with no _config is a stack not yet created, so its owner is
+        // resolved here, under the lock the catch below releases.
+        newOwner ??= await resolveOwner();
         identity = insertConfigRecord(exec, { ownerEntityId: newOwner, timezone: opts.timezone });
       }
       return new NativeSQLiteRecordAdapter(opts.path, db, exec, identity);

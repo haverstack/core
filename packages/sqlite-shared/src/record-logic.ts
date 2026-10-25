@@ -124,8 +124,9 @@ const versionRowValues = (version: RecordVersion): unknown[] => [
 ];
 
 /**
- * The `journal` columns in the order both of its INSERTs bind them: key
- * and timestamp, then journalInputValues(), then what the row reports.
+ * The `journal` columns, and the one INSERT both journal writes run: every
+ * column bound in this order, `seq` from `seqSql` — a bound value for an
+ * entry as recorded, the log's next number for an append.
  */
 const JOURNAL_COLUMNS = [
   'record_id',
@@ -141,14 +142,33 @@ const JOURNAL_COLUMNS = [
   'parent_id',
 ] as const;
 
-/** The columns a JournalEntryInput fills, as JOURNAL_COLUMNS orders them. */
-const journalInputValues = (entry: JournalEntryInput): unknown[] => [
+const insertJournalSql = (seqSql: string): string =>
+  `INSERT INTO journal (${JOURNAL_COLUMNS.join(', ')})
+   VALUES (${JOURNAL_COLUMNS.map((column) => (column === 'seq' ? seqSql : '?')).join(', ')})`;
+
+/** What the record row reports for an entry, beside what the caller supplied. */
+type JournalRowState = { version: number; typeId: string; parentId: string | null };
+
+/** The values for insertJournalSql(), in JOURNAL_COLUMNS order. */
+const journalValues = (
+  recordId: string,
+  seq: unknown,
+  at: Date,
+  entry: JournalEntryInput,
+  row: JournalRowState,
+): unknown[] => [
+  recordId,
+  seq,
+  toMs(at),
   entry.kind,
   JSON.stringify(entry.ops),
   // '' is the root; NULL is an entry that names no origin at all.
   entry.previousParentId === undefined ? null : (entry.previousParentId ?? ''),
   entry.actor ? JSON.stringify(entry.actor) : null,
   entry.associations?.length ? JSON.stringify(entry.associations) : null,
+  row.version,
+  row.typeId,
+  row.parentId,
 ];
 
 export type SharedSqlRecordLogicDeps = {
@@ -747,38 +767,26 @@ export class SharedSqlRecordLogic {
     }>('SELECT version, type_id, parent_id FROM records WHERE id = ?', [recordId]);
     if (!row) throw recordNotFound(recordId);
 
+    // The subselect's one parameter is the record id, bound in seq's place.
     this.exec.run(
-      `INSERT INTO journal (${JOURNAL_COLUMNS.join(', ')})
-       VALUES (
-         ?,
-         (SELECT COALESCE(MAX(seq), 0) + 1 FROM journal WHERE record_id = ?),
-         ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        recordId,
-        recordId,
-        toMs(new Date()),
-        ...journalInputValues(entry),
-        row.version,
-        row.type_id,
-        row.parent_id,
-      ],
+      insertJournalSql('(SELECT COALESCE(MAX(seq), 0) + 1 FROM journal WHERE record_id = ?)'),
+      journalValues(recordId, recordId, new Date(), entry, {
+        version: row.version,
+        typeId: row.type_id,
+        parentId: row.parent_id,
+      }),
     );
   }
 
   /** A whole entry as recorded, `seq` and `at` included — importRecord()'s half of the journal. */
   private insertJournalRow(recordId: string, entry: RecordJournalEntry): void {
     this.exec.run(
-      `INSERT INTO journal (${JOURNAL_COLUMNS.join(', ')})
-       VALUES (${JOURNAL_COLUMNS.map(() => '?').join(', ')})`,
-      [
-        recordId,
-        entry.seq,
-        toMs(entry.at),
-        ...journalInputValues(entry),
-        entry.version,
-        entry.typeId,
-        entry.parentId ?? null,
-      ],
+      insertJournalSql('?'),
+      journalValues(recordId, entry.seq, entry.at, entry, {
+        version: entry.version,
+        typeId: entry.typeId,
+        parentId: entry.parentId ?? null,
+      }),
     );
   }
 

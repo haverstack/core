@@ -95,6 +95,8 @@ A plain-string `ownerEntityId` is also checked against the owner of an existing 
 
 **Stack identity** (`ownerEntityId`, `timezone`) is stored as a singleton `_config@1` record in the records table. Adapters expose these values as typed readonly properties (`adapter.ownerEntityId`, `adapter.timezone`) rather than as a generic key/value store. For the API adapter, they are sourced from the discovery endpoint (`GET /.well-known/stack`) when the adapter is opened and cached for the session.
 
+**The owner is `entityId` where it is stored or sent, and `ownerEntityId` where it is an API.** A stored or wire field names the kind of thing it references, so `_config`'s content and the discovery response carry `entityId`, as a relationship target and a grantee do. An API property names the role the entity plays, so the adapter, `Stack` and every `open()` call it `ownerEntityId`. The adapters that read `_config` or discovery are where one becomes the other.
+
 **`timezone` is optional, passthrough app metadata — nothing in core reads it for behavior.** It's a presentation concern that lives at the data layer because `_config` is the natural place to store one fact per stack. There is no default: an absent `timezone` stays `undefined` end to end (`ConfigContent.timezone`, `adapter.timezone`, discovery's `timezone` field) rather than being defaulted to `'UTC'` — a default would assert knowledge the stack was never actually given. Apps that want a display default apply it themselves, explicitly, at the point they format something.
 
 **`_config` is protected**, by `Stack` itself rather than any one adapter — the same layering as schema validation, so every adapter and `ScopedStack` (which delegates to `Stack`) inherit it automatically:
