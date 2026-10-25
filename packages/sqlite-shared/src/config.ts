@@ -16,7 +16,7 @@ const hasTable = (exec: SqlExecutor, name: string): boolean =>
  * database reaches what an existing one yields without a read-back. Only
  * valid on a freshly-created database.
  */
-export const insertConfigRecord = (exec: SqlExecutor, identity: StackIdentity): StackIdentity => {
+export const writeNewStore = (exec: SqlExecutor, identity: StackIdentity): StackIdentity => {
   const now = Date.now();
   exec.transaction(() => {
     exec.run('INSERT INTO format (id, version) VALUES (1, ?)', [FORMAT_VERSION]);
@@ -35,7 +35,7 @@ export const insertConfigRecord = (exec: SqlExecutor, identity: StackIdentity): 
  * record is new. An existing store is refused in any layout but
  * FORMAT_VERSION, before the schema is applied to it — a store moves to
  * another layout only by being copied into one. Reads only.
- * See docs/spec/portability.md § The portable format.
+ * See docs/spec/adapters.md § Construction.
  */
 export const readStoredIdentity = (exec: SqlExecutor, where: string): StackIdentity | null => {
   const row = hasTable(exec, 'records') ? exec.get<{ content: string }>(CONFIG_ROW_SQL) : undefined;

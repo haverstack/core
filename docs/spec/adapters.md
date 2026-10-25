@@ -126,6 +126,8 @@ An adapter that holds a stack's identity has exactly one entry point, an async s
 | `APIAdapter`                                        | `open({ url, ownerEntityId?, … })`            | none: a client never creates                      |
 | `MemoryAdapter`, `IncapableMemoryAdapter` (testing) | `open({ ownerEntityId, timezone? })`          | none: always new                                  |
 
+**A store is present exactly when it holds its `_config` record.** That record is written in one transaction with everything else a new store is created with, so a store an interrupted create left without it is missing, whatever else it holds: `create` decides, and creating it starts over. A missing file is missing too, and needs no reading to say so.
+
 `create` names what `open()` does when the store is missing or present, like `O_CREAT`/`O_EXCL`:
 
 - `'never'`: open an existing store, fail if missing.
@@ -138,7 +140,9 @@ An adapter that holds a stack's identity has exactly one entry point, an async s
 - **A plain string or a lazy `() => string | Promise<string>`** on every creating path, called only when a store is actually created.
 - **A plain string is checked against an existing store's owner**, in every mode and on every adapter; a mismatch throws `OwnerMismatchError` (`expected`, `actual`, and a `where` naming the path, URL or Durable Object) and releases anything `open()` had acquired. A lazy provider is never called just to compare.
 
-`OwnerMismatchError` is exported from `@haverstack/core/adapter`, outside the `StackError` taxonomy alongside `InvalidAdapterError`: it reports a setup mistake, not a state a request can be in.
+**A SQLite store present in another layout is refused, before anything is written to it.** Its `format` row must name the layout the adapter reads (see [Portability § The portable format](./portability.md#the-portable-format)); a store naming another, or none, throws `FormatMismatchError` (`expected`, `actual` and `where`, as above) and releases what `open()` had acquired. A store moves to another layout only by being copied into one. The layout is read with the same read that answers whether the store is present and who owns it, so the three checks cannot disagree.
+
+`OwnerMismatchError` and `FormatMismatchError` are exported from `@haverstack/core/adapter`, outside the `StackError` taxonomy alongside `InvalidAdapterError`: each reports a setup mistake, not a state a request can be in.
 
 ## Conformance
 

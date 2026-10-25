@@ -19,5 +19,5 @@
 export { applyRecordSchema, FORMAT_VERSION } from './schema.js';
 export { sanitizeFts5Query } from './fts5.js';
 export { type SqlExecutor } from './executor.js';
-export { insertConfigRecord, readStoredIdentity } from './config.js';
+export { writeNewStore, readStoredIdentity } from './config.js';
 export { SharedSqlRecordAdapter, SQLITE_RECORD_CAPABILITIES } from './record-adapter.js';

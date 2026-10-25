@@ -243,7 +243,7 @@ describe('open create modes', () => {
   );
 
   // A store moves to a new layout only by being copied into one.
-  // See docs/spec/portability.md § The portable format.
+  // See docs/spec/adapters.md § Construction.
   test.each([
     ['another version', 'UPDATE format SET version = 2', 2],
     ['no version at all', 'DELETE FROM format', undefined],
@@ -281,7 +281,7 @@ describe('open create modes', () => {
 
   // A stack exists exactly when its file holds _config, so a file an
   // interrupted create left without one is a stack not yet created.
-  // See docs/spec/portability.md § The portable format.
+  // See docs/spec/adapters.md § Construction.
   describe('a file holding tables but no config record', () => {
     const halfMade = async () => {
       await (await initAdapter()).close();

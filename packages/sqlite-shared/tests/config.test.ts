@@ -1,7 +1,7 @@
 import { describe, test, expect } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
 import { FormatMismatchError } from '@haverstack/core/adapter';
-import { insertConfigRecord, readStoredIdentity } from '../src/config.js';
+import { writeNewStore, readStoredIdentity } from '../src/config.js';
 import type { SqlExecutor } from '../src/executor.js';
 import { applyRecordSchema, FORMAT_VERSION } from '../src/schema.js';
 
@@ -48,7 +48,7 @@ describe('readStoredIdentity', () => {
 
   test('reads back the identity a create wrote, an absent timezone kept as a key', () => {
     const exec = blank();
-    insertConfigRecord(exec, { ownerEntityId: 'did:key:owner', timezone: undefined });
+    writeNewStore(exec, { ownerEntityId: 'did:key:owner', timezone: undefined });
     const identity = readStoredIdentity(exec, 'here');
     expect(identity).toEqual({ ownerEntityId: 'did:key:owner', timezone: undefined });
     expect('timezone' in identity!).toBe(true);
@@ -60,7 +60,7 @@ describe('readStoredIdentity', () => {
     ['no format table', 'DROP TABLE format', undefined],
   ] as const)('refuses a store naming %s, writing nothing', (_name, sql, actual) => {
     const exec = blank();
-    insertConfigRecord(exec, { ownerEntityId: 'did:key:owner', timezone: 'UTC' });
+    writeNewStore(exec, { ownerEntityId: 'did:key:owner', timezone: 'UTC' });
     exec.exec(sql);
     const before = tables(exec);
     const err = (() => {
@@ -76,10 +76,10 @@ describe('readStoredIdentity', () => {
   });
 });
 
-describe('insertConfigRecord', () => {
+describe('writeNewStore', () => {
   test('returns the identity it wrote, matching what a later read yields', () => {
     const exec = blank();
-    const written = insertConfigRecord(exec, { ownerEntityId: 'did:key:owner', timezone: 'UTC' });
+    const written = writeNewStore(exec, { ownerEntityId: 'did:key:owner', timezone: 'UTC' });
     expect(written).toEqual(readStoredIdentity(exec, 'here'));
   });
 
@@ -90,7 +90,7 @@ describe('insertConfigRecord', () => {
        VALUES ('_config', '_config@1', 0, 0, '{}', 1)`,
     );
     expect(() =>
-      insertConfigRecord(exec, { ownerEntityId: 'did:key:owner', timezone: 'UTC' }),
+      writeNewStore(exec, { ownerEntityId: 'did:key:owner', timezone: 'UTC' }),
     ).toThrow();
     expect(exec.get('SELECT 1 FROM format')).toBeUndefined();
   });

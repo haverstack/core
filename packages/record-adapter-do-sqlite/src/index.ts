@@ -24,7 +24,7 @@
 
 import {
   applyRecordSchema,
-  insertConfigRecord,
+  writeNewStore,
   readStoredIdentity,
   SharedSqlRecordAdapter,
 } from '@haverstack/sqlite-shared/record';
@@ -82,7 +82,7 @@ export class DoSQLiteRecordAdapter extends SharedSqlRecordAdapter {
     } else {
       const ownerEntityId =
         typeof opts.ownerEntityId === 'function' ? await opts.ownerEntityId() : opts.ownerEntityId;
-      identity = insertConfigRecord(exec, { ownerEntityId, timezone: opts.timezone });
+      identity = writeNewStore(exec, { ownerEntityId, timezone: opts.timezone });
     }
     return new DoSQLiteRecordAdapter(exec, identity);
   }

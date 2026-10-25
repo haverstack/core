@@ -31,7 +31,7 @@ import {
   applyRecordSchema,
   acquireLock,
   releaseLock,
-  insertConfigRecord,
+  writeNewStore,
   readStoredIdentity,
   SharedSqlRecordAdapter,
 } from '@haverstack/sqlite-shared';
@@ -104,7 +104,7 @@ export class NativeSQLiteRecordAdapter extends SharedSqlRecordAdapter {
   ): Promise<NativeSQLiteRecordAdapter> {
     const mode: StoreCreateMode = opts.create ?? 'never';
     // `exists` is whether a stack is there: a file holding its _config
-    // record. See docs/spec/portability.md § The portable format.
+    // record. See docs/spec/adapters.md § Construction.
     const checkMode = (exists: boolean): void => {
       if (!exists && mode === 'never') {
         throw new Error(
@@ -165,7 +165,7 @@ export class NativeSQLiteRecordAdapter extends SharedSqlRecordAdapter {
         // A file with no _config is a stack not yet created, so its owner is
         // resolved here, under the lock the catch below releases.
         newOwner ??= await resolveOwner();
-        identity = insertConfigRecord(exec, { ownerEntityId: newOwner, timezone: opts.timezone });
+        identity = writeNewStore(exec, { ownerEntityId: newOwner, timezone: opts.timezone });
       }
       return new NativeSQLiteRecordAdapter(opts.path, db, exec, identity);
     } catch (err) {

@@ -269,7 +269,7 @@ export class OwnerMismatchError extends Error {
  * than the one the adapter reads: a store moves to a new layout only by
  * being copied into one. `actual` is undefined when the store names none.
  * Outside the StackError taxonomy for the same reason as OwnerMismatchError.
- * See docs/spec/portability.md § The portable format.
+ * See docs/spec/adapters.md § Construction.
  */
 export class FormatMismatchError extends Error {
   constructor(
