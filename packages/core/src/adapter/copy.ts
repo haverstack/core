@@ -14,7 +14,7 @@
 
 import { InvalidAdapterError } from '../errors.js';
 import { resolveQuery } from '../query-validation.js';
-import type { PlainQuery, StackAdapter, StackRecordAdapter, StackType } from '../types/index.js';
+import type { PlainQuery, StackAdapter, StackRecordAdapter } from '../types/index.js';
 
 /** What a store is created with: the identity `_config` holds, as an adapter reports it. */
 export type StackIdentity = Pick<StackRecordAdapter, 'ownerEntityId' | 'timezone'>;
@@ -46,15 +46,15 @@ export async function copyStack(from: StackAdapter, create: CreateStore): Promis
       'Cannot copy from this adapter: it has no listBlobs(), so its blobs cannot be enumerated.',
     );
   }
-  const identity = { ownerEntityId: from.ownerEntityId, timezone: from.timezone };
-  const to = await create(identity);
+  const to = await create({ ownerEntityId: from.ownerEntityId, timezone: from.timezone });
   try {
-    const types = await from.listTypes();
-    await assertNewStore(to, identity, types);
-    for (const type of types) await to.saveType(type);
+    const importRecord = to.importRecord?.bind(to);
+    if (!importRecord) refuseTarget('it has no importRecord(), so it cannot write history');
+    await assertNewStore(to, from.ownerEntityId);
+    for (const type of await from.listTypes()) await to.saveType(type);
     // Bytes before the Records that name them, as every upload writes them.
     for (const { fileId } of await listBlobs()) await to.putBlob(await from.getBlob(fileId));
-    await copyRecords(from, to);
+    await copyRecords(from, importRecord);
     return to;
   } catch (err) {
     // The failure that stopped the copy is the one to report.
@@ -63,42 +63,29 @@ export async function copyStack(from: StackAdapter, create: CreateStore): Promis
   }
 }
 
-/**
- * The one rule a target is held to: a store with `identity` holding no
- * Record, on an adapter that can write history. Whatever is named by what
- * it is — a blob by its bytes, a Type by its `id` and `schemaHash` — may
- * already be there if it is the same; a Type under another schema is refused.
- */
-async function assertNewStore(
-  to: StackAdapter,
-  identity: StackIdentity,
-  types: StackType[],
-): Promise<void> {
-  const refuse = (why: string) => {
-    throw new InvalidAdapterError(`Cannot copy into the store create() returned: ${why}.`);
-  };
-  if (!to.importRecord) refuse('it has no importRecord(), so it cannot write history');
-  if (to.ownerEntityId !== identity.ownerEntityId) {
-    refuse(`it is owned by "${to.ownerEntityId}", not "${identity.ownerEntityId}"`);
-  }
-  if (to.timezone !== identity.timezone) {
-    refuse(
-      `its timezone is ${JSON.stringify(to.timezone)}, not ${JSON.stringify(identity.timezone)}`,
-    );
-  }
-  if ((await to.queryRecords(resolveQuery({ ...EVERYTHING, limit: 1 }))).records.length) {
-    refuse('it already holds Records');
-  }
-  const hashes = new Map(types.map((type) => [type.id, type.schemaHash]));
-  for (const held of await to.listTypes()) {
-    const hash = hashes.get(held.id);
-    if (hash !== undefined && hash !== held.schemaHash) {
-      refuse(`it holds Type "${held.id}" under another schema`);
-    }
-  }
+function refuseTarget(why: string): never {
+  throw new InvalidAdapterError(`Cannot copy into the store create() returned: ${why}.`);
 }
 
-async function copyRecords(from: StackAdapter, to: StackAdapter): Promise<void> {
+/**
+ * A target is a store as its adapter creates one: the source's owner, checked
+ * as open() checks it, and no Record or Type yet. Blobs go unchecked: not
+ * every store can list them, and writing the same bytes twice is harmless.
+ */
+async function assertNewStore(to: StackAdapter, ownerEntityId: string): Promise<void> {
+  if (to.ownerEntityId !== ownerEntityId) {
+    refuseTarget(`it is owned by "${to.ownerEntityId}", not "${ownerEntityId}"`);
+  }
+  if ((await to.queryRecords(resolveQuery({ ...EVERYTHING, limit: 1 }))).records.length) {
+    refuseTarget('it already holds Records');
+  }
+  if ((await to.listTypes()).length) refuseTarget('it already holds Types');
+}
+
+async function copyRecords(
+  from: StackAdapter,
+  importRecord: NonNullable<StackRecordAdapter['importRecord']>,
+): Promise<void> {
   let cursor: string | undefined;
   do {
     const page = await from.queryRecords(resolveQuery({ ...EVERYTHING, cursor }));
@@ -107,7 +94,7 @@ async function copyRecords(from: StackAdapter, to: StackAdapter): Promise<void> 
         from.getVersions(record.id),
         from.getJournal(record.id),
       ]);
-      await to.importRecord!(record, { versions, journal });
+      await importRecord(record, { versions, journal });
     }
     cursor = page.cursor ?? undefined;
   } while (cursor);
