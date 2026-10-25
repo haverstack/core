@@ -18,19 +18,19 @@ What it carries is everything the source holds:
 
 - **Every Type**, through `listTypes()` and `saveType()`.
 - **Every Record but `_config`**, soft-deleted and unlisted ones included, each with every version snapshot and every journal entry, through [`importRecord()`](#writing-history). `_config` is the store's own: no query reaches it, and `create` made the target with what it holds.
-- **Every blob**, through `listBlobs()`, which a source must have.
+- **Every blob**, through `listBlobs()`, which both ends of a copy must have.
 
 **Each is read as the store enumerates it**, never by what a Record says, so nothing is filtered on the way: what is garbage is the target's own [collection](./attachments.md#garbage-collection) to decide, run when its owner chooses. Nothing a purge destroyed is carried, because the source no longer holds it.
 
 **It is a full-trust operation, like any direct adapter access.** It writes authorship and history as recorded, which no write through `Stack` may: a scoped create is stamped with its requester, and nothing outside a write appends a snapshot or a journal entry. It takes adapters rather than stacks because those are where that trust already lives ([Adapters § Concurrency & storage ownership](./adapters.md#concurrency--storage-ownership)). It emits no [change events](./events.md) and appends no journal entry: it reproduces changes that already happened, each of which was announced and journaled when it did.
 
-**The target is a store as its adapter creates one.** `create` receives the source's `ownerEntityId` and `timezone`, as any new store is opened with them ([Adapters § Construction](./adapters.md#construction)), and what it returns is checked as `open()` checks a store: its owner is the source's, the one identity claim the system checks anywhere, while `timezone` is passthrough metadata a store takes when it is created. It must also hold no Record and no Type yet, on an adapter with `importRecord()`. Blobs go unchecked: not every store can list them, and writing the same bytes twice is harmless. Anything else is a mistake in `create`, refused with `InvalidAdapterError` before anything is written; a store `Stack.open()` has already opened holds the [system Types](./data-model.md#system-types), so it is refused too.
+**The target is a store as its adapter creates one.** `create` receives the source's `ownerEntityId` and `timezone`, as any new store is opened with them ([Adapters § Construction](./adapters.md#construction)), and what it returns is checked as `open()` checks a store: its owner must be the source's, or the copy throws `OwnerMismatchError`, as `open()` does. `timezone` is passthrough metadata a store takes when it is created, so it is handed over and not checked. The store must also hold nothing yet — no Record, no Type, no blob — on an adapter with `importRecord()` and `listBlobs()`. Anything else is a mistake in `create`, refused with `InvalidAdapterError` before anything is written; a store `Stack.open()` has already opened holds the [system Types](./data-model.md#system-types), so it is refused too.
 
 **The source is not written during the copy.** Records are read a page at a time and each one's history separately, so a write landing partway through yields a target matching no moment of the source. Nothing enforces this: a local source's only writer is the process that owns it, which is the one copying.
 
 **It is not atomic, and the target is the caller's.** Whatever `create` makes belongs to whoever passed `create`: on success it comes back open, theirs to close; on a failure part-way, the refusal included, `copyStack()` closes it, holding the only handle, and the caller removes it, having chosen where it lives. The copy is then run again into a new store, never resumed.
 
-**The source needs `listBlobs()`**, as the target needs `importRecord()`, and a source without it is refused with `InvalidAdapterError` before `create` is called. Every blob adapter has it. `APIAdapter` does not, because the wire has no endpoint that lists blobs, so a stack behind one cannot yet be copied out through it.
+**Both ends list everything they hold.** The source needs `listBlobs()` to be read in full, and the target needs it to be checked empty and to be read in full by a later copy in turn, so a copy never lands a stack where it cannot be copied out again. A source without it is refused with `InvalidAdapterError` before `create` is called. Every blob adapter has it. `APIAdapter` does not, because the wire has no endpoint that lists blobs, so a stack behind one cannot yet be copied out through it.
 
 ## Writing history
 
@@ -73,7 +73,7 @@ const exportedStack = await LocalAdapter.open({ path: './my-stack.db' });
 await copyStack(exportedStack, createHostStore);
 ```
 
-The layout is specified here so an export stays readable without the tool that wrote it, and a change to it changes this section in the same change; a test compares the tables below with the schema the SQLite adapters create. **Every SQLite store names its layout** in the one row of its `format` table, `id` `1`: `version` is `1` for the layout below. A change to the layout bumps it. The row is written in the same transaction as `_config`, and an adapter opening a store refuses one in another layout before writing to it, by the rules in [Adapters § Construction](./adapters.md#construction). The row is the store's own, like `_config`: a copy writes its target in the target's layout, which is how a stack moves to a newer one.
+The layout is specified here so an export stays readable without the tool that wrote it, and a change to it changes this section in the same change; a test compares the tables below with the schema the SQLite adapters create. **Every SQLite store names its layout** in the one row of its `format` table, `id` `1`: `version` is `1` for the layout below. A change to the layout bumps it. The row is written in the same transaction as the tables and `_config`, and an adapter opening a store refuses one in another layout before writing to it, by the rules in [Adapters § Construction](./adapters.md#construction). The row is the store's own, like `_config`: a copy writes its target in the target's layout, which is how a stack moves to a newer one.
 
 **`attachments/<fileId>`** holds a blob's bytes, named by the [64-character lowercase hex SHA-256](./attachments.md) of its contents.
 
@@ -115,7 +115,7 @@ Every column of every table but `records_fts`, an FTS5 index over `records.conte
 | `types`         | `id`, `base_id`, `version`, `name`, `schema`, `schema_hash`, `migrates_from`, `created_at`                                                                                      |
 | `content_index` | `record_id`, `field`, `value_rank`, `num_value`, `text_key`, `text_value`, `file_id`                                                                                            |
 
-The `_config` row carries `{ entityId, timezone }` as its content: the stack's owner and timezone, which a store is created with and `copyStack()` hands to `create`. The owner is `entityId` here and `ownerEntityId` on an adapter, as [the `_config` record](../spec.md#the-_config-record) says.
+The `_config` row carries `{ ownerEntityId, timezone }` as its content: the stack's owner and timezone, which a store is created with and `copyStack()` hands to `create`.
 
 `content_index` and `records_fts` are rebuilt from `records.content`, so a reader may ignore them. A writer may not: a row whose content moved without them answers queries for content it no longer holds. They are part of the layout all the same, so a change to how either is built is a layout change like any other, made by copying into a new store, which rebuilds both as it writes.
 

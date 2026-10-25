@@ -3,7 +3,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { FormatMismatchError } from '@haverstack/core/adapter';
 import { writeNewStore, readStoredIdentity } from '../src/config.js';
 import type { SqlExecutor } from '../src/executor.js';
-import { applyRecordSchema, FORMAT_VERSION } from '../src/schema.js';
+import { FORMAT_VERSION } from '../src/schema.js';
 
 const executor = (db: DatabaseSync): SqlExecutor => ({
   exec: (sql) => db.exec(sql),
@@ -25,31 +25,35 @@ const executor = (db: DatabaseSync): SqlExecutor => ({
   },
 });
 
-/** A schema-applied, empty database: what a store looks like before it is created. */
-const blank = () => {
-  const exec = executor(new DatabaseSync(':memory:'));
-  applyRecordSchema(exec, { wal: false });
+const empty = () => executor(new DatabaseSync(':memory:'));
+
+/** A store as a create leaves it. */
+const created = (timezone: string | undefined) => {
+  const exec = empty();
+  writeNewStore(exec, { ownerEntityId: 'did:key:owner', timezone });
   return exec;
 };
 
 const tables = (exec: SqlExecutor) =>
   exec.all<{ name: string }>(`SELECT name FROM sqlite_master WHERE type = 'table'`).length;
 
-describe('readStoredIdentity', () => {
-  test('is null for a database with no tables at all', () => {
-    expect(readStoredIdentity(executor(new DatabaseSync(':memory:')), 'here')).toBeNull();
-  });
+/** The error a call throws, or undefined when it returns. */
+const thrown = (fn: () => unknown): unknown => {
+  try {
+    fn();
+    return undefined;
+  } catch (e) {
+    return e;
+  }
+};
 
-  // A store exists exactly when it has its _config record, so one left with
-  // tables and no record by an interrupted create is created afresh.
-  test('is null for a store with tables but no config record', () => {
-    expect(readStoredIdentity(blank(), 'here')).toBeNull();
+describe('readStoredIdentity', () => {
+  test('is null for a database holding no store', () => {
+    expect(readStoredIdentity(empty(), 'here')).toBeNull();
   });
 
   test('reads back the identity a create wrote, an absent timezone kept as a key', () => {
-    const exec = blank();
-    writeNewStore(exec, { ownerEntityId: 'did:key:owner', timezone: undefined });
-    const identity = readStoredIdentity(exec, 'here');
+    const identity = readStoredIdentity(created(undefined), 'here');
     expect(identity).toEqual({ ownerEntityId: 'did:key:owner', timezone: undefined });
     expect('timezone' in identity!).toBe(true);
   });
@@ -59,17 +63,10 @@ describe('readStoredIdentity', () => {
     ['no version', 'DELETE FROM format', undefined],
     ['no format table', 'DROP TABLE format', undefined],
   ] as const)('refuses a store naming %s, writing nothing', (_name, sql, actual) => {
-    const exec = blank();
-    writeNewStore(exec, { ownerEntityId: 'did:key:owner', timezone: 'UTC' });
+    const exec = created('UTC');
     exec.exec(sql);
     const before = tables(exec);
-    const err = (() => {
-      try {
-        return readStoredIdentity(exec, 'here');
-      } catch (e) {
-        return e;
-      }
-    })();
+    const err = thrown(() => readStoredIdentity(exec, 'here'));
     expect(err).toBeInstanceOf(FormatMismatchError);
     expect(err).toMatchObject({ expected: FORMAT_VERSION, actual, where: 'here' });
     expect(tables(exec)).toBe(before);
@@ -78,20 +75,20 @@ describe('readStoredIdentity', () => {
 
 describe('writeNewStore', () => {
   test('returns the identity it wrote, matching what a later read yields', () => {
-    const exec = blank();
+    const exec = empty();
     const written = writeNewStore(exec, { ownerEntityId: 'did:key:owner', timezone: 'UTC' });
     expect(written).toEqual(readStoredIdentity(exec, 'here'));
   });
 
-  test('writes the format row and the config record together, or neither', () => {
-    const exec = blank();
-    exec.run(
-      `INSERT INTO records (id, type_id, created_at, updated_at, content, version)
-       VALUES ('_config', '_config@1', 0, 0, '{}', 1)`,
-    );
+  // The tables, the format row and _config are one fact: a create failing on
+  // its format row leaves none of the tables it had already made.
+  test('writes the whole store or none of it', () => {
+    const exec = empty();
+    exec.exec(`CREATE TABLE format (id INTEGER PRIMARY KEY, version INTEGER NOT NULL)`);
+    exec.run('INSERT INTO format (id, version) VALUES (1, 1)');
     expect(() =>
       writeNewStore(exec, { ownerEntityId: 'did:key:owner', timezone: 'UTC' }),
     ).toThrow();
-    expect(exec.get('SELECT 1 FROM format')).toBeUndefined();
+    expect(tables(exec)).toBe(1);
   });
 });

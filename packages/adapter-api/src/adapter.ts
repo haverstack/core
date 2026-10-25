@@ -272,11 +272,11 @@ export class APIAdapter implements StackAdapter {
     }
 
     // After version negotiation: a differing major means fields may not mean
-    // what this client reads them as, so `entityId` isn't worth comparing yet.
-    if (opts.ownerEntityId !== undefined && discovery.entityId !== opts.ownerEntityId) {
+    // what this client reads them as, so `ownerEntityId` isn't worth comparing yet.
+    if (opts.ownerEntityId !== undefined && discovery.ownerEntityId !== opts.ownerEntityId) {
       throw new OwnerMismatchError(
         opts.ownerEntityId,
-        discovery.entityId,
+        discovery.ownerEntityId,
         `the server at "${baseUrl}"`,
       );
     }
@@ -299,7 +299,7 @@ export class APIAdapter implements StackAdapter {
       baseUrl,
       token,
       opts.credential,
-      discovery.entityId,
+      discovery.ownerEntityId,
       // Passthrough metadata only — no 'UTC' default, which would claim
       // knowledge the discovery response didn't actually provide.
       discovery.timezone,

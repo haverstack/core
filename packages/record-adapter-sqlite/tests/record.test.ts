@@ -279,40 +279,41 @@ describe('open create modes', () => {
     expect(table).toBeUndefined();
   });
 
-  // A stack exists exactly when its file holds _config, so a file an
-  // interrupted create left without one is a stack not yet created.
+  // A failed create leaves nothing behind, so a later open finds the store
+  // missing and creates it.
   // See docs/spec/adapters.md § Construction.
-  describe('a file holding tables but no config record', () => {
-    const halfMade = async () => {
-      await (await initAdapter()).close();
-      const db = new DatabaseSync(dbPath);
-      db.exec(`DELETE FROM records WHERE id = '_config'; DELETE FROM format;`);
-      db.close();
-    };
-
-    test.each(['ifMissing', 'exclusive'] as const)("is created under '%s'", async (create) => {
-      await halfMade();
-      const provider = vi.fn(() => 'owner-new');
+  test.each(['ifMissing', 'exclusive'] as const)(
+    "a create whose owner provider fails leaves nothing a later '%s' open trips on",
+    async (create) => {
+      await expect(
+        NativeSQLiteRecordAdapter.open({
+          path: dbPath,
+          create: 'ifMissing',
+          ownerEntityId: () => {
+            throw new Error('no key to hand');
+          },
+        }),
+      ).rejects.toThrow('no key to hand');
+      expect(existsSync(dbPath)).toBe(false);
+      expect(existsSync(`${dbPath}.lock`)).toBe(false);
       const adapter = await NativeSQLiteRecordAdapter.open({
         path: dbPath,
         create,
-        ownerEntityId: provider,
+        ownerEntityId: 'owner-new',
       });
       expect(adapter.ownerEntityId).toBe('owner-new');
-      expect(provider).toHaveBeenCalledOnce();
-      await adapter.close();
-      expect((await NativeSQLiteRecordAdapter.open({ path: dbPath })).ownerEntityId).toBe(
-        'owner-new',
-      );
-    });
+    },
+  );
 
-    test("is refused as missing under 'never', and releases the lock", async () => {
-      await halfMade();
-      await expect(NativeSQLiteRecordAdapter.open({ path: dbPath })).rejects.toThrow(
-        /no database found/,
-      );
-      expect(existsSync(`${dbPath}.lock`)).toBe(false);
-    });
+  test('a store holding its tables but no _config record is refused, not created over', async () => {
+    await (await initAdapter()).close();
+    const db = new DatabaseSync(dbPath);
+    db.exec(`DELETE FROM records WHERE id = '_config'`);
+    db.close();
+    await expect(
+      NativeSQLiteRecordAdapter.open({ path: dbPath, create: 'ifMissing', ownerEntityId: 'x' }),
+    ).rejects.toThrow(/no _config record/);
+    expect(existsSync(`${dbPath}.lock`)).toBe(false);
   });
 
   test('a matching plain-string owner opens an existing store', async () => {

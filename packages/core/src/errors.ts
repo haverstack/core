@@ -243,10 +243,11 @@ export class InvalidAdapterError extends Error {
 }
 
 /**
- * Thrown by an adapter's open() when a plain-string `ownerEntityId` disagrees
- * with the owner the store already has. `where` names the path, URL or
- * Durable Object that was opened; `actual` is undefined when a server reports
- * no owner at all. Outside the StackError taxonomy for the same reason as
+ * Thrown when a store is not owned by the owner expected of it: by an
+ * adapter's open() given a plain-string `ownerEntityId`, and by copyStack()
+ * when the store `create` returned is not the source's owner's. `where`
+ * names the store; `actual` is undefined when a server reports no owner at
+ * all. Outside the StackError taxonomy for the same reason as
  * InvalidAdapterError. See docs/spec/adapters.md § Construction.
  */
 export class OwnerMismatchError extends Error {
@@ -257,8 +258,8 @@ export class OwnerMismatchError extends Error {
   ) {
     super(
       actual
-        ? `Cannot open ${where}: it is owned by "${actual}", but ownerEntityId "${expected}" was given.`
-        : `Cannot open ${where}: it reports no owner, but ownerEntityId "${expected}" was given.`,
+        ? `${where} is owned by "${actual}", not "${expected}".`
+        : `${where} reports no owner, not "${expected}".`,
     );
     this.name = 'OwnerMismatchError';
   }

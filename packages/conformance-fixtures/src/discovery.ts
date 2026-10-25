@@ -15,7 +15,7 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
     responseStatus: 200,
     responseBody: {
       version: WIRE_PROTOCOL_VERSION,
-      entityId: 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK',
+      ownerEntityId: 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK',
       timezone: 'America/New_York',
       capabilities: {
         filter: {
@@ -47,7 +47,7 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
     responseStatus: 200,
     responseBody: {
       version: WIRE_PROTOCOL_VERSION,
-      entityId: 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK',
+      ownerEntityId: 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK',
       capabilities: {
         filter: { content: 'none', contentPresent: false, contentByType: false, search: false },
         sort: {
@@ -71,7 +71,7 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
     responseStatus: 200,
     responseBody: {
       version: WIRE_PROTOCOL_VERSION,
-      entityId: 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK',
+      ownerEntityId: 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK',
       capabilities: {
         filter: {
           content: 'none',
@@ -105,7 +105,7 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
     responseStatus: 200,
     responseBody: {
       version: WIRE_PROTOCOL_VERSION,
-      entityId: 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK',
+      ownerEntityId: 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK',
       capabilities: {
         filter: {
           content: 'path',
@@ -139,7 +139,7 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
     responseStatus: 200,
     responseBody: {
       version: WIRE_PROTOCOL_VERSION,
-      entityId: 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK',
+      ownerEntityId: 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK',
       capabilities: {
         filter: {
           content: 'path',
@@ -173,7 +173,7 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
     responseStatus: 200,
     responseBody: {
       version: WIRE_PROTOCOL_VERSION,
-      entityId: 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK',
+      ownerEntityId: 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK',
       capabilities: {
         filter: {
           content: 'none',

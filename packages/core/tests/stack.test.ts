@@ -146,7 +146,7 @@ describe('Stack.open', () => {
     const schemaB = (await b.getType('_config@1'))!.schema;
     expect(schemaA).toEqual(schemaB);
     expect(schemaA).not.toBe(schemaB);
-    expect(schemaA.entityId).not.toBe(schemaB.entityId);
+    expect(schemaA.ownerEntityId).not.toBe(schemaB.ownerEntityId);
   });
 
   test('timezone is undefined when not specified — no default', async () => {
@@ -3599,23 +3599,23 @@ describe('_config protections', () => {
   // MemoryAdapter never materializes a _config record on its own (ownerEntityId
   // is a plain constructor field) — the guards under test operate on whatever
   // record exists at id "_config", so tests seed one directly.
-  async function seedConfig(entityId = 'owner-123', timezone = 'UTC') {
+  async function seedConfig(ownerEntityId = 'owner-123', timezone = 'UTC') {
     return adapter.createRecord({
       id: CONFIG_ID,
       typeId: CONFIG_TYPE,
       createdAt: new Date(),
       updatedAt: new Date(),
-      content: { entityId, timezone },
+      content: { ownerEntityId, timezone },
       version: 1,
     });
   }
 
-  test('patchContent() rejects a change to entityId', async () => {
+  test('patchContent() rejects a change to ownerEntityId', async () => {
     await seedConfig();
-    await expect(stack.patchContent(CONFIG_ID, { entityId: 'someone-else' })).rejects.toThrow(
+    await expect(stack.patchContent(CONFIG_ID, { ownerEntityId: 'someone-else' })).rejects.toThrow(
       StackConflictError,
     );
-    expect((await adapter.getRecord(CONFIG_ID))?.content.entityId).toBe('owner-123');
+    expect((await adapter.getRecord(CONFIG_ID))?.content.ownerEntityId).toBe('owner-123');
   });
 
   test('patchContent() allows changing timezone', async () => {
@@ -3624,9 +3624,11 @@ describe('_config protections', () => {
     expect((updated.content as Record<string, unknown>).timezone).toBe('America/New_York');
   });
 
-  test('setting entityId to its current value is a no-op, not an error', async () => {
+  test('setting ownerEntityId to its current value is a no-op, not an error', async () => {
     await seedConfig('owner-123');
-    await expect(stack.patchContent(CONFIG_ID, { entityId: 'owner-123' })).resolves.toBeDefined();
+    await expect(
+      stack.patchContent(CONFIG_ID, { ownerEntityId: 'owner-123' }),
+    ).resolves.toBeDefined();
   });
 
   test('soft delete is rejected', async () => {
@@ -3641,21 +3643,21 @@ describe('_config protections', () => {
     expect(await adapter.getRecord(CONFIG_ID)).not.toBeNull();
   });
 
-  test('restoreVersion() rejects a snapshot with a different entityId', async () => {
+  test('restoreVersion() rejects a snapshot with a different ownerEntityId', async () => {
     await seedConfig('owner-123');
     // Simulates a snapshot that predates this guard, or a bypassed
-    // direct-adapter write — either way, a stored version whose entityId
+    // direct-adapter write — either way, a stored version whose ownerEntityId
     // disagrees with the live record's must not be restorable.
     plantVersion(CONFIG_ID, {
       version: 1,
       typeId: CONFIG_TYPE,
-      content: { entityId: 'someone-else', timezone: 'UTC' },
+      content: { ownerEntityId: 'someone-else', timezone: 'UTC' },
       updatedAt: new Date(),
     });
     await expect(stack.restoreVersion(CONFIG_ID, 1)).rejects.toThrow(StackConflictError);
   });
 
-  test('restoreVersion() allows a snapshot with the same entityId', async () => {
+  test('restoreVersion() allows a snapshot with the same ownerEntityId', async () => {
     await seedConfig('owner-123', 'UTC');
     await stack.patchContent(CONFIG_ID, { timezone: 'America/New_York' });
     const restored = await stack.restoreVersion(CONFIG_ID, 1);
@@ -3673,10 +3675,10 @@ describe('_config protections', () => {
     expect(await stack.get(CONFIG_ID)).not.toBeNull();
   });
 
-  test('ScopedStack delegation: the owner cannot change entityId via scoped update either', async () => {
+  test('ScopedStack delegation: the owner cannot change ownerEntityId via scoped update either', async () => {
     await seedConfig('owner-123');
     await expect(
-      stack.asEntity('owner-123').patchContent(CONFIG_ID, { entityId: 'someone-else' }),
+      stack.asEntity('owner-123').patchContent(CONFIG_ID, { ownerEntityId: 'someone-else' }),
     ).rejects.toThrow(StackConflictError);
   });
 
@@ -3685,36 +3687,36 @@ describe('_config protections', () => {
     await expect(stack.asEntity('owner-123').delete(CONFIG_ID)).rejects.toThrow(StackConflictError);
   });
 
-  test('commitMigration() rejects a change to entityId', async () => {
+  test('commitMigration() rejects a change to ownerEntityId', async () => {
     await seedConfig('owner-123');
     await stack.defineType({
       id: '_config@2',
       name: 'Config',
       schema: {
-        entityId: { kind: 'string', required: true },
+        ownerEntityId: { kind: 'string', required: true },
         timezone: { kind: 'string' },
       },
     });
 
     await expect(
-      stack.commitMigration(CONFIG_ID, '_config@2', { entityId: 'someone-else' }),
+      stack.commitMigration(CONFIG_ID, '_config@2', { ownerEntityId: 'someone-else' }),
     ).rejects.toThrow(StackConflictError);
     expect((await adapter.getRecord(CONFIG_ID))?.typeId).toBe(CONFIG_TYPE); // never committed
   });
 
-  test('commitMigration() allows the same entityId', async () => {
+  test('commitMigration() allows the same ownerEntityId', async () => {
     await seedConfig('owner-123');
     await stack.defineType({
       id: '_config@2',
       name: 'Config',
       schema: {
-        entityId: { kind: 'string', required: true },
+        ownerEntityId: { kind: 'string', required: true },
         timezone: { kind: 'string' },
       },
     });
 
     const migrated = await stack.commitMigration(CONFIG_ID, '_config@2', {
-      entityId: 'owner-123',
+      ownerEntityId: 'owner-123',
       timezone: 'America/New_York',
     });
     expect(migrated.typeId).toBe('_config@2');

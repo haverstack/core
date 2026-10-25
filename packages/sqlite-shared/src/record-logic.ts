@@ -124,9 +124,9 @@ const versionRowValues = (version: RecordVersion): unknown[] => [
 ];
 
 /**
- * The `journal` columns, and the one INSERT both journal writes run: every
- * column bound in this order, `seq` from `seqSql` — a bound value for an
- * entry as recorded, the log's next number for an append.
+ * The `journal` columns, and the one INSERT both journal writes run, every
+ * column bound in this order: an entry as recorded and an append differ only
+ * in where their values come from.
  */
 const JOURNAL_COLUMNS = [
   'record_id',
@@ -142,9 +142,8 @@ const JOURNAL_COLUMNS = [
   'parent_id',
 ] as const;
 
-const insertJournalSql = (seqSql: string): string =>
-  `INSERT INTO journal (${JOURNAL_COLUMNS.join(', ')})
-   VALUES (${JOURNAL_COLUMNS.map((column) => (column === 'seq' ? seqSql : '?')).join(', ')})`;
+const INSERT_JOURNAL_SQL = `INSERT INTO journal (${JOURNAL_COLUMNS.join(', ')})
+   VALUES (${JOURNAL_COLUMNS.map(() => '?').join(', ')})`;
 
 /** What the record row reports for an entry, beside what the caller supplied. */
 type JournalRowState = { version: number; typeId: string; parentId: string | null };
@@ -751,9 +750,9 @@ export class SharedSqlRecordLogic {
 
   /**
    * Append one entry, stamped from the row as it now stands, so callers run
-   * this inside their write's transaction, after the write. `seq` is
-   * allocated in the INSERT itself, so no caller ever holds one it expects
-   * to be free. See docs/spec/journal.md § Ordering.
+   * this inside their write's transaction, after the write. `seq` is read
+   * from the log's maximum in that same transaction, so no caller ever holds
+   * one it expects to be free. See docs/spec/journal.md § Ordering.
    */
   private appendJournal(recordId: string, entry: JournalEntryInput | undefined): void {
     if (!entry) return;
@@ -767,10 +766,13 @@ export class SharedSqlRecordLogic {
     }>('SELECT version, type_id, parent_id FROM records WHERE id = ?', [recordId]);
     if (!row) throw recordNotFound(recordId);
 
-    // The subselect's one parameter is the record id, bound in seq's place.
+    const { seq } = this.exec.get<{ seq: number }>(
+      'SELECT COALESCE(MAX(seq), 0) + 1 AS seq FROM journal WHERE record_id = ?',
+      [recordId],
+    )!;
     this.exec.run(
-      insertJournalSql('(SELECT COALESCE(MAX(seq), 0) + 1 FROM journal WHERE record_id = ?)'),
-      journalValues(recordId, recordId, new Date(), entry, {
+      INSERT_JOURNAL_SQL,
+      journalValues(recordId, seq, new Date(), entry, {
         version: row.version,
         typeId: row.type_id,
         parentId: row.parent_id,
@@ -781,7 +783,7 @@ export class SharedSqlRecordLogic {
   /** A whole entry as recorded, `seq` and `at` included — importRecord()'s half of the journal. */
   private insertJournalRow(recordId: string, entry: RecordJournalEntry): void {
     this.exec.run(
-      insertJournalSql('?'),
+      INSERT_JOURNAL_SQL,
       journalValues(recordId, entry.seq, entry.at, entry, {
         version: entry.version,
         typeId: entry.typeId,

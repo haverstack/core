@@ -334,18 +334,15 @@ export function assertAttachmentImmutable(
 // -------------------------------------------------------
 
 /**
- * `_config.entityId` defines stack ownership; neither patchContent() nor
+ * `_config.ownerEntityId` defines stack ownership; neither patchContent() nor
  * restoreVersion() may change it. A conflict with stack integrity, not a
  * schema violation — hence StackConflictError. See docs/spec.md § The
  * `_config` record.
  */
-export function checkConfigEntityIdUnchanged(
-  existingEntityId: EntityId,
-  newEntityId: EntityId,
-): void {
-  if (newEntityId !== existingEntityId) {
+export function checkConfigOwnerUnchanged(existingOwner: EntityId, newOwner: EntityId): void {
+  if (newOwner !== existingOwner) {
     throw new StackConflictError(
-      'Cannot change _config.entityId: it defines stack ownership. ' +
+      'Cannot change _config.ownerEntityId: it defines stack ownership. ' +
         'Ownership transfer is not a supported operation.',
     );
   }

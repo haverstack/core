@@ -222,7 +222,7 @@ describe('every record emits, including the ones a query hides', () => {
       typeId: '_config@1',
       createdAt: new Date(),
       updatedAt: new Date(),
-      content: { entityId: OWNER, timezone: 'UTC' },
+      content: { ownerEntityId: OWNER, timezone: 'UTC' },
       version: 1,
     });
     const { seen, handler } = collector();

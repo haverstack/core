@@ -12,7 +12,7 @@
  * through Stack may do. See docs/spec/portability.md.
  */
 
-import { InvalidAdapterError } from '../errors.js';
+import { InvalidAdapterError, OwnerMismatchError } from '../errors.js';
 import { resolveQuery } from '../query-validation.js';
 import type { PlainQuery, StackAdapter, StackRecordAdapter } from '../types/index.js';
 
@@ -50,7 +50,9 @@ export async function copyStack(from: StackAdapter, create: CreateStore): Promis
   try {
     const importRecord = to.importRecord?.bind(to);
     if (!importRecord) refuseTarget('it has no importRecord(), so it cannot write history');
-    await assertNewStore(to, from.ownerEntityId);
+    const listHeld = to.listBlobs?.bind(to);
+    if (!listHeld) refuseTarget('it has no listBlobs(), so it could not be copied from in turn');
+    await assertNewStore(to, from.ownerEntityId, listHeld);
     for (const type of await from.listTypes()) await to.saveType(type);
     // Bytes before the Records that name them, as every upload writes them.
     for (const { fileId } of await listBlobs()) await to.putBlob(await from.getBlob(fileId));
@@ -68,18 +70,24 @@ function refuseTarget(why: string): never {
 }
 
 /**
- * A target is a store as its adapter creates one: the source's owner, checked
- * as open() checks it, and no Record or Type yet. Blobs go unchecked: not
- * every store can list them, and writing the same bytes twice is harmless.
+ * A target is a store as its adapter creates one: the source's owner,
+ * checked as open() checks it, and nothing held yet — no Record, no Type, no
+ * blob. Every end of a copy lists all it holds, so a target is itself a
+ * store a later copy can read in full.
  */
-async function assertNewStore(to: StackAdapter, ownerEntityId: string): Promise<void> {
+async function assertNewStore(
+  to: StackAdapter,
+  ownerEntityId: string,
+  listHeld: NonNullable<StackAdapter['listBlobs']>,
+): Promise<void> {
   if (to.ownerEntityId !== ownerEntityId) {
-    refuseTarget(`it is owned by "${to.ownerEntityId}", not "${ownerEntityId}"`);
+    throw new OwnerMismatchError(ownerEntityId, to.ownerEntityId, 'the store create() returned');
   }
   if ((await to.queryRecords(resolveQuery({ ...EVERYTHING, limit: 1 }))).records.length) {
     refuseTarget('it already holds Records');
   }
   if ((await to.listTypes()).length) refuseTarget('it already holds Types');
+  if ((await listHeld()).length) refuseTarget('it already holds blobs');
 }
 
 async function copyRecords(

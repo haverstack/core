@@ -37,7 +37,7 @@ const change = (overrides: Partial<RecordChange> = {}): RecordChange => ({
 
 const discovery = (overrides: Partial<DiscoveryResponse> = {}): DiscoveryResponse => ({
   version: WIRE_PROTOCOL_VERSION,
-  entityId: OWNER,
+  ownerEntityId: OWNER,
   capabilities: {
     filter: {
       content: 'path',

@@ -23,7 +23,7 @@
  */
 
 import {
-  applyRecordSchema,
+  applyConnectionPragmas,
   writeNewStore,
   readStoredIdentity,
   SharedSqlRecordAdapter,
@@ -60,8 +60,8 @@ export class DoSQLiteRecordAdapter extends SharedSqlRecordAdapter {
    * Open the adapter for a DO instance, creating its storage on first use.
    * A DO id either already has a config record (reattach) or it doesn't
    * (first call — opts.ownerEntityId/timezone become the config), so there
-   * is no `create` option. Schema DDL is `CREATE TABLE IF NOT EXISTS`, so
-   * running it every call is idempotent and cheap.
+   * is no `create` option. A new store's tables are written in the same
+   * transaction as its config record, so storage holds a whole store or none.
    *
    * DO SQLite manages its own durability and rejects PRAGMA journal_mode
    * outright ("not authorized") — verified against the real runtime, not
@@ -74,7 +74,7 @@ export class DoSQLiteRecordAdapter extends SharedSqlRecordAdapter {
     const exec = new DurableObjectSqliteExecutor(storage);
     const where = 'the Durable Object storage';
     let identity = readStoredIdentity(exec, where);
-    applyRecordSchema(exec, { wal: false });
+    applyConnectionPragmas(exec, { wal: false });
     if (identity) {
       if (typeof opts.ownerEntityId === 'string' && opts.ownerEntityId !== identity.ownerEntityId) {
         throw new OwnerMismatchError(opts.ownerEntityId, identity.ownerEntityId, where);

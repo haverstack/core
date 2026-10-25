@@ -235,7 +235,7 @@ export const PRAGMA_FOREIGN_KEYS_ON = `PRAGMA foreign_keys = ON;`;
  */
 export const PRAGMA_JOURNAL_MODE_WAL = `PRAGMA journal_mode = WAL;`;
 
-export type RecordSchemaOptions = {
+export type ConnectionOptions = {
   /**
    * Whether to put the connection in WAL mode. False for an engine that
    * owns its own durability and rejects the pragma outright, as Durable
@@ -245,15 +245,12 @@ export type RecordSchemaOptions = {
 };
 
 /**
- * Brings a records database up to the schema every SQLite record adapter
- * expects: foreign keys on, then the tables and the FTS5 index. Every
- * statement is idempotent, so an engine that cannot tell
- * whether a store exists can run this on each attach. Run it after
- * readStoredIdentity(), which refuses a store in another layout untouched.
+ * The settings a connection holds rather than the file, so every open
+ * applies them. They run outside any transaction: `foreign_keys` is a no-op
+ * inside one, and `journal_mode` cannot change in one. The tables are
+ * writeNewStore()'s, written once, with the rest of a new store.
  */
-export const applyRecordSchema = (exec: SqlExecutor, opts: RecordSchemaOptions): void => {
+export const applyConnectionPragmas = (exec: SqlExecutor, opts: ConnectionOptions): void => {
   exec.exec(PRAGMA_FOREIGN_KEYS_ON);
   if (opts.wal) exec.exec(PRAGMA_JOURNAL_MODE_WAL);
-  exec.exec(RECORD_SCHEMA_SQL);
-  exec.exec(FTS5_SCHEMA_SQL);
 };
