@@ -1,8 +1,5 @@
-import { FormatMismatchError } from '@haverstack/core/adapter';
 import type { SqlExecutor } from './executor.js';
-
-/** The layout this code reads and writes: what a new store's `format` row names. */
-export const FORMAT_VERSION = 1;
+import { FORMAT_VERSION } from './schema.js';
 
 /** timezone is optional passthrough app metadata — no default. */
 export type StackConfig = { entityId: string; timezone: string | undefined };
@@ -48,14 +45,4 @@ export const readStackConfig = (exec: SqlExecutor): StackConfig => {
   const config = tryReadStackConfig(exec);
   if (!config) throw new Error('Stack database is missing its config record.');
   return config;
-};
-
-/**
- * Refuses an existing store in any layout but FORMAT_VERSION: a store moves
- * to a new layout only by being copied into one. `where` names the store,
- * as OwnerMismatchError's does.
- */
-export const assertFormatVersion = (exec: SqlExecutor, where: string): void => {
-  const version = exec.get<{ version: number }>('SELECT version FROM format WHERE id = 1')?.version;
-  if (version !== FORMAT_VERSION) throw new FormatMismatchError(FORMAT_VERSION, version, where);
 };

@@ -1,3 +1,4 @@
+import { FormatMismatchError } from '@haverstack/core/adapter';
 import type { SqlExecutor } from './executor.js';
 
 /**
@@ -7,6 +8,9 @@ import type { SqlExecutor } from './executor.js';
  * record-adapter-sqlite and the StackTokenStore portability rationale
  * (docs/spec/wire-format.md § Authentication).
  */
+
+/** The layout this code reads and writes: what a new store's `format` row names. */
+export const FORMAT_VERSION = 1;
 
 export const RECORD_SCHEMA_SQL = `
   -- Which layout this store is, in its one row, so an export names the one
@@ -239,17 +243,38 @@ export type RecordSchemaOptions = {
    * Object storage does.
    */
   wal: boolean;
+  /** Names the store in a FormatMismatchError, as OwnerMismatchError's `where` does. */
+  where: string;
 };
 
 /**
- * Brings a records database up to the schema every SQLite record adapter
+ * Refuses an existing store in any layout but FORMAT_VERSION before writing
+ * a byte to it, then brings it up to the schema every SQLite record adapter
  * expects: foreign keys on, then the tables and the FTS5 index. Every
- * statement is idempotent, so an engine that cannot tell
- * whether a store exists can run this on each attach.
+ * statement is idempotent, so an engine that cannot tell whether a store
+ * exists can run this on each attach.
  */
 export const applyRecordSchema = (exec: SqlExecutor, opts: RecordSchemaOptions): void => {
+  assertFormatVersion(exec, opts.where);
   exec.exec(PRAGMA_FOREIGN_KEYS_ON);
   if (opts.wal) exec.exec(PRAGMA_JOURNAL_MODE_WAL);
   exec.exec(RECORD_SCHEMA_SQL);
   exec.exec(FTS5_SCHEMA_SQL);
+};
+
+/**
+ * A store holding a `records` table is not new, so it must name this layout;
+ * a store moves to another only by being copied into one. Reads only.
+ * See docs/spec/portability.md § The portable format.
+ */
+const assertFormatVersion = (exec: SqlExecutor, where: string): void => {
+  const tables = exec.all<{ name: string }>(
+    `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('records', 'format')`,
+  );
+  const names = new Set(tables.map(({ name }) => name));
+  if (!names.has('records')) return;
+  const version = names.has('format')
+    ? exec.get<{ version: number }>('SELECT version FROM format WHERE id = 1')?.version
+    : undefined;
+  if (version !== FORMAT_VERSION) throw new FormatMismatchError(FORMAT_VERSION, version, where);
 };

@@ -52,7 +52,7 @@ type RecordHistory = {
 
 **It is handed history a Record can have**, as every adapter method is held only to what its caller produces ([Adapters § Interface split](./adapters.md#interface-split)): every snapshot's `version` is below `record.version` — one at the record's own version is [an orphan](./versioning.md#snapshot-atomicity) — and the entries' `seq` values run [dense from 1](./journal.md#ordering), as every log's do. What an adapter does with anything else is unspecified. Order is not part of the input: snapshots are keyed by `version` and entries by `seq`, and reading them back orders them as `getVersions()` and `getJournal()` always do.
 
-`RecordHistory` is what `getVersions()` and `getJournal()` return, so an adapter reads a Record's history out in the shape another writes it in.
+`RecordHistory` is two sets, snapshots keyed by `version` and entries by `seq`: whatever order `getVersions()` and `getJournal()` read them out in, an adapter writes them by key.
 
 **Optional, and every local adapter implements it.** It is optional only so `APIAdapter` can leave it out, as [`queryReadable()`](./adapters.md#querying-within-a-reach) is. A server is the only writer of its own durable tiers ([Versioning § Snapshot atomicity](./versioning.md#snapshot-atomicity)), and the wire carries no endpoint writing either one, so a stack behind an `APIAdapter` cannot be copied into. The [conformance suite](./adapters.md#conformance) holds an adapter declaring it to every rule above, and `runCopyConformance()` holds a full adapter to both halves of a copy: a stack with a past, written into one store it creates and copied into a second, arrives unchanged.
 
@@ -73,7 +73,7 @@ const exportedStack = await LocalAdapter.open({ path: './my-stack.db' });
 await copyStack(exportedStack, createHostStore);
 ```
 
-The layout is specified here so an export stays readable without the tool that wrote it, and a change to it changes this section in the same change; a test compares the tables below with the schema the SQLite adapters create. **Every store names its layout** in the one row of its `format` table, `id` `1`: `version` is `1` for the layout below. A change to the layout bumps it, so a reader tells which layout it holds before reading anything else, and an adapter opening an existing store refuses one in any layout but its own with `FormatMismatchError` (`expected`, `actual`, `where`), released as an `OwnerMismatchError` is. The row is the store's own, like `_config`: a copy writes its target in the target's layout, which is how a stack moves to a newer one.
+The layout is specified here so an export stays readable without the tool that wrote it, and a change to it changes this section in the same change; a test compares the tables below with the schema the SQLite adapters create. **Every store names its layout** in the one row of its `format` table, `id` `1`: `version` is `1` for the layout below. A change to the layout bumps it, so a reader tells which layout it holds before reading anything else, and an adapter opening an existing store checks it first, before writing anything, refusing any layout but its own with `FormatMismatchError` (`expected`, `actual`, `where`), released as an `OwnerMismatchError` is. A store holding `records` with no `format` row names no layout, and is refused the same way. The row is the store's own, like `_config`: a copy writes its target in the target's layout, which is how a stack moves to a newer one.
 
 **`attachments/<fileId>`** holds a blob's bytes, named by the [64-character lowercase hex SHA-256](./attachments.md) of its contents.
 
@@ -117,7 +117,7 @@ Every column of every table but `records_fts`, an FTS5 index over `records.conte
 
 The `_config` row carries `{ entityId, timezone }` as its content: the stack's owner and timezone, which a store is created with and `copyStack()` hands to `create`.
 
-`content_index` and `records_fts` are rebuilt from `records.content`, so a reader may ignore them. A writer may not: a row whose content moved without them answers queries for content it no longer holds.
+`content_index` and `records_fts` are rebuilt from `records.content`, so a reader may ignore them. A writer may not: a row whose content moved without them answers queries for content it no longer holds. They are part of the layout all the same, so a change to how either is built is a layout change like any other, made by copying into a new store, which rebuilds both as it writes.
 
 ## Tokens and installs
 

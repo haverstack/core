@@ -247,6 +247,7 @@ describe('open create modes', () => {
   test.each([
     ['another version', 'UPDATE format SET version = 2', 2],
     ['no version at all', 'DELETE FROM format', undefined],
+    ['no format table', 'DROP TABLE format', undefined],
   ] as const)(
     'a store naming %s throws FormatMismatchError and releases the lock',
     async (_name, sql, actual) => {
@@ -261,6 +262,22 @@ describe('open create modes', () => {
       expect(existsSync(`${dbPath}.lock`)).toBe(false);
     },
   );
+
+  test('a store in another layout is refused before anything is written to it', async () => {
+    await (await initAdapter()).close();
+    const db = new DatabaseSync(dbPath);
+    db.exec('UPDATE format SET version = 2; DROP TABLE content_index;');
+    db.close();
+    await expect(NativeSQLiteRecordAdapter.open({ path: dbPath })).rejects.toThrow(
+      FormatMismatchError,
+    );
+    const after = new DatabaseSync(dbPath);
+    const table = after
+      .prepare(`SELECT name FROM sqlite_master WHERE name = 'content_index'`)
+      .get();
+    after.close();
+    expect(table).toBeUndefined();
+  });
 
   test('a matching plain-string owner opens an existing store', async () => {
     await (await initAdapter({ ownerEntityId: 'owner-abc' })).close();

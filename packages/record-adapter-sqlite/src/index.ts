@@ -31,7 +31,6 @@ import {
   applyRecordSchema,
   acquireLock,
   releaseLock,
-  assertFormatVersion,
   insertConfigRecord,
   readStackConfig,
   SharedSqlRecordAdapter,
@@ -141,10 +140,9 @@ export class NativeSQLiteRecordAdapter extends SharedSqlRecordAdapter {
       checkMode(exists);
       db = new DatabaseSync(opts.path);
       const exec = new NativeSqliteExecutor(db);
-      applyRecordSchema(exec, { wal: true });
+      applyRecordSchema(exec, { wal: true, where: `"${opts.path}"` });
       let config: StackConfig;
       if (exists) {
-        assertFormatVersion(exec, `"${opts.path}"`);
         config = readStackConfig(exec);
         if (typeof opts.ownerEntityId === 'string' && opts.ownerEntityId !== config.entityId) {
           throw new OwnerMismatchError(opts.ownerEntityId, config.entityId, `"${opts.path}"`);
