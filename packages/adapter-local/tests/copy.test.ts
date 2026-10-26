@@ -14,21 +14,19 @@ import { LocalAdapter } from '../src/index.js';
 
 const dirs = new Map<StackAdapter, string>();
 
-const local: CreateStore = async ({ ownerEntityId, timezone }) => {
+const local: CreateStore = async (seed) => {
   const dir = join(tmpdir(), `copy-local-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   mkdirSync(dir, { recursive: true });
   const adapter = await LocalAdapter.open({
     create: 'exclusive',
     path: join(dir, 'stack.db'),
-    ownerEntityId,
-    timezone,
+    seed,
   });
   dirs.set(adapter, dir);
   return adapter;
 };
 
-const memory: CreateStore = ({ ownerEntityId, timezone }) =>
-  MemoryAdapter.open({ ownerEntityId, timezone });
+const memory: CreateStore = (seed) => MemoryAdapter.open({ seed });
 
 const close = async (adapter: StackAdapter) => {
   await adapter.close?.();

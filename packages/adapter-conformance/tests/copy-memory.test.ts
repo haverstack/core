@@ -7,5 +7,5 @@ import { runCopyConformance } from '../src/copy.js';
 
 runCopyConformance({
   name: 'MemoryAdapter',
-  create: ({ ownerEntityId, timezone }) => MemoryAdapter.open({ ownerEntityId, timezone }),
+  create: (seed) => MemoryAdapter.open({ seed }),
 });

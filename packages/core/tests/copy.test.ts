@@ -1,16 +1,14 @@
 import { describe, test, expect } from 'vitest';
 import { copyStack } from '../src/adapter/copy.js';
-import type { StackIdentity } from '../src/adapter/copy.js';
 import { Stack } from '../src/stack/stack.js';
 import { InvalidAdapterError, OwnerMismatchError } from '../src/errors.js';
 import { MemoryAdapter } from '../src/testing.js';
-import type { StackAdapter } from '../src/types/index.js';
+import type { StackAdapter, StoreSeed } from '../src/types/index.js';
 
 const OWNER = 'did:key:owner';
 const NOTE = 'com.example.test/note@1';
 
-const create = ({ ownerEntityId, timezone }: StackIdentity) =>
-  MemoryAdapter.open({ ownerEntityId, timezone });
+const create = (seed: StoreSeed) => MemoryAdapter.open({ seed });
 
 async function sourceWith(notes: number): Promise<MemoryAdapter> {
   const adapter = await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' });
@@ -25,12 +23,12 @@ async function sourceWith(notes: number): Promise<MemoryAdapter> {
 }
 
 /** A create() whose store fails the target rule in one way, and records whether it was closed. */
-function badStore(make: () => Promise<StackAdapter>) {
+function badStore(make: (seed: StoreSeed) => Promise<StackAdapter>) {
   const made: { closed: boolean } = { closed: false };
   return {
     made,
-    create: async () => {
-      const store = await make();
+    create: async (seed: StoreSeed) => {
+      const store = await make(seed);
       store.close = async () => void (made.closed = true);
       return store;
     },
@@ -38,10 +36,16 @@ function badStore(make: () => Promise<StackAdapter>) {
 }
 
 describe('copyStack', () => {
-  test('creates the target with the source identity, timezone included', async () => {
-    const source = await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'Europe/Paris' });
+  // _config travels as every Record does, so the target holds what the
+  // source's record says now, not what its adapter read at open.
+  test('carries _config with its history, a timezone patched after open included', async () => {
+    const source = await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' });
+    await (await Stack.open(source)).patchContent('_config', { timezone: 'Europe/Paris' });
     const target = await copyStack(source, create);
     expect([target.ownerEntityId, target.timezone]).toEqual([OWNER, 'Europe/Paris']);
+    expect(await target.getRecord('_config')).toEqual(await source.getRecord('_config'));
+    expect(await target.getVersions('_config')).toEqual(await source.getVersions('_config'));
+    expect(await target.getJournal('_config')).toEqual(await source.getJournal('_config'));
   });
 
   test('carries every page of records, not just the first', async () => {
@@ -64,9 +68,9 @@ describe('copyStack', () => {
     source.listBlobs = undefined;
     let created = false;
     await expect(
-      copyStack(source, (identity) => {
+      copyStack(source, (seed) => {
         created = true;
-        return create(identity);
+        return create(seed);
       }),
     ).rejects.toThrow(InvalidAdapterError);
     expect(created).toBe(false);
@@ -76,11 +80,11 @@ describe('copyStack', () => {
   // store with the source's identity. See docs/spec/portability.md
   // § Copying a stack.
   describe('refuses a store that is not a new, empty one with the source identity, and closes it', () => {
-    type Make = (identity: StackIdentity) => Promise<StackAdapter>;
+    type Make = (seed: StoreSeed) => Promise<StackAdapter>;
     const without =
       (method: 'importRecord' | 'listBlobs'): Make =>
-      async (identity) => {
-        const store = await create(identity);
+      async (seed) => {
+        const store = await create(seed);
         Object.defineProperty(store, method, { value: undefined });
         return store;
       };
@@ -89,14 +93,14 @@ describe('copyStack', () => {
       ['no listBlobs()', without('listBlobs'), InvalidAdapterError],
       [
         'another owner',
-        async ({ timezone }) => create({ ownerEntityId: 'did:key:other', timezone }),
+        async () => MemoryAdapter.open({ ownerEntityId: 'did:key:other' }),
         OwnerMismatchError,
       ],
       ['a Record already in it', async () => sourceWith(1), InvalidAdapterError],
       [
         'the system Types Stack.open() seeds',
-        async (identity) => {
-          const store = await create(identity);
+        async (seed) => {
+          const store = await create(seed);
           await Stack.open(store);
           return store;
         },
@@ -104,8 +108,8 @@ describe('copyStack', () => {
       ],
       [
         'a blob already in it',
-        async (identity) => {
-          const store = await create(identity);
+        async (seed) => {
+          const store = await create(seed);
           await store.putBlob(new Uint8Array([5]));
           return store;
         },
@@ -115,8 +119,7 @@ describe('copyStack', () => {
 
     test.each(cases)('%s', async (_name, make, error) => {
       const source = await sourceWith(1);
-      const identity = { ownerEntityId: OWNER, timezone: 'UTC' };
-      const { made, create: bad } = badStore(() => make(identity));
+      const { made, create: bad } = badStore(make);
       await expect(copyStack(source, bad)).rejects.toThrow(error);
       expect(made.closed).toBe(true);
     });

@@ -11,15 +11,15 @@
  */
 
 import { describe, test, expect } from 'vitest';
-import { Stack } from '@haverstack/core';
+import { Stack, SYSTEM_TYPES } from '@haverstack/core';
 import type { FileId, StackRecord } from '@haverstack/core';
-import { copyStack, resolveQuery } from '@haverstack/core/adapter';
+import { copyStack, newStoreSeed, resolveQuery } from '@haverstack/core/adapter';
 import type { CreateStore, StackAdapter } from '@haverstack/core/adapter';
 
 export interface CopyConformanceOptions {
   /** Used in describe() titles, so pick something that reads well there. */
   name: string;
-  /** Create a new, empty store with this identity: the copy's target. */
+  /** Create a new store from this seed: the copy's target. */
   create: CreateStore;
   /** Create the store the stack is written into and copied from. Defaults to `create`. */
   source?: CreateStore;
@@ -31,7 +31,7 @@ const OWNER = 'did:key:conformance-owner';
 const ALICE = { subjectId: 'did:key:conformance-alice' };
 const BOB = { subjectId: 'did:key:conformance-bob', principalId: 'did:key:conformance-app' };
 const NOTE = 'org.haverstack.conformance/copied-note@1';
-const IDENTITY = { ownerEntityId: OWNER, timezone: 'Europe/Paris' };
+const SEED = newStoreSeed({ ownerEntityId: OWNER, timezone: 'Europe/Paris' });
 
 /** Set order aside: an element set has no order to preserve. */
 const bySerialized = <T>(list: T[] | undefined): T[] | undefined =>
@@ -52,6 +52,9 @@ async function contentsOf(adapter: StackAdapter, fileIds: FileId[]) {
     records.push(...page.records);
     cursor = page.cursor ?? undefined;
   } while (cursor);
+  // `_config` is no query's, so it is read by id: it travels like the rest.
+  const config = await adapter.getRecord(SYSTEM_TYPES.CONFIG);
+  if (config) records.push(config);
   records.sort((a, b) => a.id.localeCompare(b.id));
 
   const blobs: Record<string, Uint8Array> = {};
@@ -78,7 +81,8 @@ async function contentsOf(adapter: StackAdapter, fileIds: FileId[]) {
  * A stack touched by every kind of write: foreign authorship, edits by an
  * app acting for someone, containment, tags, sharing, listing, an
  * attachment, bytes a content field names with no metadata record, a soft
- * delete and a purge. Answers with the blobs it wrote.
+ * delete, a purge, and a `_config` with a past of its own. Answers with the
+ * blobs it wrote.
  */
 async function writePast(adapter: StackAdapter): Promise<FileId[]> {
   const stack = await Stack.open(adapter, { ownerProfile: { name: 'Conformance Owner' } });
@@ -87,6 +91,8 @@ async function writePast(adapter: StackAdapter): Promise<FileId[]> {
     name: 'Note',
     schema: { title: { kind: 'text' }, cover: { kind: 'file-ref' } },
   });
+
+  await stack.patchContent(SYSTEM_TYPES.CONFIG, { timezone: 'Asia/Tokyo' }, { actor: BOB });
 
   const box = await stack.create(NOTE, { title: 'box' });
   const note = await stack.create(NOTE, { title: 'v1' }, { createdBy: ALICE });
@@ -117,7 +123,7 @@ export function runCopyConformance(options: CopyConformanceOptions): void {
 
   describe(`stack copy conformance: ${name}`, () => {
     test('implements importRecord()', async () => {
-      const store = await create(IDENTITY);
+      const store = await create(SEED);
       try {
         expect(store.importRecord).toBeTypeOf('function');
       } finally {
@@ -126,7 +132,7 @@ export function runCopyConformance(options: CopyConformanceOptions): void {
     });
 
     test('a copy carries every Record, version, journal entry, Type and blob unchanged', async () => {
-      const source = await createSource(IDENTITY);
+      const source = await createSource(SEED);
       let target: StackAdapter | undefined;
       try {
         const fileIds = await writePast(source);

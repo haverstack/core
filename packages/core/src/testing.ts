@@ -36,6 +36,7 @@ import type {
   BlobInfo,
   Reach,
   RecordHistory,
+  StoreSeed,
 } from './types/index.js';
 import { SYSTEM_TYPES } from './types/index.js';
 import { applyMergePatch } from './merge.js';
@@ -43,6 +44,7 @@ import { baseIdOf, fileRefFields } from './schema.js';
 import { compareSortEntries, constantSortEntry, contentSortEntry } from './adapter/sort.js';
 import type { SortEntry } from './adapter/sort.js';
 import { inReach } from './adapter/reach.js';
+import { identityOf, newStoreSeed } from './adapter/seed.js';
 
 import {
   ElementSetMovedError,
@@ -63,7 +65,10 @@ const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
 const withoutUndefined = (content: Record<string, unknown>): Record<string, unknown> =>
   Object.fromEntries(Object.entries(content).filter(([, v]) => v !== undefined));
 
-export type MemoryAdapterOpenOptions = { ownerEntityId: string; timezone?: string };
+/** A fresh store's identity, or the seed a copy creates it from — never both. */
+export type MemoryAdapterOpenOptions =
+  | { ownerEntityId: string; timezone?: string; seed?: never }
+  | { seed: StoreSeed; ownerEntityId?: never; timezone?: never };
 
 /**
  * In-memory StackAdapter with keyed cursor pagination. Implements
@@ -103,11 +108,16 @@ export class MemoryAdapter implements StackAdapter {
 
   // Protected only so IncapableMemoryAdapter can extend; callers go through open().
   protected constructor(opts: MemoryAdapterOpenOptions) {
-    this.ownerEntityId = opts.ownerEntityId;
-    this.timezone = opts.timezone;
+    const seed =
+      opts.seed ?? newStoreSeed({ ownerEntityId: opts.ownerEntityId, timezone: opts.timezone });
+    ({ ownerEntityId: this.ownerEntityId, timezone: this.timezone } = identityOf(seed));
+    this.writeImported(seed.config, seed.history);
   }
 
-  /** Always a new, empty store; `ownerEntityId` is required so the mistake fails at compile time. */
+  /**
+   * Always a new store, holding only the `_config` record its seed carries;
+   * `ownerEntityId` or `seed` is required so the mistake fails at compile time.
+   */
   static async open(opts: MemoryAdapterOpenOptions): Promise<MemoryAdapter> {
     return new MemoryAdapter(opts);
   }
@@ -124,7 +134,17 @@ export class MemoryAdapter implements StackAdapter {
   }
 
   async importRecord(record: StackRecord, history: RecordHistory) {
-    const stored = await this.createRecord(record);
+    return this.writeImported(record, history);
+  }
+
+  /** importRecord()'s write, synchronous so the constructor writes a seed the same way. */
+  private writeImported(record: StackRecord, history: RecordHistory): StackRecord {
+    if (this.records.has(record.id)) {
+      throw new StackConflictError(`Record already exists: "${record.id}"`);
+    }
+    const stored = { ...record, content: withoutUndefined(record.content) };
+    this.records.set(record.id, stored);
+    this.order.push(record.id);
     // Held oldest first, as the writes leave them, whatever order they came in.
     this.versions.set(
       record.id,

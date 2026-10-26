@@ -2,9 +2,9 @@
  * Copying a stack
  * -------------------------------------------------------
  * One stack, read in full from one adapter and written in full to a new
- * store created with its identity: every Record (soft-deleted and unlisted
- * included) with its version snapshots and journal, every Type, and every
- * blob. Each is read as the store enumerates it, never by what a Record
+ * store: every Record (soft-deleted and unlisted included) with its version
+ * snapshots and journal, `_config` among them as the seed the store is
+ * created from, every Type, and every blob. Each is read as the store enumerates it, never by what a Record
  * says, so nothing is filtered on the way. Export, import and moving
  * between storage engines are all this one call, with a different source
  * and a different kind of store to create. Full trust, like any direct
@@ -14,18 +14,22 @@
 
 import { InvalidAdapterError, OwnerMismatchError } from '../errors.js';
 import { resolveQuery } from '../query-validation.js';
-import type { PlainQuery, StackAdapter, StackRecordAdapter } from '../types/index.js';
+import type {
+  ConfigContent,
+  PlainQuery,
+  StackAdapter,
+  StackRecordAdapter,
+  StoreSeed,
+} from '../types/index.js';
+import { SYSTEM_TYPES } from '../types/index.js';
 
-/** What a store is created with: the identity `_config` holds, as an adapter reports it. */
-export type StackIdentity = Pick<StackRecordAdapter, 'ownerEntityId' | 'timezone'>;
-
-/** Creates a new, empty store with `identity` — `LocalAdapter.open({ create: 'exclusive', ...identity })`, say. */
-export type CreateStore = (identity: StackIdentity) => Promise<StackAdapter> | StackAdapter;
+/** Creates a new store from `seed` — `LocalAdapter.open({ path, create: 'exclusive', seed })`, say. */
+export type CreateStore = (seed: StoreSeed) => Promise<StackAdapter> | StackAdapter;
 
 /** Records read per page; any size works, since every page is written before the next is read. */
 const PAGE_SIZE = 100;
 
-/** Every Record a store holds but `_config`, which no query reaches and each store was created with. */
+/** Every Record a store holds but `_config`, which no query reaches and every store is created from. */
 const EVERYTHING: PlainQuery = {
   filter: { includeDeleted: true, includeUnlisted: true },
   sort: { field: 'createdAt', direction: 'asc' },
@@ -33,8 +37,8 @@ const EVERYTHING: PlainQuery = {
 };
 
 /**
- * Copy everything `from` holds into the store `create` makes with `from`'s
- * identity, and return that store, open. Not atomic: a failure closes the
+ * Copy everything `from` holds into the store `create` makes from its
+ * `_config` record and that record's history, and return that store, open. Not atomic: a failure closes the
  * store part-written, and the caller, whose store it is, removes it. The
  * source must not be written meanwhile; nothing here can check that.
  * See docs/spec/portability.md § Copying a stack.
@@ -46,13 +50,21 @@ export async function copyStack(from: StackAdapter, create: CreateStore): Promis
       'Cannot copy from this adapter: it has no listBlobs(), so its blobs cannot be enumerated.',
     );
   }
-  const to = await create({ ownerEntityId: from.ownerEntityId, timezone: from.timezone });
+  const config = await from.getRecord(SYSTEM_TYPES.CONFIG);
+  if (!config) {
+    throw new InvalidAdapterError('Cannot copy from this adapter: it holds no _config record.');
+  }
+  const [versions, journal] = await Promise.all([
+    from.getVersions(config.id),
+    from.getJournal(config.id),
+  ]);
+  const to = await create({ config, history: { versions, journal } });
   try {
     const importRecord = to.importRecord?.bind(to);
     if (!importRecord) refuseTarget('it has no importRecord(), so it cannot write history');
     const listHeld = to.listBlobs?.bind(to);
     if (!listHeld) refuseTarget('it has no listBlobs(), so it could not be copied from in turn');
-    await assertNewStore(to, from.ownerEntityId, listHeld);
+    await assertNewStore(to, (config.content as ConfigContent).ownerEntityId, listHeld);
     for (const type of await from.listTypes()) await to.saveType(type);
     // Bytes before the Records that name them, as every upload writes them.
     for (const { fileId } of await listBlobs()) await to.putBlob(await from.getBlob(fileId));

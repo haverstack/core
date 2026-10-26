@@ -306,13 +306,19 @@ export class SharedSqlRecordLogic {
    * docs/spec/portability.md § Writing history.
    */
   async importRecord(record: StackRecord, history: RecordHistory): Promise<StackRecord> {
-    this.exec.transaction(() => {
-      this.insertRecord(record);
-      for (const version of history.versions) this.insertVersionRow(record.id, version);
-      for (const entry of history.journal) this.insertJournalRow(record.id, entry);
-    });
-
+    this.exec.transaction(() => this.writeImported(record, history));
     return record;
+  }
+
+  /**
+   * importRecord()'s write, for a caller already inside a transaction:
+   * writeNewStore() writes a store's `_config` seed through it, so the one
+   * Record a store starts with lands as every other Record does.
+   */
+  writeImported(record: StackRecord, history: RecordHistory): void {
+    this.insertRecord(record);
+    for (const version of history.versions) this.insertVersionRow(record.id, version);
+    for (const entry of history.journal) this.insertJournalRow(record.id, entry);
   }
 
   /**

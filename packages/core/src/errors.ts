@@ -280,8 +280,8 @@ export class FormatMismatchError extends Error {
   ) {
     super(
       actual === undefined
-        ? `Cannot open ${where}: it names no format version, and this adapter reads version ${expected}.`
-        : `Cannot open ${where}: it is format version ${actual}, and this adapter reads version ${expected}.`,
+        ? `${where} names no format version, not ${expected}.`
+        : `${where} is format version ${actual}, not ${expected}.`,
     );
     this.name = 'FormatMismatchError';
   }

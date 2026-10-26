@@ -28,32 +28,26 @@
 import { DatabaseSync } from './node-sqlite.js';
 import { existsSync, rmSync } from 'fs';
 import {
-  applyConnectionPragmas,
   acquireLock,
   releaseLock,
-  writeNewStore,
-  readStoredIdentity,
+  missingStoreError,
+  openStore,
   SharedSqlRecordAdapter,
+  type OwnerEntityIdInput,
+  type StoreCreateMode,
 } from '@haverstack/sqlite-shared';
-import { OwnerMismatchError } from '@haverstack/core/adapter';
-import type { StackIdentity } from '@haverstack/core/adapter';
+import type { StackIdentity, StoreSeed } from '@haverstack/core/adapter';
 import { NativeSqliteExecutor } from './executor.js';
 
 // -------------------------------------------------------
 // Types
 // -------------------------------------------------------
 
-/** What open() does when the store is missing or present, like O_CREAT / O_EXCL. */
-export type StoreCreateMode = 'never' | 'ifMissing' | 'exclusive';
-
-/** A plain DID, or a lazy provider called only when a store is actually created. */
-export type OwnerEntityIdInput = string | (() => string | Promise<string>);
+export type { OwnerEntityIdInput, StoreCreateMode };
 
 export type NativeSQLiteRecordAdapterOpenOptions = {
   /** Absolute path to the .db file. */
   path: string;
-  /** IANA timezone string e.g. "America/New_York". Consulted only when a store is created. No default. */
-  timezone?: string;
   /**
    * Open even if a lock file from another live process is present.
    * Only needed if that process is gone but its PID was reused by
@@ -67,6 +61,8 @@ export type NativeSQLiteRecordAdapterOpenOptions = {
       create?: 'never';
       /** Checked against the existing store's owner; a mismatch throws OwnerMismatchError. */
       ownerEntityId?: string;
+      timezone?: never;
+      seed?: never;
     }
   | {
       /** `'ifMissing'` opens the store if present and creates it if not; `'exclusive'` creates it and fails if present. */
@@ -76,6 +72,17 @@ export type NativeSQLiteRecordAdapterOpenOptions = {
        * existing store's owner; a lazy provider is never called just to compare.
        */
       ownerEntityId: OwnerEntityIdInput;
+      /** IANA timezone string e.g. "America/New_York". Consulted only when a store is created. No default. */
+      timezone?: string;
+      seed?: never;
+    }
+  | {
+      /** A store created from a seed is a new one, so only `'exclusive'` creates from one. */
+      create: 'exclusive';
+      /** The `_config` record and history the store is created holding: a copy's source's. */
+      seed: StoreSeed;
+      ownerEntityId?: never;
+      timezone?: never;
     }
 );
 
@@ -103,25 +110,9 @@ export class NativeSQLiteRecordAdapter extends SharedSqlRecordAdapter {
     opts: NativeSQLiteRecordAdapterOpenOptions,
   ): Promise<NativeSQLiteRecordAdapter> {
     const mode: StoreCreateMode = opts.create ?? 'never';
-    // `exists` is whether the file holds a stack. See docs/spec/adapters.md
-    // § Construction.
-    const checkMode = (exists: boolean): void => {
-      if (!exists && mode === 'never') {
-        throw new Error(
-          `Cannot open: no database found at "${opts.path}". ` +
-            `Pass create: 'ifMissing' or 'exclusive' to create one.`,
-        );
-      }
-      if (exists && mode === 'exclusive') {
-        throw new Error(
-          `Cannot create: database already exists at "${opts.path}". ` +
-            `Pass create: 'never' or 'ifMissing' to open it.`,
-        );
-      }
-    };
-
+    const where = `"${opts.path}"`;
     // Judged before opening, which would create the file to say it is missing.
-    if (mode === 'never' && !existsSync(opts.path)) checkMode(false);
+    if (mode === 'never' && !existsSync(opts.path)) throw missingStoreError(where);
 
     acquireLock(opts.path, opts.force);
     // Under the lock, so no other process can have made the file meanwhile.
@@ -130,36 +121,7 @@ export class NativeSQLiteRecordAdapter extends SharedSqlRecordAdapter {
     try {
       db = new DatabaseSync(opts.path);
       const exec = new NativeSqliteExecutor(db);
-      const stored = readStoredIdentity(exec, `"${opts.path}"`);
-      checkMode(stored !== null);
-      applyConnectionPragmas(exec, { wal: true });
-      let identity: StackIdentity;
-      if (stored) {
-        identity = stored;
-        if (
-          typeof opts.ownerEntityId === 'string' &&
-          opts.ownerEntityId !== identity.ownerEntityId
-        ) {
-          throw new OwnerMismatchError(
-            opts.ownerEntityId,
-            identity.ownerEntityId,
-            `"${opts.path}"`,
-          );
-        }
-      } else {
-        // Resolved only now a store is being created, under the lock the catch
-        // below releases, along with any file this open made.
-        const owner =
-          typeof opts.ownerEntityId === 'function'
-            ? await opts.ownerEntityId()
-            : opts.ownerEntityId;
-        if (!owner) {
-          throw new Error(
-            `Cannot create: no ownerEntityId given for the new database at "${opts.path}".`,
-          );
-        }
-        identity = writeNewStore(exec, { ownerEntityId: owner, timezone: opts.timezone });
-      }
+      const identity = await openStore(exec, { ...opts, mode, where, wal: true });
       return new NativeSQLiteRecordAdapter(opts.path, db, exec, identity);
     } catch (err) {
       db?.close();

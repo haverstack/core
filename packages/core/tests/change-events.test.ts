@@ -214,17 +214,6 @@ describe('a mutation that changes nothing emits nothing', () => {
 
 describe('every record emits, including the ones a query hides', () => {
   test('_config reports a change despite never being returned by query()', async () => {
-    // Seeded through the adapter: the reserved id is unreachable from
-    // create(), and MemoryAdapter carries identity as fields rather than
-    // as the record the SQL adapters store.
-    await adapter.createRecord({
-      id: '_config',
-      typeId: '_config@1',
-      createdAt: new Date(),
-      updatedAt: new Date(),
-      content: { ownerEntityId: OWNER, timezone: 'UTC' },
-      version: 1,
-    });
     const { seen, handler } = collector();
     await stack.subscribe(handler);
 

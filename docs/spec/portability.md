@@ -7,24 +7,24 @@
 ```ts
 import { copyStack } from '@haverstack/core/adapter';
 
-const target = await copyStack(from, (identity) => createStore(identity));
+const target = await copyStack(from, (seed) => createStore(seed));
 
-type StackIdentity = { ownerEntityId: EntityId; timezone: string | undefined };
+type StoreSeed = { config: StackRecord; history: RecordHistory };
 ```
 
-**One primitive carries export, import and every move between storage engines.** `copyStack()` reads a whole stack from one `StackAdapter` and writes it into a new store, which it asks `create` to make with the source's identity and returns open. Which source it is given, and what kind of store `create` makes, is the only difference between exporting to [the portable format](#the-portable-format), importing from it, and moving a stack from one SQLite engine to another. No adapter has a format-conversion method of its own, so N adapters need N implementations of the [write below](#writing-history), not one converter per pair of formats.
+**One primitive carries export, import and every move between storage engines.** `copyStack()` reads a whole stack from one `StackAdapter` and writes it into a new store, which it asks `create` to make from the source's `_config` record and returns open. Which source it is given, and what kind of store `create` makes, is the only difference between exporting to [the portable format](#the-portable-format), importing from it, and moving a stack from one SQLite engine to another. No adapter has a format-conversion method of its own, so N adapters need N implementations of the [write below](#writing-history), not one converter per pair of formats.
 
 What it carries is everything the source holds:
 
 - **Every Type**, through `listTypes()` and `saveType()`.
-- **Every Record but `_config`**, soft-deleted and unlisted ones included, each with every version snapshot and every journal entry, through [`importRecord()`](#writing-history). `_config` is the store's own: no query reaches it, and `create` made the target with what it holds.
+- **Every Record**, soft-deleted and unlisted ones included, each with every version snapshot and every journal entry, through [`importRecord()`](#writing-history). `_config` is among them: no query reaches it, so it is read by id, and with its history it is the seed `create` makes the target from ([Adapters § Construction](./adapters.md#construction)). The target's identity is therefore what the source's `_config` holds now, whatever its adapter read when it was opened.
 - **Every blob**, through `listBlobs()`, which both ends of a copy must have.
 
 **Each is read as the store enumerates it**, never by what a Record says, so nothing is filtered on the way: what is garbage is the target's own [collection](./attachments.md#garbage-collection) to decide, run when its owner chooses. Nothing a purge destroyed is carried, because the source no longer holds it.
 
 **It is a full-trust operation, like any direct adapter access.** It writes authorship and history as recorded, which no write through `Stack` may: a scoped create is stamped with its requester, and nothing outside a write appends a snapshot or a journal entry. It takes adapters rather than stacks because those are where that trust already lives ([Adapters § Concurrency & storage ownership](./adapters.md#concurrency--storage-ownership)). It emits no [change events](./events.md) and appends no journal entry: it reproduces changes that already happened, each of which was announced and journaled when it did.
 
-**The target is a store as its adapter creates one.** `create` receives the source's `ownerEntityId` and `timezone`, as any new store is opened with them ([Adapters § Construction](./adapters.md#construction)), and what it returns is checked as `open()` checks a store: its owner must be the source's, or the copy throws `OwnerMismatchError`, as `open()` does. `timezone` is passthrough metadata a store takes when it is created, so it is handed over and not checked. The store must also hold nothing yet — no Record, no Type, no blob — on an adapter with `importRecord()` and `listBlobs()`. Anything else is a mistake in `create`, refused with `InvalidAdapterError` before anything is written; a store `Stack.open()` has already opened holds the [system Types](./data-model.md#system-types), so it is refused too.
+**The target is a store as its adapter creates one.** `create` receives that seed, as any new store is created from one, and what it returns is checked as `open()` checks a store: its owner must be the seed's, or the copy throws `OwnerMismatchError`, as `open()` does. The store must also hold nothing else yet — no other Record, no Type, no blob — on an adapter with `importRecord()` and `listBlobs()`. Anything else is a mistake in `create`, refused with `InvalidAdapterError` before anything is written; a store `Stack.open()` has already opened holds the [system Types](./data-model.md#system-types), so it is refused too.
 
 **The source is not written during the copy.** Records are read a page at a time and each one's history separately, so a write landing partway through yields a target matching no moment of the source. Nothing enforces this: a local source's only writer is the process that owns it, which is the one copying.
 
@@ -61,8 +61,8 @@ type RecordHistory = {
 **An export is a `LocalAdapter` store: a SQLite database, with an `attachments/` directory beside it.** It is a working stack, not an archive to unpack — `Stack.open()` reads it as it reads any local stack.
 
 ```ts
-const portable = (path: string) => (identity: StackIdentity) =>
-  LocalAdapter.open({ path, create: 'exclusive', ...identity });
+const portable = (path: string) => (seed: StoreSeed) =>
+  LocalAdapter.open({ path, create: 'exclusive', seed });
 
 // Export: the host's stack, into a new portable store.
 const exported = await copyStack(host, portable('./my-stack.db'));
@@ -73,7 +73,7 @@ const exportedStack = await LocalAdapter.open({ path: './my-stack.db' });
 await copyStack(exportedStack, createHostStore);
 ```
 
-The layout is specified here so an export stays readable without the tool that wrote it, and a change to it changes this section in the same change; a test compares the tables below with the schema the SQLite adapters create. **Every SQLite store names its layout** in the one row of its `format` table, `id` `1`: `version` is `1` for the layout below. A change to the layout bumps it. The row is written in the same transaction as the tables and `_config`, and an adapter opening a store refuses one in another layout before writing to it, by the rules in [Adapters § Construction](./adapters.md#construction). The row is the store's own, like `_config`: a copy writes its target in the target's layout, which is how a stack moves to a newer one.
+The layout is specified here so an export stays readable without the tool that wrote it, and a change to it changes this section in the same change; a test compares the tables below with the schema the SQLite adapters create. **Every SQLite store names its layout** in the one row of its `format` table, `id` `1`: `version` is `1` for the layout below. A change to the layout bumps it. The row is written in the same transaction as the tables and `_config`, and an adapter opening a store refuses one in another layout before writing to it, by the rules in [Adapters § Construction](./adapters.md#construction). The row is the store's own: a copy writes its target in the target's layout, which is how a stack moves to a newer one.
 
 **`attachments/<fileId>`** holds a blob's bytes, named by the [64-character lowercase hex SHA-256](./attachments.md) of its contents.
 
@@ -115,7 +115,7 @@ Every column of every table but `records_fts`, an FTS5 index over `records.conte
 | `types`         | `id`, `base_id`, `version`, `name`, `schema`, `schema_hash`, `migrates_from`, `created_at`                                                                                      |
 | `content_index` | `record_id`, `field`, `value_rank`, `num_value`, `text_key`, `text_value`, `file_id`                                                                                            |
 
-The `_config` row carries `{ ownerEntityId, timezone }` as its content: the stack's owner and timezone, which a store is created with and `copyStack()` hands to `create`.
+The `_config` row carries `{ ownerEntityId, timezone }` as its content: the stack's owner and timezone, which every store is created holding.
 
 `content_index` and `records_fts` are rebuilt from `records.content`, so a reader may ignore them. A writer may not: a row whose content moved without them answers queries for content it no longer holds. They are part of the layout all the same, so a change to how either is built is a layout change like any other, made by copying into a new store, which rebuilds both as it writes.
 

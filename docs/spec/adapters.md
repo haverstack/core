@@ -119,14 +119,16 @@ All adapters support the full Record API. Performance guarantees differ; correct
 
 An adapter that holds a stack's identity has exactly one entry point, an async static `open(opts)`, and no public constructor. Whether `open()` may create a new stack is an option, not a separate method. Blob adapters hold no identity and keep their public constructors. `Stack.open(adapter)` stays a separate step, because `combineAdapters()` sits between the two.
 
-| Adapter                                             | Entry point                                   | `create`                                          |
-| --------------------------------------------------- | --------------------------------------------- | ------------------------------------------------- |
-| `LocalAdapter`, `NativeSQLiteRecordAdapter`         | `open({ path, create?, ownerEntityId?, … })`  | `'never'` (default), `'ifMissing'`, `'exclusive'` |
-| `DoSQLiteRecordAdapter`                             | `open(storage, { ownerEntityId, timezone? })` | none: always creates if missing                   |
-| `APIAdapter`                                        | `open({ url, ownerEntityId?, … })`            | none: a client never creates                      |
-| `MemoryAdapter`, `IncapableMemoryAdapter` (testing) | `open({ ownerEntityId, timezone? })`          | none: always new                                  |
+| Adapter                                             | Entry point                                               | `create`                                          |
+| --------------------------------------------------- | --------------------------------------------------------- | ------------------------------------------------- |
+| `LocalAdapter`, `NativeSQLiteRecordAdapter`         | `open({ path, create?, ownerEntityId? or seed?, … })`     | `'never'` (default), `'ifMissing'`, `'exclusive'` |
+| `DoSQLiteRecordAdapter`                             | `open(storage, { ownerEntityId, timezone? } or { seed })` | none: always creates if missing                   |
+| `APIAdapter`                                        | `open({ url, ownerEntityId?, … })`                        | none: a client never creates                      |
+| `MemoryAdapter`, `IncapableMemoryAdapter` (testing) | `open({ ownerEntityId, timezone? } or { seed })`          | none: always new                                  |
 
-**A store is written whole, so it is either present or missing.** A new store's tables, its `format` row and its `_config` record are written in one transaction, and opening an existing one writes none of them. A database holding none of a store's tables is missing; one holding any is a store, present exactly when it is whole. An `open()` that fails leaves things as it found them: `NativeSQLiteRecordAdapter` removes a file it created rather than leaving it for the next open to trip on.
+**Every store is created holding one Record, `_config`, which says whose it is.** `open()` takes it in one of two forms: `ownerEntityId` and `timezone`, from which `newStoreSeed()` in `@haverstack/core/adapter` makes a `_config` at version 1 with no past; or a `seed` — a `StoreSeed`, a `_config` record with its history, as [a copy](./portability.md#copying-a-stack) hands over its source's — written as `importRecord()` writes any Record. A seed creates a new store, so `NativeSQLiteRecordAdapter` takes one only with `'exclusive'`; given storage that already holds a store, as the DO adapter can be, its owner is checked against the seed's. `MemoryAdapter` holds its `_config` the same way, so every adapter that stores records holds one.
+
+**A store is written whole, so it is either present or missing.** A new store's tables, its `format` row and its `_config` record are written in one transaction, and opening an existing one writes none of them. So the `format` table alone says whether a database holds a store: one without it is missing, and one with it holds a whole store. An `open()` that fails leaves things as it found them: `NativeSQLiteRecordAdapter` removes a file it created rather than leaving it for the next open to trip on.
 
 `create` names what `open()` does when the store is missing or present, like `O_CREAT`/`O_EXCL`:
 
@@ -136,7 +138,7 @@ An adapter that holds a stack's identity has exactly one entry point, an async s
 
 `ownerEntityId` follows one rule everywhere it is accepted:
 
-- **Required whenever `open()` may create.** The type makes it required for `'ifMissing'` and `'exclusive'`, on the DO adapter and on `MemoryAdapter`. No adapter defaults it to `''`.
+- **Required whenever `open()` may create from it.** The type makes it required for `'ifMissing'` and `'exclusive'`, on the DO adapter and on `MemoryAdapter`, unless a `seed` is given instead. No adapter defaults it to `''`; every SQLite engine opens through one shared path that refuses an empty one.
 - **A plain string or a lazy `() => string | Promise<string>`** on every creating path, called only when a store is actually created.
 - **A plain string is checked against an existing store's owner**, in every mode and on every adapter; a mismatch throws `OwnerMismatchError` (`expected`, `actual`, and a `where` naming the path, URL or Durable Object) and releases anything `open()` had acquired. A lazy provider is never called just to compare.
 
@@ -146,7 +148,7 @@ An adapter that holds a stack's identity has exactly one entry point, an async s
 
 ## Conformance
 
-The invariants above are easy to state in prose and easy to violate silently — FTS5's external-content index going stale, a content path matching an unfiltered superset, a cursor replayed under the wrong sort. **`@haverstack/adapter-conformance`** is the runnable form of this document: `runRecordAdapterConformance()` and `runBlobAdapterConformance()` take an `open()` for your adapter and its declared `capabilities`, and register a vitest suite checking exactly the invariants named here, gated so a capability you don't declare is never penalized for its absence. `record-adapter-sqlite` and `blob-adapter-disk` both run it against themselves (`tests/conformance.test.ts`), alongside `@haverstack/core`'s own `MemoryAdapter` — three independent implementations passing the same suite is the check that the suite describes the contract rather than one adapter's accidents. `runCopyConformance()` takes a `create()` for a full adapter and checks the [copy](./portability.md#copying-a-stack) a move between hosts makes, reading from one of its stores and writing into another; `adapter-local` runs it against itself.
+The invariants above are easy to state in prose and easy to violate silently — FTS5's external-content index going stale, a content path matching an unfiltered superset, a cursor replayed under the wrong sort. **`@haverstack/adapter-conformance`** is the runnable form of this document: `runRecordAdapterConformance()` and `runBlobAdapterConformance()` take an `open()` for your adapter and its declared `capabilities`, and register a vitest suite checking exactly the invariants named here, gated so a capability you don't declare is never penalized for its absence. `record-adapter-sqlite` and `blob-adapter-disk` both run it against themselves (`tests/conformance.test.ts`), alongside `@haverstack/core`'s own `MemoryAdapter` — three independent implementations passing the same suite is the check that the suite describes the contract rather than one adapter's accidents. `runCopyConformance()` takes a `create(seed)` for a full adapter and checks the [copy](./portability.md#copying-a-stack) a move between hosts makes, reading from one of its stores and writing into another; `adapter-local` runs it against itself.
 
 ## SQLite-backed adapters
 

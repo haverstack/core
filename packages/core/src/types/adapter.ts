@@ -128,6 +128,20 @@ export type RecordHistory = {
   journal: RecordJournalEntry[];
 };
 
+/** What a store is created with: the identity its `_config` record holds, as an adapter reports it. */
+export type StackIdentity = Pick<StackRecordAdapter, 'ownerEntityId' | 'timezone'>;
+
+/**
+ * What a store is created holding: its `_config` record and that record's
+ * history. A fresh store's is newStoreSeed()'s; a copy's is its source's, so
+ * `_config` travels as every Record does. See docs/spec/adapters.md
+ * § Construction.
+ */
+export type StoreSeed = {
+  config: StackRecord;
+  history: RecordHistory;
+};
+
 /** The metadata an upload's `_attachment@1` record carries beside its bytes. */
 export type PutAttachmentOptions = {
   mimeType: string;

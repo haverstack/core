@@ -247,7 +247,6 @@ describe('open create modes', () => {
   test.each([
     ['another version', 'UPDATE format SET version = 2', 2],
     ['no version at all', 'DELETE FROM format', undefined],
-    ['no format table', 'DROP TABLE format', undefined],
   ] as const)(
     'a store naming %s throws FormatMismatchError and releases the lock',
     async (_name, sql, actual) => {
@@ -304,17 +303,6 @@ describe('open create modes', () => {
       expect(adapter.ownerEntityId).toBe('owner-new');
     },
   );
-
-  test('a store holding its tables but no _config record is refused, not created over', async () => {
-    await (await initAdapter()).close();
-    const db = new DatabaseSync(dbPath);
-    db.exec(`DELETE FROM records WHERE id = '_config'`);
-    db.close();
-    await expect(
-      NativeSQLiteRecordAdapter.open({ path: dbPath, create: 'ifMissing', ownerEntityId: 'x' }),
-    ).rejects.toThrow(/no _config record/);
-    expect(existsSync(`${dbPath}.lock`)).toBe(false);
-  });
 
   test('a matching plain-string owner opens an existing store', async () => {
     await (await initAdapter({ ownerEntityId: 'owner-abc' })).close();

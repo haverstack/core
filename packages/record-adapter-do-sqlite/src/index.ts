@@ -22,30 +22,35 @@
  * SharedSqlRecordAdapter, exactly as it does for record-adapter-sqlite.
  */
 
-import {
-  applyConnectionPragmas,
-  writeNewStore,
-  readStoredIdentity,
-  SharedSqlRecordAdapter,
-} from '@haverstack/sqlite-shared/record';
-import { OwnerMismatchError } from '@haverstack/core/adapter';
-import type { StackIdentity } from '@haverstack/core/adapter';
+import { openStore, SharedSqlRecordAdapter } from '@haverstack/sqlite-shared/record';
+import type { StackIdentity, StoreSeed } from '@haverstack/core/adapter';
 import { DurableObjectSqliteExecutor } from './executor.js';
 
 // -------------------------------------------------------
 // Types
 // -------------------------------------------------------
 
-export type DoSQLiteRecordAdapterOpenOptions = {
-  /**
-   * Entity ID of the stack owner. A plain string is checked against an
-   * existing config record (mismatch throws OwnerMismatchError); a lazy
-   * provider is called only when the DO's storage has none yet.
-   */
-  ownerEntityId: string | (() => string | Promise<string>);
-  /** IANA timezone string e.g. "America/New_York". Optional passthrough app metadata — no default. */
-  timezone?: string;
-};
+export type DoSQLiteRecordAdapterOpenOptions =
+  | {
+      /**
+       * Entity ID of the stack owner. A plain string is checked against an
+       * existing config record (mismatch throws OwnerMismatchError); a lazy
+       * provider is called only when the DO's storage has none yet.
+       */
+      ownerEntityId: string | (() => string | Promise<string>);
+      /** IANA timezone string e.g. "America/New_York". Optional passthrough app metadata — no default. */
+      timezone?: string;
+      seed?: never;
+    }
+  | {
+      /**
+       * The `_config` record and history new storage is created holding: a
+       * copy's source's. Its owner is checked against storage that has one.
+       */
+      seed: StoreSeed;
+      ownerEntityId?: never;
+      timezone?: never;
+    };
 
 // -------------------------------------------------------
 // DoSQLiteRecordAdapter
@@ -72,18 +77,12 @@ export class DoSQLiteRecordAdapter extends SharedSqlRecordAdapter {
     opts: DoSQLiteRecordAdapterOpenOptions,
   ): Promise<DoSQLiteRecordAdapter> {
     const exec = new DurableObjectSqliteExecutor(storage);
-    const where = 'the Durable Object storage';
-    let identity = readStoredIdentity(exec, where);
-    applyConnectionPragmas(exec, { wal: false });
-    if (identity) {
-      if (typeof opts.ownerEntityId === 'string' && opts.ownerEntityId !== identity.ownerEntityId) {
-        throw new OwnerMismatchError(opts.ownerEntityId, identity.ownerEntityId, where);
-      }
-    } else {
-      const ownerEntityId =
-        typeof opts.ownerEntityId === 'function' ? await opts.ownerEntityId() : opts.ownerEntityId;
-      identity = writeNewStore(exec, { ownerEntityId, timezone: opts.timezone });
-    }
+    const identity = await openStore(exec, {
+      ...opts,
+      mode: 'ifMissing',
+      where: 'the Durable Object storage',
+      wal: false,
+    });
     return new DoSQLiteRecordAdapter(exec, identity);
   }
 

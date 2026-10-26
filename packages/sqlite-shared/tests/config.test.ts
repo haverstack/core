@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
-import { FormatMismatchError } from '@haverstack/core/adapter';
+import { FormatMismatchError, newStoreSeed } from '@haverstack/core/adapter';
 import { writeNewStore, readStoredIdentity } from '../src/config.js';
 import type { SqlExecutor } from '../src/executor.js';
 import { FORMAT_VERSION } from '../src/schema.js';
@@ -30,7 +30,7 @@ const empty = () => executor(new DatabaseSync(':memory:'));
 /** A store as a create leaves it. */
 const created = (timezone: string | undefined) => {
   const exec = empty();
-  writeNewStore(exec, { ownerEntityId: 'did:key:owner', timezone });
+  writeNewStore(exec, newStoreSeed({ ownerEntityId: 'did:key:owner', timezone }));
   return exec;
 };
 
@@ -61,7 +61,6 @@ describe('readStoredIdentity', () => {
   test.each([
     ['another version', 'UPDATE format SET version = 2', 2],
     ['no version', 'DELETE FROM format', undefined],
-    ['no format table', 'DROP TABLE format', undefined],
   ] as const)('refuses a store naming %s, writing nothing', (_name, sql, actual) => {
     const exec = created('UTC');
     exec.exec(sql);
@@ -76,7 +75,10 @@ describe('readStoredIdentity', () => {
 describe('writeNewStore', () => {
   test('returns the identity it wrote, matching what a later read yields', () => {
     const exec = empty();
-    const written = writeNewStore(exec, { ownerEntityId: 'did:key:owner', timezone: 'UTC' });
+    const written = writeNewStore(
+      exec,
+      newStoreSeed({ ownerEntityId: 'did:key:owner', timezone: 'UTC' }),
+    );
     expect(written).toEqual(readStoredIdentity(exec, 'here'));
   });
 
@@ -87,7 +89,7 @@ describe('writeNewStore', () => {
     exec.exec(`CREATE TABLE format (id INTEGER PRIMARY KEY, version INTEGER NOT NULL)`);
     exec.run('INSERT INTO format (id, version) VALUES (1, 1)');
     expect(() =>
-      writeNewStore(exec, { ownerEntityId: 'did:key:owner', timezone: 'UTC' }),
+      writeNewStore(exec, newStoreSeed({ ownerEntityId: 'did:key:owner', timezone: 'UTC' })),
     ).toThrow();
     expect(tables(exec)).toBe(1);
   });
