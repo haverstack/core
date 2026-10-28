@@ -17,11 +17,7 @@ const dirs = new Map<StackAdapter, string>();
 const local: CreateStore = async (seed) => {
   const dir = join(tmpdir(), `copy-local-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   mkdirSync(dir, { recursive: true });
-  const adapter = await LocalAdapter.open({
-    create: 'exclusive',
-    path: join(dir, 'stack.db'),
-    seed,
-  });
+  const adapter = await LocalAdapter.open({ path: join(dir, 'stack.db'), seed });
   dirs.set(adapter, dir);
   return adapter;
 };

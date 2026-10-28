@@ -78,7 +78,7 @@ export type OpenStoreOptions = {
 /**
  * Every SQLite engine's open, after it holds a connection: read what the
  * store holds, judge `mode` by it, check the owner a caller expects, and
- * create a missing store from `seed` or a fresh one. The one read answers
+ * create a missing store from `seed` or a fresh one; a seed never opens one. The one read answers
  * whether a store is present, its layout and its owner, so those checks
  * cannot disagree. See docs/spec/adapters.md § Construction.
  */
@@ -88,20 +88,17 @@ export const openStore = async (
 ): Promise<StackIdentity> => {
   const stored = readStoredIdentity(exec, opts.where);
   if (!stored && opts.mode === 'never') throw missingStoreError(opts.where);
-  if (stored && opts.mode === 'exclusive') {
+  // A seed is a new store's whole first state, so it creates or fails.
+  if (stored && (opts.mode === 'exclusive' || opts.seed)) {
     throw new Error(
       `Cannot create: database already exists at ${opts.where}. ` +
-        `Pass create: 'never' or 'ifMissing' to open it.`,
+        `Pass create: 'never' or 'ifMissing' without a seed to open it.`,
     );
   }
   applyConnectionPragmas(exec, { wal: opts.wal });
 
   if (stored) {
-    const expected = opts.seed
-      ? identityOf(opts.seed).ownerEntityId
-      : typeof opts.ownerEntityId === 'string'
-        ? opts.ownerEntityId
-        : undefined;
+    const expected = typeof opts.ownerEntityId === 'string' ? opts.ownerEntityId : undefined;
     if (expected !== undefined && expected !== stored.ownerEntityId) {
       throw new OwnerMismatchError(expected, stored.ownerEntityId, opts.where);
     }

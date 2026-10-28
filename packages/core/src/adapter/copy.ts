@@ -4,8 +4,9 @@
  * One stack, read in full from one adapter and written in full to a new
  * store: every Record (soft-deleted and unlisted included) with its version
  * snapshots and journal, `_config` among them as the seed the store is
- * created from, every Type, and every blob. Each is read as the store enumerates it, never by what a Record
- * says, so nothing is filtered on the way. Export, import and moving
+ * created from, every Type, and every blob. Each is read as the store
+ * enumerates it, never by what a Record says, so nothing is filtered on the
+ * way. Export, import and moving
  * between storage engines are all this one call, with a different source
  * and a different kind of store to create. Full trust, like any direct
  * adapter access: authorship and history land as recorded, which no write
@@ -23,13 +24,13 @@ import type {
 } from '../types/index.js';
 import { SYSTEM_TYPES } from '../types/index.js';
 
-/** Creates a new store from `seed` — `LocalAdapter.open({ path, create: 'exclusive', seed })`, say. */
+/** Creates a new store from `seed`: `LocalAdapter.open({ path, seed })`, say. */
 export type CreateStore = (seed: StoreSeed) => Promise<StackAdapter> | StackAdapter;
 
-/** Records read per page; any size works, since every page is written before the next is read. */
+/** Records read per page; any size works, as each page is written before the next is read. */
 const PAGE_SIZE = 100;
 
-/** Every Record a store holds but `_config`, which no query reaches and every store is created from. */
+/** Every Record a store holds but `_config`, which no query reaches: a store is created from it. */
 const EVERYTHING: PlainQuery = {
   filter: { includeDeleted: true, includeUnlisted: true },
   sort: { field: 'createdAt', direction: 'asc' },
@@ -38,9 +39,10 @@ const EVERYTHING: PlainQuery = {
 
 /**
  * Copy everything `from` holds into the store `create` makes from its
- * `_config` record and that record's history, and return that store, open. Not atomic: a failure closes the
- * store part-written, and the caller, whose store it is, removes it. The
- * source must not be written meanwhile; nothing here can check that.
+ * `_config` record and that record's history, and return that store, open.
+ * Not atomic: a failure closes the store part-written, and the caller, whose
+ * store it is, removes it. The source must not be written meanwhile; nothing
+ * here can check that.
  * See docs/spec/portability.md § Copying a stack.
  */
 export async function copyStack(from: StackAdapter, create: CreateStore): Promise<StackAdapter> {

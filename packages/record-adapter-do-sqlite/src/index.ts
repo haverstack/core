@@ -45,7 +45,7 @@ export type DoSQLiteRecordAdapterOpenOptions =
   | {
       /**
        * The `_config` record and history new storage is created holding: a
-       * copy's source's. Its owner is checked against storage that has one.
+       * copy's source's. Storage that already holds a store refuses it.
        */
       seed: StoreSeed;
       ownerEntityId?: never;

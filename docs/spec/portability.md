@@ -61,8 +61,7 @@ type RecordHistory = {
 **An export is a `LocalAdapter` store: a SQLite database, with an `attachments/` directory beside it.** It is a working stack, not an archive to unpack — `Stack.open()` reads it as it reads any local stack.
 
 ```ts
-const portable = (path: string) => (seed: StoreSeed) =>
-  LocalAdapter.open({ path, create: 'exclusive', seed });
+const portable = (path: string) => (seed: StoreSeed) => LocalAdapter.open({ path, seed });
 
 // Export: the host's stack, into a new portable store.
 const exported = await copyStack(host, portable('./my-stack.db'));

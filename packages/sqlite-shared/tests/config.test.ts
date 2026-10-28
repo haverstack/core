@@ -1,7 +1,7 @@
 import { describe, test, expect } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
 import { FormatMismatchError, newStoreSeed } from '@haverstack/core/adapter';
-import { writeNewStore, readStoredIdentity } from '../src/config.js';
+import { openStore, writeNewStore, readStoredIdentity } from '../src/config.js';
 import type { SqlExecutor } from '../src/executor.js';
 import { FORMAT_VERSION } from '../src/schema.js';
 
@@ -82,15 +82,29 @@ describe('writeNewStore', () => {
     expect(written).toEqual(readStoredIdentity(exec, 'here'));
   });
 
-  // The tables, the format row and _config are one fact: a create failing on
-  // its format row leaves none of the tables it had already made.
+  // The tables, the format row and _config are one fact: a create failing
+  // partway leaves none of the tables it had already made, and a table of
+  // the same name already there fails it rather than being adopted.
   test('writes the whole store or none of it', () => {
     const exec = empty();
-    exec.exec(`CREATE TABLE format (id INTEGER PRIMARY KEY, version INTEGER NOT NULL)`);
-    exec.run('INSERT INTO format (id, version) VALUES (1, 1)');
+    exec.exec(`CREATE TABLE journal (note TEXT)`);
     expect(() =>
       writeNewStore(exec, newStoreSeed({ ownerEntityId: 'did:key:owner', timezone: 'UTC' })),
-    ).toThrow();
+    ).toThrow(/journal already exists/);
     expect(tables(exec)).toBe(1);
   });
+});
+
+describe('openStore', () => {
+  const seed = newStoreSeed({ ownerEntityId: 'did:key:owner', timezone: 'UTC' });
+
+  test.each(['ifMissing', 'exclusive'] as const)(
+    'refuses a seed for a database already holding a store, under %s',
+    async (mode) => {
+      const exec = created('UTC');
+      await expect(openStore(exec, { where: 'here', mode, wal: false, seed })).rejects.toThrow(
+        /already exists/,
+      );
+    },
+  );
 });

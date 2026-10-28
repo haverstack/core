@@ -77,8 +77,8 @@ export type NativeSQLiteRecordAdapterOpenOptions = {
       seed?: never;
     }
   | {
-      /** A store created from a seed is a new one, so only `'exclusive'` creates from one. */
-      create: 'exclusive';
+      /** A seed only creates, as `'exclusive'` does: an existing store refuses it. */
+      create?: never;
       /** The `_config` record and history the store is created holding: a copy's source's. */
       seed: StoreSeed;
       ownerEntityId?: never;
@@ -109,7 +109,7 @@ export class NativeSQLiteRecordAdapter extends SharedSqlRecordAdapter {
   static async open(
     opts: NativeSQLiteRecordAdapterOpenOptions,
   ): Promise<NativeSQLiteRecordAdapter> {
-    const mode: StoreCreateMode = opts.create ?? 'never';
+    const mode: StoreCreateMode = opts.seed ? 'exclusive' : (opts.create ?? 'never');
     const where = `"${opts.path}"`;
     // Judged before opening, which would create the file to say it is missing.
     if (mode === 'never' && !existsSync(opts.path)) throw missingStoreError(where);
