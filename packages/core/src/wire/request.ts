@@ -748,15 +748,15 @@ export function parseJournalParams(url: URL): JournalQuery {
 
 /**
  * Parse `GET /records/:id/versions`'s params into a `VersionsQuery`; absent
- * stays absent, as in parseJournalParams(). `afterVersion` is exclusive.
+ * stays absent, as in parseJournalParams(). `beforeVersion` is exclusive.
  * See docs/spec/wire-format.md § Versions.
  */
 export function parseVersionsParams(url: URL): VersionsQuery {
-  requireKnownParams(url, ['afterVersion', 'limit']);
+  requireKnownParams(url, ['beforeVersion', 'limit']);
   const query: VersionsQuery = {};
-  const afterVersion = url.searchParams.get('afterVersion');
-  if (afterVersion !== null) {
-    query.afterVersion = parseUnsignedInt(afterVersion, 'afterVersion');
+  const beforeVersion = url.searchParams.get('beforeVersion');
+  if (beforeVersion !== null) {
+    query.beforeVersion = parseUnsignedInt(beforeVersion, 'beforeVersion');
   }
   const limit = url.searchParams.get('limit');
   if (limit !== null) query.limit = parseUnsignedInt(limit, 'limit');

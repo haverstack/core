@@ -467,16 +467,16 @@ A move that would make the record its own ancestor answers **409** (code `confli
 **The server snapshots prior state automatically on every mutating endpoint that bumps `version`** — there is no client-initiated endpoint to write a version directly. The list is exhaustive on purpose: `PATCH /records/:id/content`, `DELETE` (soft), `POST .../undelete`, `POST .../migrate`, and `POST .../restore/:version` itself (restore always creates a new version). The parent, unlisted, association and permission endpoints are the deliberate exception: none of them bumps `version`, so none snapshots either. `APIAdapter` has no [`importRecord()`](./portability.md#writing-history) — the server is the only snapshot writer for this adapter — so a server that implements anything less than every endpoint above silently loses rollback history for that endpoint's mutations.
 
 ```
-GET  /records/:id/versions            — list all versions (oldest first)
-GET  /records/:id/versions?afterVersion=4&limit=50
-                                      — at most 50 versions after 4, exclusive
+GET  /records/:id/versions            — list all versions (newest first)
+GET  /records/:id/versions?beforeVersion=4&limit=50
+                                      — at most 50 versions older than 4, exclusive
 GET  /records/:id/versions/:version   — get a specific version
 POST /records/:id/restore/:version    — restore a version (creates new version, no rewrite)
 ```
 
 Both `GET` endpoints require the requester to hold the same mutate-surface authorization as a write to the record (write access, or owner/creator, or a Group's admin) — **not** plain read access; a read-only requester gets `403`. Every requester who passes that gate gets the same body. See [Versioning & deletion](./versioning.md#history-access) for the rationale.
 
-**The list answers an envelope, `{ "versions": [...], "cursor": ... }`, paged exactly like [the journal](#journal).** Both run oldest first ([Versioning § History reads share one order](./versioning.md#history-reads-share-one-order)); `limit` bounds the page and `afterVersion` is exclusive. `cursor` is the only end-of-history signal: a server MAY answer a page shorter than the `limit` asked for, so a short page must not be read as an exhausted history. It carries the `version` to send back as `afterVersion`, and is `null` once nothing follows. `APIAdapter.getVersions()` follows it to the end when no `limit` is given, so the library contract that omitting `limit` reads every version survives whatever page size a server picks. Neither param has a default, and `@haverstack/core/wire` exports `parseVersionsParams()` to decode them.
+**The list answers an envelope, `{ "versions": [...], "cursor": ... }`, paged like [the journal](#journal) but newest first.** `limit` bounds the page and `beforeVersion` is exclusive. `cursor` is the only end-of-history signal: a server MAY answer a page shorter than the `limit` asked for, so a short page must not be read as an exhausted history. It carries the `version` to send back as `beforeVersion`, and is `null` once nothing follows. `APIAdapter.getVersions()` follows it to the end when no `limit` is given, so the library contract that omitting `limit` reads every version survives whatever page size a server picks. Neither param has a default, and `@haverstack/core/wire` exports `parseVersionsParams()` to decode them.
 
 **A snapshot body carries no `associations`, `permissions`, `parentId` or `unlistedAt`** — no version has ever captured any of the four (see [Versioning § Version history](./versioning.md#version-history)). `WireVersion` has no such field, so a server that emits one is writing a key every client drops.
 

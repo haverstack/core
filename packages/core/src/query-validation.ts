@@ -471,10 +471,10 @@ export function assertValidJournalQuery(query: JournalQuery | undefined): void {
 }
 
 /**
- * A `getVersions()` window: `afterVersion` 0 is the start of history. No
- * ceiling is imposed — omitting `limit` reads every version by contract.
+ * A `getVersions()` window. No ceiling is imposed: omitting `limit` reads
+ * every version by contract.
  */
 export function assertValidVersionsQuery(query: VersionsQuery | undefined): void {
-  assertWindowInteger(query?.afterVersion, 'versions afterVersion', 0);
+  assertWindowInteger(query?.beforeVersion, 'versions beforeVersion', 1);
   assertWindowInteger(query?.limit, 'versions limit', 1);
 }

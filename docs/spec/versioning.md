@@ -39,17 +39,11 @@ type RecordVersion = {
 
 **API surface:**
 
-- `stack.getVersions(recordId, query?)` — retrieve version history, **oldest first** on every adapter (the same order [`GET /records/:id/versions`](./wire-format.md#versions) answers in). See [History reads share one order](#history-reads-share-one-order).
+- `stack.getVersions(recordId, query?)` — retrieve version history, **newest first** on every adapter (the same order [`GET /records/:id/versions`](./wire-format.md#versions) answers in), so the restore point just before the current version comes first and a page of history starts at the useful end. [`getJournal()`](./journal.md) runs the other way: an append-only log tailed forward from a cursor reads oldest first.
 
-  `query` is a `VersionsQuery` — `afterVersion` (exclusive: the versions after it) and `limit` — the shape of the journal's `afterSeq` and `limit`. Omitting both reads every version, as omitting them on `getJournal()` reads the whole log. Paging walks every version exactly once: send the last version of a page as the next `afterVersion`.
+  `query` is a `VersionsQuery` — `beforeVersion` (exclusive: versions strictly older than it) and `limit` — in the shape of the journal's `afterSeq` and `limit`. Omitting both reads every version, as omitting them on `getJournal()` reads the whole log. Paging walks every version exactly once: send the last version of a page as the next `beforeVersion`.
 
 - `stack.restoreVersion(recordId, version, opts?)` — revert to a prior version. Restores `content` and `typeId`, and **restores nothing else** — see [Restore semantics](#restore-semantics). The snapshot deliberately does not capture `appId` either, so restore never reverts an app reattribution.
-
-### History reads share one order
-
-**A Record's two history reads run oldest first, paged forward from an exclusive `after` cursor.** `getVersions()` takes `afterVersion` and [`getJournal()`](./journal.md#reading-it) takes `afterSeq`; both ordinals count from 1 per record, so `0` is the start of either, and each read's `limit` bounds the page the same way.
-
-Forward is the direction that serves every reader. A cursor that walks forward resumes: a reader holding the last ordinal it saw asks for what has been written since, where one walking backwards only reaches further into the past and catching up means re-reading from the top. It is also the order the history was written in, the order a replay or a [copy](./portability.md#writing-history) consumes it in. The newest end needs no second direction, since every version below a Record's own has a snapshot: the last `n` restore points are the versions after `max(0, record.version - 1 - n)`.
 
 ## Snapshot atomicity
 

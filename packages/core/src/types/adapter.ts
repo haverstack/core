@@ -259,7 +259,7 @@ export interface StackRecordAdapter {
 
   // Versions
   /**
-   * Snapshots oldest first; omitting `query` reads every version.
+   * Snapshots newest first; omitting `query` reads every version.
    * See docs/spec/versioning.md § Version history.
    */
   getVersions(id: RecordId, query?: VersionsQuery): Promise<RecordVersion[]>;

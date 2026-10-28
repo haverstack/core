@@ -71,12 +71,12 @@ export type RecordVersion = {
 };
 
 /**
- * Window into a record's version history, in the shape of JournalQuery.
- * Omitting both reads every version, oldest first.
+ * Window into a record's version history. Newest first, the reverse of
+ * JournalQuery; omitting both reads every version.
  * See docs/spec/versioning.md § Version history.
  */
 export type VersionsQuery = {
-  /** Versions after this one, exclusive. */
-  afterVersion?: number;
+  /** Versions strictly older than this, exclusive. */
+  beforeVersion?: number;
   limit?: number;
 };

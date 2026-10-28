@@ -1276,36 +1276,36 @@ describe('getVersions', () => {
     expect(versions[0].createdBy?.subjectId).toBe('entity-owner-123');
   });
 
-  test('follows cursor as afterVersion to the end when no limit is given', async () => {
+  test('follows cursor as beforeVersion to the end when no limit is given', async () => {
     const adapter = await openAdapter();
     mockFetch
       .mockResolvedValueOnce(
-        jsonResponse({ versions: [{ ...VERSION_RAW, version: 1 }], cursor: 1 }),
+        jsonResponse({ versions: [{ ...VERSION_RAW, version: 3 }], cursor: 3 }),
       )
       .mockResolvedValueOnce(
-        jsonResponse({ versions: [{ ...VERSION_RAW, version: 3 }], cursor: null }),
+        jsonResponse({ versions: [{ ...VERSION_RAW, version: 1 }], cursor: null }),
       );
     const versions = await adapter.getVersions('rec-abc123');
-    expect(versions.map((v) => v.version)).toEqual([1, 3]);
+    expect(versions.map((v) => v.version)).toEqual([3, 1]);
     expect(mockFetch.mock.calls[2][0]).toBe(
-      `${BASE_URL}/records/rec-abc123/versions?afterVersion=1`,
+      `${BASE_URL}/records/rec-abc123/versions?beforeVersion=3`,
     );
   });
 
-  test('sends limit and afterVersion, and caps the result at limit', async () => {
+  test('sends limit and beforeVersion, and caps the result at limit', async () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(
       jsonResponse({
         versions: [
           { ...VERSION_RAW, version: 2 },
-          { ...VERSION_RAW, version: 3 },
+          { ...VERSION_RAW, version: 1 },
         ],
         cursor: null,
       }),
     );
-    const versions = await adapter.getVersions('rec-abc123', { afterVersion: 1, limit: 1 });
+    const versions = await adapter.getVersions('rec-abc123', { beforeVersion: 3, limit: 1 });
     expect(mockFetch).toHaveBeenLastCalledWith(
-      `${BASE_URL}/records/rec-abc123/versions?afterVersion=1&limit=1`,
+      `${BASE_URL}/records/rec-abc123/versions?beforeVersion=3&limit=1`,
       expect.objectContaining({ method: 'GET' }),
     );
     expect(versions.map((v) => v.version)).toEqual([2]);

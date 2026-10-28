@@ -642,7 +642,7 @@ describe('JournalQuery is validated at the surface', () => {
 // -------------------------------------------------------
 
 describe('VersionsQuery is validated at the surface', () => {
-  test.each([{ afterVersion: -1 }, { limit: 0 }, { limit: -1 }, { afterVersion: 1.5 }])(
+  test.each([{ beforeVersion: 0 }, { limit: 0 }, { limit: -1 }, { beforeVersion: 1.5 }])(
     'getVersions refuses %j, as the wire does',
     async (query) => {
       const note = await stack.create(NOTE, { text: 'hello' });

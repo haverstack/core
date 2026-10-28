@@ -284,41 +284,40 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         expect(undeleted.deletedAt).toBeUndefined();
       });
 
-      test('getVersions returns snapshots oldest first', async () => {
+      test('getVersions returns snapshots newest first', async () => {
         const record = makeRecord();
         await adapter.createRecord(record);
         await patchWithSnapshots(record, 3);
-        expect((await adapter.getVersions(record.id)).map((v) => v.version)).toEqual([1, 2, 3]);
+        expect((await adapter.getVersions(record.id)).map((v) => v.version)).toEqual([3, 2, 1]);
       });
 
-      test('getVersions pages walk every version exactly once, oldest first', async () => {
+      test('getVersions pages walk every version exactly once, newest first', async () => {
         const record = makeRecord();
         await adapter.createRecord(record);
         await patchWithSnapshots(record, 5);
         const seen: number[] = [];
-        let afterVersion: number | undefined;
+        let beforeVersion: number | undefined;
         for (;;) {
-          const page = await adapter.getVersions(record.id, { afterVersion, limit: 2 });
+          const page = await adapter.getVersions(record.id, { beforeVersion, limit: 2 });
           if (page.length === 0) break;
           expect(page.length).toBeLessThanOrEqual(2);
           seen.push(...page.map((v) => v.version));
-          afterVersion = page[page.length - 1].version;
+          beforeVersion = page[page.length - 1].version;
         }
-        expect(seen).toEqual([1, 2, 3, 4, 5]);
+        expect(seen).toEqual([5, 4, 3, 2, 1]);
       });
 
-      test('getVersions afterVersion is exclusive and limit bounds the result', async () => {
+      test('getVersions beforeVersion is exclusive and limit bounds the result', async () => {
         const record = makeRecord();
         await adapter.createRecord(record);
         await patchWithSnapshots(record, 3);
-        const versionsOf = async (query: { afterVersion?: number; limit?: number }) =>
+        const versionsOf = async (query: { beforeVersion?: number; limit?: number }) =>
           (await adapter.getVersions(record.id, query)).map((v) => v.version);
-        expect(await versionsOf({ afterVersion: 1 })).toEqual([2, 3]);
-        expect(await versionsOf({ afterVersion: 3 })).toEqual([]);
-        expect(await versionsOf({ afterVersion: 0 })).toEqual([1, 2, 3]);
-        expect(await versionsOf({ limit: 1 })).toEqual([1]);
-        expect(await versionsOf({ afterVersion: 1, limit: 1 })).toEqual([2]);
-        expect(await versionsOf({})).toEqual([1, 2, 3]);
+        expect(await versionsOf({ beforeVersion: 3 })).toEqual([2, 1]);
+        expect(await versionsOf({ beforeVersion: 1 })).toEqual([]);
+        expect(await versionsOf({ limit: 1 })).toEqual([3]);
+        expect(await versionsOf({ beforeVersion: 3, limit: 1 })).toEqual([2]);
+        expect(await versionsOf({})).toEqual([3, 2, 1]);
       });
 
       test('purging deleteRecord removes the record and its version history', async () => {
@@ -814,7 +813,7 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
           { snapshot: snapshotOf(record), journal: { ops: ['patch'], kind: 'changed' } },
         );
         expect(patched.version).toBe(3);
-        expect((await adapter.getVersions(record.id)).map((v) => v.version)).toEqual([1, 2]);
+        expect((await adapter.getVersions(record.id)).map((v) => v.version)).toEqual([2, 1]);
         expect((await adapter.getJournal(record.id)).map((e) => e.seq)).toEqual([1, 2, 3, 4, 5]);
       });
     });

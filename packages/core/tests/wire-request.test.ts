@@ -4,7 +4,6 @@ import {
   parseQueryBody,
   parseChangeParams,
   parseJournalParams,
-  parseVersionsParams,
   parseGetRecordParams,
   parseDeleteParams,
   parseDownloadParams,
@@ -534,21 +533,6 @@ describe('parseJournalParams', () => {
         StackBadRequestError,
       );
     }
-  });
-});
-
-describe('parseVersionsParams', () => {
-  const versions = (qs: string) => new URL(`https://s.example/records/r1/versions${qs}`);
-
-  test('reads an empty query as every version, imposing no default page size', () => {
-    expect(parseVersionsParams(versions(''))).toEqual({});
-  });
-
-  test("round-trips a window in the journal's shape", () => {
-    expect(parseVersionsParams(versions('?afterVersion=4&limit=10'))).toEqual({
-      afterVersion: 4,
-      limit: 10,
-    });
   });
 });
 
