@@ -23,7 +23,7 @@ import {
   MAX_ID_TIMESTAMP,
   IdGenerationError,
 } from '../src/id.js';
-import type { TypeSchema } from '../src/types/index.js';
+import type { RecordVersion, TypeSchema } from '../src/types/index.js';
 import { baseIdOf } from '../src/schema.js';
 import { migration, typeHandle } from '../src/type-handle.js';
 import { add, derive, drop } from '../src/migration-steps.js';
@@ -86,6 +86,13 @@ const EntityV1 = typeHandle({
 });
 
 let adapter: MemoryAdapter;
+
+/**
+ * A version row written behind Stack's back: the state an interrupted
+ * write or a hand-edited store leaves.
+ */
+const plantVersion = (id: string, version: RecordVersion) =>
+  adapter.versions.set(id, [...(adapter.versions.get(id) ?? []), version]);
 let stack: Stack;
 
 /** Replace `stack` with one over the same adapter that knows `migrations`. */
@@ -139,7 +146,7 @@ describe('Stack.open', () => {
     const schemaB = (await b.getType('_config@1'))!.schema;
     expect(schemaA).toEqual(schemaB);
     expect(schemaA).not.toBe(schemaB);
-    expect(schemaA.entityId).not.toBe(schemaB.entityId);
+    expect(schemaA.ownerEntityId).not.toBe(schemaB.ownerEntityId);
   });
 
   test('timezone is undefined when not specified — no default', async () => {
@@ -2253,7 +2260,7 @@ describe('migrateAll', () => {
     const record = await stack.create(NOTE_V1, { text: 'original' }); // v1
     // Simulate a migrateAll() interrupted between its snapshot and its
     // commitMigration() call, leaving an orphan row at v1.
-    await adapter.saveVersion(record.id, {
+    plantVersion(record.id, {
       version: 1,
       typeId: NOTE_V1,
       content: { text: 'original' },
@@ -3007,7 +3014,7 @@ describe('restoreVersion — typeId and validation', () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
     // Simulate schema drift or adapter corruption: a stored snapshot whose
     // content no longer satisfies its own claimed type's schema.
-    await adapter.saveVersion(record.id, {
+    plantVersion(record.id, {
       version: 1,
       typeId: NOTE_V1,
       content: {}, // missing required "text"
@@ -3337,7 +3344,7 @@ describe('orphan version row recovery', () => {
     // Simulate an interrupted write: the v1 snapshot committed, but the
     // mutation that should have bumped past it never did — an orphan row
     // sitting at the record's own current version.
-    await adapter.saveVersion(record.id, {
+    plantVersion(record.id, {
       version: 1,
       typeId: NOTE_V1,
       content: { text: 'hello' },
@@ -3358,7 +3365,7 @@ describe('orphan version row recovery', () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
     await stack.patchContent(record.id, { text: 'v2' }); // v2, snapshots v1
 
-    await adapter.saveVersion(record.id, {
+    plantVersion(record.id, {
       version: 2,
       typeId: NOTE_V1,
       content: { text: 'v2' },
@@ -3589,125 +3596,103 @@ describe('_config protections', () => {
   const CONFIG_ID = '_config';
   const CONFIG_TYPE = '_config@1';
 
-  // MemoryAdapter never materializes a _config record on its own (ownerEntityId
-  // is a plain constructor field) — the guards under test operate on whatever
-  // record exists at id "_config", so tests seed one directly.
-  async function seedConfig(entityId = 'owner-123', timezone = 'UTC') {
-    return adapter.createRecord({
-      id: CONFIG_ID,
-      typeId: CONFIG_TYPE,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-      content: { entityId, timezone },
-      version: 1,
-    });
-  }
+  // The adapter is created holding _config — owner-123, UTC, at version 1 —
+  // as every store is, so the guards under test operate on that record.
 
-  test('patchContent() rejects a change to entityId', async () => {
-    await seedConfig();
-    await expect(stack.patchContent(CONFIG_ID, { entityId: 'someone-else' })).rejects.toThrow(
+  test('patchContent() rejects a change to ownerEntityId', async () => {
+    await expect(stack.patchContent(CONFIG_ID, { ownerEntityId: 'someone-else' })).rejects.toThrow(
       StackConflictError,
     );
-    expect((await adapter.getRecord(CONFIG_ID))?.content.entityId).toBe('owner-123');
+    expect((await adapter.getRecord(CONFIG_ID))?.content.ownerEntityId).toBe('owner-123');
   });
 
   test('patchContent() allows changing timezone', async () => {
-    await seedConfig();
     const updated = await stack.patchContent(CONFIG_ID, { timezone: 'America/New_York' });
     expect((updated.content as Record<string, unknown>).timezone).toBe('America/New_York');
   });
 
-  test('setting entityId to its current value is a no-op, not an error', async () => {
-    await seedConfig('owner-123');
-    await expect(stack.patchContent(CONFIG_ID, { entityId: 'owner-123' })).resolves.toBeDefined();
+  test('setting ownerEntityId to its current value is a no-op, not an error', async () => {
+    await expect(
+      stack.patchContent(CONFIG_ID, { ownerEntityId: 'owner-123' }),
+    ).resolves.toBeDefined();
   });
 
   test('soft delete is rejected', async () => {
-    await seedConfig();
     await expect(stack.delete(CONFIG_ID)).rejects.toThrow(StackConflictError);
     expect(await adapter.getRecord(CONFIG_ID)).not.toBeNull();
   });
 
   test('purge is rejected', async () => {
-    await seedConfig();
     await expect(stack.delete(CONFIG_ID, { purge: true })).rejects.toThrow(StackConflictError);
     expect(await adapter.getRecord(CONFIG_ID)).not.toBeNull();
   });
 
-  test('restoreVersion() rejects a snapshot with a different entityId', async () => {
-    await seedConfig('owner-123');
+  test('restoreVersion() rejects a snapshot with a different ownerEntityId', async () => {
     // Simulates a snapshot that predates this guard, or a bypassed
-    // direct-adapter write — either way, a stored version whose entityId
+    // direct-adapter write — either way, a stored version whose ownerEntityId
     // disagrees with the live record's must not be restorable.
-    await adapter.saveVersion(CONFIG_ID, {
+    plantVersion(CONFIG_ID, {
       version: 1,
       typeId: CONFIG_TYPE,
-      content: { entityId: 'someone-else', timezone: 'UTC' },
+      content: { ownerEntityId: 'someone-else', timezone: 'UTC' },
       updatedAt: new Date(),
     });
     await expect(stack.restoreVersion(CONFIG_ID, 1)).rejects.toThrow(StackConflictError);
   });
 
-  test('restoreVersion() allows a snapshot with the same entityId', async () => {
-    await seedConfig('owner-123', 'UTC');
+  test('restoreVersion() allows a snapshot with the same ownerEntityId', async () => {
     await stack.patchContent(CONFIG_ID, { timezone: 'America/New_York' });
     const restored = await stack.restoreVersion(CONFIG_ID, 1);
     expect((restored.content as Record<string, unknown>).timezone).toBe('UTC');
   });
 
   test('generic query excludes _config', async () => {
-    await seedConfig();
     const result = await stack.query({ filter: { typeId: CONFIG_TYPE } });
     expect(result.records).toHaveLength(0);
   });
 
   test('_config is still addressable directly by ID', async () => {
-    await seedConfig();
     expect(await stack.get(CONFIG_ID)).not.toBeNull();
   });
 
-  test('ScopedStack delegation: the owner cannot change entityId via scoped update either', async () => {
-    await seedConfig('owner-123');
+  test('ScopedStack delegation: the owner cannot change ownerEntityId via scoped update either', async () => {
     await expect(
-      stack.asEntity('owner-123').patchContent(CONFIG_ID, { entityId: 'someone-else' }),
+      stack.asEntity('owner-123').patchContent(CONFIG_ID, { ownerEntityId: 'someone-else' }),
     ).rejects.toThrow(StackConflictError);
   });
 
   test('ScopedStack delegation: the owner cannot delete _config via scoped delete either', async () => {
-    await seedConfig('owner-123');
     await expect(stack.asEntity('owner-123').delete(CONFIG_ID)).rejects.toThrow(StackConflictError);
   });
 
-  test('commitMigration() rejects a change to entityId', async () => {
-    await seedConfig('owner-123');
+  test('commitMigration() rejects a change to ownerEntityId', async () => {
     await stack.defineType({
       id: '_config@2',
       name: 'Config',
       schema: {
-        entityId: { kind: 'string', required: true },
+        ownerEntityId: { kind: 'string', required: true },
         timezone: { kind: 'string' },
       },
     });
 
     await expect(
-      stack.commitMigration(CONFIG_ID, '_config@2', { entityId: 'someone-else' }),
+      stack.commitMigration(CONFIG_ID, '_config@2', { ownerEntityId: 'someone-else' }),
     ).rejects.toThrow(StackConflictError);
     expect((await adapter.getRecord(CONFIG_ID))?.typeId).toBe(CONFIG_TYPE); // never committed
   });
 
-  test('commitMigration() allows the same entityId', async () => {
-    await seedConfig('owner-123');
+  test('commitMigration() allows the same ownerEntityId', async () => {
     await stack.defineType({
       id: '_config@2',
       name: 'Config',
       schema: {
-        entityId: { kind: 'string', required: true },
+        ownerEntityId: { kind: 'string', required: true },
         timezone: { kind: 'string' },
       },
     });
 
     const migrated = await stack.commitMigration(CONFIG_ID, '_config@2', {
-      entityId: 'owner-123',
+      ownerEntityId: 'owner-123',
       timezone: 'America/New_York',
     });
     expect(migrated.typeId).toBe('_config@2');

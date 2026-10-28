@@ -39,9 +39,10 @@ import type {
   JournalOptions,
   MutateOptions,
   Reach,
+  RecordHistory,
+  StackIdentity,
 } from '@haverstack/core/adapter';
 import type { SqlExecutor } from './executor.js';
-import type { StackConfig } from './config.js';
 import { SharedSqlRecordLogic } from './record-logic.js';
 
 /**
@@ -76,10 +77,10 @@ export abstract class SharedSqlRecordAdapter implements StackRecordAdapter {
 
   private readonly record: SharedSqlRecordLogic;
 
-  protected constructor(exec: SqlExecutor, config: StackConfig) {
+  protected constructor(exec: SqlExecutor, identity: StackIdentity) {
     this.record = new SharedSqlRecordLogic({ exec });
-    this.ownerEntityId = config.entityId;
-    this.timezone = config.timezone;
+    this.ownerEntityId = identity.ownerEntityId;
+    this.timezone = identity.timezone;
   }
 
   // -------------------------------------------------------
@@ -88,6 +89,10 @@ export abstract class SharedSqlRecordAdapter implements StackRecordAdapter {
 
   createRecord(record: StackRecord, opts?: JournalOptions): Promise<StackRecord> {
     return this.record.createRecord(record, opts);
+  }
+
+  importRecord(record: StackRecord, history: RecordHistory): Promise<StackRecord> {
+    return this.record.importRecord(record, history);
   }
 
   getRecord(id: string): Promise<StackRecord | null> {
@@ -159,10 +164,6 @@ export abstract class SharedSqlRecordAdapter implements StackRecordAdapter {
 
   getVersion(id: string, version: number): Promise<RecordVersion | null> {
     return this.record.getVersion(id, version);
-  }
-
-  saveVersion(id: string, version: RecordVersion): Promise<void> {
-    return this.record.saveVersion(id, version);
   }
 
   // -------------------------------------------------------

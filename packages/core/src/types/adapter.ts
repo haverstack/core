@@ -119,6 +119,29 @@ export type Reach = {
   };
 };
 
+/**
+ * A record's two durable history tiers as an adapter reads them back:
+ * every version snapshot, and every journal entry with its `seq` and `at`.
+ */
+export type RecordHistory = {
+  versions: RecordVersion[];
+  journal: RecordJournalEntry[];
+};
+
+/** What a store is created with: the identity its `_config` record holds, as an adapter reports it. */
+export type StackIdentity = Pick<StackRecordAdapter, 'ownerEntityId' | 'timezone'>;
+
+/**
+ * What a store is created holding: its `_config` record and that record's
+ * history. A fresh store's is newStoreSeed()'s; a copy's is its source's, so
+ * `_config` travels as every Record does. See docs/spec/adapters.md
+ * § Construction.
+ */
+export type StoreSeed = {
+  config: StackRecord;
+  history: RecordHistory;
+};
+
 /** The metadata an upload's `_attachment@1` record carries beside its bytes. */
 export type PutAttachmentOptions = {
   mimeType: string;
@@ -152,6 +175,14 @@ export interface StackRecordAdapter {
    */
   createRecord(record: StackRecord, opts?: JournalOptions): Promise<StackRecord>;
   getRecord(id: RecordId): Promise<StackRecord | null>;
+  /**
+   * createRecord() for a record with a past: written exactly as given, beside
+   * its snapshots and journal entries as recorded, in one atomic write that
+   * appends no entry of its own. Optional: a stack whose adapter lacks it
+   * cannot be copied into. See docs/spec/portability.md § Writing history.
+   */
+  importRecord?(record: StackRecord, history: RecordHistory): Promise<StackRecord>;
+
   /**
    * Merge a content patch, one level deep, into the content as it stands
    * when the write lands. Bumps `version` and snapshots. Never touches
@@ -233,13 +264,6 @@ export interface StackRecordAdapter {
    */
   getVersions(id: RecordId, query?: VersionsQuery): Promise<RecordVersion[]>;
   getVersion(id: RecordId, version: number): Promise<RecordVersion | null>;
-  /**
-   * Standalone snapshot write, outside of a mutation's own atomic path.
-   * Mutating methods above take a `snapshot` option instead, so the
-   * snapshot and the mutation land in one write — see SnapshotOptions.
-   */
-  saveVersion(id: RecordId, version: RecordVersion): Promise<void>;
-
   /**
    * Read a record's change journal, oldest first — required, on the same
    * footing as getVersions(). A recovery mechanism an app cannot rely on is

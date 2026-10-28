@@ -23,10 +23,21 @@ export type {
   AspectWriteOptions,
   ElementWriteOptions,
   Reach,
+  RecordHistory,
+  StackIdentity,
+  StoreSeed,
 } from '../types/index.js';
 export { sameAssociationSet } from '../associations/identity.js';
-export { ElementSetMovedError, OwnerMismatchError, softDeletedRefusal } from '../errors.js';
+export {
+  ElementSetMovedError,
+  FormatMismatchError,
+  OwnerMismatchError,
+  softDeletedRefusal,
+} from '../errors.js';
 export { combineAdapters } from './combine.js';
+export { copyStack } from './copy.js';
+export type { CreateStore } from './copy.js';
+export { identityOf, newStoreSeed } from './seed.js';
 export { inReach } from './reach.js';
 export type { ReachedRecord } from './reach.js';
 export {

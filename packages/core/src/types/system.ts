@@ -155,7 +155,7 @@ export type ConfigContent = {
    * DID of the stack owner. Immutable — see docs/spec.md § The `_config`
    * record for why ownership transfer isn't a field write.
    */
-  entityId: EntityId;
+  ownerEntityId: EntityId;
   /**
    * IANA timezone string e.g. "America/New_York". Optional passthrough app
    * metadata — nothing in core reads it for behavior, and there is no

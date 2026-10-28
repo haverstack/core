@@ -415,6 +415,8 @@ The adapter interface is split into `StackRecordAdapter` (structured records) an
 
 Use `combineAdapters({ record, blob })` from `@haverstack/core/adapter` to compose a record adapter with a different blob backend — for example, `NativeSQLiteRecordAdapter` with `S3BlobAdapter`. `adapter-local` wraps this pattern for the common case.
 
+To move a stack between backends or hosts, `copyStack(from, create)` from the same entry point copies it whole — soft-deleted and unlisted Records, authorship, version history, journal, Types and blobs — into a new store `create` makes with the source's identity. An export is a `LocalAdapter` store: copy into one to export, out of one to import. See [Portability](./docs/spec/portability.md).
+
 ---
 
 ## Development

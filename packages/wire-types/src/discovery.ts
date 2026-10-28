@@ -24,7 +24,7 @@ export const WIRE_PROTOCOL_VERSION = '1.0';
 /** GET /.well-known/stack. See docs/spec/wire-format.md § Discovery. */
 export type DiscoveryResponse = {
   version: string;
-  entityId: string;
+  ownerEntityId: string;
   timezone?: string;
   capabilities?: DiscoveryCapabilities;
   auth?: DiscoveryAuth;

@@ -16,13 +16,16 @@
  * for lock.ts's plain functions — so avoiding the import (not just the
  * unused export) has to happen at this file's level.
  */
-export { applyRecordSchema } from './schema.js';
+export { FORMAT_VERSION } from './schema.js';
 export { sanitizeFts5Query } from './fts5.js';
 export { type SqlExecutor } from './executor.js';
 export {
-  insertConfigRecord,
-  readStackConfig,
-  tryReadStackConfig,
-  type StackConfig,
+  missingStoreError,
+  openStore,
+  readStoredIdentity,
+  writeNewStore,
+  type OpenStoreOptions,
+  type OwnerEntityIdInput,
+  type StoreCreateMode,
 } from './config.js';
 export { SharedSqlRecordAdapter, SQLITE_RECORD_CAPABILITIES } from './record-adapter.js';

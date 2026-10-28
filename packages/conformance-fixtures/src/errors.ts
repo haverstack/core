@@ -1478,22 +1478,22 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
     },
   },
   {
-    name: 'error-conflict-config-entityid-change',
+    name: 'error-conflict-config-owner-change',
     description:
-      'PATCH /records/_config/content that would change entityId returns 409 / code ' +
-      '"conflict" — entityId defines stack ownership, read once at open and consulted by every ' +
+      'PATCH /records/_config/content that would change ownerEntityId returns 409 / code ' +
+      '"conflict" — ownerEntityId defines stack ownership, read once at open and consulted by every ' +
       'permission check thereafter; a write that silently re-anchored it would desync every ' +
       'already-running owner check. Other _config fields (e.g. timezone) update normally through ' +
-      'the same endpoint — only an entityId change is refused.',
+      'the same endpoint — only an ownerEntityId change is refused.',
     method: 'PATCH',
     path: '/records/_config/content',
-    requestBody: { entityId: 'did:key:z6MkvVv7EXm3g3XZ8k4hqYqK5zqfSj6pS4KvL5s6cQzYzZq3' },
+    requestBody: { ownerEntityId: 'did:key:z6MkvVv7EXm3g3XZ8k4hqYqK5zqfSj6pS4KvL5s6cQzYzZq3' },
     responseStatus: 409,
     responseBody: {
       error: {
         code: 'conflict',
         message:
-          'Cannot change _config.entityId: it defines stack ownership. Ownership transfer is ' +
+          'Cannot change _config.ownerEntityId: it defines stack ownership. Ownership transfer is ' +
           'not a supported operation.',
       },
     },

@@ -46,6 +46,7 @@ import type {
   JournalOptions,
   MutateOptions,
   Reach,
+  RecordHistory,
 } from '@haverstack/core/adapter';
 import type { SqlExecutor } from './executor.js';
 import { isForeignKeyViolation, isUniqueConstraintViolation } from './executor.js';
@@ -120,6 +121,53 @@ const versionRowValues = (version: RecordVersion): unknown[] => [
   version.createdBy?.principalId ?? null,
   version.updatedBy?.subjectId ?? null,
   version.updatedBy?.principalId ?? null,
+];
+
+/**
+ * The `journal` columns, and the one INSERT both journal writes run, every
+ * column bound in this order: an entry as recorded and an append differ only
+ * in where their values come from.
+ */
+const JOURNAL_COLUMNS = [
+  'record_id',
+  'seq',
+  'at',
+  'kind',
+  'ops',
+  'previous_parent_id',
+  'actor',
+  'associations',
+  'version',
+  'type_id',
+  'parent_id',
+] as const;
+
+const INSERT_JOURNAL_SQL = `INSERT INTO journal (${JOURNAL_COLUMNS.join(', ')})
+   VALUES (${JOURNAL_COLUMNS.map(() => '?').join(', ')})`;
+
+/** What the record row reports for an entry, beside what the caller supplied. */
+type JournalRowState = { version: number; typeId: string; parentId: string | null };
+
+/** The values for insertJournalSql(), in JOURNAL_COLUMNS order. */
+const journalValues = (
+  recordId: string,
+  seq: unknown,
+  at: Date,
+  entry: JournalEntryInput,
+  row: JournalRowState,
+): unknown[] => [
+  recordId,
+  seq,
+  toMs(at),
+  entry.kind,
+  JSON.stringify(entry.ops),
+  // '' is the root; NULL is an entry that names no origin at all.
+  entry.previousParentId === undefined ? null : (entry.previousParentId ?? ''),
+  entry.actor ? JSON.stringify(entry.actor) : null,
+  entry.associations?.length ? JSON.stringify(entry.associations) : null,
+  row.version,
+  row.typeId,
+  row.parentId,
 ];
 
 export type SharedSqlRecordLogicDeps = {
@@ -244,46 +292,76 @@ export class SharedSqlRecordLogic {
    */
   async createRecord(record: StackRecord, opts: JournalOptions = {}): Promise<StackRecord> {
     this.exec.transaction(() => {
-      try {
-        this.exec.run(
-          `INSERT INTO records
-          (id, type_id, created_at, updated_at, content, version,
-           parent_id, entity_id, app_id, principal_id, updated_by, updated_via,
-           deleted_at, unlisted_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [
-            record.id,
-            record.typeId,
-            toMs(record.createdAt),
-            toMs(record.updatedAt),
-            JSON.stringify(record.content),
-            record.version,
-            record.parentId ?? null,
-            record.createdBy?.subjectId ?? null,
-            record.appId ?? null,
-            record.createdBy?.principalId ?? null,
-            record.updatedBy?.subjectId ?? null,
-            record.updatedBy?.principalId ?? null,
-            record.deletedAt ? toMs(record.deletedAt) : null,
-            record.unlistedAt ? toMs(record.unlistedAt) : null,
-          ],
-        );
-      } catch (err) {
-        if (isUniqueConstraintViolation(err)) {
-          throw new StackConflictError(`Record already exists: "${record.id}"`);
-        }
-        throw err;
-      }
-
-      if (record.associations?.length) this.insertAssociations(record.id, record.associations);
-      if (record.permissions?.length) this.insertPermissions(record.id, record.permissions);
-
-      this.searchIndex.insert(record.id, JSON.stringify(record.content));
-      this.contentIndex.sync(record.id, record.typeId, record.content);
+      this.insertRecord(record);
       this.appendJournal(record.id, opts.journal);
     });
 
     return record;
+  }
+
+  /**
+   * createRecord() carrying the record's history as recorded: its version
+   * rows and journal entries, `seq` and `at` included, in the same
+   * transaction. Appends no entry of its own. See
+   * docs/spec/portability.md § Writing history.
+   */
+  async importRecord(record: StackRecord, history: RecordHistory): Promise<StackRecord> {
+    this.exec.transaction(() => this.writeImported(record, history));
+    return record;
+  }
+
+  /**
+   * importRecord()'s write, for a caller already inside a transaction:
+   * writeNewStore() writes a store's `_config` seed through it, so the one
+   * Record a store starts with lands as every other Record does.
+   */
+  writeImported(record: StackRecord, history: RecordHistory): void {
+    this.insertRecord(record);
+    for (const version of history.versions) this.insertVersionRow(record.id, version);
+    for (const entry of history.journal) this.insertJournalRow(record.id, entry);
+  }
+
+  /**
+   * The record row and every table describing it, for a caller already
+   * inside a transaction. A duplicate id maps to StackConflictError.
+   */
+  private insertRecord(record: StackRecord): void {
+    try {
+      this.exec.run(
+        `INSERT INTO records
+          (id, type_id, created_at, updated_at, content, version,
+           parent_id, entity_id, app_id, principal_id, updated_by, updated_via,
+           deleted_at, unlisted_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          record.id,
+          record.typeId,
+          toMs(record.createdAt),
+          toMs(record.updatedAt),
+          JSON.stringify(record.content),
+          record.version,
+          record.parentId ?? null,
+          record.createdBy?.subjectId ?? null,
+          record.appId ?? null,
+          record.createdBy?.principalId ?? null,
+          record.updatedBy?.subjectId ?? null,
+          record.updatedBy?.principalId ?? null,
+          record.deletedAt ? toMs(record.deletedAt) : null,
+          record.unlistedAt ? toMs(record.unlistedAt) : null,
+        ],
+      );
+    } catch (err) {
+      if (isUniqueConstraintViolation(err)) {
+        throw new StackConflictError(`Record already exists: "${record.id}"`);
+      }
+      throw err;
+    }
+
+    if (record.associations?.length) this.insertAssociations(record.id, record.associations);
+    if (record.permissions?.length) this.insertPermissions(record.id, record.permissions);
+
+    this.searchIndex.insert(record.id, JSON.stringify(record.content));
+    this.contentIndex.sync(record.id, record.typeId, record.content);
   }
 
   async getRecord(id: string): Promise<StackRecord | null> {
@@ -625,8 +703,7 @@ export class SharedSqlRecordLogic {
     } catch (err) {
       if (isUniqueConstraintViolation(err)) {
         throw new StackConflictError(
-          `Version ${version.version} already exists for record "${id}" — a concurrent ` +
-            `writer raced past this version. Use ifVersion to detect this before it happens.`,
+          `Version ${version.version} already exists for record "${id}"`,
         );
       }
       throw err;
@@ -649,15 +726,6 @@ export class SharedSqlRecordLogic {
   }
 
   /**
-   * Standalone snapshot write for tooling and tests — loud on any
-   * collision, since nothing here is about to bump the version. Mutating
-   * methods take a `snapshot` option instead; see snapshotBeforeMutation.
-   */
-  async saveVersion(id: string, version: RecordVersion): Promise<void> {
-    this.insertVersionRow(id, version);
-  }
-
-  /**
    * The snapshot half of a mutating method's atomic snapshot-then-mutate
    * transaction. A collision is a racing-writer conflict, except an orphan
    * row at the record's *current* version — recognized by version number
@@ -670,7 +738,13 @@ export class SharedSqlRecordLogic {
     } catch (err) {
       if (!(err instanceof StackConflictError)) throw err;
 
-      if (this.currentVersion(id) !== version.version) throw err;
+      // A collision below the current version is a writer that raced past it.
+      if (this.currentVersion(id) !== version.version) {
+        throw new StackConflictError(
+          `Version ${version.version} already exists for record "${id}" — a concurrent ` +
+            `writer raced past this version. Use ifVersion to detect this before it happens.`,
+        );
+      }
 
       this.overwriteVersionRow(id, version);
     }
@@ -682,9 +756,9 @@ export class SharedSqlRecordLogic {
 
   /**
    * Append one entry, stamped from the row as it now stands, so callers run
-   * this inside their write's transaction, after the write. `seq` is
-   * allocated in the INSERT itself, so no caller ever holds one it expects
-   * to be free. See docs/spec/journal.md § Ordering.
+   * this inside their write's transaction, after the write. `seq` is read
+   * from the log's maximum in that same transaction, so no caller ever holds
+   * one it expects to be free. See docs/spec/journal.md § Ordering.
    */
   private appendJournal(recordId: string, entry: JournalEntryInput | undefined): void {
     if (!entry) return;
@@ -698,28 +772,29 @@ export class SharedSqlRecordLogic {
     }>('SELECT version, type_id, parent_id FROM records WHERE id = ?', [recordId]);
     if (!row) throw recordNotFound(recordId);
 
+    const { seq } = this.exec.get<{ seq: number }>(
+      'SELECT COALESCE(MAX(seq), 0) + 1 AS seq FROM journal WHERE record_id = ?',
+      [recordId],
+    )!;
     this.exec.run(
-      `INSERT INTO journal
-        (record_id, seq, at, kind, ops, version, type_id, parent_id,
-         previous_parent_id, actor, associations)
-       VALUES (
-         ?,
-         (SELECT COALESCE(MAX(seq), 0) + 1 FROM journal WHERE record_id = ?),
-         ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        recordId,
-        recordId,
-        toMs(new Date()),
-        entry.kind,
-        JSON.stringify(entry.ops),
-        row.version,
-        row.type_id,
-        row.parent_id,
-        // '' is the root; NULL is an entry that names no origin at all.
-        entry.previousParentId === undefined ? null : (entry.previousParentId ?? ''),
-        entry.actor ? JSON.stringify(entry.actor) : null,
-        entry.associations?.length ? JSON.stringify(entry.associations) : null,
-      ],
+      INSERT_JOURNAL_SQL,
+      journalValues(recordId, seq, new Date(), entry, {
+        version: row.version,
+        typeId: row.type_id,
+        parentId: row.parent_id,
+      }),
+    );
+  }
+
+  /** A whole entry as recorded, `seq` and `at` included — importRecord()'s half of the journal. */
+  private insertJournalRow(recordId: string, entry: RecordJournalEntry): void {
+    this.exec.run(
+      INSERT_JOURNAL_SQL,
+      journalValues(recordId, entry.seq, entry.at, entry, {
+        version: entry.version,
+        typeId: entry.typeId,
+        parentId: entry.parentId ?? null,
+      }),
     );
   }
 

@@ -35,6 +35,8 @@ import type {
   StackCapabilities,
   BlobInfo,
   Reach,
+  RecordHistory,
+  StoreSeed,
 } from './types/index.js';
 import { SYSTEM_TYPES } from './types/index.js';
 import { applyMergePatch } from './merge.js';
@@ -42,6 +44,7 @@ import { baseIdOf, fileRefFields } from './schema.js';
 import { compareSortEntries, constantSortEntry, contentSortEntry } from './adapter/sort.js';
 import type { SortEntry } from './adapter/sort.js';
 import { inReach } from './adapter/reach.js';
+import { identityOf, newStoreSeed } from './adapter/seed.js';
 
 import {
   ElementSetMovedError,
@@ -62,7 +65,10 @@ const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
 const withoutUndefined = (content: Record<string, unknown>): Record<string, unknown> =>
   Object.fromEntries(Object.entries(content).filter(([, v]) => v !== undefined));
 
-export type MemoryAdapterOpenOptions = { ownerEntityId: string; timezone?: string };
+/** A fresh store's identity, or the seed a copy creates it from — never both. */
+export type MemoryAdapterOpenOptions =
+  | { ownerEntityId: string; timezone?: string; seed?: never }
+  | { seed: StoreSeed; ownerEntityId?: never; timezone?: never };
 
 /**
  * In-memory StackAdapter with keyed cursor pagination. Implements
@@ -102,11 +108,16 @@ export class MemoryAdapter implements StackAdapter {
 
   // Protected only so IncapableMemoryAdapter can extend; callers go through open().
   protected constructor(opts: MemoryAdapterOpenOptions) {
-    this.ownerEntityId = opts.ownerEntityId;
-    this.timezone = opts.timezone;
+    const seed =
+      opts.seed ?? newStoreSeed({ ownerEntityId: opts.ownerEntityId, timezone: opts.timezone });
+    ({ ownerEntityId: this.ownerEntityId, timezone: this.timezone } = identityOf(seed));
+    this.writeImported(seed.config, seed.history);
   }
 
-  /** Always a new, empty store; `ownerEntityId` is required so the mistake fails at compile time. */
+  /**
+   * Always a new store, holding only the `_config` record its seed carries;
+   * `ownerEntityId` or `seed` is required so the mistake fails at compile time.
+   */
   static async open(opts: MemoryAdapterOpenOptions): Promise<MemoryAdapter> {
     return new MemoryAdapter(opts);
   }
@@ -119,6 +130,30 @@ export class MemoryAdapter implements StackAdapter {
     this.records.set(record.id, stored);
     this.order.push(record.id);
     this.appendJournal(record.id, opts.journal, stored);
+    return stored;
+  }
+
+  async importRecord(record: StackRecord, history: RecordHistory) {
+    return this.writeImported(record, history);
+  }
+
+  /** importRecord()'s write, synchronous so the constructor writes a seed the same way. */
+  private writeImported(record: StackRecord, history: RecordHistory): StackRecord {
+    if (this.records.has(record.id)) {
+      throw new StackConflictError(`Record already exists: "${record.id}"`);
+    }
+    const stored = { ...record, content: withoutUndefined(record.content) };
+    this.records.set(record.id, stored);
+    this.order.push(record.id);
+    // Held oldest first, as the writes leave them, whatever order they came in.
+    this.versions.set(
+      record.id,
+      [...history.versions].sort((a, b) => a.version - b.version),
+    );
+    this.journals.set(
+      record.id,
+      [...history.journal].sort((a, b) => a.seq - b.seq),
+    );
     return stored;
   }
 
@@ -537,31 +572,6 @@ export class MemoryAdapter implements StackAdapter {
   }
 
   /**
-   * Loud on a (record, version) collision, mirroring the real adapters'
-   * UNIQUE constraint.
-   */
-  private insertVersionRow(id: string, version: RecordVersion): void {
-    const existing = this.versions.get(id) ?? [];
-    if (existing.some((v) => v.version === version.version)) {
-      throw new StackConflictError(
-        `Version ${version.version} already exists for record "${id}" — a concurrent ` +
-          `writer raced past this version. Use ifVersion to detect this before it happens.`,
-      );
-    }
-    this.versions.set(id, [...existing, version]);
-  }
-
-  /**
-   * Standalone snapshot write for tooling and tests — loud on any
-   * collision, since nothing here is about to bump the record's version.
-   * Mutating methods take a `snapshot` option instead; see
-   * snapshotBeforeMutation.
-   */
-  async saveVersion(id: string, version: RecordVersion) {
-    this.insertVersionRow(id, version);
-  }
-
-  /**
    * The snapshot half of a mutating method's atomic snapshot-then-mutate
    * step. Mirrors the real adapters' snapshotBeforeMutation (see
    * sqlite-shared/record-logic.ts for the full rationale): a collision is
@@ -640,7 +650,9 @@ export class MemoryAdapter implements StackAdapter {
     const log = this.journals.get(id) ?? [];
     log.push({
       ...entry,
-      seq: log.length + 1,
+      // From the log's maximum, as every adapter allocates it.
+      // See docs/spec/journal.md § Ordering.
+      seq: (log.at(-1)?.seq ?? 0) + 1,
       at: new Date(),
       version: record.version,
       typeId: record.typeId,

@@ -154,7 +154,7 @@ import {
   checkBindingsOnCreate,
   checkBindingsOnMigrate,
   checkBindingsOnUpdate,
-  checkConfigEntityIdUnchanged,
+  checkConfigOwnerUnchanged,
 } from './integrity.js';
 import { systemTypeDefinitions } from './system-types.js';
 import type {
@@ -822,9 +822,9 @@ export class Stack implements StackClient {
     await checkBindingsOnUpdate(this, existing.typeId, id, patch, existing.content, merged);
 
     if (id === SYSTEM_TYPES.CONFIG) {
-      checkConfigEntityIdUnchanged(
-        (existing.content as ConfigContent).entityId,
-        (merged as ConfigContent).entityId,
+      checkConfigOwnerUnchanged(
+        (existing.content as ConfigContent).ownerEntityId,
+        (merged as ConfigContent).ownerEntityId,
       );
     }
     return merged;
@@ -1285,9 +1285,9 @@ export class Stack implements StackClient {
     }
 
     if (id === SYSTEM_TYPES.CONFIG) {
-      checkConfigEntityIdUnchanged(
-        (existing.content as ConfigContent).entityId,
-        (target.content as ConfigContent).entityId,
+      checkConfigOwnerUnchanged(
+        (existing.content as ConfigContent).ownerEntityId,
+        (target.content as ConfigContent).ownerEntityId,
       );
     }
 
@@ -1399,9 +1399,9 @@ export class Stack implements StackClient {
     await checkBindingsOnMigrate(this, existing.typeId, toTypeId, id, existingContent, content);
 
     if (id === SYSTEM_TYPES.CONFIG) {
-      checkConfigEntityIdUnchanged(
-        (existing.content as ConfigContent).entityId,
-        (content as ConfigContent).entityId,
+      checkConfigOwnerUnchanged(
+        (existing.content as ConfigContent).ownerEntityId,
+        (content as ConfigContent).ownerEntityId,
       );
     }
 
@@ -1438,8 +1438,8 @@ export class Stack implements StackClient {
       // never sees it and this is the only place it can be announced.
       const record = await this.adapter.putAttachmentWithMetadata(data, opts);
       // The one emission with no journal half of its own: the far side
-      // wrote the record, so it appended the entry in that same write —
-      // the same division saveVersion() follows over this adapter. See
+      // wrote the record, so it appended the entry in that same write: a
+      // server is the only writer of its own durable tiers. See
       // docs/spec/journal.md § The entry set is the event set.
       this.announce(new PendingChange('create'), record);
       return record as StackRecord & { content: AttachmentContent };

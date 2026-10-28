@@ -8,8 +8,22 @@ import type { SqlExecutor } from './executor.js';
  * (docs/spec/wire-format.md § Authentication).
  */
 
+/** The layout this code reads and writes: what a new store's `format` row names. */
+export const FORMAT_VERSION = 1;
+
+/**
+ * Run once, by writeNewStore() on a database holding no store, so a table
+ * of the same name already there fails the create instead of being adopted.
+ */
 export const RECORD_SCHEMA_SQL = `
-  CREATE TABLE IF NOT EXISTS records (
+  -- Which layout this store is, in its one row, so an export names the one
+  -- a reader holds. See docs/spec/portability.md § The portable format.
+  CREATE TABLE format (
+    id      INTEGER PRIMARY KEY CHECK (id = 1),
+    version INTEGER NOT NULL
+  ) STRICT;
+
+  CREATE TABLE records (
     id          TEXT PRIMARY KEY,
     type_id     TEXT NOT NULL,
     created_at  INTEGER NOT NULL,
@@ -29,7 +43,7 @@ export const RECORD_SCHEMA_SQL = `
   -- A record's data associations: tags, attachments and relationships.
   -- Its permissions are in their own table below, so no predicate over this
   -- one can match a grantee as a relationship target.
-  CREATE TABLE IF NOT EXISTS associations (
+  CREATE TABLE associations (
     record_id     TEXT NOT NULL REFERENCES records(id),
     kind          TEXT NOT NULL CHECK (kind IN ('tag', 'attachment', 'relationship')),
     label         TEXT NOT NULL,
@@ -55,7 +69,7 @@ export const RECORD_SCHEMA_SQL = `
   -- grantee; a group grantee's role is in the key, because member and
   -- admin name two different sets of people.
   -- See docs/spec/access-control.md § Record-level permissions.
-  CREATE TABLE IF NOT EXISTS permissions (
+  CREATE TABLE permissions (
     record_id    TEXT NOT NULL REFERENCES records(id),
     kind         TEXT NOT NULL CHECK (kind IN ('permission', 'anyone')),
     label        TEXT NOT NULL CHECK (label IN ('read', 'write')),
@@ -69,7 +83,7 @@ export const RECORD_SCHEMA_SQL = `
   -- associations column: none of those aspects bumps version, so no
   -- version ever snapshots one. See
   -- docs/spec/versioning.md § Version history.
-  CREATE TABLE IF NOT EXISTS versions (
+  CREATE TABLE versions (
     record_id   TEXT NOT NULL REFERENCES records(id),
     version     INTEGER NOT NULL,
     type_id     TEXT NOT NULL,
@@ -87,7 +101,7 @@ export const RECORD_SCHEMA_SQL = `
   -- by design — content lives on a versions row, and copying it here
   -- would make the journal the larger of the two stores.
   -- See docs/spec/journal.md.
-  CREATE TABLE IF NOT EXISTS journal (
+  CREATE TABLE journal (
     record_id   TEXT NOT NULL REFERENCES records(id),
     seq         INTEGER NOT NULL,
     at          INTEGER NOT NULL,
@@ -111,7 +125,7 @@ export const RECORD_SCHEMA_SQL = `
     PRIMARY KEY (record_id, seq)
   ) STRICT;
 
-  CREATE TABLE IF NOT EXISTS types (
+  CREATE TABLE types (
     id            TEXT PRIMARY KEY,
     base_id       TEXT NOT NULL,
     version       INTEGER NOT NULL,
@@ -129,7 +143,7 @@ export const RECORD_SCHEMA_SQL = `
   -- value_rank is 0 for a numeric value and 1 for a text one — the same
   -- split as "num_value IS NULL", but non-null, so one index can carry
   -- the whole ordering. file_id is set only for a 'file-ref' field.
-  CREATE TABLE IF NOT EXISTS content_index (
+  CREATE TABLE content_index (
     record_id  TEXT NOT NULL REFERENCES records(id),
     field      TEXT NOT NULL,
     value_rank INTEGER NOT NULL CHECK (value_rank IN (0, 1)),
@@ -145,35 +159,35 @@ export const RECORD_SCHEMA_SQL = `
   -- leaves the planner sorting every match before it can honor LIMIT.
   -- deleted_at and unlisted_at get none: an index on a column every query
   -- tests IS NULL only lures the planner off the one answering ORDER BY.
-  CREATE INDEX IF NOT EXISTS idx_records_type_id      ON records(type_id, created_at, id);
-  CREATE INDEX IF NOT EXISTS idx_records_parent_id    ON records(parent_id, created_at, id);
-  CREATE INDEX IF NOT EXISTS idx_records_entity_id    ON records(entity_id, created_at, id);
-  CREATE INDEX IF NOT EXISTS idx_records_app_id       ON records(app_id, created_at, id);
-  CREATE INDEX IF NOT EXISTS idx_records_principal_id ON records(principal_id, created_at, id);
-  CREATE INDEX IF NOT EXISTS idx_records_created_at   ON records(created_at, id);
-  CREATE INDEX IF NOT EXISTS idx_records_updated_at   ON records(updated_at, id);
-  CREATE INDEX IF NOT EXISTS idx_records_version      ON records(version, id);
+  CREATE INDEX idx_records_type_id      ON records(type_id, created_at, id);
+  CREATE INDEX idx_records_parent_id    ON records(parent_id, created_at, id);
+  CREATE INDEX idx_records_entity_id    ON records(entity_id, created_at, id);
+  CREATE INDEX idx_records_app_id       ON records(app_id, created_at, id);
+  CREATE INDEX idx_records_principal_id ON records(principal_id, created_at, id);
+  CREATE INDEX idx_records_created_at   ON records(created_at, id);
+  CREATE INDEX idx_records_updated_at   ON records(updated_at, id);
+  CREATE INDEX idx_records_version      ON records(version, id);
 
   -- Each association index ends with record_id so the semi-joins in
   -- query.ts read the matching record ids out of the index alone.
   -- idx_assoc_related carries related_ns ahead of related_id because a
   -- record- or entity-scoped target always stores '' there, which
   -- buildQueryPlan states explicitly to keep the prefix contiguous.
-  CREATE INDEX IF NOT EXISTS idx_assoc_kind_label   ON associations(kind, label, record_id);
-  CREATE INDEX IF NOT EXISTS idx_assoc_kind_file_id ON associations(kind, file_id, record_id);
-  CREATE INDEX IF NOT EXISTS idx_assoc_related      ON associations(kind, related_scope, related_ns, related_id, record_id);
-  CREATE INDEX IF NOT EXISTS idx_types_base_id      ON types(base_id, version);
+  CREATE INDEX idx_assoc_kind_label   ON associations(kind, label, record_id);
+  CREATE INDEX idx_assoc_kind_file_id ON associations(kind, file_id, record_id);
+  CREATE INDEX idx_assoc_related      ON associations(kind, related_scope, related_ns, related_id, record_id);
+  CREATE INDEX idx_types_base_id      ON types(base_id, version);
 
   -- The permissions key with record_id moved last, so a scoped query reads
   -- the records carrying an element straight out of the index.
-  CREATE INDEX IF NOT EXISTS idx_permissions_element
+  CREATE INDEX idx_permissions_element
     ON permissions(kind, label, grantee_kind, grantee_id, role, record_id);
 
   -- The whole content ordering, in index order, for one field at a time:
   -- a content-sorted page is an ordered walk of a slice of this index.
-  CREATE INDEX IF NOT EXISTS idx_content_index_sort
+  CREATE INDEX idx_content_index_sort
     ON content_index(field, value_rank, num_value, text_key, text_value, record_id);
-  CREATE INDEX IF NOT EXISTS idx_content_index_file
+  CREATE INDEX idx_content_index_file
     ON content_index(file_id, record_id) WHERE file_id IS NOT NULL;
 `;
 
@@ -202,7 +216,7 @@ export const TOKENS_SCHEMA_SQL = `
  * only that setting records.
  */
 export const FTS5_SCHEMA_SQL = `
-  CREATE VIRTUAL TABLE IF NOT EXISTS records_fts USING fts5(
+  CREATE VIRTUAL TABLE records_fts USING fts5(
     content,
     content='records',
     content_rowid='rowid',
@@ -225,7 +239,7 @@ export const PRAGMA_FOREIGN_KEYS_ON = `PRAGMA foreign_keys = ON;`;
  */
 export const PRAGMA_JOURNAL_MODE_WAL = `PRAGMA journal_mode = WAL;`;
 
-export type RecordSchemaOptions = {
+export type ConnectionOptions = {
   /**
    * Whether to put the connection in WAL mode. False for an engine that
    * owns its own durability and rejects the pragma outright, as Durable
@@ -235,14 +249,12 @@ export type RecordSchemaOptions = {
 };
 
 /**
- * Brings a records database up to the schema every SQLite record adapter
- * expects: foreign keys on, then the tables and the FTS5 index. Every
- * statement is idempotent, so an engine that cannot tell
- * whether a store exists can run this on each attach.
+ * The settings a connection holds rather than the file, so every open
+ * applies them. They run outside any transaction: `foreign_keys` is a no-op
+ * inside one, and `journal_mode` cannot change in one. The tables are
+ * writeNewStore()'s, written once, with the rest of a new store.
  */
-export const applyRecordSchema = (exec: SqlExecutor, opts: RecordSchemaOptions): void => {
+export const applyConnectionPragmas = (exec: SqlExecutor, opts: ConnectionOptions): void => {
   exec.exec(PRAGMA_FOREIGN_KEYS_ON);
   if (opts.wal) exec.exec(PRAGMA_JOURNAL_MODE_WAL);
-  exec.exec(RECORD_SCHEMA_SQL);
-  exec.exec(FTS5_SCHEMA_SQL);
 };

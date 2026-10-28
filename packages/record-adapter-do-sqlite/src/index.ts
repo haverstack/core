@@ -22,46 +22,51 @@
  * SharedSqlRecordAdapter, exactly as it does for record-adapter-sqlite.
  */
 
-import {
-  applyRecordSchema,
-  insertConfigRecord,
-  tryReadStackConfig,
-  SharedSqlRecordAdapter,
-  type StackConfig,
-} from '@haverstack/sqlite-shared/record';
-import { OwnerMismatchError } from '@haverstack/core/adapter';
+import { openStore, SharedSqlRecordAdapter } from '@haverstack/sqlite-shared/record';
+import type { StackIdentity, StoreSeed } from '@haverstack/core/adapter';
 import { DurableObjectSqliteExecutor } from './executor.js';
 
 // -------------------------------------------------------
 // Types
 // -------------------------------------------------------
 
-export type DoSQLiteRecordAdapterOpenOptions = {
-  /**
-   * Entity ID of the stack owner. A plain string is checked against an
-   * existing config record (mismatch throws OwnerMismatchError); a lazy
-   * provider is called only when the DO's storage has none yet.
-   */
-  ownerEntityId: string | (() => string | Promise<string>);
-  /** IANA timezone string e.g. "America/New_York". Optional passthrough app metadata — no default. */
-  timezone?: string;
-};
+export type DoSQLiteRecordAdapterOpenOptions =
+  | {
+      /**
+       * Entity ID of the stack owner. A plain string is checked against an
+       * existing config record (mismatch throws OwnerMismatchError); a lazy
+       * provider is called only when the DO's storage has none yet.
+       */
+      ownerEntityId: string | (() => string | Promise<string>);
+      /** IANA timezone string e.g. "America/New_York". Optional passthrough app metadata — no default. */
+      timezone?: string;
+      seed?: never;
+    }
+  | {
+      /**
+       * The `_config` record and history new storage is created holding: a
+       * copy's source's. Storage that already holds a store refuses it.
+       */
+      seed: StoreSeed;
+      ownerEntityId?: never;
+      timezone?: never;
+    };
 
 // -------------------------------------------------------
 // DoSQLiteRecordAdapter
 // -------------------------------------------------------
 
 export class DoSQLiteRecordAdapter extends SharedSqlRecordAdapter {
-  private constructor(exec: DurableObjectSqliteExecutor, config: StackConfig) {
-    super(exec, config);
+  private constructor(exec: DurableObjectSqliteExecutor, identity: StackIdentity) {
+    super(exec, identity);
   }
 
   /**
    * Open the adapter for a DO instance, creating its storage on first use.
    * A DO id either already has a config record (reattach) or it doesn't
    * (first call — opts.ownerEntityId/timezone become the config), so there
-   * is no `create` option. Schema DDL is `CREATE TABLE IF NOT EXISTS`, so
-   * running it every call is idempotent and cheap.
+   * is no `create` option. A new store's tables are written in the same
+   * transaction as its config record, so storage holds a whole store or none.
    *
    * DO SQLite manages its own durability and rejects PRAGMA journal_mode
    * outright ("not authorized") — verified against the real runtime, not
@@ -72,22 +77,13 @@ export class DoSQLiteRecordAdapter extends SharedSqlRecordAdapter {
     opts: DoSQLiteRecordAdapterOpenOptions,
   ): Promise<DoSQLiteRecordAdapter> {
     const exec = new DurableObjectSqliteExecutor(storage);
-    applyRecordSchema(exec, { wal: false });
-    let config = tryReadStackConfig(exec);
-    if (config) {
-      if (typeof opts.ownerEntityId === 'string' && opts.ownerEntityId !== config.entityId) {
-        throw new OwnerMismatchError(
-          opts.ownerEntityId,
-          config.entityId,
-          'the Durable Object storage',
-        );
-      }
-    } else {
-      const ownerEntityId =
-        typeof opts.ownerEntityId === 'function' ? await opts.ownerEntityId() : opts.ownerEntityId;
-      config = insertConfigRecord(exec, ownerEntityId, opts.timezone);
-    }
-    return new DoSQLiteRecordAdapter(exec, config);
+    const identity = await openStore(exec, {
+      ...opts,
+      mode: 'ifMissing',
+      where: 'the Durable Object storage',
+      wal: false,
+    });
+    return new DoSQLiteRecordAdapter(exec, identity);
   }
 
   // -------------------------------------------------------
