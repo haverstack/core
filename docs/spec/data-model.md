@@ -690,14 +690,14 @@ Pagination is cursor-based rather than offset-based, so it works consistently ac
 
 **Every list's order is stated here.**
 
-| Call                     | Order                                                                |
-| ------------------------ | -------------------------------------------------------------------- |
-| `query()`, no sort       | `createdAt`, newest first                                            |
-| `query()` with a sort    | `direction`, default `asc`                                           |
-| `getVersions()`          | newest first ([Versioning](./versioning.md))                         |
-| `getJournal()`           | oldest first ([Journal](./journal.md))                               |
-| `getAttachmentRecords()` | first-recorded order, oldest first ([Attachments](./attachments.md)) |
-| `listTypeGrants()`       | newest first                                                         |
+| Call                     | Order                                                                              |
+| ------------------------ | ---------------------------------------------------------------------------------- |
+| `query()`, no sort       | `createdAt`, newest first                                                          |
+| `query()` with a sort    | `direction`, default `asc`                                                         |
+| `getVersions()`          | newest first ([Versioning](./versioning.md#history-reads-start-at-the-useful-end)) |
+| `getJournal()`           | oldest first ([Versioning](./versioning.md#history-reads-start-at-the-useful-end)) |
+| `getAttachmentRecords()` | first-recorded order, oldest first ([Attachments](./attachments.md))               |
+| `listTypeGrants()`       | newest first                                                                       |
 
 **A sort names exactly one of a native column, a content field or a content field per Type**, and a request naming more than one, or none — a `direction` alone — is rejected with `StackBadRequestError` (**400**) rather than resolved in one direction or dropped. They are two members rather than one widened `field` because a content field may be named `version`, `createdAt` or `updatedAt`, and a `'content.publishedAt'` prefix would collide with the [path separator](#filter) a filter key is split on.
 

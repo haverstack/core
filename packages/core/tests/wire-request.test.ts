@@ -4,6 +4,7 @@ import {
   parseQueryBody,
   parseChangeParams,
   parseJournalParams,
+  parseVersionsParams,
   parseGetRecordParams,
   parseDeleteParams,
   parseDownloadParams,
@@ -533,6 +534,25 @@ describe('parseJournalParams', () => {
         StackBadRequestError,
       );
     }
+  });
+});
+
+describe('parseVersionsParams', () => {
+  const versions = (qs: string) => new URL(`https://s.example/records/r1/versions${qs}`);
+
+  test('reads an empty query as every version, imposing no default page size', () => {
+    expect(parseVersionsParams(versions(''))).toEqual({});
+  });
+
+  test('round-trips a window', () => {
+    expect(parseVersionsParams(versions('?beforeVersion=4&limit=10'))).toEqual({
+      beforeVersion: 4,
+      limit: 10,
+    });
+  });
+
+  test('an unrecognized param is refused rather than ignored', () => {
+    expect(() => parseVersionsParams(versions('?afterVersion=4'))).toThrow(/Unknown query param/);
   });
 });
 
