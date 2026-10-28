@@ -662,11 +662,9 @@ export class APIAdapter implements StackAdapter {
       limit: number | undefined;
       items: (body: W) => R[];
       parse: (raw: R) => T;
-      /** Whether `next` lands somewhere the read from `prev` has not been. */
-      advances: (next: number, prev: number) => boolean;
     },
   ): Promise<T[]> {
-    const { cursorParam, limit, items, parse, advances } = opts;
+    const { cursorParam, limit, items, parse } = opts;
     const out: T[] = [];
     let cursor = opts.cursor;
     for (;;) {
@@ -685,10 +683,7 @@ export class APIAdapter implements StackAdapter {
       if (page.length === 0) break;
       // A server that omits a cursor, repeats one, or mints one
       // unconditionally ends the read here rather than spinning on it.
-      if (
-        typeof body.cursor !== 'number' ||
-        (cursor !== undefined && !advances(body.cursor, cursor))
-      ) {
+      if (typeof body.cursor !== 'number' || (cursor !== undefined && body.cursor <= cursor)) {
         break;
       }
       cursor = body.cursor;
@@ -702,13 +697,11 @@ export class APIAdapter implements StackAdapter {
   /** See docs/spec/wire-format.md § Versions. */
   async getVersions(id: RecordId, query: VersionsQuery = {}): Promise<RecordVersion[]> {
     return this.readPages(`/records/${pathSegment(id)}/versions`, {
-      cursorParam: 'beforeVersion',
-      cursor: query.beforeVersion,
+      cursorParam: 'afterVersion',
+      cursor: query.afterVersion,
       limit: query.limit,
       items: (body: WireVersionsResponse) => body.versions,
       parse: parseVersion,
-      // Newest first, so the cursor has to move strictly older.
-      advances: (next, prev) => next < prev,
     });
   }
 
@@ -724,7 +717,6 @@ export class APIAdapter implements StackAdapter {
       limit: query.limit,
       items: (body: WireJournalResponse) => body.entries,
       parse: parseJournalEntry,
-      advances: (next, prev) => next > prev,
     });
   }
 

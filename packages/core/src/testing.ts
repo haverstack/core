@@ -560,12 +560,12 @@ export class MemoryAdapter implements StackAdapter {
   }
 
   async getVersions(id: string, query: VersionsQuery = {}) {
-    const newestFirst = [...(this.versions.get(id) ?? [])].sort((a, b) => b.version - a.version);
-    const before =
-      query.beforeVersion === undefined
-        ? newestFirst
-        : newestFirst.filter((v) => v.version < query.beforeVersion!);
-    return query.limit === undefined ? before : before.slice(0, query.limit);
+    const history = [...(this.versions.get(id) ?? [])].sort((a, b) => a.version - b.version);
+    const after =
+      query.afterVersion === undefined
+        ? history
+        : history.filter((v) => v.version > query.afterVersion!);
+    return query.limit === undefined ? after : after.slice(0, query.limit);
   }
   async getVersion(id: string, version: number) {
     return (this.versions.get(id) ?? []).find((v) => v.version === version) ?? null;

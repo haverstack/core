@@ -143,7 +143,7 @@ export function serializeVersion(v: RecordVersion): WireVersion {
  *
  * `cursor` is the only end-of-history signal, as on the journal: a server
  * may cap a page below the `limit` asked for. It carries the `version` to
- * send as the next `beforeVersion`, and is null once nothing follows.
+ * send as the next `afterVersion`, and is null once nothing follows.
  */
 export type WireVersionsResponse = {
   versions: WireVersion[];

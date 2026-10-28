@@ -632,10 +632,10 @@ describe('getVersions fixtures', () => {
       }
 
       const query = new URL(`${BASE_URL}${fixture.path}`).searchParams;
-      const beforeVersion = query.get('beforeVersion');
+      const afterVersion = query.get('afterVersion');
       const limit = query.get('limit');
       const result = await adapter.getVersions(idFromPath(fixture.path), {
-        ...(beforeVersion !== null && { beforeVersion: Number(beforeVersion) }),
+        ...(afterVersion !== null && { afterVersion: Number(afterVersion) }),
         ...(limit !== null && { limit: Number(limit) }),
       });
 

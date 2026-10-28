@@ -58,10 +58,11 @@ export const getVersionsFixtures: ConformanceFixture<undefined, WireVersionsResp
   {
     name: 'get-versions-page-reports-a-cursor-to-resume-from',
     description:
-      'Newest first, a page of history starts at the restore points. A server may answer a ' +
-      'page shorter than the limit asked for, so cursor is the only end-of-history signal: ' +
-      'its value is the version to send back as beforeVersion, which is exclusive. A client ' +
-      'reading the whole history follows it rather than taking the first page for the answer. ' +
+      'Oldest first, like the journal. A server may answer a page shorter than the limit ' +
+      'asked for, so cursor is the only end-of-history signal: its value is the version to ' +
+      'send back as afterVersion, which is exclusive. A client reading the whole history ' +
+      'follows it rather than taking the first page for the answer. Assumes the record is at ' +
+      'version 3, holding snapshots of versions 1 and 2. ' +
       'See docs/spec/wire-format.md § Versions.',
     method: 'GET',
     path: '/records/1hk153x00001/versions?limit=1',
@@ -69,29 +70,29 @@ export const getVersionsFixtures: ConformanceFixture<undefined, WireVersionsResp
     responseBody: {
       versions: [
         {
-          version: 3,
+          version: 1,
           typeId: 'com.example/note@1',
-          content: { title: 'title before restore' },
-          updatedAt: '2024-01-03T00:00:00.000Z',
+          content: { title: 'original title' },
+          updatedAt: '2024-01-01T00:00:00.000Z',
         },
       ],
-      cursor: 3,
+      cursor: 1,
     },
   },
   {
-    name: 'get-versions-before-version-ends-with-a-null-cursor',
+    name: 'get-versions-after-version-ends-with-a-null-cursor',
     description:
-      'The follow-up page from cursor 3 holds the versions strictly older than 3, and its ' +
-      'cursor is null because nothing follows. See docs/spec/wire-format.md § Versions.',
+      'The follow-up page from cursor 1 holds the versions after 1, and its cursor is null ' +
+      'because nothing follows. See docs/spec/wire-format.md § Versions.',
     method: 'GET',
-    path: '/records/1hk153x00001/versions?beforeVersion=3&limit=1',
+    path: '/records/1hk153x00001/versions?afterVersion=1&limit=1',
     responseStatus: 200,
     responseBody: {
       versions: [
         {
           version: 2,
           typeId: 'com.example/note@1',
-          content: { title: 'original title' },
+          content: { title: 'draft title' },
           updatedAt: '2024-01-02T00:00:00.000Z',
         },
       ],
@@ -190,7 +191,7 @@ export const getVersionsSequenceFixtures: ConformanceSequenceFixture[] = [
         method: 'GET',
         path: '/records/1hk153x00001/versions',
         responseStatus: 200,
-        responseBody: { versions: [V2, V1], cursor: null },
+        responseBody: { versions: [V1, V2], cursor: null },
       },
       {
         name: 'version-history-restore',
@@ -216,7 +217,7 @@ export const getVersionsSequenceFixtures: ConformanceSequenceFixture[] = [
         method: 'GET',
         path: '/records/1hk153x00001/versions',
         responseStatus: 200,
-        responseBody: { versions: [V3, V2, V1], cursor: null },
+        responseBody: { versions: [V1, V2, V3], cursor: null },
       },
       {
         name: 'version-history-migrate',
@@ -242,7 +243,7 @@ export const getVersionsSequenceFixtures: ConformanceSequenceFixture[] = [
         method: 'GET',
         path: '/records/1hk153x00001/versions',
         responseStatus: 200,
-        responseBody: { versions: [V4, V3, V2, V1], cursor: null },
+        responseBody: { versions: [V1, V2, V3, V4], cursor: null },
       },
       {
         name: 'version-history-associate',
@@ -270,7 +271,7 @@ export const getVersionsSequenceFixtures: ConformanceSequenceFixture[] = [
         method: 'GET',
         path: '/records/1hk153x00001/versions',
         responseStatus: 200,
-        responseBody: { versions: [V4, V3, V2, V1], cursor: null },
+        responseBody: { versions: [V1, V2, V3, V4], cursor: null },
       },
     ],
   },

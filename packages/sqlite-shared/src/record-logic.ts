@@ -661,12 +661,12 @@ export class SharedSqlRecordLogic {
   async getVersions(id: string, query: VersionsQuery = {}): Promise<RecordVersion[]> {
     const conditions = ['record_id = ?'];
     const values: unknown[] = [id];
-    if (query.beforeVersion !== undefined) {
-      conditions.push('version < ?');
-      values.push(query.beforeVersion);
+    if (query.afterVersion !== undefined) {
+      conditions.push('version > ?');
+      values.push(query.afterVersion);
     }
     const rows = this.exec.all<Record<string, unknown>>(
-      `SELECT * FROM versions WHERE ${conditions.join(' AND ')} ORDER BY version DESC${
+      `SELECT * FROM versions WHERE ${conditions.join(' AND ')} ORDER BY version ASC${
         query.limit !== undefined ? ' LIMIT ?' : ''
       }`,
       query.limit !== undefined ? [...values, query.limit] : values,

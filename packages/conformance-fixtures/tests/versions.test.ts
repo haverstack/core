@@ -32,11 +32,11 @@ describe('getVersionsSequenceFixtures', () => {
       for (let i = 0; i < rest.length; i += 2) {
         const [mutation, read] = [rest[i], rest[i + 1]];
         // Every replaced version has a snapshot, so the newest is one behind.
-        const prior = history[0] + 1;
+        const prior = history[history.length - 1] + 1;
         const { version } = mutation.responseBody as WireRecord;
         expect([prior, prior + 1], mutation.name).toContain(version);
 
-        const expected = version === prior ? history : [prior, ...history];
+        const expected = version === prior ? history : [...history, prior];
         expect(versionsOf(read.responseBody), read.name).toEqual(expected);
         history = expected;
       }

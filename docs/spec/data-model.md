@@ -694,7 +694,7 @@ Pagination is cursor-based rather than offset-based, so it works consistently ac
 | ------------------------ | -------------------------------------------------------------------- |
 | `query()`, no sort       | `createdAt`, newest first                                            |
 | `query()` with a sort    | `direction`, default `asc`                                           |
-| `getVersions()`          | newest first ([Versioning](./versioning.md))                         |
+| `getVersions()`          | oldest first ([Versioning](./versioning.md))                         |
 | `getJournal()`           | oldest first ([Journal](./journal.md))                               |
 | `getAttachmentRecords()` | first-recorded order, oldest first ([Attachments](./attachments.md)) |
 | `listTypeGrants()`       | newest first                                                         |
