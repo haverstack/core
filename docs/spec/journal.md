@@ -100,7 +100,7 @@ A purged record's id is therefore a pointer to nothing, wherever it survives —
 
 ## Reading it
 
-- `stack.getJournal(recordId, { afterSeq?, limit? })` — the log, oldest first.
+- `stack.getJournal(recordId, { afterSeq?, limit? })` — the log, oldest first. See [Versioning § History reads start at the useful end](./versioning.md#history-reads-start-at-the-useful-end) for why it runs opposite to version history.
 
 **A record that does not exist is `StackNotFoundError`, never an empty log.** A purged record is gone, so it is the same refusal.
 
