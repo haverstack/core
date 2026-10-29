@@ -51,12 +51,11 @@ const plantVersionRow = (recordId: string, v: RecordVersion): void => {
   db.close();
 };
 
-const initAdapter = (opts?: { timezone?: string; ownerEntityId?: string }) =>
+const initAdapter = (opts?: { ownerEntityId?: string }) =>
   NativeSQLiteRecordAdapter.open({
     create: 'exclusive',
     path: dbPath,
     ownerEntityId: opts?.ownerEntityId ?? 'entity-123',
-    timezone: opts?.timezone ?? 'America/New_York',
   });
 
 const NOTE_TYPE = {
@@ -92,11 +91,6 @@ describe('initialize', () => {
   test('sets ownerEntityId', async () => {
     const adapter = await initAdapter({ ownerEntityId: 'owner-abc' });
     expect(adapter.ownerEntityId).toBe('owner-abc');
-  });
-
-  test('writes timezone into the _config record it creates', async () => {
-    const adapter = await initAdapter({ timezone: 'Europe/London' });
-    expect((await adapter.getRecord('_config'))?.content.timezone).toBe('Europe/London');
   });
 
   test('throws if database already exists', async () => {
@@ -138,11 +132,10 @@ describe('open', () => {
   });
 });
 
-test('preserves ownerEntityId and timezone across reopen', async () => {
-  await initAdapter({ ownerEntityId: 'owner-abc', timezone: 'Europe/London' });
+test('preserves ownerEntityId across reopen', async () => {
+  await initAdapter({ ownerEntityId: 'owner-abc' });
   const adapter = await NativeSQLiteRecordAdapter.open({ path: dbPath });
   expect(adapter.ownerEntityId).toBe('owner-abc');
-  expect((await adapter.getRecord('_config'))?.content.timezone).toBe('Europe/London');
 });
 
 // -------------------------------------------------------

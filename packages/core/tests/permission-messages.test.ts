@@ -13,7 +13,7 @@ const MISSING_FILE = 'ab'.repeat(32);
 let stack: Stack;
 
 beforeEach(async () => {
-  const adapter = await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' });
+  const adapter = await MemoryAdapter.open({ ownerEntityId: OWNER });
   stack = await Stack.open(adapter);
   await stack.defineType({
     id: NOTE,

@@ -61,7 +61,6 @@ export type NativeSQLiteRecordAdapterOpenOptions = {
       create?: 'never';
       /** Checked against the existing store's owner; a mismatch throws OwnerMismatchError. */
       ownerEntityId?: string;
-      timezone?: never;
       seed?: never;
     }
   | {
@@ -72,8 +71,6 @@ export type NativeSQLiteRecordAdapterOpenOptions = {
        * existing store's owner; a lazy provider is never called just to compare.
        */
       ownerEntityId: OwnerEntityIdInput;
-      /** IANA timezone string e.g. "America/New_York". Consulted only when a store is created. No default. */
-      timezone?: string;
       seed?: never;
     }
   | {
@@ -82,7 +79,6 @@ export type NativeSQLiteRecordAdapterOpenOptions = {
       /** The `_config` record and history the store is created holding: a copy's source's. */
       seed: StoreSeed;
       ownerEntityId?: never;
-      timezone?: never;
     }
 );
 

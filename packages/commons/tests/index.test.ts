@@ -22,7 +22,7 @@ let adapter: MemoryAdapter;
 let stack: Stack;
 
 beforeEach(async () => {
-  adapter = await MemoryAdapter.open({ ownerEntityId: 'owner-123', timezone: 'UTC' });
+  adapter = await MemoryAdapter.open({ ownerEntityId: 'owner-123' });
   stack = await Stack.open(adapter);
 });
 

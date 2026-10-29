@@ -42,7 +42,6 @@ export class TestRecordAdapterDO extends DurableObject {
     this.ready = ctx.blockConcurrencyWhile(async () => {
       this.adapter = await DoSQLiteRecordAdapter.open(ctx.storage, {
         ownerEntityId: 'entity-test',
-        timezone: 'America/New_York',
       });
     });
   }

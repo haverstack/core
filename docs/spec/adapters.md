@@ -104,7 +104,6 @@ const record = await NativeSQLiteRecordAdapter.open({
   path,
   create: 'exclusive',
   ownerEntityId,
-  timezone,
 });
 const blob = new S3BlobAdapter({ bucket: 'my-bucket' });
 const adapter = combineAdapters({ record, blob });
@@ -119,14 +118,14 @@ All adapters support the full Record API. Performance guarantees differ; correct
 
 An adapter that holds a stack's identity has exactly one entry point, an async static `open(opts)`, and no public constructor. Whether `open()` may create a new stack is an option, not a separate method. Blob adapters hold no identity and keep their public constructors. `Stack.open(adapter)` stays a separate step, because `combineAdapters()` sits between the two.
 
-| Adapter                                             | Entry point                                               | `create`                                          |
-| --------------------------------------------------- | --------------------------------------------------------- | ------------------------------------------------- |
-| `LocalAdapter`, `NativeSQLiteRecordAdapter`         | `open({ path, create?, ownerEntityId? or seed?, … })`     | `'never'` (default), `'ifMissing'`, `'exclusive'` |
-| `DoSQLiteRecordAdapter`                             | `open(storage, { ownerEntityId, timezone? } or { seed })` | none: always creates if missing                   |
-| `APIAdapter`                                        | `open({ url, ownerEntityId?, … })`                        | none: a client never creates                      |
-| `MemoryAdapter`, `IncapableMemoryAdapter` (testing) | `open({ ownerEntityId, timezone? } or { seed })`          | none: always new                                  |
+| Adapter                                             | Entry point                                           | `create`                                          |
+| --------------------------------------------------- | ----------------------------------------------------- | ------------------------------------------------- |
+| `LocalAdapter`, `NativeSQLiteRecordAdapter`         | `open({ path, create?, ownerEntityId? or seed?, … })` | `'never'` (default), `'ifMissing'`, `'exclusive'` |
+| `DoSQLiteRecordAdapter`                             | `open(storage, { ownerEntityId } or { seed })`        | none: always creates if missing                   |
+| `APIAdapter`                                        | `open({ url, ownerEntityId?, … })`                    | none: a client never creates                      |
+| `MemoryAdapter`, `IncapableMemoryAdapter` (testing) | `open({ ownerEntityId } or { seed })`                 | none: always new                                  |
 
-**Every store is created holding one Record, `_config`, which says whose it is.** `open()` takes it in one of two forms: `ownerEntityId` and `timezone`, from which `newStoreSeed()` in `@haverstack/core/adapter` makes a `_config` at version 1 with no past; or a `seed` — a `StoreSeed`, a `_config` record with its history, as [a copy](./portability.md#copying-a-stack) hands over its source's — written as `importRecord()` writes any Record. Of that content an adapter caches only `ownerEntityId`, which never changes; the rest is read from the record (see [§ The `_config` record](../spec.md#the-_config-record)). A seed is a new store's whole first state, so it only creates, as `'exclusive'` does: storage that already holds a store refuses it, on every engine. No engine takes `create` beside a seed. `MemoryAdapter` holds its `_config` the same way, so every adapter that stores records holds one.
+**Every store is created holding one Record, `_config`, which says whose it is.** `open()` takes it in one of two forms: an `ownerEntityId`, from which `newStoreSeed()` in `@haverstack/core/adapter` makes a `_config` at version 1 with no past; or a `seed` — a `StoreSeed`, a `_config` record with its history, as [a copy](./portability.md#copying-a-stack) hands over its source's — written as `importRecord()` writes any Record. An adapter caches the `ownerEntityId` it holds, which never changes (see [§ The `_config` record](../spec.md#the-_config-record)). A seed is a new store's whole first state, so it only creates, as `'exclusive'` does: storage that already holds a store refuses it, on every engine. No engine takes `create` beside a seed. `MemoryAdapter` holds its `_config` the same way, so every adapter that stores records holds one.
 
 **A store is written whole, so it is either present or missing.** A new store's tables, its `format` row and its `_config` record are written in one transaction, and opening an existing one writes none of them. So the `format` table alone says whether a database holds a store: one without it is missing, and one with it holds a whole store. An `open()` that fails leaves things as it found them: `NativeSQLiteRecordAdapter` removes a file it created rather than leaving it for the next open to trip on.
 

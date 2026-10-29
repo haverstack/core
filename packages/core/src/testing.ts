@@ -67,8 +67,8 @@ const withoutUndefined = (content: Record<string, unknown>): Record<string, unkn
 
 /** A fresh store's identity, or the seed a copy creates it from — never both. */
 export type MemoryAdapterOpenOptions =
-  | { ownerEntityId: string; timezone?: string; seed?: never }
-  | { seed: StoreSeed; ownerEntityId?: never; timezone?: never };
+  | { ownerEntityId: string; seed?: never }
+  | { seed: StoreSeed; ownerEntityId?: never };
 
 /**
  * In-memory StackAdapter with keyed cursor pagination. Implements
@@ -107,8 +107,7 @@ export class MemoryAdapter implements StackAdapter {
 
   // Protected only so IncapableMemoryAdapter can extend; callers go through open().
   protected constructor(opts: MemoryAdapterOpenOptions) {
-    const seed =
-      opts.seed ?? newStoreSeed({ ownerEntityId: opts.ownerEntityId, timezone: opts.timezone });
+    const seed = opts.seed ?? newStoreSeed({ ownerEntityId: opts.ownerEntityId });
     ({ ownerEntityId: this.ownerEntityId } = identityOf(seed));
     this.writeImported(seed.config, seed.history);
   }

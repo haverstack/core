@@ -14,10 +14,7 @@ import { SYSTEM_TYPES } from '../types/index.js';
 /** The seed of a stack that has no past: `_config` at version 1, holding `config`. */
 export function newStoreSeed(config: ConfigContent): StoreSeed {
   const now = new Date();
-  const content: ConfigContent = {
-    ownerEntityId: config.ownerEntityId,
-    ...(config.timezone !== undefined && { timezone: config.timezone }),
-  };
+  const content: ConfigContent = { ownerEntityId: config.ownerEntityId };
   return {
     config: {
       id: SYSTEM_TYPES.CONFIG,

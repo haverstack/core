@@ -124,7 +124,6 @@ const keyPath = './my-stack.key.json'; // see "Key custody" below for where this
 const adapter = await LocalAdapter.open({
   path: dbPath,
   create: 'ifMissing',
-  timezone: 'America/New_York',
   ownerEntityId: async () => {
     const { did, privateKey } = await generateDidKeypair();
     await writeFile(keyPath, JSON.stringify(await exportDidPrivateKeyJwk(privateKey)));

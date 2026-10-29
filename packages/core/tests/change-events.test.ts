@@ -23,7 +23,7 @@ const collector = () => {
 };
 
 beforeEach(async () => {
-  adapter = await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' });
+  adapter = await MemoryAdapter.open({ ownerEntityId: OWNER });
   stack = await Stack.open(adapter);
   await stack.defineType({
     id: NOTE,
@@ -217,9 +217,11 @@ describe('every record emits, including the ones a query hides', () => {
     const { seen, handler } = collector();
     await stack.subscribe(handler);
 
-    await stack.patchContent('_config', { timezone: 'Europe/London' });
+    await stack.editAssociations('_config', [
+      { op: 'add', association: { kind: 'tag', label: 'seen' } },
+    ]);
 
-    expect(seen.map((c) => [c.recordId, c.ops])).toEqual([['_config', ['patch']]]);
+    expect(seen.map((c) => c.recordId)).toEqual(['_config']);
     // Addressable only by ID, so a query still cannot see it.
     const queried = await stack.query({});
     expect(queried.records.map((r) => r.id)).not.toContain('_config');

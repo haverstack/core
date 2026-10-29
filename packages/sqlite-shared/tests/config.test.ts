@@ -73,10 +73,7 @@ describe('readStoredIdentity', () => {
 describe('writeNewStore', () => {
   test('returns the identity it wrote, matching what a later read yields', () => {
     const exec = empty();
-    const written = writeNewStore(
-      exec,
-      newStoreSeed({ ownerEntityId: 'did:key:owner', timezone: 'UTC' }),
-    );
+    const written = writeNewStore(exec, newStoreSeed({ ownerEntityId: 'did:key:owner' }));
     expect(written).toEqual(readStoredIdentity(exec, 'here'));
   });
 
@@ -86,15 +83,15 @@ describe('writeNewStore', () => {
   test('writes the whole store or none of it', () => {
     const exec = empty();
     exec.exec(`CREATE TABLE journal (note TEXT)`);
-    expect(() =>
-      writeNewStore(exec, newStoreSeed({ ownerEntityId: 'did:key:owner', timezone: 'UTC' })),
-    ).toThrow(/journal already exists/);
+    expect(() => writeNewStore(exec, newStoreSeed({ ownerEntityId: 'did:key:owner' }))).toThrow(
+      /journal already exists/,
+    );
     expect(tables(exec)).toBe(1);
   });
 });
 
 describe('openStore', () => {
-  const seed = newStoreSeed({ ownerEntityId: 'did:key:owner', timezone: 'UTC' });
+  const seed = newStoreSeed({ ownerEntityId: 'did:key:owner' });
 
   test.each(['ifMissing', 'exclusive'] as const)(
     'refuses a seed for a database already holding a store, under %s',

@@ -72,8 +72,8 @@ export type OpenStoreOptions = {
   mode: StoreCreateMode;
   wal: boolean;
 } & (
-  | { ownerEntityId?: OwnerEntityIdInput; timezone?: string; seed?: never }
-  | { seed: StoreSeed; ownerEntityId?: never; timezone?: never }
+  | { ownerEntityId?: OwnerEntityIdInput; seed?: never }
+  | { seed: StoreSeed; ownerEntityId?: never }
 );
 
 /**
@@ -114,5 +114,5 @@ export const openStore = async (
   if (!owner) {
     throw new Error(`Cannot create: no ownerEntityId given for the new database at ${opts.where}.`);
   }
-  return writeNewStore(exec, newStoreSeed({ ownerEntityId: owner, timezone: opts.timezone }));
+  return writeNewStore(exec, newStoreSeed({ ownerEntityId: owner }));
 };

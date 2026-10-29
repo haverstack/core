@@ -11,7 +11,7 @@ const NOTE = 'com.example.test/note@1';
 const create = (seed: StoreSeed) => MemoryAdapter.open({ seed });
 
 async function sourceWith(notes: number): Promise<MemoryAdapter> {
-  const adapter = await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' });
+  const adapter = await MemoryAdapter.open({ ownerEntityId: OWNER });
   const stack = await Stack.open(adapter);
   await stack.defineType({
     id: NOTE,
@@ -38,12 +38,13 @@ function badStore(make: (seed: StoreSeed) => Promise<StackAdapter>) {
 describe('copyStack', () => {
   // _config travels as every Record does, so the target holds what the
   // source's record says now, not what it was created with.
-  test('carries _config with its history, a timezone patched after open included', async () => {
-    const source = await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' });
-    await (await Stack.open(source)).patchContent('_config', { timezone: 'Europe/Paris' });
+  test('carries _config with its history, a change after open included', async () => {
+    const source = await MemoryAdapter.open({ ownerEntityId: OWNER });
+    await (
+      await Stack.open(source)
+    ).editAssociations('_config', [{ op: 'add', association: { kind: 'tag', label: 'moved' } }]);
     const target = await copyStack(source, create);
     expect(target.ownerEntityId).toBe(OWNER);
-    expect((await target.getRecord('_config'))?.content.timezone).toBe('Europe/Paris');
     expect(await target.getRecord('_config')).toEqual(await source.getRecord('_config'));
     expect(await target.getVersions('_config')).toEqual(await source.getVersions('_config'));
     expect(await target.getJournal('_config')).toEqual(await source.getJournal('_config'));

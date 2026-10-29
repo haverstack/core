@@ -38,8 +38,6 @@ export type DoSQLiteRecordAdapterOpenOptions =
        * provider is called only when the DO's storage has none yet.
        */
       ownerEntityId: string | (() => string | Promise<string>);
-      /** IANA timezone string e.g. "America/New_York". Optional passthrough app metadata — no default. */
-      timezone?: string;
       seed?: never;
     }
   | {
@@ -49,7 +47,6 @@ export type DoSQLiteRecordAdapterOpenOptions =
        */
       seed: StoreSeed;
       ownerEntityId?: never;
-      timezone?: never;
     };
 
 // -------------------------------------------------------
@@ -64,7 +61,7 @@ export class DoSQLiteRecordAdapter extends SharedSqlRecordAdapter {
   /**
    * Open the adapter for a DO instance, creating its storage on first use.
    * A DO id either already has a config record (reattach) or it doesn't
-   * (first call — opts.ownerEntityId/timezone become the config), so there
+   * (first call — opts.ownerEntityId becomes the config), so there
    * is no `create` option. A new store's tables are written in the same
    * transaction as its config record, so storage holds a whole store or none.
    *

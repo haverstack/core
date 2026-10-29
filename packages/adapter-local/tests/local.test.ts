@@ -20,12 +20,11 @@ afterEach(() => {
   rmSync(testDir, { recursive: true, force: true });
 });
 
-const initAdapter = (opts?: { timezone?: string; ownerEntityId?: string }) =>
+const initAdapter = (opts?: { ownerEntityId?: string }) =>
   LocalAdapter.open({
     create: 'exclusive',
     path: dbPath,
     ownerEntityId: opts?.ownerEntityId ?? 'entity-123',
-    timezone: opts?.timezone ?? 'America/New_York',
   });
 
 const makeRecord = (overrides: Partial<StackRecord> = {}): StackRecord => ({
@@ -58,11 +57,6 @@ describe('initialize', () => {
     expect(adapter.ownerEntityId).toBe('owner-abc');
   });
 
-  test('writes timezone into the _config record it creates', async () => {
-    const adapter = await initAdapter({ timezone: 'Europe/London' });
-    expect((await adapter.getRecord('_config'))?.content.timezone).toBe('Europe/London');
-  });
-
   test('throws if database already exists', async () => {
     await initAdapter();
     await expect(initAdapter()).rejects.toThrow(/already exists/);
@@ -91,11 +85,10 @@ describe('open', () => {
     expect(await adapter2.getRecord('persist-test')).not.toBeNull();
   });
 
-  test('preserves ownerEntityId and timezone across reopen', async () => {
-    await initAdapter({ ownerEntityId: 'owner-abc', timezone: 'Europe/London' });
+  test('preserves ownerEntityId across reopen', async () => {
+    await initAdapter({ ownerEntityId: 'owner-abc' });
     const adapter = await LocalAdapter.open({ path: dbPath });
     expect(adapter.ownerEntityId).toBe('owner-abc');
-    expect((await adapter.getRecord('_config'))?.content.timezone).toBe('Europe/London');
   });
 });
 
@@ -170,16 +163,6 @@ describe('open with create: ifMissing', () => {
       }),
     ).rejects.toThrow(OwnerMismatchError);
     expect(existsSync(`${dbPath}.lock`)).toBe(false);
-  });
-
-  test('passes timezone through when the store is created', async () => {
-    const adapter = await LocalAdapter.open({
-      create: 'ifMissing',
-      path: dbPath,
-      ownerEntityId: 'owner-abc',
-      timezone: 'Europe/London',
-    });
-    expect((await adapter.getRecord('_config'))?.content.timezone).toBe('Europe/London');
   });
 });
 

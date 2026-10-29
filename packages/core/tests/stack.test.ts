@@ -102,7 +102,7 @@ const reopenWith = async (...migrations: Migration[]): Promise<Stack> => {
 };
 
 beforeEach(async () => {
-  adapter = await MemoryAdapter.open({ ownerEntityId: 'owner-123', timezone: 'UTC' });
+  adapter = await MemoryAdapter.open({ ownerEntityId: 'owner-123' });
   stack = await Stack.open(adapter);
 
   await stack.defineType({
@@ -142,11 +142,8 @@ describe('Stack.open', () => {
     expect(schemaA.ownerEntityId).not.toBe(schemaB.ownerEntityId);
   });
 
-  // A default would claim knowledge the stack was never given.
-  test('a stack created without a timezone has none in _config', async () => {
-    const adapter = await MemoryAdapter.open({ ownerEntityId: 'entity-without-timezone' });
-    const s = await Stack.open(adapter);
-    expect((await s.get('_config'))?.content).not.toHaveProperty('timezone');
+  test('_config holds the owner and nothing else', async () => {
+    expect((await stack.get('_config'))?.content).toEqual({ ownerEntityId: 'owner-123' });
   });
 
   describe('ownerProfile', () => {
@@ -845,7 +842,6 @@ describe('create — backdating (createdAt/updatedAt)', () => {
   test('idTimestampSkewMs: null disables the id/createdAt consistency check too', async () => {
     const permissiveAdapter = await MemoryAdapter.open({
       ownerEntityId: 'owner-123',
-      timezone: 'UTC',
     });
     const permissiveStack = await Stack.open(permissiveAdapter, { idTimestampSkewMs: null });
     await permissiveStack.defineType({
@@ -1240,7 +1236,7 @@ describe('query — capability fail-loud', () => {
 
   test('filter.content against an adapter reaching no content throws, not returns everything', async () => {
     const incapableStack = await Stack.open(
-      await IncapableMemoryAdapter.open({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
+      await IncapableMemoryAdapter.open({ ownerEntityId: 'owner-123' }),
     );
     await incapableStack.defineType({
       id: NOTE_V1,
@@ -1259,7 +1255,7 @@ describe('query — capability fail-loud', () => {
 
   test('contentPresent against an adapter without the capability throws', async () => {
     const incapableStack = await Stack.open(
-      await IncapableMemoryAdapter.open({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
+      await IncapableMemoryAdapter.open({ ownerEntityId: 'owner-123' }),
     );
     await incapableStack.defineType({
       id: NOTE_V1,
@@ -1278,7 +1274,7 @@ describe('query — capability fail-loud', () => {
 
   test('a query with neither filter still works against an incapable adapter', async () => {
     const incapableStack = await Stack.open(
-      await IncapableMemoryAdapter.open({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
+      await IncapableMemoryAdapter.open({ ownerEntityId: 'owner-123' }),
     );
     await incapableStack.defineType({
       id: NOTE_V1,
@@ -2041,7 +2037,7 @@ describe("presentAt: 'latest' (explicit in-memory migration)", () => {
   });
 
   test('registration gap: an older record with no migration path to a type this app has defined throws', async () => {
-    const gapAdapter = await MemoryAdapter.open({ ownerEntityId: 'owner-123', timezone: 'UTC' });
+    const gapAdapter = await MemoryAdapter.open({ ownerEntityId: 'owner-123' });
     const gapStack = await Stack.open(gapAdapter);
     await gapStack.defineType({
       id: NOTE_V1,
@@ -2231,7 +2227,7 @@ describe('migrateAll', () => {
   test('aborts immediately if a migration produces invalid content, leaving that record unmigrated', async () => {
     // Fresh stack so this test can pass its own (deliberately buggy)
     // migration instead of the valid one from the outer beforeEach.
-    const buggyAdapter = await MemoryAdapter.open({ ownerEntityId: 'owner-123', timezone: 'UTC' });
+    const buggyAdapter = await MemoryAdapter.open({ ownerEntityId: 'owner-123' });
     const buggyStack = await Stack.open(buggyAdapter, {
       // What derive() returns is known only when it runs, so validation at
       // write time is what refuses it.
@@ -3600,11 +3596,6 @@ describe('_config protections', () => {
     expect((await adapter.getRecord(CONFIG_ID))?.content.ownerEntityId).toBe('owner-123');
   });
 
-  test('patchContent() allows changing timezone', async () => {
-    const updated = await stack.patchContent(CONFIG_ID, { timezone: 'America/New_York' });
-    expect((updated.content as Record<string, unknown>).timezone).toBe('America/New_York');
-  });
-
   test('setting ownerEntityId to its current value is a no-op, not an error', async () => {
     await expect(
       stack.patchContent(CONFIG_ID, { ownerEntityId: 'owner-123' }),
@@ -3628,16 +3619,21 @@ describe('_config protections', () => {
     plantVersion(CONFIG_ID, {
       version: 1,
       typeId: CONFIG_TYPE,
-      content: { ownerEntityId: 'someone-else', timezone: 'UTC' },
+      content: { ownerEntityId: 'someone-else' },
       updatedAt: new Date(),
     });
     await expect(stack.restoreVersion(CONFIG_ID, 1)).rejects.toThrow(StackConflictError);
   });
 
   test('restoreVersion() allows a snapshot with the same ownerEntityId', async () => {
-    await stack.patchContent(CONFIG_ID, { timezone: 'America/New_York' });
+    plantVersion(CONFIG_ID, {
+      version: 1,
+      typeId: CONFIG_TYPE,
+      content: { ownerEntityId: 'owner-123' },
+      updatedAt: new Date(),
+    });
     const restored = await stack.restoreVersion(CONFIG_ID, 1);
-    expect((restored.content as Record<string, unknown>).timezone).toBe('UTC');
+    expect(restored.content).toEqual({ ownerEntityId: 'owner-123' });
   });
 
   test('generic query excludes _config', async () => {
@@ -3665,7 +3661,6 @@ describe('_config protections', () => {
       name: 'Config',
       schema: {
         ownerEntityId: { kind: 'string', required: true },
-        timezone: { kind: 'string' },
       },
     });
 
@@ -3681,13 +3676,11 @@ describe('_config protections', () => {
       name: 'Config',
       schema: {
         ownerEntityId: { kind: 'string', required: true },
-        timezone: { kind: 'string' },
       },
     });
 
     const migrated = await stack.commitMigration(CONFIG_ID, '_config@2', {
       ownerEntityId: 'owner-123',
-      timezone: 'America/New_York',
     });
     expect(migrated.typeId).toBe('_config@2');
   });
@@ -5981,28 +5974,25 @@ describe('nested content paths', () => {
   });
 
   test('a nested path needs filter.content: "path"', async () => {
-    const narrow = Object.assign(
-      await MemoryAdapter.open({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
-      {
-        capabilities: {
-          filter: {
-            content: 'field',
-            contentPresent: false,
-            contentByType: false,
-            search: false,
-          },
-          sort: {
-            fields: ['createdAt', 'updatedAt', 'version'],
-            contentField: false,
-            contentFieldByType: false,
-          },
-          limits: {
-            attachmentBytes: null,
-            contentBytes: null,
-          },
+    const narrow = Object.assign(await MemoryAdapter.open({ ownerEntityId: 'owner-123' }), {
+      capabilities: {
+        filter: {
+          content: 'field',
+          contentPresent: false,
+          contentByType: false,
+          search: false,
+        },
+        sort: {
+          fields: ['createdAt', 'updatedAt', 'version'],
+          contentField: false,
+          contentFieldByType: false,
+        },
+        limits: {
+          attachmentBytes: null,
+          contentBytes: null,
         },
       },
-    );
+    });
     const narrowStack = await Stack.open(narrow as StackAdapter);
 
     // A single-segment filter is still served by the 'field' rung.
@@ -6023,7 +6013,7 @@ describe('nested content paths', () => {
 
 describe('limits.contentBytes pre-check', () => {
   const withContentCeiling = async (contentBytes: number): Promise<StackAdapter> =>
-    Object.assign(await MemoryAdapter.open({ ownerEntityId: 'owner-123', timezone: 'UTC' }), {
+    Object.assign(await MemoryAdapter.open({ ownerEntityId: 'owner-123' }), {
       capabilities: {
         filter: { content: 'path', contentPresent: true, contentByType: true, search: false },
         sort: {
@@ -6081,7 +6071,7 @@ describe('limits.contentBytes pre-check', () => {
 
 describe('putAttachment — limits.attachmentBytes pre-check', () => {
   const withCeiling = async (attachmentBytes: number): Promise<StackAdapter> =>
-    Object.assign(await MemoryAdapter.open({ ownerEntityId: 'owner-123', timezone: 'UTC' }), {
+    Object.assign(await MemoryAdapter.open({ ownerEntityId: 'owner-123' }), {
       capabilities: {
         filter: { content: 'none', contentPresent: false, contentByType: false, search: false },
         sort: {
@@ -6140,7 +6130,7 @@ describe('putAttachment — atomic adapter path', () => {
       version: 1,
     };
     const atomicAdapter: StackAdapter = Object.assign(
-      await MemoryAdapter.open({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
+      await MemoryAdapter.open({ ownerEntityId: 'owner-123' }),
       { putAttachmentWithMetadata: vi.fn().mockResolvedValue(fabricatedRecord) },
     );
     const atomicStack = await Stack.open(atomicAdapter);
@@ -6177,7 +6167,7 @@ describe('putAttachment — atomic adapter path', () => {
       version: 1,
     };
     const atomicAdapter: StackAdapter = Object.assign(
-      await MemoryAdapter.open({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
+      await MemoryAdapter.open({ ownerEntityId: 'owner-123' }),
       { putAttachmentWithMetadata: vi.fn().mockResolvedValue(fabricatedRecord) },
     );
     const atomicStack = await Stack.open(atomicAdapter);
@@ -6352,7 +6342,7 @@ describe('Stack.getAttachmentRecords', () => {
   // content-filtered query a compliant local adapter takes.
   test('finds a record past the first page on an adapter reaching no content', async () => {
     const incapableStack = await Stack.open(
-      await IncapableMemoryAdapter.open({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
+      await IncapableMemoryAdapter.open({ ownerEntityId: 'owner-123' }),
     );
     for (let i = 0; i < 55; i++) {
       await incapableStack.create('_attachment@1', {
@@ -6810,7 +6800,7 @@ describe('_attachment@1 mimeType conflict on create', () => {
   // real-world default) would take.
   test('conflict is detected even when the established record is beyond the first query page (>50 records, fallback path)', async () => {
     const incapableStack = await Stack.open(
-      await IncapableMemoryAdapter.open({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
+      await IncapableMemoryAdapter.open({ ownerEntityId: 'owner-123' }),
     );
     for (let i = 0; i < 55; i++) {
       await incapableStack.create('_attachment@1', {
@@ -7061,7 +7051,7 @@ describe('deleteAttachment', () => {
       }
     }
     const noBytesStack = await Stack.open(
-      await NoBytesAdapter.open({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
+      await NoBytesAdapter.open({ ownerEntityId: 'owner-123' }),
     );
 
     await expect(noBytesStack.deleteAttachment('nonexistent-file')).rejects.toThrow(
@@ -7074,7 +7064,7 @@ describe('deleteAttachment', () => {
   // in-memory fallback the test name describes.
   test('leaves no orphaned metadata when the matching record is beyond the first page (>50 records)', async () => {
     const incapableStack = await Stack.open(
-      await IncapableMemoryAdapter.open({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
+      await IncapableMemoryAdapter.open({ ownerEntityId: 'owner-123' }),
     );
     const targetFileId = 'target-file-abc';
     for (let i = 0; i < 55; i++) {
@@ -7182,9 +7172,7 @@ describe('deleteAttachment', () => {
         return toDelete;
       }
     }
-    const atomicStack = await Stack.open(
-      await AtomicAdapter.open({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
-    );
+    const atomicStack = await Stack.open(await AtomicAdapter.open({ ownerEntityId: 'owner-123' }));
     await atomicStack.defineType({
       id: NOTE_V1,
       name: 'Note',
@@ -7364,7 +7352,7 @@ describe('collectAttachmentGarbage', () => {
       override listBlobs: (() => Promise<BlobInfo[]>) | undefined = undefined;
     }
     const noListBlobsStack = await Stack.open(
-      await NoListBlobsAdapter.open({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
+      await NoListBlobsAdapter.open({ ownerEntityId: 'owner-123' }),
     );
     const {
       content: { fileId },
@@ -7386,7 +7374,7 @@ describe('collectAttachmentGarbage', () => {
       override listBlobs: (() => Promise<BlobInfo[]>) | undefined = undefined;
     }
     const noListBlobsStack = await Stack.open(
-      await NoListBlobsAdapter.open({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
+      await NoListBlobsAdapter.open({ ownerEntityId: 'owner-123' }),
     );
     const {
       id,
@@ -7409,7 +7397,6 @@ describe('collectAttachmentGarbage', () => {
     }
     const noListBlobsAdapter = await NoListBlobsAdapter.open({
       ownerEntityId: 'owner-123',
-      timezone: 'UTC',
     });
     const noListBlobsStack = await Stack.open(noListBlobsAdapter);
     await noListBlobsAdapter.putBlob(new Uint8Array([9, 9, 9]));
@@ -7732,7 +7719,7 @@ describe('_entity.did bindings', () => {
   // short-circuiting is what keeps the walk bounded, not a narrower scan.
   test('finds a clash past page one on an adapter reaching no content', async () => {
     const incapable = await Stack.open(
-      await IncapableMemoryAdapter.open({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
+      await IncapableMemoryAdapter.open({ ownerEntityId: 'owner-123' }),
     );
     for (let i = 0; i < 60; i++) {
       await incapable.create('_entity@1', { did: `did:key:filler${i}`, name: `Filler ${i}` });

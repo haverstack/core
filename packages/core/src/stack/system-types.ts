@@ -21,8 +21,6 @@ export const systemTypeDefinitions = (): DefineTypeOptions[] => [
     name: 'Config',
     schema: {
       ownerEntityId: { kind: 'string', required: true },
-      // Optional passthrough app metadata — see ConfigContent.timezone.
-      timezone: { kind: 'string' },
     },
   },
   {
