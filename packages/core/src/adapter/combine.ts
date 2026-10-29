@@ -36,9 +36,6 @@ export function combineAdapters(parts: {
     get ownerEntityId() {
       return parts.record.ownerEntityId;
     },
-    get timezone() {
-      return parts.record.timezone;
-    },
 
     createRecord: (r, opts) => parts.record.createRecord(r, opts),
     getRecord: (id) => parts.record.getRecord(id),

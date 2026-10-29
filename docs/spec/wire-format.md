@@ -4,7 +4,7 @@ The API adapter speaks REST over HTTP with JSON bodies and standard status codes
 
 ## Discovery
 
-A client hits this endpoint first to understand the server's identity and capabilities. The response supplies `ownerEntityId` and `timezone`, which the `APIAdapter` caches as properties of the same names for the session.
+A client hits this endpoint first to understand the server's identity and capabilities. The response supplies `ownerEntityId`, which the `APIAdapter` caches as a property of the same name for the session. It is the one `_config` field discovery carries, because it is the one that cannot change; a client reads the rest of `_config` as it reads any Record, with `GET /records/_config` and under the same permissions.
 
 ```
 GET /.well-known/stack
@@ -14,7 +14,6 @@ GET /.well-known/stack
 {
   "version": "1.0",
   "ownerEntityId": "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
-  "timezone": "America/New_York",
   "capabilities": {
     "filter": { "content": "path", "contentPresent": true, "contentByType": true, "search": true },
     "sort": {

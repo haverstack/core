@@ -94,9 +94,9 @@ describe('initialize', () => {
     expect(adapter.ownerEntityId).toBe('owner-abc');
   });
 
-  test('sets timezone', async () => {
+  test('writes timezone into the _config record it creates', async () => {
     const adapter = await initAdapter({ timezone: 'Europe/London' });
-    expect(adapter.timezone).toBe('Europe/London');
+    expect((await adapter.getRecord('_config'))?.content.timezone).toBe('Europe/London');
   });
 
   test('throws if database already exists', async () => {
@@ -142,7 +142,7 @@ test('preserves ownerEntityId and timezone across reopen', async () => {
   await initAdapter({ ownerEntityId: 'owner-abc', timezone: 'Europe/London' });
   const adapter = await NativeSQLiteRecordAdapter.open({ path: dbPath });
   expect(adapter.ownerEntityId).toBe('owner-abc');
-  expect(adapter.timezone).toBe('Europe/London');
+  expect((await adapter.getRecord('_config'))?.content.timezone).toBe('Europe/London');
 });
 
 // -------------------------------------------------------

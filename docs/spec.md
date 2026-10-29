@@ -27,7 +27,7 @@ The spec is split into focused documents:
 
 ## Stack initialization
 
-A Stack is opened with the async factory `Stack.open(adapter, opts)`, which reads identity (and, optionally, timezone) from the adapter.
+A Stack is opened with the async factory `Stack.open(adapter, opts)`, which reads the owner's identity from the adapter.
 
 ```ts
 // First run — generate an identity keypair and create a new database.
@@ -45,12 +45,12 @@ const adapter = await LocalAdapter.open({
 // Subsequent runs — open an existing database (`create` defaults to 'never')
 const adapter = await LocalAdapter.open({ path: './my-stack.db' });
 
-// Always the same — reads identity and timezone from the adapter.
+// Always the same — reads the owner's identity from the adapter.
 // ownerProfile creates the owner's own _entity profile record on first
 // run; a no-op on every later call once that record exists.
 const stack = await Stack.open(adapter, { ownerProfile: { name: 'Jane Smith' } });
 stack.ownerEntityId; // from adapter.ownerEntityId
-stack.timezone; // from adapter.timezone — string | undefined
+(await stack.get('_config'))?.content.timezone; // read like any Record — string | undefined
 ```
 
 `Stack.open()` throws `InvalidAdapterError` when the adapter has no `ownerEntityId`. Like `UseAfterCloseError`, it sits outside the `StackError` taxonomy (see [Wire format § The taxonomy root](./spec/wire-format.md#the-taxonomy-root)): it reports a local setup mistake, not something a request can run into.
@@ -93,16 +93,18 @@ A plain-string `ownerEntityId` is also checked against the owner of an existing 
 
 ### The `_config` record
 
-**Stack identity** (`ownerEntityId`, `timezone`) is stored as a singleton `_config@1` record in the records table. Adapters expose these values as typed readonly properties (`adapter.ownerEntityId`, `adapter.timezone`) rather than as a generic key/value store. For the API adapter, they are sourced from the discovery endpoint (`GET /.well-known/stack`) when the adapter is opened and cached for the session.
+**A stack's configuration** (`ownerEntityId`, `timezone`) is stored as a singleton `_config@1` record in the records table, and read like any Record: `get('_config')`. `open()` writes its first version from the values it is given (see [Adapters § Construction](./spec/adapters.md#construction)).
+
+**An adapter caches only what cannot change.** `ownerEntityId` is immutable and every permission check consults it, so each adapter reads it once at open and exposes it as `adapter.ownerEntityId` (and `stack.ownerEntityId`); the API adapter reads it from the discovery endpoint (`GET /.well-known/stack`). Every other `_config` field can be patched, so no adapter holds a second copy that could disagree with the record.
 
 **A field is `ownerEntityId` when it can only hold the owner, and `entityId` when it may hold any entity.** So `_config`'s content, the discovery response, every adapter, `Stack` and every `open()` say `ownerEntityId`, and a relationship target or a grantee says `entityId`. The owner has one name wherever it is the owner.
 
-**`timezone` is optional, passthrough app metadata — nothing in core reads it for behavior.** It's a presentation concern that lives at the data layer because `_config` is the natural place to store one fact per stack. There is no default: an absent `timezone` stays `undefined` end to end (`ConfigContent.timezone`, `adapter.timezone`, discovery's `timezone` field) rather than being defaulted to `'UTC'` — a default would assert knowledge the stack was never actually given. Apps that want a display default apply it themselves, explicitly, at the point they format something.
+**`timezone` is optional, passthrough app metadata — nothing in core reads it for behavior.** It's a presentation concern that lives at the data layer because `_config` is the natural place to store one fact per stack. There is no default: an absent `timezone` is absent from `_config`'s content (`ConfigContent.timezone`) rather than being defaulted to `'UTC'` — a default would assert knowledge the stack was never actually given. Apps that want a display default apply it themselves, explicitly, at the point they format something.
 
 **`_config` is protected**, by `Stack` itself rather than any one adapter — the same layering as schema validation, so every adapter and `ScopedStack` (which delegates to `Stack`) inherit it automatically:
 
 - **Addressable only by ID.** `get('_config')` works; a generic `query()` never returns it, regardless of filter — matching every other reserved-ID system record, but load-bearing here since `_config` is read at open and consulted by every permission check.
-- **`ownerEntityId` is immutable.** `patchContent('_config', { ownerEntityId: '...' })` throws `StackConflictError` — changing it would silently re-anchor stack ownership out from under a running system, and identity is a DID: the field isn't a label, it's the key the whole stack answers to. Other fields (`timezone` today) update normally. `restoreVersion('_config', ...)` inherits the same rule: a snapshot whose `ownerEntityId` disagrees with the live record's cannot be restored. Ownership transfer, if ever added, is a deliberate future API with key-custody semantics — not a field write.
+- **`ownerEntityId` is immutable.** `patchContent('_config', { ownerEntityId: '...' })` throws `StackConflictError` — changing it would silently re-anchor stack ownership out from under a running system, and identity is a DID: the field isn't a label, it's the key the whole stack answers to. Other fields (`timezone`) update normally. `restoreVersion('_config', ...)` inherits the same rule: a snapshot whose `ownerEntityId` disagrees with the live record's cannot be restored. Ownership transfer, if ever added, is a deliberate future API with key-custody semantics — not a field write.
 - **Never deletable**, soft or purged. `delete('_config')` always throws `StackConflictError`: a soft-deleted config is unreadable through normal paths, and a purged one leaves nothing to reopen the stack against.
 
 ## Open questions

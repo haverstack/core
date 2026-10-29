@@ -58,9 +58,9 @@ describe('initialize', () => {
     expect(adapter.ownerEntityId).toBe('owner-abc');
   });
 
-  test('exposes timezone', async () => {
+  test('writes timezone into the _config record it creates', async () => {
     const adapter = await initAdapter({ timezone: 'Europe/London' });
-    expect(adapter.timezone).toBe('Europe/London');
+    expect((await adapter.getRecord('_config'))?.content.timezone).toBe('Europe/London');
   });
 
   test('throws if database already exists', async () => {
@@ -95,7 +95,7 @@ describe('open', () => {
     await initAdapter({ ownerEntityId: 'owner-abc', timezone: 'Europe/London' });
     const adapter = await LocalAdapter.open({ path: dbPath });
     expect(adapter.ownerEntityId).toBe('owner-abc');
-    expect(adapter.timezone).toBe('Europe/London');
+    expect((await adapter.getRecord('_config'))?.content.timezone).toBe('Europe/London');
   });
 });
 
@@ -179,7 +179,7 @@ describe('open with create: ifMissing', () => {
       ownerEntityId: 'owner-abc',
       timezone: 'Europe/London',
     });
-    expect(adapter.timezone).toBe('Europe/London');
+    expect((await adapter.getRecord('_config'))?.content.timezone).toBe('Europe/London');
   });
 });
 

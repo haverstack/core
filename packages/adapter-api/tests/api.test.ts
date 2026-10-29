@@ -196,18 +196,6 @@ describe('open', () => {
     expect(adapter.ownerEntityId).toBe('entity-owner-123');
   });
 
-  test('populates timezone from discovery response', async () => {
-    const adapter = await openAdapter();
-    expect(adapter.timezone).toBe('America/New_York');
-  });
-
-  // timezone is passthrough metadata only — no 'UTC' default, which
-  // would claim knowledge the discovery response didn't actually provide.
-  test('timezone is undefined when not in discovery response — no default', async () => {
-    const adapter = await openAdapter({ ...DISCOVERY, timezone: undefined });
-    expect(adapter.timezone).toBeUndefined();
-  });
-
   test('omits Authorization header when no token provided', async () => {
     mockFetch.mockResolvedValueOnce(jsonResponse(DISCOVERY));
     await APIAdapter.open({ url: BASE_URL });

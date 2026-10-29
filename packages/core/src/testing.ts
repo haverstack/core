@@ -97,7 +97,6 @@ export class MemoryAdapter implements StackAdapter {
   };
 
   readonly ownerEntityId: string;
-  readonly timezone: string | undefined;
 
   readonly records = new Map<string, StackRecord>();
   readonly order: string[] = [];
@@ -110,7 +109,7 @@ export class MemoryAdapter implements StackAdapter {
   protected constructor(opts: MemoryAdapterOpenOptions) {
     const seed =
       opts.seed ?? newStoreSeed({ ownerEntityId: opts.ownerEntityId, timezone: opts.timezone });
-    ({ ownerEntityId: this.ownerEntityId, timezone: this.timezone } = identityOf(seed));
+    ({ ownerEntityId: this.ownerEntityId } = identityOf(seed));
     this.writeImported(seed.config, seed.history);
   }
 

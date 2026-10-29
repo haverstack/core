@@ -25,7 +25,6 @@ export const WIRE_PROTOCOL_VERSION = '1.0';
 export type DiscoveryResponse = {
   version: string;
   ownerEntityId: string;
-  timezone?: string;
   capabilities?: DiscoveryCapabilities;
   auth?: DiscoveryAuth;
   changes?: DiscoveryChanges;

@@ -4,6 +4,7 @@ import {
   identityOf,
   newStoreSeed,
 } from '@haverstack/core/adapter';
+import type { ConfigContent } from '@haverstack/core';
 import type { StackIdentity, StoreSeed } from '@haverstack/core/adapter';
 import type { SqlExecutor } from './executor.js';
 import { SharedSqlRecordLogic } from './record-logic.js';
@@ -61,8 +62,8 @@ export const readStoredIdentity = (exec: SqlExecutor, where: string): StackIdent
   const version = exec.get<{ version: number }>('SELECT version FROM format WHERE id = 1')?.version;
   if (version !== FORMAT_VERSION) throw new FormatMismatchError(FORMAT_VERSION, version, where);
   const { content } = exec.get<{ content: string }>(CONFIG_ROW_SQL)!;
-  const config = JSON.parse(content) as StackIdentity;
-  return { ownerEntityId: config.ownerEntityId, timezone: config.timezone };
+  const config = JSON.parse(content) as ConfigContent;
+  return { ownerEntityId: config.ownerEntityId };
 };
 
 export type OpenStoreOptions = {

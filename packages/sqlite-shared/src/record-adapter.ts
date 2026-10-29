@@ -73,14 +73,12 @@ export abstract class SharedSqlRecordAdapter implements StackRecordAdapter {
   readonly capabilities: StackCapabilities = SQLITE_RECORD_CAPABILITIES;
 
   readonly ownerEntityId: string;
-  readonly timezone: string | undefined;
 
   private readonly record: SharedSqlRecordLogic;
 
   protected constructor(exec: SqlExecutor, identity: StackIdentity) {
     this.record = new SharedSqlRecordLogic({ exec });
     this.ownerEntityId = identity.ownerEntityId;
-    this.timezone = identity.timezone;
   }
 
   // -------------------------------------------------------

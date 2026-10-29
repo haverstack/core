@@ -128,10 +128,6 @@ export class LocalAdapter implements StackAdapter {
     return this.record.ownerEntityId;
   }
 
-  get timezone(): string | undefined {
-    return this.record.timezone;
-  }
-
   async createRecord(record: StackRecord, opts?: JournalOptions): Promise<StackRecord> {
     return this.record.createRecord(record, opts);
   }

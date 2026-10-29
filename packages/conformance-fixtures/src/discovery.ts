@@ -16,7 +16,6 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
     responseBody: {
       version: WIRE_PROTOCOL_VERSION,
       ownerEntityId: 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK',
-      timezone: 'America/New_York',
       capabilities: {
         filter: {
           content: 'path',
@@ -58,37 +57,6 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
         limits: { attachmentBytes: null, contentBytes: null },
       },
       installs: { requests: true },
-    },
-  },
-  {
-    name: 'discovery-omits-absent-timezone',
-    description:
-      'A stack with no timezone omits the field rather than defaulting it. An absent timezone ' +
-      'stays undefined end to end — a default would assert knowledge the stack was never ' +
-      'given (docs/spec.md § The _config record).',
-    method: 'GET',
-    path: '/.well-known/stack',
-    responseStatus: 200,
-    responseBody: {
-      version: WIRE_PROTOCOL_VERSION,
-      ownerEntityId: 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK',
-      capabilities: {
-        filter: {
-          content: 'none',
-          contentPresent: false,
-          contentByType: false,
-          search: false,
-        },
-        sort: {
-          fields: ['createdAt'],
-          contentField: false,
-          contentFieldByType: false,
-        },
-        limits: {
-          attachmentBytes: null,
-          contentBytes: null,
-        },
-      },
     },
   },
   {

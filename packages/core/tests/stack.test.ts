@@ -123,10 +123,6 @@ describe('Stack.open', () => {
     expect(stack.ownerEntityId).toBe('owner-123');
   });
 
-  test('reads timezone from adapter', async () => {
-    expect(stack.timezone).toBe('UTC');
-  });
-
   test('an adapter with no ownerEntityId is an InvalidAdapterError, outside StackError', async () => {
     const emptyAdapter = await MemoryAdapter.open({ ownerEntityId: '' });
     const err = await Stack.open(emptyAdapter).catch((e: unknown) => e);
@@ -136,9 +132,6 @@ describe('Stack.open', () => {
     expect((err as Error).message).toContain('adapter has no ownerEntityId');
   });
 
-  // timezone is optional passthrough metadata, nothing more — no
-  // default, since defaulting to a real timezone would claim knowledge the
-  // stack doesn't have.
   test('each Stack holds its own system Type schema objects', async () => {
     const a = await Stack.open(await MemoryAdapter.open({ ownerEntityId: 'did:key:a' }));
     const b = await Stack.open(await MemoryAdapter.open({ ownerEntityId: 'did:key:b' }));
@@ -149,10 +142,11 @@ describe('Stack.open', () => {
     expect(schemaA.ownerEntityId).not.toBe(schemaB.ownerEntityId);
   });
 
-  test('timezone is undefined when not specified — no default', async () => {
+  // A default would claim knowledge the stack was never given.
+  test('a stack created without a timezone has none in _config', async () => {
     const adapter = await MemoryAdapter.open({ ownerEntityId: 'entity-without-timezone' });
     const s = await Stack.open(adapter);
-    expect(s.timezone).toBeUndefined();
+    expect((await s.get('_config'))?.content).not.toHaveProperty('timezone');
   });
 
   describe('ownerProfile', () => {

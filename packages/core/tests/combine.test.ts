@@ -49,7 +49,6 @@ function makeRecordAdapter(overrides: Partial<StackRecordAdapter> = {}): StackRe
   return {
     capabilities,
     ownerEntityId: 'owner-123',
-    timezone: 'UTC',
     createRecord: async (r) => r,
     getRecord: async () => null,
     patchContent: async () => {
@@ -105,13 +104,12 @@ function makeBlobAdapter(overrides: Partial<StackBlobAdapter> = {}): StackBlobAd
 }
 
 describe('combineAdapters', () => {
-  test('forwards ownerEntityId, timezone, and capabilities from the record adapter', () => {
+  test('forwards ownerEntityId and capabilities from the record adapter', () => {
     const adapter = combineAdapters({
-      record: makeRecordAdapter({ ownerEntityId: 'owner-xyz', timezone: 'Europe/London' }),
+      record: makeRecordAdapter({ ownerEntityId: 'owner-xyz' }),
       blob: makeBlobAdapter(),
     });
     expect(adapter.ownerEntityId).toBe('owner-xyz');
-    expect(adapter.timezone).toBe('Europe/London');
     expect(adapter.capabilities).toBe(capabilities);
   });
 

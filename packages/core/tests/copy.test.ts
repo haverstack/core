@@ -37,12 +37,13 @@ function badStore(make: (seed: StoreSeed) => Promise<StackAdapter>) {
 
 describe('copyStack', () => {
   // _config travels as every Record does, so the target holds what the
-  // source's record says now, not what its adapter read at open.
+  // source's record says now, not what it was created with.
   test('carries _config with its history, a timezone patched after open included', async () => {
     const source = await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' });
     await (await Stack.open(source)).patchContent('_config', { timezone: 'Europe/Paris' });
     const target = await copyStack(source, create);
-    expect([target.ownerEntityId, target.timezone]).toEqual([OWNER, 'Europe/Paris']);
+    expect(target.ownerEntityId).toBe(OWNER);
+    expect((await target.getRecord('_config'))?.content.timezone).toBe('Europe/Paris');
     expect(await target.getRecord('_config')).toEqual(await source.getRecord('_config'));
     expect(await target.getVersions('_config')).toEqual(await source.getVersions('_config'));
     expect(await target.getJournal('_config')).toEqual(await source.getJournal('_config'));

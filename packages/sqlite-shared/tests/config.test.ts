@@ -28,9 +28,9 @@ const executor = (db: DatabaseSync): SqlExecutor => ({
 const empty = () => executor(new DatabaseSync(':memory:'));
 
 /** A store as a create leaves it. */
-const created = (timezone: string | undefined) => {
+const created = () => {
   const exec = empty();
-  writeNewStore(exec, newStoreSeed({ ownerEntityId: 'did:key:owner', timezone }));
+  writeNewStore(exec, newStoreSeed({ ownerEntityId: 'did:key:owner' }));
   return exec;
 };
 
@@ -52,17 +52,15 @@ describe('readStoredIdentity', () => {
     expect(readStoredIdentity(empty(), 'here')).toBeNull();
   });
 
-  test('reads back the identity a create wrote, an absent timezone kept as a key', () => {
-    const identity = readStoredIdentity(created(undefined), 'here');
-    expect(identity).toEqual({ ownerEntityId: 'did:key:owner', timezone: undefined });
-    expect('timezone' in identity!).toBe(true);
+  test('reads back the identity a create wrote', () => {
+    expect(readStoredIdentity(created(), 'here')).toEqual({ ownerEntityId: 'did:key:owner' });
   });
 
   test.each([
     ['another version', 'UPDATE format SET version = 2', 2],
     ['no version', 'DELETE FROM format', undefined],
   ] as const)('refuses a store naming %s, writing nothing', (_name, sql, actual) => {
-    const exec = created('UTC');
+    const exec = created();
     exec.exec(sql);
     const before = tables(exec);
     const err = thrown(() => readStoredIdentity(exec, 'here'));
@@ -101,7 +99,7 @@ describe('openStore', () => {
   test.each(['ifMissing', 'exclusive'] as const)(
     'refuses a seed for a database already holding a store, under %s',
     async (mode) => {
-      const exec = created('UTC');
+      const exec = created();
       await expect(openStore(exec, { where: 'here', mode, wal: false, seed })).rejects.toThrow(
         /already exists/,
       );
