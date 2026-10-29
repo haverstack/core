@@ -521,7 +521,7 @@ describe('parseJournalParams', () => {
     });
   });
 
-  test('accepts zero for either, which assertValidJournalQuery also allows', () => {
+  test('accepts zero for either, leaving the window to assertValidJournalQuery', () => {
     expect(parseJournalParams(journal('/records/r1/journal?afterSeq=0&limit=0'))).toEqual({
       afterSeq: 0,
       limit: 0,
@@ -553,6 +553,25 @@ describe('parseVersionsParams', () => {
 
   test('an unrecognized param is refused rather than ignored', () => {
     expect(() => parseVersionsParams(versions('?afterVersion=4'))).toThrow(/Unknown query param/);
+  });
+
+  test('a repeated param is refused', () => {
+    expect(() => parseVersionsParams(versions('?beforeVersion=4&beforeVersion=9'))).toThrow(
+      /Repeated query param/,
+    );
+  });
+
+  test('accepts zero for either, leaving the window to assertValidVersionsQuery', () => {
+    expect(parseVersionsParams(versions('?beforeVersion=0&limit=0'))).toEqual({
+      beforeVersion: 0,
+      limit: 0,
+    });
+  });
+
+  test('refuses a value that is not a bare non-negative integer', () => {
+    for (const qs of ['?limit=-1', '?limit=1.5', '?beforeVersion=-1', '?beforeVersion=1e3']) {
+      expect(() => parseVersionsParams(versions(qs))).toThrow(StackBadRequestError);
+    }
   });
 });
 

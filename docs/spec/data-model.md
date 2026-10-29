@@ -688,17 +688,6 @@ Pagination is cursor-based rather than offset-based, so it works consistently ac
 
 **Direction defaults follow SQL.** A sort that names a field runs `asc` unless `direction` says otherwise, whether the field is native or a content field, so `sort: { contentField: 'name' }` reads A→Z. A query with no sort answers by `createdAt`, newest first, the order a feed-style listing reads in. The two meet in one visible quirk: `sort: { field: 'createdAt' }` returns oldest first, the opposite of the unsorted default on the same field. No single default direction fits both a `name` and a `date`, and core cannot tell them apart at query time (a query can span Types), so the rule keys on nothing but whether a sort was named. **`Stack` resolves every default before an adapter sees the query** — the sort, its direction and the page size — so `queryRecords()` and `queryReadable()` receive a complete query (`AdapterQuery`, built by `resolveQuery()`) and no adapter carries a default of its own. Nor does an adapter see `presentAt`: `Stack` applies it to the results, and the type has no room for it. A query with no sort reaches an adapter as `{ field: 'createdAt', direction: 'desc' }`.
 
-**Every list's order is stated here.**
-
-| Call                     | Order                                                                              |
-| ------------------------ | ---------------------------------------------------------------------------------- |
-| `query()`, no sort       | `createdAt`, newest first                                                          |
-| `query()` with a sort    | `direction`, default `asc`                                                         |
-| `getVersions()`          | newest first ([Versioning](./versioning.md#history-reads-start-at-the-useful-end)) |
-| `getJournal()`           | oldest first ([Versioning](./versioning.md#history-reads-start-at-the-useful-end)) |
-| `getAttachmentRecords()` | first-recorded order, oldest first ([Attachments](./attachments.md))               |
-| `listTypeGrants()`       | newest first                                                                       |
-
 **A sort names exactly one of a native column, a content field or a content field per Type**, and a request naming more than one, or none — a `direction` alone — is rejected with `StackBadRequestError` (**400**) rather than resolved in one direction or dropped. They are two members rather than one widened `field` because a content field may be named `version`, `createdAt` or `updatedAt`, and a `'content.publishedAt'` prefix would collide with the [path separator](#filter) a filter key is split on.
 
 **`sort.field` and `sort.direction` are validated, not merely typed.** The `'asc' | 'desc'` and three-field types are a compile-time contract only; a request arriving over the wire (a server mapping `?sort=`/`?direction=`) or from a delegated app supplies raw strings. A SQLite record adapter interpolates the direction into its `ORDER BY`, so `Stack.query()`/`ScopedStack.query()` reject a field or direction outside the enumerated set with `StackBadRequestError` (**400**, `bad_request`) before it reaches an adapter — the same posture as a malformed cursor. The value never reaches SQL as anything but one of the two keywords. **Every `limit` is a positive integer** — on `query()`, `getVersions()` and `getJournal()` alike — and anything else is refused the same way, since the adapters would read it differently: a negative one drops entries from a JavaScript slice and empties or lifts a SQL `LIMIT`.
@@ -710,6 +699,19 @@ Pagination is cursor-based rather than offset-based, so it works consistently ac
 **A query result carries no count of the whole match.** `QueryResult` is `records` and `cursor`, and nothing else. The count of matching Records, unfiltered, would reveal how many Records exist that the requester cannot read — the cardinality the permission check just hid — so a [permission-scoped](./access-control.md) query could never report one, and neither could any response on the wire (see [Wire format § Response envelope](./wire-format.md#response-envelope)). That left a number reachable on exactly one path, a direct unscoped `Stack.query()` in process, which is the worst of both: an app written against it reads a number locally and `null` the moment the same code runs scoped or against a server. A field no caller can rely on is worse than no field, and computing it cost every caller a full count of the match on every page — including the scoped and wire paths, which then discarded it.
 
 A caller that genuinely needs a count follows `cursor` to exhaustion and counts what it receives, which is the only number that was ever true for that requester anyway.
+
+#### List order
+
+**A list starts at the end its reader needs first, and a paged list's cursor walks away from that end.** Every list's order is stated here, each with the reader it serves; a sorted query is the case where the caller names that end itself.
+
+| Call                     | Order                                    | Why                                                                                                                                                  |
+| ------------------------ | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `query()`, no sort       | `createdAt`, newest first                | The order a feed-style listing reads in.                                                                                                             |
+| `query()` with a sort    | `direction`, default `asc`               | The caller names the end it wants.                                                                                                                   |
+| `getVersions()`          | newest first, `beforeVersion` pages back | A restore point is almost always a recent one ([Versioning § Version history](./versioning.md#version-history)).                                     |
+| `getJournal()`           | oldest first, `afterSeq` pages forward   | A log is tailed from the last `seq` seen and replayed in order; a backward cursor cannot catch up ([Journal § Reading it](./journal.md#reading-it)). |
+| `getAttachmentRecords()` | first-recorded order, oldest first       | `records[0]` is the record that establishes the `mimeType` ([Attachments](./attachments.md)).                                                        |
+| `listTypeGrants()`       | newest first                             | A `query()` over `_grant` Records with no sort, so it reads in that default.                                                                         |
 
 ### Sorting by a content field
 

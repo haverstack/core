@@ -39,20 +39,11 @@ type RecordVersion = {
 
 **API surface:**
 
-- `stack.getVersions(recordId, query?)` — retrieve version history, **newest first** on every adapter (the same order [`GET /records/:id/versions`](./wire-format.md#versions) answers in). See [History reads start at the useful end](#history-reads-start-at-the-useful-end).
+- `stack.getVersions(recordId, query?)` — retrieve version history, **newest first** on every adapter (the same order [`GET /records/:id/versions`](./wire-format.md#versions) answers in), since a reader choosing a restore point almost always wants a recent one: `getVersions(id, { limit: n })` is the last `n`. See [Data model § List order](./data-model.md#list-order).
 
   `query` is a `VersionsQuery` — `beforeVersion` (exclusive: versions strictly older than it) and `limit` — in the shape of the journal's `afterSeq` and `limit`. Omitting both reads every version, as omitting them on `getJournal()` reads the whole log. Paging walks every version exactly once: send the last version of a page as the next `beforeVersion`.
 
 - `stack.restoreVersion(recordId, version, opts?)` — revert to a prior version. Restores `content` and `typeId`, and **restores nothing else** — see [Restore semantics](#restore-semantics). The snapshot deliberately does not capture `appId` either, so restore never reverts an app reattribution.
-
-### History reads start at the useful end
-
-**A paged history read starts at the end its reader needs first, and its cursor walks away from it.** The two reads differ in direction because their readers want opposite ends:
-
-- **Version history is browsed from the present.** Its reader is choosing a restore point, almost always a recent one, so `getVersions()` answers newest first and `beforeVersion` pages into the past. `getVersions(id, { limit: n })` is the last `n` restore points. A version already known by number is `getVersion()`'s to fetch, not a page's.
-- **The journal is tailed and replayed.** Its reader holds the last `seq` it saw and asks for what was written since, or walks the log in the order it happened, so [`getJournal()`](./journal.md#reading-it) answers oldest first and `afterSeq` pages forward. A backward cursor cannot catch up: it only reaches further into the past.
-
-Everything else is one shape: an exclusive cursor naming an ordinal that counts from 1 per record, a positive `limit` with no ceiling when omitted, and on the wire an envelope of the page beside a `cursor` that is the only end signal. A reader that needs neither end — a [copy](./portability.md#writing-history) — takes history keyed by ordinal, so order never reaches it.
 
 ## Snapshot atomicity
 
