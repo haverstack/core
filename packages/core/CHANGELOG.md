@@ -1,5 +1,28 @@
 # @haverstack/core
 
+## 0.44.0
+
+### Minor Changes
+
+- [#470](https://github.com/haverstack/core/pull/470) [`e0475d2`](https://github.com/haverstack/core/commit/e0475d2fdd09581310d819d3d2b5effe4191603c) Thanks [@cuibonobo](https://github.com/cuibonobo)! - The stack owner has one name wherever a field can only hold the owner: `ownerEntityId`.
+  - `_config`'s content is `{ ownerEntityId, timezone }`, and `ConfigContent.entityId` is `ConfigContent.ownerEntityId`.
+  - The discovery response (`GET /.well-known/stack`) carries `ownerEntityId` in place of `entityId`, in `DiscoveryResponse` and the discovery fixtures. The `_config` ownership-conflict fixture is `error-conflict-config-owner-change`.
+  - Fields that may hold any entity, such as a relationship target or a grantee, keep `entityId`.
+
+- [#470](https://github.com/haverstack/core/pull/470) [`b02e69c`](https://github.com/haverstack/core/commit/b02e69c4675e7397d2fca76c314261a9744053bf) Thanks [@cuibonobo](https://github.com/cuibonobo)! - A stack can be copied whole between adapters, authorship and history included.
+  - `copyStack(from, create)` in `@haverstack/core/adapter` copies every Record, soft-deleted and unlisted ones too, with its versions and journal, plus every Type and every blob, into a new store `create` makes from the source's `_config` record and its history, and returns it open. `_config` travels as every Record does. Both ends must list their blobs, and the target must hold nothing yet, so `APIAdapter` cannot yet be copied from. Copying into a `LocalAdapter` store is an export; copying out of one is an import.
+  - It writes through the new optional `StackRecordAdapter.importRecord(record, { versions, journal })`, which every local adapter implements and `APIAdapter` does not.
+  - `StackIdentity`, `CreateStore`, `StoreSeed`, `newStoreSeed()` and `identityOf()` are exported beside it. Every adapter that creates stores takes a `seed` in place of `ownerEntityId` and `timezone`: the `_config` record, with its history, a new store is created holding. A seed only creates: storage already holding a store refuses it, and `NativeSQLiteRecordAdapter`/`LocalAdapter` take no `create` beside one. `MemoryAdapter` now holds a real `_config` record.
+  - Every SQLite store names its layout in a one-row `format` table, and opening one in another layout throws the new `FormatMismatchError` (from `@haverstack/core/adapter`). A new store is written whole, tables included, in one transaction — a table of the same name already in the database fails the create — and a failed `NativeSQLiteRecordAdapter.open()` removes a file it created.
+  - `OwnerMismatchError` reads `<where> is owned by "X", not "Y"`, and `copyStack()` throws it too.
+  - `saveVersion()` is removed from the adapter contract: `importRecord()` is the one standalone history write.
+  - `@haverstack/adapter-conformance` checks `importRecord()` in the record suite and adds `runCopyConformance()`, which holds a full adapter to both halves of a copy.
+
+- [#468](https://github.com/haverstack/core/pull/468) [`7f3d108`](https://github.com/haverstack/core/commit/7f3d108100dbb7a358fdc8d1bb6e3edb2455ec45) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Authority is gated the same way whenever it is written.
+  - Resharing needs read on the Record: `editAccess()`, `setAccess()` and `setUnlisted()` refuse a creator who cannot read their Record, such as one removed from the roster that conveyed it, or a drop-box contributor.
+  - `permissions` and `unlisted` at `create()` pass the same gate, asked of the Record the create would make.
+  - A roster entry no longer counts on the principal's side of a delegated request, so a delegated app neither manages a `_group` nor creates one, even with its own DID on the roster. The owner's own software acting for a subject still can.
+
 ## 0.43.0
 
 ### Minor Changes
