@@ -484,7 +484,7 @@ The second durable tier a mutation writes is [the change journal](./journal.md),
 
 `POST .../restore/:version` accepts the same optional `If-Match` precondition described under [Optimistic concurrency](#optimistic-concurrency). It settles `content` and `typeId` alone, so it never moves the record and never lists or unlists it: neither the **403** nor the **409** a `PUT .../parent` can earn has a site here. A snapshot naming a `file-ref` the requester cannot currently reach still answers **403**, which is the only reference a restore can re-convey. See [Versioning § Restore semantics](./versioning.md#restore-semantics).
 
-**The [change feed](./change-feed.md) reports on a wider list than snapshotting does**: every endpoint above, plus create, purge, the association and permission endpoints, and a `PATCH` naming only no-bump keys — none of which snapshots. A server that skips an endpoint there loses reactivity for that verb exactly as silently as a version-bumping endpoint's omission loses rollback history here.
+**The [change feed](./change-feed.md) reports on a wider list than snapshotting does**: every endpoint above, plus create, purge, the parent and unlisted endpoints, and the association and permission endpoints — none of which snapshots. A server that skips an endpoint there loses reactivity for that verb exactly as silently as a version-bumping endpoint's omission loses rollback history here.
 
 ## Journal
 
