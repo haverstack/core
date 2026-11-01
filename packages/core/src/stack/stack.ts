@@ -1705,18 +1705,19 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Apply an approved plan: types, the key's `_app` card, the `_install`
-   * Record and every linked key's grants. A plan the stack has moved on
-   * from — or, with `opts.fingerprint`, one that is no longer the plan the
-   * owner approved — is a StackConflictError, so what lands is what was
-   * approved. See docs/spec/apps.md § Plan, then apply.
+   * Apply an approved manifest: types, the key's `_app` card, the
+   * `_install` Record and every linked key's grants. `opts.ifFingerprint`
+   * names the plan the owner approved — `plan.fingerprint` from
+   * planInstall() — and a manifest that no longer plans to it is a
+   * StackConflictError, so what lands is what was approved.
+   * See docs/spec/apps.md § Plan, then apply.
    */
   async installApp(
-    plan: InstallPlan,
-    opts?: InstallAppOptions,
+    manifest: AppManifest,
+    opts: InstallAppOptions,
   ): Promise<StackRecord & { content: InstallContent }> {
     this.assertOpen();
-    return apps.installApp(this, plan, opts);
+    return apps.installApp(this, manifest, opts);
   }
 
   /**

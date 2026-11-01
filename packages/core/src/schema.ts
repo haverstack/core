@@ -15,6 +15,7 @@
 import type { TypeSchema, FieldDef, ScalarFieldKind } from './types/index.js';
 import type { ReadonlyTypeSchema } from './type-handle.js';
 import { formatEnumValues } from './validate.js';
+import { sha256Hex } from './hash.js';
 
 // -------------------------------------------------------
 // Canonical schema serialization
@@ -88,11 +89,7 @@ const canonicalizeSchema = (schema: TypeSchema): unknown => {
  * schemas hash differently, the schema was mutated without a version bump.
  */
 export const hashSchema = async (schema: TypeSchema): Promise<string> => {
-  const canonical = JSON.stringify(canonicalizeSchema(schema));
-  const buffer = new TextEncoder().encode(canonical);
-  const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
+  return sha256Hex(JSON.stringify(canonicalizeSchema(schema)));
 };
 
 // -------------------------------------------------------

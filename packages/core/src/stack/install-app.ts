@@ -141,13 +141,13 @@ export async function planInstall(
 
 export async function installApp(
   stack: Stack,
-  plan: InstallPlan,
-  opts: InstallAppOptions = {},
+  submitted: AppManifest,
+  opts: InstallAppOptions,
 ): Promise<StackRecord & { content: InstallContent }> {
-  const fresh = await planInstall(stack, plan.manifest, { did: plan.did });
-  if (fresh.fingerprint !== (opts.fingerprint ?? plan.fingerprint)) {
+  const fresh = await planInstall(stack, submitted, { did: opts.did });
+  if (fresh.fingerprint !== opts.ifFingerprint) {
     throw new StackConflictError(
-      `The stack changed since the install of "${plan.manifest.appId}" was planned; plan it again`,
+      `The install of "${fresh.manifest.appId}" no longer matches the approved plan; plan it again`,
     );
   }
   const { manifest, did, existing } = fresh;

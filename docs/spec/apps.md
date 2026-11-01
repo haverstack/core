@@ -17,7 +17,7 @@ type InstallRequest = { baseId: BaseId; actions: GrantAction[] };
 
 const plan = await stack.planInstall(manifest, { did: appDid });
 // …show the plan to the owner…
-await stack.installApp(plan);
+await stack.installApp(manifest, { did: appDid, ifFingerprint: plan.fingerprint });
 ```
 
 Migrations are not part of a manifest. They are app code, passed to `Stack.open()` on every startup (see [Data model § Type migrations](./data-model.md#type-migrations)), and the app runs them itself — see [Migrating an installed app's types](#migrating-an-installed-apps-types).
@@ -78,7 +78,7 @@ type InstallPlan = {
   typeChanges: { id: TypeId; change: 'new' | 'schema' | 'name' }[]; // types installApp() would write
   newKey: boolean; // whether `did` is not yet linked, or linked through a soft-deleted `_app` card
   linkedKeys: EntityId[]; // keys already linked, whose grants the plan also sets
-  fingerprint: string; // names this plan: the manifest and everything above that depends on the stack
+  fingerprint: string; // names this plan, for installApp() to apply only while it still holds
 };
 ```
 
@@ -92,16 +92,22 @@ A key whose `_app` card the owner soft-deleted counts as new: `installApp()` und
 
 It refuses what no approval could make valid: a type outside the app's own namespace and the commons (`StackValidationError` — use a request instead), a type whose schema [`defineType()` would refuse](./data-model.md#types) or that is listed twice (`StackValidationError`), a type already defined whose new schema is not [additive](./data-model.md#schema-drift-detection) (`StackSchemaDriftError`), a request [`grantType()` would refuse](./access-control.md#type-level-grants) (`StackValidationError`), and a `did` whose `_app` card names a different `appId` (`StackConflictError`).
 
-`installApp(plan)` applies the plan:
+`installApp(manifest, { did, ifFingerprint })` applies the manifest:
 
 1. Defines each of the manifest's types. The plan has already refused a schema `defineType()` would, so a manifest's types are written all or none.
 2. Registers the key on an `_app` card when it has none, undeleting a soft-deleted one. An existing card's `name` is left alone: it is the owner's label.
 3. Creates the install, or patches it — undeleting it first if it was uninstalled. `defines` gains the manifest's versions and never loses any, since a Type once defined stays defined; `requests` becomes the manifest's.
 4. Brings the grants of **every** key linked to the install to exactly `requests`: a grant no longer requested is revoked, a missing one is written, and the links follow.
 
-**Nothing is applied that was not approved.** `installApp()` plans the same manifest again and refuses with `StackConflictError` when the result's `fingerprint` differs from the plan it was handed — the install changing, a type being defined, or a key being linked, since it was planned. The remedy is to plan again and show the owner the new plan.
+**Nothing is applied that was not approved.** Every apply names the plan it approves: `installApp()` plans the manifest again for `did` and refuses with `StackConflictError` unless the result's `fingerprint` is `ifFingerprint` — the install changing, a type being defined, or a key being linked since the owner saw it. A caller applying in the same breath passes the plan's own `fingerprint`; a server that shows the owner a plan in one request and applies it in another carries the fingerprint between them, holding only the manifest and the key. Either way the remedy is the same: plan again and show the owner the new plan.
 
-**An approval can travel without its plan.** A server shows the owner a plan in one request and applies it in another, holding only the manifest in between. It carries the reviewed plan's `fingerprint` instead: `installApp(plan, { fingerprint })` plans again and refuses with the same `StackConflictError` unless the result is still the plan with that fingerprint. The fingerprint covers the manifest, its keys sorted so their order is no difference, so an approval of one manifest never applies another. A plan holds a frozen copy of the manifest it was made from, so changing the caller's object afterwards changes nothing that is applied. Re-applying a manifest whose plan is empty changes nothing. A plan is empty only when the manifest's `name` and `version` are also the install's, so an upgrade that changes only those still reaches the owner.
+**A fingerprint names a plan by what applying it would do.** It is a SHA-256 over the manifest and every part of the plan that depends on the stack, each in the form core already compares it in: a type by its `id`, `name`, `migratesFrom` and [`schemaHash`](./data-model.md#schema-drift-detection), a request by its family and its set of actions, and every list as a sorted set. Two plans share a fingerprint only when applying either would do the same thing, so an approval of one manifest never applies another, and reordering a manifest's keys, types, requests, actions or enum values leaves it unchanged.
+
+**A stale approval is a conflict, not a version conflict.** `StackVersionConflictError` names a Record's version and carries the numbers a caller re-reads and retries with. A plan has no version, and its remedy is not a retry: applying the re-planned manifest without the owner seeing it is applying what was not approved. So the refusal is `StackConflictError`, whose remedy is a person's decision.
+
+`installApp()` applies the frozen copy of the manifest its own planning made, so changing the caller's object afterwards changes nothing that is applied. Re-applying a manifest whose plan is empty changes nothing. A plan is empty only when the manifest's `name` and `version` are also the install's, so an upgrade that changes only those still reaches the owner.
+
+**Residual, stated rather than fixed:** the check plans and then applies, so a write landing between the two — a type defined, a key linked — is applied over rather than refused. [`ifVersion`](./versioning.md#optimistic-concurrency-ifversion) closes the same window for a Record by checking inside the write; an install spans many writes, so closing it means holding the stack still across them, which nothing in core does yet. The window is the length of one `installApp()` call, and everything a plan reads — Types, `_app` cards, `_install` and `_grant` Records — only the owner writes.
 
 ## Migrating an installed app's types
 

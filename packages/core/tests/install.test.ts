@@ -11,7 +11,7 @@ import { MemoryAdapter } from '../src/testing.js';
 import { isPlanEmpty } from '../src/install.js';
 import { migration, typeHandle } from '../src/type-handle.js';
 import { add } from '../src/migration-steps.js';
-import type { AppManifest } from '../src/install.js';
+import type { AppManifest, InstallPlan } from '../src/install.js';
 import type { AppContent, GrantContent, InstallContent, StackRecord } from '../src/types/index.js';
 
 const OWNER = 'did:key:owner';
@@ -48,8 +48,13 @@ const MIGRATING = [
 
 let stack: Stack;
 
+/** Applies `plan` as an owner approving exactly it would. */
+function apply(plan: InstallPlan) {
+  return stack.installApp(plan.manifest, { did: plan.did, ifFingerprint: plan.fingerprint });
+}
+
 async function install(m: AppManifest, did = APP_DID) {
-  return stack.installApp(await stack.planInstall(m, { did }));
+  return apply(await stack.planInstall(m, { did }));
 }
 
 async function linkedGrants(record: StackRecord): Promise<GrantContent[]> {
@@ -105,7 +110,7 @@ describe('installApp()', () => {
       requestsRemoved: [],
       newKey: false,
     });
-    const second = await stack.installApp(plan);
+    const second = await apply(plan);
     expect(second.id).toBe(first.id);
     expect(await stack.listTypeGrants()).toHaveLength(1);
   });
@@ -119,7 +124,7 @@ describe('installApp()', () => {
     expect(plan.requestsAdded).toEqual(MIGRATING);
     expect(plan.requestsRemoved).toEqual(manifest().requests);
 
-    const upgraded = await stack.installApp(plan);
+    const upgraded = await apply(plan);
     expect(upgraded.content.defines).toEqual([NOTE_1, NOTE_2]);
     expect((await linkedGrants(upgraded)).map((g) => g.actions)).toEqual([
       ['read-any', 'update-any'],
@@ -132,7 +137,7 @@ describe('installApp()', () => {
     await install(manifest());
     const plan = await stack.planInstall(manifest(), { did: OTHER_DID });
     expect(plan.newKey).toBe(true);
-    await stack.installApp(plan);
+    await apply(plan);
     expect(
       (await stack.listTypeGrants()).map(
         (g) => (g.content.grantee as { entityId: string }).entityId,
@@ -146,46 +151,72 @@ describe('installApp()', () => {
   test('refuses a plan the stack has moved on from', async () => {
     const plan = await stack.planInstall(manifest(), { did: APP_DID });
     await install(manifest());
-    await expect(stack.installApp(plan)).rejects.toThrow(StackConflictError);
+    await expect(apply(plan)).rejects.toThrow(StackConflictError);
   });
 
-  test('a plan is named by a fingerprint shared exactly by plans that would do the same', async () => {
+  test('a fingerprint changes when the manifest or the key does', async () => {
     const plan = await stack.planInstall(manifest(), { did: APP_DID });
     expect(plan.fingerprint).toMatch(/^[0-9a-f]{64}$/);
-    // Key order in the manifest is no difference; a changed manifest is.
-    const reordered = Object.fromEntries(Object.entries(manifest()).reverse()) as AppManifest;
-    expect((await stack.planInstall(reordered, { did: APP_DID })).fingerprint).toBe(
-      plan.fingerprint,
-    );
-    expect(
-      (await stack.planInstall(manifest({ name: 'Notes+' }), { did: APP_DID })).fingerprint,
-    ).not.toBe(plan.fingerprint);
-    expect((await stack.planInstall(manifest(), { did: OTHER_DID })).fingerprint).not.toBe(
-      plan.fingerprint,
-    );
+    for (const other of [
+      await stack.planInstall(manifest({ name: 'Notes+' }), { did: APP_DID }),
+      await stack.planInstall(manifest({ version: '2.0.0' }), { did: APP_DID }),
+      await stack.planInstall(manifest(), { did: OTHER_DID }),
+    ]) {
+      expect(other.fingerprint).not.toBe(plan.fingerprint);
+    }
   });
 
-  test('applies a fresh plan only while it is the plan the owner approved', async () => {
+  test('a fingerprint is unchanged by reordering what applying ignores the order of', async () => {
+    const BOOK_1 = 'com.example.notes/book@1';
+    const book = (values: string[]) =>
+      ({
+        id: BOOK_1,
+        name: 'Book',
+        schema: { status: { kind: 'enum', values } },
+      }) as AppManifest['types'][number];
+    const base = manifest({
+      types: [NOTE_1_TYPE, book(['want', 'read'])],
+      requests: [
+        { baseId: 'com.example.notes/note', actions: ['create', 'read-any'] },
+        { baseId: 'com.example.notes/book', actions: ['read-any'] },
+      ],
+    });
+    const { fingerprint } = await stack.planInstall(base, { did: APP_DID });
+    const reordered = manifest({
+      types: [book(['read', 'want']), NOTE_1_TYPE],
+      requests: [
+        { baseId: 'com.example.notes/book', actions: ['read-any'] },
+        { baseId: 'com.example.notes/note', actions: ['read-any', 'create'] },
+      ],
+    });
+    const keysReversed = Object.fromEntries(Object.entries(base).reverse()) as AppManifest;
+    for (const m of [reordered, keysReversed]) {
+      expect((await stack.planInstall(m, { did: APP_DID })).fingerprint).toBe(fingerprint);
+    }
+  });
+
+  test('applies a manifest only while it plans to the approved fingerprint', async () => {
     const reviewed = await stack.planInstall(manifest(), { did: APP_DID });
     await stack.defineType(manifest().types[0]!);
 
-    // Planned again after the stack moved, the approval still names the old plan.
-    const fresh = await stack.planInstall(manifest(), { did: APP_DID });
-    await expect(stack.installApp(fresh, { fingerprint: reviewed.fingerprint })).rejects.toThrow(
-      StackConflictError,
-    );
-    expect(await stack.query({ filter: { baseId: '_install' } })).toMatchObject({ records: [] });
+    const approve = (ifFingerprint: string) =>
+      stack.installApp(manifest(), { did: APP_DID, ifFingerprint });
+    await expect(approve(reviewed.fingerprint)).rejects.toThrow(StackConflictError);
+    expect((await stack.query({ filter: { baseId: '_install' } })).records).toEqual([]);
 
-    const record = await stack.installApp(fresh, { fingerprint: fresh.fingerprint });
+    const fresh = await stack.planInstall(manifest(), { did: APP_DID });
+    const record = await approve(fresh.fingerprint);
     expect(record.content).toMatchObject({ appId: 'com.example.notes' });
   });
 
   test('an approval of one manifest does not apply another', async () => {
     const reviewed = await stack.planInstall(manifest(), { did: APP_DID });
-    const other = await stack.planInstall(manifest({ version: '2.0.0' }), { did: APP_DID });
-    await expect(stack.installApp(other, { fingerprint: reviewed.fingerprint })).rejects.toThrow(
-      StackConflictError,
-    );
+    await expect(
+      stack.installApp(manifest({ version: '2.0.0' }), {
+        did: APP_DID,
+        ifFingerprint: reviewed.fingerprint,
+      }),
+    ).rejects.toThrow(StackConflictError);
   });
 
   test('the plan lists every type it would write, commons types included', async () => {
@@ -197,7 +228,7 @@ describe('installApp()', () => {
       { id: NOTE_1, change: 'new' },
       { id: COMMONS_NOTE, change: 'new' },
     ]);
-    await stack.installApp(plan);
+    await apply(plan);
 
     const renamed = await stack.planInstall(
       manifest({ types: [{ ...manifest().types[0]!, name: 'Memo' }] }),
@@ -239,7 +270,7 @@ describe('installApp()', () => {
   test('a plan made before a type was defined is refused', async () => {
     const plan = await stack.planInstall(manifest(), { did: APP_DID });
     await stack.defineType(manifest().types[0]!);
-    await expect(stack.installApp(plan)).rejects.toThrow(StackConflictError);
+    await expect(apply(plan)).rejects.toThrow(StackConflictError);
   });
 
   test('a key registered to another app is refused', async () => {
@@ -415,7 +446,7 @@ describe('what an installed app sees', () => {
     expect(() => {
       (plan.manifest.requests as unknown[]).push({ baseId: '_entity', actions: ['read-any'] });
     }).toThrow(TypeError);
-    const record = await stack.installApp(plan);
+    const record = await apply(plan);
     expect(record.content.requests).toEqual(manifest().requests);
   });
 
@@ -440,7 +471,7 @@ describe('what an installed app sees', () => {
       ).toBe(false);
     }
     const bumped = await stack.planInstall(manifest({ version: '1.0.1' }), { did: APP_DID });
-    const record = await stack.installApp(bumped);
+    const record = await apply(bumped);
     expect(record.content).toMatchObject({ version: '1.0.1' });
   });
 
@@ -453,7 +484,7 @@ describe('what an installed app sees', () => {
       { did: APP_DID },
     );
     expect(padded.requestsRemoved).toEqual(MIGRATING);
-    const record = await stack.installApp(padded);
+    const record = await apply(padded);
     expect((await linkedGrants(record)).flatMap((g) => g.actions)).not.toContain('update-any');
 
     const reordered = (actions: ('create' | 'read-any')[]) =>

@@ -19,7 +19,8 @@
  * are in stack/install-app.ts. See docs/spec/apps.md.
  */
 
-import { baseIdOf, familyIdProblem, parseTypeId } from './schema.js';
+import { baseIdOf, familyIdProblem, hashSchema, parseTypeId } from './schema.js';
+import { sha256Hex } from './hash.js';
 import { GRANT_ACTION_SET, UNGRANTABLE_SYSTEM_TYPES, sameActions } from './grants.js';
 import { SYSTEM_TYPES } from './types/index.js';
 import type {
@@ -35,6 +36,7 @@ import type {
   RelationshipAssociation,
   StackRecord,
   TypeId,
+  TypeSchema,
 } from './types/index.js';
 import type { DefineTypeOptions } from './stack/client.js';
 import type { ValidationError } from './validate.js';
@@ -70,8 +72,8 @@ export type TypeChange = {
 
 /**
  * What applying a manifest would change, for the owner to approve.
- * `installApp()` applies a plan only while it is still what planning the
- * same manifest would produce. See docs/spec/apps.md § Plan, then apply.
+ * `installApp()` applies the manifest only while planning it still
+ * produces this plan's `fingerprint`. See docs/spec/apps.md § Plan, then apply.
  */
 export type InstallPlan = {
   manifest: AppManifest;
@@ -102,22 +104,22 @@ export type InstallPlan = {
    */
   linkedKeys: EntityId[];
   /**
-   * Names this plan: the manifest it was made from and everything above
-   * that depends on the stack. Two plans share one exactly when applying
-   * either would do the same thing, so an approval made in one request can
-   * be checked in another. See docs/spec/apps.md § Plan, then apply.
+   * Names this plan, for `installApp()` to apply only while planning the
+   * same manifest still produces it. See planFingerprint() and
+   * docs/spec/apps.md § Plan, then apply.
    */
   fingerprint: string;
 };
 
 /**
- * How `installApp()` is told which plan was approved. A caller that shows
- * a plan in one request and applies it in another plans the manifest again
- * and passes the reviewed plan's `fingerprint`, so what lands is what was
- * shown. Absent, the plan handed in is the one approved.
+ * What `installApp()` applies a manifest under: the key it is for, and the
+ * fingerprint of the plan the owner approved. Named on every apply, so an
+ * approval made in one request is checked in another exactly as one made
+ * in the same call is. See docs/spec/apps.md § Plan, then apply.
  */
 export type InstallAppOptions = {
-  fingerprint?: string;
+  did: EntityId;
+  ifFingerprint: string;
 };
 
 /** Relationship label from an install to an `_app` card it was installed for. */
@@ -313,36 +315,58 @@ export function isPlanEmpty(plan: InstallPlan): boolean {
 }
 
 /**
- * The fingerprint of a plan: a SHA-256 over its manifest, keys sorted so
- * their order is no difference, and the parts that depend on the stack's
- * state — what `installApp()` compares to refuse a stale plan.
+ * The fingerprint of a plan: a SHA-256 over its manifest and the parts of
+ * it that depend on the stack, each in the form core already compares it
+ * in — a type by its id, name, lineage and schemaHash, a request by its
+ * family and its set of actions — and every list sorted. Two plans share
+ * one only when applying either would do the same thing, and reordering a
+ * manifest's types, requests, actions or enum values leaves it unchanged.
  */
 export async function planFingerprint(plan: Omit<InstallPlan, 'fingerprint'>): Promise<string> {
-  const parts = JSON.stringify([
-    sortKeys(plan.manifest),
-    plan.did,
-    plan.existing?.id ?? null,
-    plan.existing?.version ?? null,
-    plan.existing?.deletedAt ? true : false,
-    plan.newFamilies,
-    plan.newVersions,
-    plan.requestsAdded,
-    plan.requestsRemoved,
-    plan.foreignRequests,
-    plan.typeChanges,
-    plan.newKey,
-    plan.linkedKeys,
-  ]);
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(parts));
-  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
-}
-
-function sortKeys(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(sortKeys);
-  if (value === null || typeof value !== 'object') return value;
-  return Object.fromEntries(
-    Object.keys(value)
-      .sort()
-      .map((key) => [key, sortKeys((value as Record<string, unknown>)[key])]),
+  const { manifest } = plan;
+  const types = await Promise.all(
+    manifest.types.map(async (t) => ({
+      id: t.id,
+      name: t.name,
+      migratesFrom: t.migratesFrom ?? null,
+      schemaHash: await hashSchema(t.schema as TypeSchema),
+    })),
+  );
+  return sha256Hex(
+    JSON.stringify([
+      manifest.appId,
+      manifest.name,
+      manifest.version ?? null,
+      sortedBy(types, (t) => t.id),
+      canonicalRequests(manifest.requests),
+      plan.did,
+      plan.existing?.id ?? null,
+      plan.existing?.version ?? null,
+      plan.existing?.deletedAt ? true : false,
+      [...plan.newFamilies].sort(),
+      [...plan.newVersions].sort(),
+      canonicalRequests(plan.requestsAdded),
+      canonicalRequests(plan.requestsRemoved),
+      sortedBy(
+        plan.foreignRequests.map((r) => ({ ...canonicalRequest(r), owner: r.owner })),
+        (r) => JSON.stringify(r),
+      ),
+      sortedBy(plan.typeChanges, (c) => `${c.id} ${c.change}`),
+      plan.newKey,
+      [...plan.linkedKeys].sort(),
+    ]),
   );
 }
+
+/** A request as core compares it: its family and its set of actions. */
+const canonicalRequest = (r: InstallRequest) => ({
+  baseId: r.baseId,
+  actions: [...new Set(r.actions)].sort(),
+});
+
+/** A list of requests as a set of canonical requests. */
+const canonicalRequests = (requests: readonly InstallRequest[]) =>
+  [...new Set(requests.map((r) => JSON.stringify(canonicalRequest(r))))].sort();
+
+const sortedBy = <T>(items: readonly T[], key: (item: T) => string): T[] =>
+  [...items].sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0));
