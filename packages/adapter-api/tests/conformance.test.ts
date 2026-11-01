@@ -98,7 +98,6 @@ describe('discovery fixtures', () => {
       const [url] = mockFetch.mock.lastCall as [string, RequestInit];
       expect(url).toBe(`${BASE_URL}${fixture.path}`);
       expect(adapter.ownerEntityId).toBe(fixture.responseBody!.ownerEntityId);
-      expect(adapter.timezone).toBe(fixture.responseBody!.timezone);
       expect(adapter.capabilities).toEqual(fixture.responseBody!.capabilities);
     });
   }

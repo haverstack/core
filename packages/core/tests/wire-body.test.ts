@@ -155,9 +155,7 @@ describe('parseTypeBody', () => {
   const schema: TypeSchema = { title: { kind: 'string', required: true } };
 
   test('a whole Type as a client serializes one parses to defineType() options', async () => {
-    const stack = await Stack.open(
-      await MemoryAdapter.open({ ownerEntityId: 'did:key:owner', timezone: 'UTC' }),
-    );
+    const stack = await Stack.open(await MemoryAdapter.open({ ownerEntityId: 'did:key:owner' }));
     const type = await stack.defineType({ id: 'com.example/note@1', name: 'Note', schema });
     const wire = JSON.parse(JSON.stringify(type)) as unknown;
     expect(parseTypeBody(wire)).toEqual({ id: 'com.example/note@1', name: 'Note', schema });
@@ -187,9 +185,7 @@ describe('parseTypeBody', () => {
 
   test('a malformed schema passes through for defineType() to answer with 422', async () => {
     const options = parseTypeBody({ id: 'a@1', name: 'A', schema: 'not a schema' });
-    const stack = await Stack.open(
-      await MemoryAdapter.open({ ownerEntityId: 'did:key:owner', timezone: 'UTC' }),
-    );
+    const stack = await Stack.open(await MemoryAdapter.open({ ownerEntityId: 'did:key:owner' }));
     await expect(stack.defineType(options)).rejects.toThrow(StackValidationError);
   });
 });
@@ -313,9 +309,7 @@ describe('aspect arguments refuse a wrong-typed value as the wire parsers do', (
 
   for (const [field, call, parse] of cases) {
     test(field, async () => {
-      const stack = await Stack.open(
-        await MemoryAdapter.open({ ownerEntityId: DID, timezone: 'UTC' }),
-      );
+      const stack = await Stack.open(await MemoryAdapter.open({ ownerEntityId: DID }));
       await stack.defineType({ id: 'com.example/note@1', name: 'Note', schema: {} });
       const { id } = await stack.create('com.example/note@1', {});
       const err = await call(stack, id).catch((e: unknown) => e);

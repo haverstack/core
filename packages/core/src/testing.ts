@@ -37,6 +37,7 @@ import type {
   Reach,
   RecordHistory,
   StoreSeed,
+  ConfigContent,
 } from './types/index.js';
 import { SYSTEM_TYPES } from './types/index.js';
 import { applyMergePatch } from './merge.js';
@@ -44,7 +45,7 @@ import { baseIdOf, fileRefFields } from './schema.js';
 import { compareSortEntries, constantSortEntry, contentSortEntry } from './adapter/sort.js';
 import type { SortEntry } from './adapter/sort.js';
 import { inReach } from './adapter/reach.js';
-import { identityOf, newStoreSeed } from './adapter/seed.js';
+import { newStoreSeed } from './adapter/seed.js';
 
 import {
   ElementSetMovedError,
@@ -65,10 +66,10 @@ const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
 const withoutUndefined = (content: Record<string, unknown>): Record<string, unknown> =>
   Object.fromEntries(Object.entries(content).filter(([, v]) => v !== undefined));
 
-/** A fresh store's identity, or the seed a copy creates it from — never both. */
+/** A fresh store's `_config`, or the seed a copy creates it from — never both. */
 export type MemoryAdapterOpenOptions =
-  | { ownerEntityId: string; timezone?: string; seed?: never }
-  | { seed: StoreSeed; ownerEntityId?: never; timezone?: never };
+  | { ownerEntityId: string; seed?: never }
+  | { seed: StoreSeed; ownerEntityId?: never };
 
 /**
  * In-memory StackAdapter with keyed cursor pagination. Implements
@@ -97,7 +98,6 @@ export class MemoryAdapter implements StackAdapter {
   };
 
   readonly ownerEntityId: string;
-  readonly timezone: string | undefined;
 
   readonly records = new Map<string, StackRecord>();
   readonly order: string[] = [];
@@ -108,9 +108,8 @@ export class MemoryAdapter implements StackAdapter {
 
   // Protected only so IncapableMemoryAdapter can extend; callers go through open().
   protected constructor(opts: MemoryAdapterOpenOptions) {
-    const seed =
-      opts.seed ?? newStoreSeed({ ownerEntityId: opts.ownerEntityId, timezone: opts.timezone });
-    ({ ownerEntityId: this.ownerEntityId, timezone: this.timezone } = identityOf(seed));
+    const seed = opts.seed ?? newStoreSeed({ ownerEntityId: opts.ownerEntityId });
+    this.ownerEntityId = (seed.config.content as ConfigContent).ownerEntityId;
     this.writeImported(seed.config, seed.history);
   }
 

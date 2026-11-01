@@ -128,9 +128,6 @@ export type RecordHistory = {
   journal: RecordJournalEntry[];
 };
 
-/** What a store is created with: the identity its `_config` record holds, as an adapter reports it. */
-export type StackIdentity = Pick<StackRecordAdapter, 'ownerEntityId' | 'timezone'>;
-
 /**
  * What a store is created holding: its `_config` record and that record's
  * history. A fresh store's is newStoreSeed()'s; a copy's is its source's, so
@@ -159,12 +156,6 @@ export interface StackRecordAdapter {
 
   /** DID of the stack owner. Set during adapter initialization. */
   readonly ownerEntityId: EntityId;
-  /**
-   * IANA timezone string for this stack, or undefined if never set.
-   * Passthrough app metadata with no default — see docs/spec.md § The
-   * `_config` record.
-   */
-  readonly timezone: string | undefined;
 
   // Records
   /**

@@ -426,9 +426,7 @@ describe('migration()', () => {
 
 describe('defineType()', () => {
   test('accepts a handle as it is', async () => {
-    const stack = await Stack.open(
-      await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' }),
-    );
+    const stack = await Stack.open(await MemoryAdapter.open({ ownerEntityId: OWNER }));
     const type = await stack.defineType(Book);
     expect(type.id).toBe(Book.id);
     expect(type.schema).toEqual(Book.schema);

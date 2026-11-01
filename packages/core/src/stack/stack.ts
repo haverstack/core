@@ -301,7 +301,7 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Open a Stack over an adapter. Reads ownerEntityId and timezone from the adapter.
+   * Open a Stack over an adapter. Reads ownerEntityId from the adapter.
    */
   static async open(adapter: StackAdapter, opts: StackOptions = {}): Promise<Stack> {
     if (!adapter.ownerEntityId) {
@@ -350,10 +350,6 @@ export class Stack implements StackClient {
 
   async getOwnerEntity(): Promise<StackRecord | null> {
     return this.getEntityByDid(this.ownerEntityId);
-  }
-
-  get timezone(): string | undefined {
-    return this.adapter.timezone;
   }
 
   get capabilities(): StackCapabilities {

@@ -114,7 +114,7 @@ Every column of every table but `records_fts`, an FTS5 index over `records.conte
 | `types`         | `id`, `base_id`, `version`, `name`, `schema`, `schema_hash`, `migrates_from`, `created_at`                                                                                      |
 | `content_index` | `record_id`, `field`, `value_rank`, `num_value`, `text_key`, `text_value`, `file_id`                                                                                            |
 
-The `_config` row carries `{ ownerEntityId, timezone }` as its content: the stack's owner and timezone, which every store is created holding.
+The `_config` row carries `{ ownerEntityId }` as its content: the stack's owner, which every store is created holding.
 
 `content_index` and `records_fts` are rebuilt from `records.content`, so a reader may ignore them. A writer may not: a row whose content moved without them answers queries for content it no longer holds. They are part of the layout all the same, so a change to how either is built is a layout change like any other, made by copying into a new store, which rebuilds both as it writes.
 

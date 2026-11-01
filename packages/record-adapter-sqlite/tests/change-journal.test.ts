@@ -26,7 +26,6 @@ const initAdapter = () =>
     create: 'exclusive',
     path: dbPath,
     ownerEntityId: 'entity-123',
-    timezone: 'UTC',
   });
 
 const makeRecord = (overrides: Partial<StackRecord> = {}): StackRecord => ({

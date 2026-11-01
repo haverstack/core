@@ -23,7 +23,8 @@
  */
 
 import { openStore, SharedSqlRecordAdapter } from '@haverstack/sqlite-shared/record';
-import type { StackIdentity, StoreSeed } from '@haverstack/core/adapter';
+import type { ConfigContent } from '@haverstack/core';
+import type { StoreSeed } from '@haverstack/core/adapter';
 import { DurableObjectSqliteExecutor } from './executor.js';
 
 // -------------------------------------------------------
@@ -38,8 +39,6 @@ export type DoSQLiteRecordAdapterOpenOptions =
        * provider is called only when the DO's storage has none yet.
        */
       ownerEntityId: string | (() => string | Promise<string>);
-      /** IANA timezone string e.g. "America/New_York". Optional passthrough app metadata — no default. */
-      timezone?: string;
       seed?: never;
     }
   | {
@@ -49,7 +48,6 @@ export type DoSQLiteRecordAdapterOpenOptions =
        */
       seed: StoreSeed;
       ownerEntityId?: never;
-      timezone?: never;
     };
 
 // -------------------------------------------------------
@@ -57,14 +55,14 @@ export type DoSQLiteRecordAdapterOpenOptions =
 // -------------------------------------------------------
 
 export class DoSQLiteRecordAdapter extends SharedSqlRecordAdapter {
-  private constructor(exec: DurableObjectSqliteExecutor, identity: StackIdentity) {
-    super(exec, identity);
+  private constructor(exec: DurableObjectSqliteExecutor, config: ConfigContent) {
+    super(exec, config);
   }
 
   /**
    * Open the adapter for a DO instance, creating its storage on first use.
    * A DO id either already has a config record (reattach) or it doesn't
-   * (first call — opts.ownerEntityId/timezone become the config), so there
+   * (first call — opts.ownerEntityId becomes the config), so there
    * is no `create` option. A new store's tables are written in the same
    * transaction as its config record, so storage holds a whole store or none.
    *
@@ -77,13 +75,13 @@ export class DoSQLiteRecordAdapter extends SharedSqlRecordAdapter {
     opts: DoSQLiteRecordAdapterOpenOptions,
   ): Promise<DoSQLiteRecordAdapter> {
     const exec = new DurableObjectSqliteExecutor(storage);
-    const identity = await openStore(exec, {
+    const config = await openStore(exec, {
       ...opts,
       mode: 'ifMissing',
       where: 'the Durable Object storage',
       wal: false,
     });
-    return new DoSQLiteRecordAdapter(exec, identity);
+    return new DoSQLiteRecordAdapter(exec, config);
   }
 
   // -------------------------------------------------------

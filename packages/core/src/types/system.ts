@@ -156,12 +156,6 @@ export type ConfigContent = {
    * record for why ownership transfer isn't a field write.
    */
   ownerEntityId: EntityId;
-  /**
-   * IANA timezone string e.g. "America/New_York". Optional passthrough app
-   * metadata — nothing in core reads it for behavior, and there is no
-   * default. See docs/spec.md § The `_config` record.
-   */
-  timezone?: string;
 };
 
 /** Reserved system type IDs */

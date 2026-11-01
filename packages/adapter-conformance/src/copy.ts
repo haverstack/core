@@ -31,7 +31,7 @@ const OWNER = 'did:key:conformance-owner';
 const ALICE = { subjectId: 'did:key:conformance-alice' };
 const BOB = { subjectId: 'did:key:conformance-bob', principalId: 'did:key:conformance-app' };
 const NOTE = 'org.haverstack.conformance/copied-note@1';
-const SEED = newStoreSeed({ ownerEntityId: OWNER, timezone: 'Europe/Paris' });
+const SEED = newStoreSeed({ ownerEntityId: OWNER });
 
 /** Set order aside: an element set has no order to preserve. */
 const bySerialized = <T>(list: T[] | undefined): T[] | undefined =>
@@ -92,7 +92,11 @@ async function writePast(adapter: StackAdapter): Promise<FileId[]> {
     schema: { title: { kind: 'text' }, cover: { kind: 'file-ref' } },
   });
 
-  await stack.patchContent(SYSTEM_TYPES.CONFIG, { timezone: 'Asia/Tokyo' }, { actor: BOB });
+  await stack.editAssociations(
+    SYSTEM_TYPES.CONFIG,
+    [{ op: 'add', association: { kind: 'tag', label: 'copied' } }],
+    { actor: BOB },
+  );
 
   const box = await stack.create(NOTE, { title: 'box' });
   const note = await stack.create(NOTE, { title: 'v1' }, { createdBy: ALICE });

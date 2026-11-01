@@ -1,7 +1,7 @@
 import { describe, test, expect } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
 import { FormatMismatchError, newStoreSeed } from '@haverstack/core/adapter';
-import { openStore, writeNewStore, readStoredIdentity } from '../src/config.js';
+import { openStore, writeNewStore, readStoredConfig } from '../src/config.js';
 import type { SqlExecutor } from '../src/executor.js';
 import { FORMAT_VERSION } from '../src/schema.js';
 
@@ -28,9 +28,9 @@ const executor = (db: DatabaseSync): SqlExecutor => ({
 const empty = () => executor(new DatabaseSync(':memory:'));
 
 /** A store as a create leaves it. */
-const created = (timezone: string | undefined) => {
+const created = () => {
   const exec = empty();
-  writeNewStore(exec, newStoreSeed({ ownerEntityId: 'did:key:owner', timezone }));
+  writeNewStore(exec, newStoreSeed({ ownerEntityId: 'did:key:owner' }));
   return exec;
 };
 
@@ -47,25 +47,23 @@ const thrown = (fn: () => unknown): unknown => {
   }
 };
 
-describe('readStoredIdentity', () => {
+describe('readStoredConfig', () => {
   test('is null for a database holding no store', () => {
-    expect(readStoredIdentity(empty(), 'here')).toBeNull();
+    expect(readStoredConfig(empty(), 'here')).toBeNull();
   });
 
-  test('reads back the identity a create wrote, an absent timezone kept as a key', () => {
-    const identity = readStoredIdentity(created(undefined), 'here');
-    expect(identity).toEqual({ ownerEntityId: 'did:key:owner', timezone: undefined });
-    expect('timezone' in identity!).toBe(true);
+  test('reads back the _config a create wrote', () => {
+    expect(readStoredConfig(created(), 'here')).toEqual({ ownerEntityId: 'did:key:owner' });
   });
 
   test.each([
     ['another version', 'UPDATE format SET version = 2', 2],
     ['no version', 'DELETE FROM format', undefined],
   ] as const)('refuses a store naming %s, writing nothing', (_name, sql, actual) => {
-    const exec = created('UTC');
+    const exec = created();
     exec.exec(sql);
     const before = tables(exec);
-    const err = thrown(() => readStoredIdentity(exec, 'here'));
+    const err = thrown(() => readStoredConfig(exec, 'here'));
     expect(err).toBeInstanceOf(FormatMismatchError);
     expect(err).toMatchObject({ expected: FORMAT_VERSION, actual, where: 'here' });
     expect(tables(exec)).toBe(before);
@@ -73,13 +71,10 @@ describe('readStoredIdentity', () => {
 });
 
 describe('writeNewStore', () => {
-  test('returns the identity it wrote, matching what a later read yields', () => {
+  test('returns the _config it wrote, matching what a later read yields', () => {
     const exec = empty();
-    const written = writeNewStore(
-      exec,
-      newStoreSeed({ ownerEntityId: 'did:key:owner', timezone: 'UTC' }),
-    );
-    expect(written).toEqual(readStoredIdentity(exec, 'here'));
+    const written = writeNewStore(exec, newStoreSeed({ ownerEntityId: 'did:key:owner' }));
+    expect(written).toEqual(readStoredConfig(exec, 'here'));
   });
 
   // The tables, the format row and _config are one fact: a create failing
@@ -88,20 +83,20 @@ describe('writeNewStore', () => {
   test('writes the whole store or none of it', () => {
     const exec = empty();
     exec.exec(`CREATE TABLE journal (note TEXT)`);
-    expect(() =>
-      writeNewStore(exec, newStoreSeed({ ownerEntityId: 'did:key:owner', timezone: 'UTC' })),
-    ).toThrow(/journal already exists/);
+    expect(() => writeNewStore(exec, newStoreSeed({ ownerEntityId: 'did:key:owner' }))).toThrow(
+      /journal already exists/,
+    );
     expect(tables(exec)).toBe(1);
   });
 });
 
 describe('openStore', () => {
-  const seed = newStoreSeed({ ownerEntityId: 'did:key:owner', timezone: 'UTC' });
+  const seed = newStoreSeed({ ownerEntityId: 'did:key:owner' });
 
   test.each(['ifMissing', 'exclusive'] as const)(
     'refuses a seed for a database already holding a store, under %s',
     async (mode) => {
-      const exec = created('UTC');
+      const exec = created();
       await expect(openStore(exec, { where: 'here', mode, wal: false, seed })).rejects.toThrow(
         /already exists/,
       );

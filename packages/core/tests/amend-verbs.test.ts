@@ -30,7 +30,7 @@ let stack: Stack;
 let id: string;
 
 beforeEach(async () => {
-  stack = await Stack.open(await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' }));
+  stack = await Stack.open(await MemoryAdapter.open({ ownerEntityId: OWNER }));
   await stack.defineType({ id: NOTE, name: 'Note', schema: { text: { kind: 'text' } } });
   id = (await stack.create(NOTE, { text: 'x' })).id;
 });
@@ -214,7 +214,7 @@ describe('editAccess() that moves nothing', () => {
   // The write-implies-read check reads the set a write would produce, so a
   // call producing the stored set is not refused for a set it did not write.
   test('returns the record unchanged even where the stored set breaks write-implies-read', async () => {
-    const adapter = await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' });
+    const adapter = await MemoryAdapter.open({ ownerEntityId: OWNER });
     const raw = await Stack.open(adapter);
     await raw.defineType({ id: NOTE, name: 'Note', schema: { text: { kind: 'text' } } });
     const stored = await adapter.createRecord({

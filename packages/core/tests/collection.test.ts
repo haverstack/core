@@ -87,7 +87,7 @@ describe.each([
   let books: Collection<BookContent>;
 
   beforeEach(async () => {
-    adapter = await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' });
+    adapter = await MemoryAdapter.open({ ownerEntityId: OWNER });
     stack = await Stack.open(adapter, { migrations: [bookV1ToV2] });
     await stack.defineType(BookV1);
     await stack.defineType(Book);
@@ -598,7 +598,7 @@ describe.each([
   let stack: Stack;
 
   beforeEach(async () => {
-    const adapter = await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' });
+    const adapter = await MemoryAdapter.open({ ownerEntityId: OWNER });
     stack = await Stack.open(adapter, {
       migrations: [
         bookV1ToV2,
@@ -693,7 +693,7 @@ describe.each([
   let stack: Stack;
 
   const open = async (byType = true) => {
-    adapter = await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' });
+    adapter = await MemoryAdapter.open({ ownerEntityId: OWNER });
     (adapter as { capabilities: StackClient['capabilities'] }).capabilities = {
       ...adapter.capabilities,
       filter: { ...adapter.capabilities.filter, contentByType: byType },
@@ -777,7 +777,7 @@ describe.each([
   });
 
   test('a later page reuses the versions the first page chose, without listing types', async () => {
-    adapter = await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' });
+    adapter = await MemoryAdapter.open({ ownerEntityId: OWNER });
     stack = await Stack.open(adapter, { migrations: TASK_MIGRATIONS });
     await stack.defineType(TaskV2);
     await stack.defineType(Task);
@@ -834,19 +834,16 @@ describe.each([
 
 describe('a collection whose migration throws', () => {
   test('subscribe() still delivers the change, without its record', async () => {
-    const stack = await Stack.open(
-      await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' }),
-      {
-        migrations: [
-          migration(BookV1, Book, [
-            map('status', { done: 'finished' }),
-            derive('title', () => {
-              throw new TypeError('broken migration');
-            }),
-          ]),
-        ],
-      },
-    );
+    const stack = await Stack.open(await MemoryAdapter.open({ ownerEntityId: OWNER }), {
+      migrations: [
+        migration(BookV1, Book, [
+          map('status', { done: 'finished' }),
+          derive('title', () => {
+            throw new TypeError('broken migration');
+          }),
+        ]),
+      ],
+    });
     await stack.defineType(BookV1);
     await stack.defineType(Book);
     const books = stack.collection(Book);
@@ -863,9 +860,7 @@ describe('a collection whose migration throws', () => {
 
 describe('collection()', () => {
   test('refuses a handle whose migratesFrom has no migration', async () => {
-    const stack = await Stack.open(
-      await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' }),
-    );
+    const stack = await Stack.open(await MemoryAdapter.open({ ownerEntityId: OWNER }));
     expect(() => stack.collection(Book)).toThrow(
       `No migration from "${BookV1.id}" to "${Book.id}" was passed to Stack.open().`,
     );
@@ -876,10 +871,9 @@ describe('collection()', () => {
 
 describe('a collection under delegation', () => {
   test('refuses a patch needing a migration the requester may not commit', async () => {
-    const stack = await Stack.open(
-      await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' }),
-      { migrations: [bookV1ToV2] },
-    );
+    const stack = await Stack.open(await MemoryAdapter.open({ ownerEntityId: OWNER }), {
+      migrations: [bookV1ToV2],
+    });
     await stack.defineType(BookV1);
     await stack.defineType(Book);
     const old = await stack.create(
@@ -948,9 +942,7 @@ describe('content filter and sort typing', () => {
   });
 
   test('accepts declared paths, element values, any suffix below an open node, and null', async () => {
-    const stack = await Stack.open(
-      await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' }),
-    );
+    const stack = await Stack.open(await MemoryAdapter.open({ ownerEntityId: OWNER }));
     await stack.defineType(Contact);
     const contacts = stack.collection(Contact);
     const ada = await contacts.create({

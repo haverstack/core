@@ -63,7 +63,7 @@ function makeRecord(overrides: Partial<StackRecord> = {}): StackRecord {
 }
 
 beforeEach(async () => {
-  adapter = await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' });
+  adapter = await MemoryAdapter.open({ ownerEntityId: OWNER });
   stack = await Stack.open(adapter);
   await stack.defineType({ id: NOTE, name: 'Note', schema: { text: { kind: 'text' } } });
 });
@@ -1430,7 +1430,7 @@ describe('ScopedStack.create — client-supplied id', () => {
   });
 
   test('idTimestampSkewMs: null on the Stack disables the skew check for grantees', async () => {
-    const permissiveAdapter = await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' });
+    const permissiveAdapter = await MemoryAdapter.open({ ownerEntityId: OWNER });
     const permissiveStack = await Stack.open(permissiveAdapter, { idTimestampSkewMs: null });
     await permissiveStack.defineType({
       id: COMMENT,
@@ -3124,7 +3124,6 @@ describe('ScopedStack.getAttachment', () => {
   test('an unlisted _attachment record carries it on a content-blind adapter too', async () => {
     const incapableAdapter = await IncapableMemoryAdapter.open({
       ownerEntityId: OWNER,
-      timezone: 'UTC',
     });
     const incapableStack = await Stack.open(incapableAdapter);
     const fileId = fakeFileId('file-unlisted-blind');
@@ -3162,7 +3161,6 @@ describe('ScopedStack.getAttachment', () => {
   test('uploader can access an upload that is not their first (regression)', async () => {
     const incapableAdapter = await IncapableMemoryAdapter.open({
       ownerEntityId: OWNER,
-      timezone: 'UTC',
     });
     const incapableStack = await Stack.open(incapableAdapter);
     const fileFirst = fakeFileId('file-first');

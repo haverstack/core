@@ -22,7 +22,7 @@ export { type SqlExecutor } from './executor.js';
 export {
   missingStoreError,
   openStore,
-  readStoredIdentity,
+  readStoredConfig,
   writeNewStore,
   type OpenStoreOptions,
   type OwnerEntityIdInput,

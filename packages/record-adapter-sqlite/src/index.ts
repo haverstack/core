@@ -36,7 +36,8 @@ import {
   type OwnerEntityIdInput,
   type StoreCreateMode,
 } from '@haverstack/sqlite-shared';
-import type { StackIdentity, StoreSeed } from '@haverstack/core/adapter';
+import type { ConfigContent } from '@haverstack/core';
+import type { StoreSeed } from '@haverstack/core/adapter';
 import { NativeSqliteExecutor } from './executor.js';
 
 // -------------------------------------------------------
@@ -61,7 +62,6 @@ export type NativeSQLiteRecordAdapterOpenOptions = {
       create?: 'never';
       /** Checked against the existing store's owner; a mismatch throws OwnerMismatchError. */
       ownerEntityId?: string;
-      timezone?: never;
       seed?: never;
     }
   | {
@@ -72,8 +72,6 @@ export type NativeSQLiteRecordAdapterOpenOptions = {
        * existing store's owner; a lazy provider is never called just to compare.
        */
       ownerEntityId: OwnerEntityIdInput;
-      /** IANA timezone string e.g. "America/New_York". Consulted only when a store is created. No default. */
-      timezone?: string;
       seed?: never;
     }
   | {
@@ -82,7 +80,6 @@ export type NativeSQLiteRecordAdapterOpenOptions = {
       /** The `_config` record and history the store is created holding: a copy's source's. */
       seed: StoreSeed;
       ownerEntityId?: never;
-      timezone?: never;
     }
 );
 
@@ -95,9 +92,9 @@ export class NativeSQLiteRecordAdapter extends SharedSqlRecordAdapter {
     private readonly path: string,
     private readonly db: DatabaseSync,
     exec: NativeSqliteExecutor,
-    identity: StackIdentity,
+    config: ConfigContent,
   ) {
-    super(exec, identity);
+    super(exec, config);
   }
 
   /**
@@ -121,8 +118,8 @@ export class NativeSQLiteRecordAdapter extends SharedSqlRecordAdapter {
     try {
       db = new DatabaseSync(opts.path);
       const exec = new NativeSqliteExecutor(db);
-      const identity = await openStore(exec, { ...opts, mode, where, wal: true });
-      return new NativeSQLiteRecordAdapter(opts.path, db, exec, identity);
+      const config = await openStore(exec, { ...opts, mode, where, wal: true });
+      return new NativeSQLiteRecordAdapter(opts.path, db, exec, config);
     } catch (err) {
       db?.close();
       // A failed open leaves the filesystem as it found it.

@@ -1483,8 +1483,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       'PATCH /records/_config/content that would change ownerEntityId returns 409 / code ' +
       '"conflict" — ownerEntityId defines stack ownership, read once at open and consulted by every ' +
       'permission check thereafter; a write that silently re-anchored it would desync every ' +
-      'already-running owner check. Other _config fields (e.g. timezone) update normally through ' +
-      'the same endpoint — only an ownerEntityId change is refused.',
+      'already-running owner check.',
     method: 'PATCH',
     path: '/records/_config/content',
     requestBody: { ownerEntityId: 'did:key:z6MkvVv7EXm3g3XZ8k4hqYqK5zqfSj6pS4KvL5s6cQzYzZq3' },

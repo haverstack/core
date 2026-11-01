@@ -15,7 +15,7 @@ let stack: Stack;
 let recordId: string;
 
 beforeEach(async () => {
-  stack = await Stack.open(await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' }));
+  stack = await Stack.open(await MemoryAdapter.open({ ownerEntityId: OWNER }));
   await stack.defineType({ id: NOTE, name: 'Note', schema: { text: { kind: 'text' } } });
   recordId = (await stack.create(NOTE, { text: 'x' })).id;
 });
@@ -149,7 +149,7 @@ describe('a stored permission grantee the write would refuse reaches nobody', ()
     ],
     ['an entity arm with an empty entityId', () => ({ kind: 'entity', entityId: '' })],
   ])('%s', async (_, grantee) => {
-    const adapter = await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' });
+    const adapter = await MemoryAdapter.open({ ownerEntityId: OWNER });
     const local = await Stack.open(adapter);
     await local.defineType({ id: NOTE, name: 'Note', schema: { text: { kind: 'text' } } });
     const group = await local.create(

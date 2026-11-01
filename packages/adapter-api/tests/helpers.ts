@@ -51,7 +51,6 @@ export const CHANGE_FEED = discoveryFixtures.find(
 export const DISCOVERY = {
   version: WIRE_PROTOCOL_VERSION,
   ownerEntityId: OWNER,
-  timezone: 'America/New_York',
   capabilities: FULL_CAPABILITIES,
 };
 

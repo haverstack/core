@@ -201,7 +201,6 @@ const isFatalFeedError = (err: unknown): boolean => {
 export class APIAdapter implements StackAdapter {
   readonly capabilities: StackCapabilities;
   readonly ownerEntityId: string;
-  readonly timezone: string | undefined;
 
   /** Shared by every request that finds its token expired at the same moment. */
   private reauthInFlight: Promise<string> | null = null;
@@ -211,7 +210,6 @@ export class APIAdapter implements StackAdapter {
     private token: string | undefined,
     private readonly credential: DidCredential | undefined,
     ownerEntityId: string,
-    timezone: string | undefined,
     capabilities: StackCapabilities,
     /** The feed discovery advertised, if any. Absent means the server offers none. */
     private readonly changeFeed: DiscoveryChanges | undefined,
@@ -220,7 +218,6 @@ export class APIAdapter implements StackAdapter {
   ) {
     this.capabilities = capabilities;
     this.ownerEntityId = ownerEntityId;
-    this.timezone = timezone;
   }
 
   /**
@@ -300,9 +297,6 @@ export class APIAdapter implements StackAdapter {
       token,
       opts.credential,
       discovery.ownerEntityId,
-      // Passthrough metadata only — no 'UTC' default, which would claim
-      // knowledge the discovery response didn't actually provide.
-      discovery.timezone,
       // One rule for every entry, applied once: absent, malformed or
       // unrecognized reads as the least capable value it could stand for.
       normalizeCapabilities(discovery.capabilities),
