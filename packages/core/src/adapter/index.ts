@@ -24,7 +24,6 @@ export type {
   ElementWriteOptions,
   Reach,
   RecordHistory,
-  StackIdentity,
   StoreSeed,
 } from '../types/index.js';
 export { sameAssociationSet } from '../associations/identity.js';

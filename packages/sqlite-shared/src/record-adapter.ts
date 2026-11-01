@@ -30,6 +30,7 @@ import type {
   AuthorityAssociation,
   DataAssociation,
   StackCapabilities,
+  ConfigContent,
 } from '@haverstack/core';
 import type {
   AdapterQuery,
@@ -40,7 +41,6 @@ import type {
   MutateOptions,
   Reach,
   RecordHistory,
-  StackIdentity,
 } from '@haverstack/core/adapter';
 import type { SqlExecutor } from './executor.js';
 import { SharedSqlRecordLogic } from './record-logic.js';
@@ -76,7 +76,7 @@ export abstract class SharedSqlRecordAdapter implements StackRecordAdapter {
 
   private readonly record: SharedSqlRecordLogic;
 
-  protected constructor(exec: SqlExecutor, identity: StackIdentity) {
+  protected constructor(exec: SqlExecutor, identity: ConfigContent) {
     this.record = new SharedSqlRecordLogic({ exec });
     this.ownerEntityId = identity.ownerEntityId;
   }

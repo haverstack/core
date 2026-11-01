@@ -8,7 +8,7 @@
  * § Construction.
  */
 
-import type { ConfigContent, StackIdentity, StoreSeed } from '../types/index.js';
+import type { ConfigContent, StoreSeed } from '../types/index.js';
 import { SYSTEM_TYPES } from '../types/index.js';
 
 /** The seed of a stack that has no past: `_config` at version 1, holding `config`. */
@@ -29,7 +29,6 @@ export function newStoreSeed(config: ConfigContent): StoreSeed {
 }
 
 /** The identity a seed's `_config` holds. */
-export function identityOf(seed: StoreSeed): StackIdentity {
-  const content = seed.config.content as ConfigContent;
-  return { ownerEntityId: content.ownerEntityId };
+export function identityOf(seed: StoreSeed): ConfigContent {
+  return seed.config.content as ConfigContent;
 }

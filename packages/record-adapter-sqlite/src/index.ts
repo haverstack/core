@@ -36,7 +36,8 @@ import {
   type OwnerEntityIdInput,
   type StoreCreateMode,
 } from '@haverstack/sqlite-shared';
-import type { StackIdentity, StoreSeed } from '@haverstack/core/adapter';
+import type { ConfigContent } from '@haverstack/core';
+import type { StoreSeed } from '@haverstack/core/adapter';
 import { NativeSqliteExecutor } from './executor.js';
 
 // -------------------------------------------------------
@@ -91,7 +92,7 @@ export class NativeSQLiteRecordAdapter extends SharedSqlRecordAdapter {
     private readonly path: string,
     private readonly db: DatabaseSync,
     exec: NativeSqliteExecutor,
-    identity: StackIdentity,
+    identity: ConfigContent,
   ) {
     super(exec, identity);
   }

@@ -92,8 +92,6 @@ A plain-string `ownerEntityId` is also checked against the owner of an existing 
 
 **`_config` says whose stack it is, and nothing else.** Its content is `{ ownerEntityId }`, stored as a singleton `_config@1` record in the records table and written by `open()` when the store is created (see [Adapters § Construction](./spec/adapters.md#construction)). `ownerEntityId` is immutable and every permission check consults it, so each adapter reads it once at open and exposes it as `adapter.ownerEntityId` (and `stack.ownerEntityId`); the API adapter reads it from the discovery endpoint (`GET /.well-known/stack`).
 
-**A stack has no timezone.** Each time value carries what it means, so reading one never depends on the stack (see [Data model § Types](./spec/data-model.md#types)).
-
 **A field is `ownerEntityId` when it can only hold the owner, and `entityId` when it may hold any entity.** So `_config`'s content, the discovery response, every adapter, `Stack` and every `open()` say `ownerEntityId`, and a relationship target or a grantee says `entityId`. The owner has one name wherever it is the owner.
 
 **`_config` is protected**, by `Stack` itself rather than any one adapter — the same layering as schema validation, so every adapter and `ScopedStack` (which delegates to `Stack`) inherit it automatically:

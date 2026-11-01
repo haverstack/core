@@ -21,7 +21,6 @@ await stack.defineType({
     title: { kind: 'string', required: true },
     startsAt: { kind: 'date', required: true },
     endsAt: { kind: 'date' },
-    allDay: { kind: 'boolean' },
     description: { kind: 'text' },
     url: { kind: 'string' },
   },
@@ -30,14 +29,13 @@ await stack.defineType({
 
 ## Field semantics
 
-| Field         | Kind      | Required | Meaning                                                                                                                                                                             |
-| ------------- | --------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `title`       | `string`  | yes      | What it is ("Monthly meeting", "Spring cleanup day").                                                                                                                               |
-| `startsAt`    | `date`    | yes      | When it begins — a moment (an ISO 8601 timestamp), or a calendar day (`YYYY-MM-DD`) when `allDay`. An event is meaningless without a time.                                          |
-| `endsAt`      | `date`    | no       | When it ends, in the same form as `startsAt`; for an all-day event, the last day it occupies. Absent means unspecified duration (a deadline, a "starts at 7pm" with no stated end). |
-| `allDay`      | `boolean` | no       | Absent means `false`. When `true`, `startsAt` and `endsAt` are calendar days, the same dates to every reader wherever they are.                                                     |
-| `description` | `text`    | no       | Details. Markdown by convention.                                                                                                                                                    |
-| `url`         | `string`  | no       | Where it happens online (video-call link) or a canonical event page.                                                                                                                |
+| Field         | Kind     | Required | Meaning                                                                                                                                                                                                                                    |
+| ------------- | -------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `title`       | `string` | yes      | What it is ("Monthly meeting", "Spring cleanup day").                                                                                                                                                                                      |
+| `startsAt`    | `date`   | yes      | When it begins. A moment (`2026-11-03T19:00:00Z`) for a timed event, a calendar day (`2026-11-03`) for an all-day one: the form is what says which (see docs/spec/data-model.md § Types). An event is meaningless without a time.          |
+| `endsAt`      | `date`   | no       | The first moment or day after the event, in the same form as `startsAt`, so a one-day event on the 3rd ends on the 4th, as iCalendar's `DTEND` does. Absent means unspecified duration (a deadline, a "starts at 7pm" with no stated end). |
+| `description` | `text`   | no       | Details. Markdown by convention.                                                                                                                                                                                                           |
+| `url`         | `string` | no       | Where it happens online (video-call link) or a canonical event page.                                                                                                                                                                       |
 
 ## Conventions
 
@@ -84,7 +82,7 @@ time slot promoted to a real event — can appear on a calendar consumer's calen
   `url`/`description` for virtual ones; a freeform field would become the junk drawer
   that keeps both honest mechanisms unused.
 - Timezone-per-event — a timed event is a moment and an all-day event is calendar days,
-  so neither needs a zone to be read. A wall-clock time tied to a place (a 9am-local
+  so neither needs a zone to be read. A wall-clock reading tied to a place (a 9am-local
   meeting that should stay 9am across a DST change) would add a zone field beside it
   (see docs/spec/data-model.md § Types); deferred until a real writer demonstrates the
   need.

@@ -5,7 +5,7 @@ import {
   newStoreSeed,
 } from '@haverstack/core/adapter';
 import type { ConfigContent } from '@haverstack/core';
-import type { StackIdentity, StoreSeed } from '@haverstack/core/adapter';
+import type { StoreSeed } from '@haverstack/core/adapter';
 import type { SqlExecutor } from './executor.js';
 import { SharedSqlRecordLogic } from './record-logic.js';
 import {
@@ -38,7 +38,7 @@ export const missingStoreError = (where: string): Error =>
  * written as importRecord() writes any Record. Only valid on a database
  * readStoredIdentity() found missing.
  */
-export const writeNewStore = (exec: SqlExecutor, seed: StoreSeed): StackIdentity => {
+export const writeNewStore = (exec: SqlExecutor, seed: StoreSeed): ConfigContent => {
   exec.transaction(() => {
     exec.exec(RECORD_SCHEMA_SQL);
     exec.exec(FTS5_SCHEMA_SQL);
@@ -55,15 +55,14 @@ export const writeNewStore = (exec: SqlExecutor, seed: StoreSeed): StackIdentity
  * to another layout only by being copied into one. Reads only, so a refused
  * store is left untouched. See docs/spec/adapters.md § Construction.
  */
-export const readStoredIdentity = (exec: SqlExecutor, where: string): StackIdentity | null => {
+export const readStoredIdentity = (exec: SqlExecutor, where: string): ConfigContent | null => {
   const hasFormat =
     exec.get(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'format'`) !== undefined;
   if (!hasFormat) return null;
   const version = exec.get<{ version: number }>('SELECT version FROM format WHERE id = 1')?.version;
   if (version !== FORMAT_VERSION) throw new FormatMismatchError(FORMAT_VERSION, version, where);
   const { content } = exec.get<{ content: string }>(CONFIG_ROW_SQL)!;
-  const config = JSON.parse(content) as ConfigContent;
-  return { ownerEntityId: config.ownerEntityId };
+  return JSON.parse(content) as ConfigContent;
 };
 
 export type OpenStoreOptions = {
@@ -86,7 +85,7 @@ export type OpenStoreOptions = {
 export const openStore = async (
   exec: SqlExecutor,
   opts: OpenStoreOptions,
-): Promise<StackIdentity> => {
+): Promise<ConfigContent> => {
   const stored = readStoredIdentity(exec, opts.where);
   if (!stored && opts.mode === 'never') throw missingStoreError(opts.where);
   // A seed is a new store's whole first state, so it creates or fails.

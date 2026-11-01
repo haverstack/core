@@ -128,9 +128,6 @@ export type RecordHistory = {
   journal: RecordJournalEntry[];
 };
 
-/** The part of a store's `_config` an adapter caches at open: what never changes. */
-export type StackIdentity = Pick<StackRecordAdapter, 'ownerEntityId'>;
-
 /**
  * What a store is created holding: its `_config` record and that record's
  * history. A fresh store's is newStoreSeed()'s; a copy's is its source's, so

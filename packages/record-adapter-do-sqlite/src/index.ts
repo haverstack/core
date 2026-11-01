@@ -23,7 +23,8 @@
  */
 
 import { openStore, SharedSqlRecordAdapter } from '@haverstack/sqlite-shared/record';
-import type { StackIdentity, StoreSeed } from '@haverstack/core/adapter';
+import type { ConfigContent } from '@haverstack/core';
+import type { StoreSeed } from '@haverstack/core/adapter';
 import { DurableObjectSqliteExecutor } from './executor.js';
 
 // -------------------------------------------------------
@@ -54,7 +55,7 @@ export type DoSQLiteRecordAdapterOpenOptions =
 // -------------------------------------------------------
 
 export class DoSQLiteRecordAdapter extends SharedSqlRecordAdapter {
-  private constructor(exec: DurableObjectSqliteExecutor, identity: StackIdentity) {
+  private constructor(exec: DurableObjectSqliteExecutor, identity: ConfigContent) {
     super(exec, identity);
   }
 
