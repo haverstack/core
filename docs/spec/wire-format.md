@@ -221,6 +221,7 @@ A server built on core reaches this through the wire parsers in `@haverstack/cor
 | `GET /changes`                                        | `parseChangeParams()`           |
 | `GET /attachments/:fileId`                            | `parseDownloadParams()`         |
 | `POST /types`                                         | `parseTypeBody()`               |
+| `POST /installs`                                      | `parseInstallBody()`            |
 | `POST /auth/challenge`                                | `parseAuthChallengeBody()`      |
 | `POST /auth/token`                                    | `parseAuthTokenBody()`          |
 
@@ -464,7 +465,7 @@ A move that would make the record its own ancestor answers **409** (code `confli
 
 ## Versions
 
-**The server snapshots prior state automatically on every mutating endpoint that bumps `version`** — there is no client-initiated endpoint to write a version directly. The list is exhaustive on purpose: `PATCH /records/:id/content`, `DELETE` (soft), `POST .../undelete`, `POST .../migrate`, and `POST .../restore/:version` itself (restore always creates a new version). The parent, unlisted, association and permission endpoints are the deliberate exception: none of them bumps `version`, so none snapshots either. `APIAdapter` has no [`importRecord()`](./portability.md#writing-history) — the server is the only snapshot writer for this adapter — so a server that implements anything less than every endpoint above silently loses rollback history for that endpoint's mutations.
+**The server snapshots prior state automatically on every mutating endpoint that bumps `version`** — there is no client-initiated endpoint to write a version directly. The list is exhaustive on purpose: `PATCH /records/:id/content`, `DELETE` (soft), `POST .../undelete`, `POST .../migrate`, and `POST .../restore/:version` itself (restore always creates a new version). The parent, unlisted, association and permission endpoints are the deliberate exception: each is a [no-bump write](./versioning.md#version-history), so none snapshots either. `APIAdapter` has no [`importRecord()`](./portability.md#writing-history) — the server is the only snapshot writer for this adapter — so a server that implements anything less than every endpoint above silently loses rollback history for that endpoint's mutations.
 
 ```
 GET  /records/:id/versions            — list all versions (newest first)
@@ -476,7 +477,7 @@ POST /records/:id/restore/:version    — restore a version (creates new version
 
 Both `GET` endpoints require the requester to hold the same mutate-surface authorization as a write to the record (write access, or owner/creator, or a Group's admin) — **not** plain read access; a read-only requester gets `403`. Every requester who passes that gate gets the same body. See [Versioning & deletion](./versioning.md#history-access) for the rationale.
 
-**The list answers an envelope, `{ "versions": [...], "cursor": ... }`, paged like [the journal](#journal) but newest first.** `limit` bounds the page and `beforeVersion` is exclusive. `cursor` is the only end-of-history signal: a server MAY answer a page shorter than the `limit` asked for, so a short page must not be read as an exhausted history. It carries the `version` to send back as `beforeVersion`, and is `null` once nothing follows. `APIAdapter.getVersions()` follows it to the end when no `limit` is given, so the library contract that omitting `limit` reads every version survives whatever page size a server picks. Neither param has a default, and `@haverstack/core/wire` exports `parseVersionsParams()` to decode them.
+**The list answers an envelope, `{ "versions": [...], "cursor": ... }`, newest first ([Data model § List order](./data-model.md#list-order)).** `limit` bounds the page and `beforeVersion` is exclusive. `cursor` is the only end-of-history signal: a server MAY answer a page shorter than the `limit` asked for, so a short page must not be read as an exhausted history. It carries the `version` to send back as `beforeVersion`, and is `null` once nothing follows. `APIAdapter.getVersions()` follows it to the end when no `limit` is given, so the library contract that omitting `limit` reads every version survives whatever page size a server picks. Neither param has a default, and `@haverstack/core/wire` exports `parseVersionsParams()` to decode them.
 
 **A snapshot body carries no `associations`, `permissions`, `parentId` or `unlistedAt`** — no version has ever captured any of the four (see [Versioning § Version history](./versioning.md#version-history)). `WireVersion` has no such field, so a server that emits one is writing a key every client drops.
 
@@ -484,7 +485,7 @@ The second durable tier a mutation writes is [the change journal](./journal.md),
 
 `POST .../restore/:version` accepts the same optional `If-Match` precondition described under [Optimistic concurrency](#optimistic-concurrency). It settles `content` and `typeId` alone, so it never moves the record and never lists or unlists it: neither the **403** nor the **409** a `PUT .../parent` can earn has a site here. A snapshot naming a `file-ref` the requester cannot currently reach still answers **403**, which is the only reference a restore can re-convey. See [Versioning § Restore semantics](./versioning.md#restore-semantics).
 
-**The [change feed](./change-feed.md) reports on a wider list than snapshotting does**: every endpoint above, plus create, purge, the association and permission endpoints, and a `PATCH` naming only no-bump keys — none of which snapshots. A server that skips an endpoint there loses reactivity for that verb exactly as silently as a version-bumping endpoint's omission loses rollback history here.
+**The [change feed](./change-feed.md) reports on a wider list than snapshotting does**: every endpoint above, plus create, purge and every [no-bump write](./versioning.md#version-history) — none of which snapshots. A server that skips an endpoint there loses reactivity for that verb exactly as silently as a version-bumping endpoint's omission loses rollback history here.
 
 ## Journal
 

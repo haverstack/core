@@ -39,7 +39,7 @@ type RecordVersion = {
 
 **API surface:**
 
-- `stack.getVersions(recordId, query?)` — retrieve version history, **newest first** on every adapter (the same order [`GET /records/:id/versions`](./wire-format.md#versions) answers in), so the restore point just before the current version comes first and a page of history starts at the useful end. [`getJournal()`](./journal.md) runs the other way: an append-only log tailed forward from a cursor reads oldest first.
+- `stack.getVersions(recordId, query?)` — retrieve version history, **newest first** on every adapter (the same order [`GET /records/:id/versions`](./wire-format.md#versions) answers in), since a reader choosing a restore point almost always wants a recent one: `getVersions(id, { limit: n })` is the last `n`. See [Data model § List order](./data-model.md#list-order).
 
   `query` is a `VersionsQuery` — `beforeVersion` (exclusive: versions strictly older than it) and `limit` — in the shape of the journal's `afterSeq` and `limit`. Omitting both reads every version, as omitting them on `getJournal()` reads the whole log. Paging walks every version exactly once: send the last version of a page as the next `beforeVersion`.
 
