@@ -31,6 +31,7 @@ import {
   planFingerprint,
   sameRequest,
   snapshotManifest,
+  canonicalRequests,
 } from '../install.js';
 import { baseIdOf, diffSchemas, hashSchema, parseTypeId } from '../schema.js';
 import { findAppCardByDid, loadInstallRecords, queryAllPages } from './reads.js';
@@ -69,8 +70,12 @@ export async function planInstall(
   opts: { did: EntityId },
 ): Promise<InstallPlan> {
   const { did } = opts;
-  const manifest = snapshotManifest(submitted);
-  checkManifest(manifest, did);
+  const checked = snapshotManifest(submitted);
+  checkManifest(checked, did);
+  const manifest = snapshotManifest({
+    ...checked,
+    requests: canonicalRequests(checked.requests),
+  });
 
   const installs = await loadInstallRecords(stack);
   const existing = installs.find((r) => r.content.appId === manifest.appId) ?? null;

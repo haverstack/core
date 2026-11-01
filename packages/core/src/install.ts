@@ -316,11 +316,10 @@ export function isPlanEmpty(plan: InstallPlan): boolean {
 
 /**
  * The fingerprint of a plan: a SHA-256 over its manifest and the parts of
- * it that depend on the stack, each in the form core already compares it
- * in — a type by its id, name, lineage and schemaHash, a request by its
- * family and its set of actions — and every list sorted. Two plans share
- * one only when applying either would do the same thing, and reordering a
- * manifest's types, requests, actions or enum values leaves it unchanged.
+ * it that depend on the stack. A type is taken by its id, name, lineage and
+ * schemaHash, and every list as a sorted set; planInstall() has already put
+ * requests in canonicalRequests() form. Two plans share one only when
+ * applying either would do the same thing as core compares it.
  */
 export async function planFingerprint(plan: Omit<InstallPlan, 'fingerprint'>): Promise<string> {
   const { manifest } = plan;
@@ -337,36 +336,42 @@ export async function planFingerprint(plan: Omit<InstallPlan, 'fingerprint'>): P
       manifest.appId,
       manifest.name,
       manifest.version ?? null,
-      sortedBy(types, (t) => t.id),
-      canonicalRequests(manifest.requests),
+      sortedSet(types),
+      sortedSet(manifest.requests),
       plan.did,
       plan.existing?.id ?? null,
       plan.existing?.version ?? null,
       plan.existing?.deletedAt ? true : false,
-      [...plan.newFamilies].sort(),
-      [...plan.newVersions].sort(),
-      canonicalRequests(plan.requestsAdded),
-      canonicalRequests(plan.requestsRemoved),
-      sortedBy(
-        plan.foreignRequests.map((r) => ({ ...canonicalRequest(r), owner: r.owner })),
-        (r) => JSON.stringify(r),
-      ),
-      sortedBy(plan.typeChanges, (c) => `${c.id} ${c.change}`),
+      sortedSet(plan.newFamilies),
+      sortedSet(plan.newVersions),
+      sortedSet(plan.requestsAdded),
+      sortedSet(plan.requestsRemoved),
+      sortedSet(plan.foreignRequests),
+      sortedSet(plan.typeChanges),
       plan.newKey,
-      [...plan.linkedKeys].sort(),
+      sortedSet(plan.linkedKeys),
     ]),
   );
 }
 
-/** A request as core compares it: its family and its set of actions. */
-const canonicalRequest = (r: InstallRequest) => ({
-  baseId: r.baseId,
-  actions: [...new Set(r.actions)].sort(),
-});
+/** A list read as a set: its members sorted by their JSON form. */
+const sortedSet = <T>(items: readonly T[]): T[] =>
+  items
+    .map((item) => [JSON.stringify(item), item] as const)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([, item]) => item);
 
-/** A list of requests as a set of canonical requests. */
-const canonicalRequests = (requests: readonly InstallRequest[]) =>
-  [...new Set(requests.map((r) => JSON.stringify(canonicalRequest(r))))].sort();
-
-const sortedBy = <T>(items: readonly T[], key: (item: T) => string): T[] =>
-  [...items].sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0));
+/**
+ * Requests in the form core compares them in — each a family and a set of
+ * actions, and the list a set of requests — sorted, with repeats dropped.
+ * planInstall() puts a manifest's requests in this form, so what the
+ * install stores is what the plan compared.
+ */
+export function canonicalRequests(requests: readonly InstallRequest[]): InstallRequest[] {
+  const unique = new Map<string, InstallRequest>();
+  for (const r of requests) {
+    const request = { baseId: r.baseId, actions: [...new Set(r.actions)].sort() };
+    unique.set(JSON.stringify(request), request);
+  }
+  return sortedSet([...unique.values()]);
+}

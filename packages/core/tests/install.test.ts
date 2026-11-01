@@ -195,6 +195,31 @@ describe('installApp()', () => {
     }
   });
 
+  test('a repeated request or action is stored as the one the fingerprint counts', async () => {
+    const note = { baseId: 'com.example.notes/note', actions: ['create', 'read-any'] } as const;
+    const plain = await stack.planInstall(
+      manifest({ requests: [{ ...note, actions: [...note.actions] }] }),
+      {
+        did: APP_DID,
+      },
+    );
+    const repeated = await stack.planInstall(
+      manifest({
+        requests: [
+          { ...note, actions: ['read-any', 'create', 'create'] },
+          { ...note, actions: [...note.actions] },
+        ],
+      }),
+      { did: APP_DID },
+    );
+    expect(repeated.fingerprint).toBe(plain.fingerprint);
+    expect(repeated.manifest.requests).toEqual(plain.manifest.requests);
+    const record = await apply(repeated);
+    expect(record.content.requests).toEqual([
+      { baseId: note.baseId, actions: ['create', 'read-any'] },
+    ]);
+  });
+
   test('applies a manifest only while it plans to the approved fingerprint', async () => {
     const reviewed = await stack.planInstall(manifest(), { did: APP_DID });
     await stack.defineType(manifest().types[0]!);
@@ -305,11 +330,13 @@ describe('installApp()', () => {
       }),
       { did: APP_DID },
     );
-    expect(plan.foreignRequests).toEqual([
+    const expected = [
       { baseId: 'com.example.tags/tag', actions: ['read-any'], owner: 'com.example.tags' },
       { baseId: 'org.haverstack/note', actions: ['read-any'], owner: 'commons' },
       { baseId: '_entity', actions: ['read-any'], owner: 'system' },
-    ]);
+    ];
+    expect(plan.foreignRequests).toHaveLength(expected.length);
+    expect(plan.foreignRequests).toEqual(expect.arrayContaining(expected));
   });
 
   test('another app’s family can be used through a request, never defined', async () => {
