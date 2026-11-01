@@ -55,8 +55,8 @@ export type DoSQLiteRecordAdapterOpenOptions =
 // -------------------------------------------------------
 
 export class DoSQLiteRecordAdapter extends SharedSqlRecordAdapter {
-  private constructor(exec: DurableObjectSqliteExecutor, identity: ConfigContent) {
-    super(exec, identity);
+  private constructor(exec: DurableObjectSqliteExecutor, config: ConfigContent) {
+    super(exec, config);
   }
 
   /**
@@ -75,13 +75,13 @@ export class DoSQLiteRecordAdapter extends SharedSqlRecordAdapter {
     opts: DoSQLiteRecordAdapterOpenOptions,
   ): Promise<DoSQLiteRecordAdapter> {
     const exec = new DurableObjectSqliteExecutor(storage);
-    const identity = await openStore(exec, {
+    const config = await openStore(exec, {
       ...opts,
       mode: 'ifMissing',
       where: 'the Durable Object storage',
       wal: false,
     });
-    return new DoSQLiteRecordAdapter(exec, identity);
+    return new DoSQLiteRecordAdapter(exec, config);
   }
 
   // -------------------------------------------------------

@@ -1,7 +1,7 @@
 import { describe, test, expect } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
 import { FormatMismatchError, newStoreSeed } from '@haverstack/core/adapter';
-import { openStore, writeNewStore, readStoredIdentity } from '../src/config.js';
+import { openStore, writeNewStore, readStoredConfig } from '../src/config.js';
 import type { SqlExecutor } from '../src/executor.js';
 import { FORMAT_VERSION } from '../src/schema.js';
 
@@ -47,13 +47,13 @@ const thrown = (fn: () => unknown): unknown => {
   }
 };
 
-describe('readStoredIdentity', () => {
+describe('readStoredConfig', () => {
   test('is null for a database holding no store', () => {
-    expect(readStoredIdentity(empty(), 'here')).toBeNull();
+    expect(readStoredConfig(empty(), 'here')).toBeNull();
   });
 
-  test('reads back the identity a create wrote', () => {
-    expect(readStoredIdentity(created(), 'here')).toEqual({ ownerEntityId: 'did:key:owner' });
+  test('reads back the _config a create wrote', () => {
+    expect(readStoredConfig(created(), 'here')).toEqual({ ownerEntityId: 'did:key:owner' });
   });
 
   test.each([
@@ -63,7 +63,7 @@ describe('readStoredIdentity', () => {
     const exec = created();
     exec.exec(sql);
     const before = tables(exec);
-    const err = thrown(() => readStoredIdentity(exec, 'here'));
+    const err = thrown(() => readStoredConfig(exec, 'here'));
     expect(err).toBeInstanceOf(FormatMismatchError);
     expect(err).toMatchObject({ expected: FORMAT_VERSION, actual, where: 'here' });
     expect(tables(exec)).toBe(before);
@@ -71,10 +71,10 @@ describe('readStoredIdentity', () => {
 });
 
 describe('writeNewStore', () => {
-  test('returns the identity it wrote, matching what a later read yields', () => {
+  test('returns the _config it wrote, matching what a later read yields', () => {
     const exec = empty();
     const written = writeNewStore(exec, newStoreSeed({ ownerEntityId: 'did:key:owner' }));
-    expect(written).toEqual(readStoredIdentity(exec, 'here'));
+    expect(written).toEqual(readStoredConfig(exec, 'here'));
   });
 
   // The tables, the format row and _config are one fact: a create failing

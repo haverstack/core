@@ -76,9 +76,9 @@ export abstract class SharedSqlRecordAdapter implements StackRecordAdapter {
 
   private readonly record: SharedSqlRecordLogic;
 
-  protected constructor(exec: SqlExecutor, identity: ConfigContent) {
+  protected constructor(exec: SqlExecutor, config: ConfigContent) {
     this.record = new SharedSqlRecordLogic({ exec });
-    this.ownerEntityId = identity.ownerEntityId;
+    this.ownerEntityId = config.ownerEntityId;
   }
 
   // -------------------------------------------------------

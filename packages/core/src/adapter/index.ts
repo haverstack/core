@@ -36,7 +36,7 @@ export {
 export { combineAdapters } from './combine.js';
 export { copyStack } from './copy.js';
 export type { CreateStore } from './copy.js';
-export { identityOf, newStoreSeed } from './seed.js';
+export { newStoreSeed } from './seed.js';
 export { inReach } from './reach.js';
 export type { ReachedRecord } from './reach.js';
 export {

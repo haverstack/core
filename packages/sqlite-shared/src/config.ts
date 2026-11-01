@@ -1,9 +1,4 @@
-import {
-  FormatMismatchError,
-  OwnerMismatchError,
-  identityOf,
-  newStoreSeed,
-} from '@haverstack/core/adapter';
+import { FormatMismatchError, OwnerMismatchError, newStoreSeed } from '@haverstack/core/adapter';
 import type { ConfigContent } from '@haverstack/core';
 import type { StoreSeed } from '@haverstack/core/adapter';
 import type { SqlExecutor } from './executor.js';
@@ -36,7 +31,7 @@ export const missingStoreError = (where: string): Error =>
  * row and the `_config` record its seed carries, with that record's history —
  * in one transaction, so a store is either whole or not there. `_config` is
  * written as importRecord() writes any Record. Only valid on a database
- * readStoredIdentity() found missing.
+ * readStoredConfig() found missing.
  */
 export const writeNewStore = (exec: SqlExecutor, seed: StoreSeed): ConfigContent => {
   exec.transaction(() => {
@@ -45,17 +40,17 @@ export const writeNewStore = (exec: SqlExecutor, seed: StoreSeed): ConfigContent
     exec.run('INSERT INTO format (id, version) VALUES (1, ?)', [FORMAT_VERSION]);
     new SharedSqlRecordLogic({ exec }).writeImported(seed.config, seed.history);
   });
-  return identityOf(seed);
+  return seed.config.content as ConfigContent;
 };
 
 /**
- * The identity a store holds, or null when the database holds no store.
+ * The `_config` content a store holds, or null when the database holds no store.
  * Stores are written whole, so the `format` table alone says whether one is
  * there; a store must name FORMAT_VERSION, or it is refused — a store moves
  * to another layout only by being copied into one. Reads only, so a refused
  * store is left untouched. See docs/spec/adapters.md § Construction.
  */
-export const readStoredIdentity = (exec: SqlExecutor, where: string): ConfigContent | null => {
+export const readStoredConfig = (exec: SqlExecutor, where: string): ConfigContent | null => {
   const hasFormat =
     exec.get(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'format'`) !== undefined;
   if (!hasFormat) return null;
@@ -86,7 +81,7 @@ export const openStore = async (
   exec: SqlExecutor,
   opts: OpenStoreOptions,
 ): Promise<ConfigContent> => {
-  const stored = readStoredIdentity(exec, opts.where);
+  const stored = readStoredConfig(exec, opts.where);
   if (!stored && opts.mode === 'never') throw missingStoreError(opts.where);
   // A seed is a new store's whole first state, so it creates or fails.
   if (stored && (opts.mode === 'exclusive' || opts.seed)) {

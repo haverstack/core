@@ -92,9 +92,9 @@ export class NativeSQLiteRecordAdapter extends SharedSqlRecordAdapter {
     private readonly path: string,
     private readonly db: DatabaseSync,
     exec: NativeSqliteExecutor,
-    identity: ConfigContent,
+    config: ConfigContent,
   ) {
-    super(exec, identity);
+    super(exec, config);
   }
 
   /**
@@ -118,8 +118,8 @@ export class NativeSQLiteRecordAdapter extends SharedSqlRecordAdapter {
     try {
       db = new DatabaseSync(opts.path);
       const exec = new NativeSqliteExecutor(db);
-      const identity = await openStore(exec, { ...opts, mode, where, wal: true });
-      return new NativeSQLiteRecordAdapter(opts.path, db, exec, identity);
+      const config = await openStore(exec, { ...opts, mode, where, wal: true });
+      return new NativeSQLiteRecordAdapter(opts.path, db, exec, config);
     } catch (err) {
       db?.close();
       // A failed open leaves the filesystem as it found it.
