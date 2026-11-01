@@ -221,6 +221,7 @@ A server built on core reaches this through the wire parsers in `@haverstack/cor
 | `GET /changes`                                        | `parseChangeParams()`           |
 | `GET /attachments/:fileId`                            | `parseDownloadParams()`         |
 | `POST /types`                                         | `parseTypeBody()`               |
+| `POST /installs`                                      | `parseInstallBody()`            |
 | `POST /auth/challenge`                                | `parseAuthChallengeBody()`      |
 | `POST /auth/token`                                    | `parseAuthTokenBody()`          |
 
