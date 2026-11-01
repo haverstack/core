@@ -101,6 +101,23 @@ export type InstallPlan = {
    * as the same app. See docs/spec/apps.md § Plan, then apply.
    */
   linkedKeys: EntityId[];
+  /**
+   * Names this plan: the manifest it was made from and everything above
+   * that depends on the stack. Two plans share one exactly when applying
+   * either would do the same thing, so an approval made in one request can
+   * be checked in another. See docs/spec/apps.md § Plan, then apply.
+   */
+  fingerprint: string;
+};
+
+/**
+ * How `installApp()` is told which plan was approved. A caller that shows
+ * a plan in one request and applies it in another plans the manifest again
+ * and passes the reviewed plan's `fingerprint`, so what lands is what was
+ * shown. Absent, the plan handed in is the one approved.
+ */
+export type InstallAppOptions = {
+  fingerprint?: string;
 };
 
 /** Relationship label from an install to an `_app` card it was installed for. */
@@ -296,11 +313,14 @@ export function isPlanEmpty(plan: InstallPlan): boolean {
 }
 
 /**
- * The parts of a plan that depend on the stack's state — what
- * `installApp()` compares to refuse a stale one.
+ * The fingerprint of a plan: a SHA-256 over its manifest, keys sorted so
+ * their order is no difference, and the parts that depend on the stack's
+ * state — what `installApp()` compares to refuse a stale plan.
  */
-export function planFingerprint(plan: InstallPlan): string {
-  return JSON.stringify([
+export async function planFingerprint(plan: Omit<InstallPlan, 'fingerprint'>): Promise<string> {
+  const parts = JSON.stringify([
+    sortKeys(plan.manifest),
+    plan.did,
     plan.existing?.id ?? null,
     plan.existing?.version ?? null,
     plan.existing?.deletedAt ? true : false,
@@ -313,4 +333,16 @@ export function planFingerprint(plan: InstallPlan): string {
     plan.newKey,
     plan.linkedKeys,
   ]);
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(parts));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+function sortKeys(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortKeys);
+  if (value === null || typeof value !== 'object') return value;
+  return Object.fromEntries(
+    Object.keys(value)
+      .sort()
+      .map((key) => [key, sortKeys((value as Record<string, unknown>)[key])]),
+  );
 }

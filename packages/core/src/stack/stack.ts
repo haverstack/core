@@ -122,7 +122,7 @@ import { validateGrantee, validateGrantBaseId } from '../grants.js';
 import type { GrantQuery } from '../grants.js';
 import { bindingFieldsOf } from './identity-bindings.js';
 import { validateInstall } from '../install.js';
-import type { AppManifest, InstallPlan } from '../install.js';
+import type { AppManifest, InstallAppOptions, InstallPlan } from '../install.js';
 import { assertAttachmentSize, assertContentSize } from './limits.js';
 import {
   validateRecordId,
@@ -1707,12 +1707,16 @@ export class Stack implements StackClient {
   /**
    * Apply an approved plan: types, the key's `_app` card, the `_install`
    * Record and every linked key's grants. A plan the stack has moved on
-   * from is a StackConflictError, so what lands is what was approved.
-   * See docs/spec/apps.md § Plan, then apply.
+   * from — or, with `opts.fingerprint`, one that is no longer the plan the
+   * owner approved — is a StackConflictError, so what lands is what was
+   * approved. See docs/spec/apps.md § Plan, then apply.
    */
-  async installApp(plan: InstallPlan): Promise<StackRecord & { content: InstallContent }> {
+  async installApp(
+    plan: InstallPlan,
+    opts?: InstallAppOptions,
+  ): Promise<StackRecord & { content: InstallContent }> {
     this.assertOpen();
-    return apps.installApp(this, plan);
+    return apps.installApp(this, plan, opts);
   }
 
   /**

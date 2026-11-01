@@ -78,6 +78,7 @@ type InstallPlan = {
   typeChanges: { id: TypeId; change: 'new' | 'schema' | 'name' }[]; // types installApp() would write
   newKey: boolean; // whether `did` is not yet linked, or linked through a soft-deleted `_app` card
   linkedKeys: EntityId[]; // keys already linked, whose grants the plan also sets
+  fingerprint: string; // names this plan: the manifest and everything above that depends on the stack
 };
 ```
 
@@ -98,7 +99,9 @@ It refuses what no approval could make valid: a type outside the app's own names
 3. Creates the install, or patches it — undeleting it first if it was uninstalled. `defines` gains the manifest's versions and never loses any, since a Type once defined stays defined; `requests` becomes the manifest's.
 4. Brings the grants of **every** key linked to the install to exactly `requests`: a grant no longer requested is revoked, a missing one is written, and the links follow.
 
-**Nothing is applied that was not approved.** `installApp()` plans the same manifest again and refuses with `StackConflictError` when the result differs from the plan it was handed — the install changing, a type being defined, or a key being linked, since it was planned. The remedy is to plan again and show the owner the new plan. A plan holds a frozen copy of the manifest it was made from, so changing the caller's object afterwards changes nothing that is applied. Re-applying a manifest whose plan is empty changes nothing. A plan is empty only when the manifest's `name` and `version` are also the install's, so an upgrade that changes only those still reaches the owner.
+**Nothing is applied that was not approved.** `installApp()` plans the same manifest again and refuses with `StackConflictError` when the result's `fingerprint` differs from the plan it was handed — the install changing, a type being defined, or a key being linked, since it was planned. The remedy is to plan again and show the owner the new plan.
+
+**An approval can travel without its plan.** A server shows the owner a plan in one request and applies it in another, holding only the manifest in between. It carries the reviewed plan's `fingerprint` instead: `installApp(plan, { fingerprint })` plans again and refuses with the same `StackConflictError` unless the result is still the plan with that fingerprint. The fingerprint covers the manifest, its keys sorted so their order is no difference, so an approval of one manifest never applies another. A plan holds a frozen copy of the manifest it was made from, so changing the caller's object afterwards changes nothing that is applied. Re-applying a manifest whose plan is empty changes nothing. A plan is empty only when the manifest's `name` and `version` are also the install's, so an upgrade that changes only those still reaches the owner.
 
 ## Migrating an installed app's types
 

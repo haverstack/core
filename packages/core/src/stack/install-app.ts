@@ -40,7 +40,13 @@ import {
   validateSchemaReservedNames,
   validateSchemaShape,
 } from '../validate.js';
-import type { AppManifest, ForeignRequest, InstallPlan, TypeChange } from '../install.js';
+import type {
+  AppManifest,
+  ForeignRequest,
+  InstallAppOptions,
+  InstallPlan,
+  TypeChange,
+} from '../install.js';
 import type {
   AppContent,
   AppId,
@@ -113,7 +119,7 @@ export async function planInstall(
     if (typeof key === 'string') linkedKeys.push(key);
   }
 
-  return {
+  const plan = {
     manifest,
     did,
     existing,
@@ -130,14 +136,16 @@ export async function planInstall(
       !linkedIds(existing, INSTALL_APP_LABEL).includes(card.id),
     linkedKeys,
   };
+  return { ...plan, fingerprint: await planFingerprint(plan) };
 }
 
 export async function installApp(
   stack: Stack,
   plan: InstallPlan,
+  opts: InstallAppOptions = {},
 ): Promise<StackRecord & { content: InstallContent }> {
   const fresh = await planInstall(stack, plan.manifest, { did: plan.did });
-  if (planFingerprint(fresh) !== planFingerprint(plan)) {
+  if (fresh.fingerprint !== (opts.fingerprint ?? plan.fingerprint)) {
     throw new StackConflictError(
       `The stack changed since the install of "${plan.manifest.appId}" was planned; plan it again`,
     );

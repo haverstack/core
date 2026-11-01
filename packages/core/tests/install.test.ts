@@ -149,6 +149,45 @@ describe('installApp()', () => {
     await expect(stack.installApp(plan)).rejects.toThrow(StackConflictError);
   });
 
+  test('a plan is named by a fingerprint shared exactly by plans that would do the same', async () => {
+    const plan = await stack.planInstall(manifest(), { did: APP_DID });
+    expect(plan.fingerprint).toMatch(/^[0-9a-f]{64}$/);
+    // Key order in the manifest is no difference; a changed manifest is.
+    const reordered = Object.fromEntries(Object.entries(manifest()).reverse()) as AppManifest;
+    expect((await stack.planInstall(reordered, { did: APP_DID })).fingerprint).toBe(
+      plan.fingerprint,
+    );
+    expect(
+      (await stack.planInstall(manifest({ name: 'Notes+' }), { did: APP_DID })).fingerprint,
+    ).not.toBe(plan.fingerprint);
+    expect((await stack.planInstall(manifest(), { did: OTHER_DID })).fingerprint).not.toBe(
+      plan.fingerprint,
+    );
+  });
+
+  test('applies a fresh plan only while it is the plan the owner approved', async () => {
+    const reviewed = await stack.planInstall(manifest(), { did: APP_DID });
+    await stack.defineType(manifest().types[0]!);
+
+    // Planned again after the stack moved, the approval still names the old plan.
+    const fresh = await stack.planInstall(manifest(), { did: APP_DID });
+    await expect(stack.installApp(fresh, { fingerprint: reviewed.fingerprint })).rejects.toThrow(
+      StackConflictError,
+    );
+    expect(await stack.query({ filter: { baseId: '_install' } })).toMatchObject({ records: [] });
+
+    const record = await stack.installApp(fresh, { fingerprint: fresh.fingerprint });
+    expect(record.content).toMatchObject({ appId: 'com.example.notes' });
+  });
+
+  test('an approval of one manifest does not apply another', async () => {
+    const reviewed = await stack.planInstall(manifest(), { did: APP_DID });
+    const other = await stack.planInstall(manifest({ version: '2.0.0' }), { did: APP_DID });
+    await expect(stack.installApp(other, { fingerprint: reviewed.fingerprint })).rejects.toThrow(
+      StackConflictError,
+    );
+  });
+
   test('the plan lists every type it would write, commons types included', async () => {
     const commons = { id: COMMONS_NOTE, name: 'Note', schema: { body: { kind: 'text' } } } as const;
     const plan = await stack.planInstall(manifest({ types: [manifest().types[0]!, commons] }), {
