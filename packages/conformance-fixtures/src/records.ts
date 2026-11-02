@@ -342,8 +342,11 @@ export const deleteRecordFixtures: ConformanceFixture<undefined, WireRecord | un
     name: 'delete-record-soft',
     description:
       'DELETE /records/:id soft-deletes — record and version history are retained — and answers ' +
-      'with the record it produced, carrying deletedAt and the bumped version. ' +
-      'See docs/spec/wire-format.md § Records.',
+      'with the record it produced: the tombstone, carrying deletedAt and the bumped version ' +
+      'with content emptied and associations, parentId and authorship absent, for every ' +
+      'requester, the owner included. The content a soft delete removes is read back through ' +
+      'version history, never off this body. See docs/spec/wire-format.md § Records and ' +
+      'docs/spec/versioning.md § The tombstone is literal.',
     method: 'DELETE',
     path: '/records/1hk153x00001',
     responseStatus: 200,
@@ -352,7 +355,7 @@ export const deleteRecordFixtures: ConformanceFixture<undefined, WireRecord | un
       typeId: 'com.example/note@1',
       createdAt: '2024-01-01T00:00:00.000Z',
       updatedAt: '2024-01-02T00:00:00.000Z',
-      content: { title: 'Hello', body: 'World' },
+      content: {},
       version: 2,
       deletedAt: '2024-01-02T00:00:00.000Z',
     },

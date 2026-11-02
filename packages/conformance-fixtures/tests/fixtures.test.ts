@@ -69,6 +69,34 @@ describe('every fixture group', () => {
     expect([...counts].filter(([, n]) => n > 1).map(([name]) => name)).toEqual([]);
   });
 
+  // Every channel serves a soft-deleted record the same way, so the rule is
+  // asserted over every response rather than fixture by fixture.
+  // See docs/spec/versioning.md § The tombstone is literal.
+  it('serves every soft-deleted record as the tombstone projection', () => {
+    const served = (body: unknown): Record<string, unknown>[] => {
+      if (typeof body !== 'object' || body === null) return [];
+      const records = (body as { records?: unknown }).records;
+      return Array.isArray(records) ? records : [body as Record<string, unknown>];
+    };
+    const withheld = ['associations', 'parentId', 'createdBy', 'appId', 'updatedBy'];
+    let tombstones = 0;
+    for (const [group, value] of exportedArrays) {
+      for (const fixture of collect(value, [])) {
+        for (const record of served((fixture as { responseBody?: unknown }).responseBody)) {
+          if (record.deletedAt === undefined) continue;
+          tombstones++;
+          const label = `${group}/${fixture.name}`;
+          expect(record.content, label).toEqual({});
+          expect(
+            withheld.filter((key) => key in record),
+            label,
+          ).toEqual([]);
+        }
+      }
+    }
+    expect(tombstones).toBeGreaterThan(0);
+  });
+
   it('describes what each fixture pins', () => {
     for (const [group, value] of exportedArrays) {
       for (const { name, description } of collect(value, [])) {
