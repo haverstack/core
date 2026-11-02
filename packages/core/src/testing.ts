@@ -47,9 +47,8 @@ import { compareSortEntries, constantSortEntry, contentSortEntry } from './adapt
 import type { SortEntry } from './adapter/sort.js';
 import { inReach } from './adapter/reach.js';
 import { newStoreSeed } from './adapter/seed.js';
-import { blobWindow } from './adapter/blobs.js';
+import { assertFileId, blobWindow } from './adapter/blobs.js';
 import { WriteHead } from './adapter/head.js';
-import { FILE_ID_RE } from './validate.js';
 
 import {
   ElementSetMovedError,
@@ -709,9 +708,7 @@ export class MemoryAdapter implements StackAdapter {
     return fileId;
   }
   async getBlob(fileId: string): Promise<Uint8Array> {
-    if (!FILE_ID_RE.test(fileId)) {
-      throw new StackBadRequestError(`Invalid fileId: expected 64-character lowercase hex string`);
-    }
+    assertFileId(fileId);
     const blob = this.blobs.get(fileId);
     if (!blob) throw new StackNotFoundError(`Attachment not found: "${fileId}"`);
     return new Uint8Array(blob.data);

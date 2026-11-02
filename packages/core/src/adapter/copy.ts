@@ -139,6 +139,7 @@ async function copyRecords(
   do {
     const page = await from.queryRecords(resolveQuery({ ...EVERYTHING, cursor }));
     for (const record of page.records) {
+      // One Record's history is read whole, as importRecord() takes it.
       const [versions, journal] = await Promise.all([
         from.getVersions(record.id),
         from.getJournal(record.id),

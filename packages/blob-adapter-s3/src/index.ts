@@ -25,16 +25,10 @@ import {
   NotFound,
   type S3ClientConfig,
 } from '@aws-sdk/client-s3';
-import { StackNotFoundError, StackBadRequestError } from '@haverstack/core';
+import { StackNotFoundError } from '@haverstack/core';
 import type { FileId } from '@haverstack/core';
-import { FILE_ID_RE, WriteHead } from '@haverstack/core/adapter';
+import { FILE_ID_RE, WriteHead, assertFileId } from '@haverstack/core/adapter';
 import type { StackBlobAdapter, BlobInfo, BlobsQuery } from '@haverstack/core/adapter';
-
-const assertFileId = (fileId: string): void => {
-  if (!FILE_ID_RE.test(fileId)) {
-    throw new StackBadRequestError(`Invalid fileId: expected 64-character lowercase hex string`);
-  }
-};
 
 export type S3BlobAdapterOptions = {
   /** Bucket to store blobs in. */

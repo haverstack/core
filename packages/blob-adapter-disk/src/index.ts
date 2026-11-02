@@ -15,16 +15,10 @@ import { createHash, randomBytes } from 'node:crypto';
 import { mkdirSync, existsSync } from 'fs';
 import { readFile, writeFile, unlink, readdir, stat, rename } from 'fs/promises';
 import { join } from 'path';
-import { StackNotFoundError, StackBadRequestError } from '@haverstack/core';
+import { StackNotFoundError } from '@haverstack/core';
 import type { FileId } from '@haverstack/core';
-import { FILE_ID_RE, WriteHead, blobWindow } from '@haverstack/core/adapter';
+import { FILE_ID_RE, WriteHead, assertFileId, blobWindow } from '@haverstack/core/adapter';
 import type { StackBlobAdapter, BlobInfo, BlobsQuery } from '@haverstack/core/adapter';
-
-const assertFileId = (fileId: string): void => {
-  if (!FILE_ID_RE.test(fileId)) {
-    throw new StackBadRequestError(`Invalid fileId: expected 64-character lowercase hex string`);
-  }
-};
 
 export type DiskBlobAdapterOptions = {
   /** Directory to store blobs in. Created if it doesn't exist. */

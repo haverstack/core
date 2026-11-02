@@ -34,7 +34,7 @@ export {
   OwnerMismatchError,
   softDeletedRefusal,
 } from '../errors.js';
-export { blobWindow } from './blobs.js';
+export { assertFileId, blobWindow } from './blobs.js';
 export { WriteHead, combinedHead } from './head.js';
 export { FILE_ID_RE } from '../validate.js';
 export { combineAdapters } from './combine.js';

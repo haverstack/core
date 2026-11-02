@@ -694,14 +694,65 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         expect(await adapter.head()).toBe(before);
       });
 
-      test('moves on a Record write and on a Type write', async () => {
+      // Every write method on StackRecordAdapter, so an adapter that moves
+      // its head by hand cannot miss one and still pass.
+      const ATTACHMENT_FILE = 'a'.repeat(64);
+      const writes: [string, (record: StackRecord) => Promise<unknown> | undefined][] = [
+        ['createRecord', () => adapter.createRecord(makeRecord())],
+        ['importRecord', () => adapter.importRecord?.(makeRecord(), { versions: [], journal: [] })],
+        ['patchContent', (r) => adapter.patchContent(r.id, { title: 'moved' })],
+        ['setParent', async (r) => adapter.setParent(r.id, null)],
+        ['setUnlisted', (r) => adapter.setUnlisted(r.id, true)],
+        [
+          'editAssociations',
+          (r) =>
+            adapter.editAssociations(r.id, [
+              { op: 'add', association: { kind: 'tag', label: 't' } },
+            ]),
+        ],
+        ['setAssociations', (r) => adapter.setAssociations(r.id, [{ kind: 'tag', label: 't' }])],
+        [
+          'editAccess',
+          (r) =>
+            adapter.editAccess(r.id, [
+              { op: 'add', association: { kind: 'anyone', label: 'read' } },
+            ]),
+        ],
+        ['setAccess', (r) => adapter.setAccess(r.id, [{ kind: 'anyone', label: 'read' }])],
+        ['deleteRecord', (r) => adapter.deleteRecord(r.id)],
+        ['deleteRecord with purge', (r) => adapter.deleteRecord(r.id, { purge: true })],
+        ['undeleteRecord', (r) => adapter.undeleteRecord(r.id)],
+        ['restoreVersion', (r) => adapter.restoreVersion(r.id, r.version)],
+        [
+          'commitMigration',
+          (r) => adapter.commitMigration(r.id, 'org.haverstack.conformance/note@2', { title: 'm' }),
+        ],
+        ['saveType', () => adapter.saveType(conformanceType())],
+        [
+          'deleteUnreferencedAttachmentRecords',
+          () => adapter.deleteUnreferencedAttachmentRecords?.(ATTACHMENT_FILE, '_attachment'),
+        ],
+      ];
+
+      test.each(writes)('moves on %s', async (method, write) => {
         if (!adapter.head) return;
-        const start = await adapter.head();
-        await adapter.createRecord(makeRecord());
-        const afterRecord = await adapter.head();
-        expect(afterRecord).not.toBe(start);
-        await adapter.saveType(conformanceType());
-        expect(await adapter.head()).not.toBe(afterRecord);
+        if (!(adapter as unknown as Record<string, unknown>)[method.split(' ')[0]]) return;
+        // A record each write can act on: one past version to restore, soft
+        // deleted for the undelete, and an unreferenced attachment record.
+        const record = makeRecord();
+        await adapter.createRecord(record);
+        await adapter.patchContent(record.id, { title: 'v2' }, { snapshot: snapshotOf(record) });
+        if (method === 'undeleteRecord') await adapter.deleteRecord(record.id);
+        await adapter.createRecord(
+          makeRecord({
+            typeId: '_attachment@1',
+            content: { fileId: ATTACHMENT_FILE, mimeType: 'text/plain', size: 1 },
+          }),
+        );
+
+        const before = await adapter.head();
+        await write(record);
+        expect(await adapter.head()).not.toBe(before);
       });
     });
 
