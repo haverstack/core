@@ -15,7 +15,6 @@ import {
   StackSchemaDriftError,
   StackValidationError,
 } from '../errors.js';
-import { checkGrantValid } from '../grants.js';
 import {
   INSTALL_APP_LABEL,
   INSTALL_GRANT_LABEL,
@@ -31,6 +30,7 @@ import {
   planFingerprint,
   sameRequest,
   snapshotManifest,
+  validateRequests,
 } from '../install.js';
 import { baseIdOf, diffSchemas, hashSchema, parseTypeId } from '../schema.js';
 import { findAppCardByDid, loadInstallRecords, queryAllPages } from './reads.js';
@@ -40,7 +40,13 @@ import {
   validateSchemaReservedNames,
   validateSchemaShape,
 } from '../validate.js';
-import type { AppManifest, ForeignRequest, InstallPlan, TypeChange } from '../install.js';
+import type {
+  AppManifest,
+  ForeignRequest,
+  InstallAppOptions,
+  InstallPlan,
+  TypeChange,
+} from '../install.js';
 import type {
   AppContent,
   AppId,
@@ -113,7 +119,7 @@ export async function planInstall(
     if (typeof key === 'string') linkedKeys.push(key);
   }
 
-  return {
+  const plan = {
     manifest,
     did,
     existing,
@@ -130,16 +136,19 @@ export async function planInstall(
       !linkedIds(existing, INSTALL_APP_LABEL).includes(card.id),
     linkedKeys,
   };
+  const fingerprint = await planFingerprint(plan);
+  return { ...plan, fingerprint };
 }
 
 export async function installApp(
   stack: Stack,
-  plan: InstallPlan,
+  submitted: AppManifest,
+  opts: InstallAppOptions,
 ): Promise<StackRecord & { content: InstallContent }> {
-  const fresh = await planInstall(stack, plan.manifest, { did: plan.did });
-  if (planFingerprint(fresh) !== planFingerprint(plan)) {
+  const fresh = await planInstall(stack, submitted, { did: opts.did });
+  if (fresh.fingerprint !== opts.fingerprint) {
     throw new StackConflictError(
-      `The stack changed since the install of "${plan.manifest.appId}" was planned; plan it again`,
+      `The install of "${fresh.manifest.appId}" no longer matches the approved plan; plan it again`,
     );
   }
   const { manifest, did, existing } = fresh;
@@ -246,8 +255,8 @@ function checkManifest(manifest: AppManifest, did: EntityId): void {
       }
     }
   });
+  errors.push(...validateRequests(manifest.requests, 'requests'));
   if (errors.length > 0) throw new StackValidationError(errors, ARGUMENTS_INVALID);
-  for (const r of manifest.requests) checkGrantValid(r.baseId, r.actions);
 }
 
 /** The key's `_app` card, created or undeleted as needed. */

@@ -7,13 +7,14 @@
  */
 
 import {
-  checkGrantValid,
+  validateGrant,
   grantCoversGrantee,
   grantReach,
   matchesGrantTarget,
   sameActions,
   validateGrantTarget,
 } from '../grants.js';
+import { ARGUMENTS_INVALID, StackValidationError } from '../errors.js';
 import { assertFamilyId } from '../query-validation.js';
 import { loadGrantRecords, loadRosterRoles } from './reads.js';
 import { Lazy } from '../lazy.js';
@@ -28,7 +29,8 @@ export async function grantType(
   grant: TypeGrant,
 ): Promise<StackRecord & { content: GrantContent }> {
   validateGrantTarget(grant.grantee);
-  checkGrantValid(baseId, grant.actions);
+  const errors = validateGrant(baseId, grant.actions);
+  if (errors.length > 0) throw new StackValidationError(errors, ARGUMENTS_INVALID);
   return stack.create<GrantContent>(`${SYSTEM_TYPES.GRANT}@1`, {
     baseId,
     actions: grant.actions,

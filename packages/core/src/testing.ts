@@ -56,6 +56,7 @@ import {
   StackBadRequestError,
 } from './errors.js';
 import { matchesContent } from './content-match.js';
+import { sha256Hex } from './hash.js';
 import { applyAssociationEdits, sameAssociationSet } from './associations/identity.js';
 
 /** A FileId is the SHA-256 hex digest of its bytes — see docs/spec/attachments.md. */
@@ -682,10 +683,7 @@ export class MemoryAdapter implements StackAdapter {
 
   /** Content-addressed, like the real adapters — needed so file-ref values (SHA-256 hex) validate. */
   async putBlob(data: Uint8Array): Promise<string> {
-    const hashBuffer = await crypto.subtle.digest('SHA-256', data as BufferSource);
-    const fileId = Array.from(new Uint8Array(hashBuffer))
-      .map((b) => b.toString(16).padStart(2, '0'))
-      .join('');
+    const fileId = await sha256Hex(data);
     if (!this.blobs.has(fileId)) {
       this.blobs.set(fileId, { data: new Uint8Array(data), modifiedAt: new Date() });
     }

@@ -720,12 +720,12 @@ How an app holding its own key asks to be installed (see [App installs § Over t
 
 The server plans the manifest for the session's key and answers with the result:
 
-| Status | Body                                      | When                                                                                                                                             |
-| ------ | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `202`  | `{ "status": "pending" }`                 | Applying the manifest would change something. The server queues it for the owner and writes nothing to the stack.                                |
-| `200`  | `{ "status": "installed", "install": … }` | The plan is empty — `isPlanEmpty()` from `@haverstack/core` decides — and `install` is the `_install` record, which the key can read.            |
-| `422`  | `validation`                              | The manifest defines a type outside the app's [own namespace](./apps.md#who-owns-a-family) and the commons, or a request breaks the grant rules. |
-| `409`  | `conflict`                                | The key's `_app` card names a different `appId`.                                                                                                 |
+| Status | Body                                      | When                                                                                                                                                                                                                                              |
+| ------ | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `202`  | `{ "status": "pending" }`                 | Applying the manifest would change something. The server queues it for the owner and writes nothing to the stack.                                                                                                                                 |
+| `200`  | `{ "status": "installed", "install": … }` | The plan is empty — `isPlanEmpty()` from `@haverstack/core` decides — and `install` is the `_install` record, which the key can read.                                                                                                             |
+| `422`  | `validation`                              | The manifest is one [`planInstall()` refuses](./apps.md#plan-then-apply): a type outside the app's [own namespace](./apps.md#who-owns-a-family) and the commons or listed twice, a request breaking the grant rules, or a family requested twice. |
+| `409`  | `conflict`                                | The key's `_app` card names a different `appId`.                                                                                                                                                                                                  |
 
 Re-sending the same manifest is how an app checks: it answers `202` until the owner approves and `200` after. A manifest that changes anything an approved one said — a new version, a changed request — is `202` again, so an upgrade takes the same path as a first install. A client refuses `requestInstall()` locally when discovery does not advertise `installs`, rather than learning it as a `404`.
 

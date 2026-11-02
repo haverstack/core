@@ -19,15 +19,15 @@
  * are in stack/install-app.ts. See docs/spec/apps.md.
  */
 
-import { baseIdOf, familyIdProblem, parseTypeId } from './schema.js';
-import { GRANT_ACTION_SET, UNGRANTABLE_SYSTEM_TYPES, sameActions } from './grants.js';
+import { baseIdOf, hashSchema, parseTypeId } from './schema.js';
+import { sha256Hex } from './hash.js';
+import { sameActions, validateGrant } from './grants.js';
 import { SYSTEM_TYPES } from './types/index.js';
 import type {
   AppId,
   AuthorityAssociation,
   BaseId,
   EntityId,
-  GrantAction,
   GrantContent,
   InstallContent,
   InstallRequest,
@@ -35,6 +35,7 @@ import type {
   RelationshipAssociation,
   StackRecord,
   TypeId,
+  TypeSchema,
 } from './types/index.js';
 import type { DefineTypeOptions } from './stack/client.js';
 import type { ValidationError } from './validate.js';
@@ -70,8 +71,8 @@ export type TypeChange = {
 
 /**
  * What applying a manifest would change, for the owner to approve.
- * `installApp()` applies a plan only while it is still what planning the
- * same manifest would produce. See docs/spec/apps.md § Plan, then apply.
+ * `installApp()` applies the manifest only while planning it still
+ * produces this plan's `fingerprint`. See docs/spec/apps.md § Plan, then apply.
  */
 export type InstallPlan = {
   manifest: AppManifest;
@@ -101,6 +102,23 @@ export type InstallPlan = {
    * as the same app. See docs/spec/apps.md § Plan, then apply.
    */
   linkedKeys: EntityId[];
+  /**
+   * Names this plan, for `installApp()` to apply the manifest only while
+   * planning it still produces this plan. See planFingerprint() and
+   * docs/spec/apps.md § Plan, then apply.
+   */
+  fingerprint: string;
+};
+
+/**
+ * What `installApp()` applies a manifest under: the key it is for, and the
+ * `fingerprint` of the plan the owner approved. Named on every apply, so an
+ * approval made in one request is checked in another exactly as one made
+ * in the same call is. See docs/spec/apps.md § Plan, then apply.
+ */
+export type InstallAppOptions = {
+  did: EntityId;
+  fingerprint: string;
 };
 
 /** Relationship label from an install to an `_app` card it was installed for. */
@@ -185,6 +203,29 @@ export function claimedFamilies(content: unknown): Set<BaseId> {
 }
 
 /**
+ * A list of install requests as every write of one holds it — a manifest's
+ * and an `_install`'s alike: each a grant validateGrant() accepts, and each
+ * family requested once, as a type is listed once.
+ */
+export function validateRequests(requests: readonly unknown[], path: string): ValidationError[] {
+  const errors: ValidationError[] = [];
+  const families = new Set<unknown>();
+  requests.forEach((r, i) => {
+    const req = r as Partial<Record<keyof InstallRequest, unknown>> | null;
+    const at = `${path}[${i}].`;
+    errors.push(...validateGrant(req?.baseId, Array.isArray(req?.actions) ? req.actions : [], at));
+    if (families.has(req?.baseId)) {
+      errors.push({
+        path: `${at}baseId`,
+        message: `"${String(req?.baseId)}" is requested more than once`,
+      });
+    }
+    families.add(req?.baseId);
+  });
+  return errors;
+}
+
+/**
  * An `_install`'s `defines` and `requests`, asked of its content on every
  * write. A schema can say both are lists; only this can say what their
  * entries must name. See docs/spec/apps.md § The `_install` record.
@@ -194,10 +235,13 @@ export function validateInstall(typeId: TypeId, content: unknown): ValidationErr
   const c = content as Partial<Record<keyof InstallContent, unknown>> | null;
   const errors: ValidationError[] = [];
   if (Array.isArray(c?.defines)) {
-    c.defines.forEach((id, i) => {
+    const defines: unknown[] = c.defines;
+    defines.forEach((id, i) => {
       const parsed = typeof id === 'string' ? parseTypeId(id) : null;
       if (!parsed) {
         errors.push({ path: `defines[${i}]`, message: 'Expected a versioned TypeId' });
+      } else if (defines.indexOf(id) !== i) {
+        errors.push({ path: `defines[${i}]`, message: `"${id}" is listed more than once` });
       } else if (typeof c?.appId === 'string' && familyStanding(parsed.baseId, c.appId) !== 'own') {
         errors.push({
           path: `defines[${i}]`,
@@ -206,30 +250,7 @@ export function validateInstall(typeId: TypeId, content: unknown): ValidationErr
       }
     });
   }
-  if (Array.isArray(c?.requests)) {
-    c.requests.forEach((r, i) => {
-      const req = r as Partial<Record<keyof InstallRequest, unknown>> | null;
-      const problem = familyIdProblem(req?.baseId, `requests[${i}].baseId`);
-      if (problem) {
-        errors.push({ path: `requests[${i}].baseId`, message: problem });
-      } else if (UNGRANTABLE_SYSTEM_TYPES.has(req!.baseId as string)) {
-        errors.push({
-          path: `requests[${i}].baseId`,
-          message: `"${String(req!.baseId)}" cannot be granted, so no install can request it`,
-        });
-      }
-      if (Array.isArray(req?.actions)) {
-        req.actions.forEach((a, j) => {
-          if (!GRANT_ACTION_SET.has(a as GrantAction)) {
-            errors.push({
-              path: `requests[${i}].actions[${j}]`,
-              message: `Unknown grant action "${String(a)}"`,
-            });
-          }
-        });
-      }
-    });
-  }
+  if (Array.isArray(c?.requests)) errors.push(...validateRequests(c.requests, 'requests'));
   return errors;
 }
 
@@ -296,21 +317,54 @@ export function isPlanEmpty(plan: InstallPlan): boolean {
 }
 
 /**
- * The parts of a plan that depend on the stack's state — what
- * `installApp()` compares to refuse a stale one.
+ * The fingerprint of a plan: a SHA-256 over the plan the owner sees, in
+ * canonical form, as a schemaHash names a schema — a type by its id, name,
+ * lineage and schemaHash, every list as a set, keys in one fixed order.
+ * See docs/spec/apps.md § Plan, then apply.
  */
-export function planFingerprint(plan: InstallPlan): string {
-  return JSON.stringify([
-    plan.existing?.id ?? null,
-    plan.existing?.version ?? null,
-    plan.existing?.deletedAt ? true : false,
-    plan.newFamilies,
-    plan.newVersions,
-    plan.requestsAdded,
-    plan.requestsRemoved,
-    plan.foreignRequests,
-    plan.typeChanges,
-    plan.newKey,
-    plan.linkedKeys,
-  ]);
+export async function planFingerprint(plan: Omit<InstallPlan, 'fingerprint'>): Promise<string> {
+  const { manifest, existing } = plan;
+  const types = await Promise.all(
+    manifest.types.map(async (t) => ({
+      id: t.id,
+      name: t.name,
+      migratesFrom: t.migratesFrom ?? null,
+      schemaHash: await hashSchema(t.schema as TypeSchema),
+    })),
+  );
+  const request = (r: InstallRequest) => ({ baseId: r.baseId, actions: [...r.actions].sort() });
+  return sha256Hex(
+    JSON.stringify({
+      appId: manifest.appId,
+      name: manifest.name,
+      version: manifest.version ?? null,
+      types: byKey(types, (t) => t.id),
+      requests: byKey(manifest.requests.map(request), (r) => r.baseId),
+      did: plan.did,
+      existing: existing && {
+        name: existing.content.name,
+        version: existing.content.version ?? null,
+        deleted: existing.deletedAt !== undefined,
+      },
+      newFamilies: [...plan.newFamilies].sort(),
+      newVersions: [...plan.newVersions].sort(),
+      requestsAdded: byKey(plan.requestsAdded.map(request), (r) => r.baseId),
+      requestsRemoved: byKey(plan.requestsRemoved.map(request), (r) => r.baseId),
+      // Follows from the manifest, but hashed because the owner is shown it.
+      foreignRequests: byKey(
+        plan.foreignRequests.map((r) => ({ ...request(r), owner: r.owner })),
+        (r) => r.baseId,
+      ),
+      typeChanges: byKey(
+        plan.typeChanges.map((c) => ({ id: c.id, change: c.change })),
+        (c) => c.id,
+      ),
+      newKey: plan.newKey,
+      linkedKeys: [...plan.linkedKeys].sort(),
+    }),
+  );
 }
+
+/** A list read as a set, ordered by a key unique to each member. */
+const byKey = <T>(items: readonly T[], key: (item: T) => string): T[] =>
+  [...items].sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0));

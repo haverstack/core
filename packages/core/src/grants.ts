@@ -10,13 +10,12 @@
  */
 
 import { baseIdOf, familyIdProblem } from './schema.js';
-import { ARGUMENTS_INVALID, StackBadRequestError, StackValidationError } from './errors.js';
+import { StackBadRequestError } from './errors.js';
 import { granteeErrors } from './associations/validation.js';
 import { SYSTEM_TYPES, GRANT_ACTIONS } from './types/index.js';
 import { granteeReaches } from './access.js';
 import type { RosterRoles } from './access.js';
 import type {
-  BaseId,
   EntityId,
   GrantAction,
   GrantContent,
@@ -203,34 +202,65 @@ export const UNGRANTABLE_SYSTEM_TYPES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Actions must be known GrantAction values; the target is held to the
- * same rule every `_grant` write meets — see validateGrantBaseId().
+ * An action list as every write of one holds it: known GrantAction values,
+ * each named once. Actions are a set, and a set is written without repeats,
+ * as a type list or an enum's values are. Shared by grantType(), a
+ * manifest's requests, and the `_grant` and `_install` Records they write.
  */
-export function checkGrantValid(baseId: BaseId, actions: GrantAction[]): void {
+export function validateActionList(actions: readonly unknown[], path: string): ValidationError[] {
   const errors: ValidationError[] = [];
+  const seen = new Set<unknown>();
   actions.forEach((action, j) => {
-    if (!GRANT_ACTION_SET.has(action)) {
-      errors.push({ path: `actions[${j}]`, message: `Unknown grant action "${action}"` });
+    if (!GRANT_ACTION_SET.has(action as GrantAction)) {
+      errors.push({ path: `${path}[${j}]`, message: `Unknown grant action "${String(action)}"` });
+    } else if (seen.has(action)) {
+      errors.push({
+        path: `${path}[${j}]`,
+        message: `"${String(action)}" is listed more than once`,
+      });
     }
+    seen.add(action);
   });
+  return errors;
+}
 
-  const problem = familyIdProblem(baseId, 'grantType');
+/** A `_grant`'s actions, asked of its content on every write. See validateActionList(). */
+export function validateGrantActions(typeId: TypeId, content: unknown): ValidationError[] {
+  if (baseIdOf(typeId) !== SYSTEM_TYPES.GRANT) return [];
+  const actions = (content as { actions?: unknown } | null)?.actions;
+  // A missing or non-array list is the schema's to refuse.
+  return Array.isArray(actions) ? validateActionList(actions, 'actions') : [];
+}
+
+/**
+ * A grant as every write of one holds it: a family a grant may target, the
+ * same rule every `_grant` write meets (see validateGrantBaseId()), and an
+ * action list held to validateActionList() whose mutate verbs carry their
+ * read companions. `path` prefixes each error, so a request inside a
+ * manifest or an `_install` reports where it sits.
+ */
+export function validateGrant(
+  baseId: unknown,
+  actions: readonly unknown[],
+  path = '',
+): ValidationError[] {
+  const errors: ValidationError[] = validateActionList(actions, `${path}actions`);
+  const problem = familyIdProblem(baseId, `${path}baseId`);
   if (problem) {
-    errors.push({ path: 'baseId', message: problem });
+    errors.push({ path: `${path}baseId`, message: problem });
   } else {
-    errors.push(...validateGrantBaseId(`${SYSTEM_TYPES.GRANT}@1`, { baseId }));
+    for (const e of validateGrantBaseId(`${SYSTEM_TYPES.GRANT}@1`, { baseId })) {
+      errors.push({ ...e, path: `${path}${e.path}` });
+    }
   }
-
+  const known = actions.filter((a): a is GrantAction => GRANT_ACTION_SET.has(a as GrantAction));
   actions.forEach((action, j) => {
-    if (grantConveys(actions, action)) return;
-    const companions = READ_COMPANIONS.get(action);
-    if (!companions) return;
+    const companions = READ_COMPANIONS.get(action as GrantAction);
+    if (!companions || grantConveys(known, action as GrantAction)) return;
     errors.push({
-      path: `actions[${j}]`,
-      message: `"${action}" requires ${companions.map((c) => `"${c}"`).join(' or ')} in the same grant: a mutate verb reaches the record and its history, so it conveys nothing without read. Name both in one grant: actions: [${companions.map((c) => `'${c}'`).join(' | ')}, '${action}']`,
+      path: `${path}actions[${j}]`,
+      message: `"${String(action)}" requires ${companions.map((c) => `"${c}"`).join(' or ')} in the same grant: a mutate verb reaches the record and its history, so it conveys nothing without read. Name both in one grant: actions: [${companions.map((c) => `'${c}'`).join(' | ')}, '${String(action)}']`,
     });
   });
-  if (errors.length > 0) {
-    throw new StackValidationError(errors, ARGUMENTS_INVALID);
-  }
+  return errors;
 }

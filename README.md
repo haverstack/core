@@ -45,7 +45,7 @@ An app can instead ship those steps as a manifest — its types and the grants i
 
 ```ts
 const plan = await stack.planInstall(manifest, { did: notesAppDid }); // show this to the owner
-await stack.installApp(plan);
+await stack.installApp(manifest, { did: notesAppDid, fingerprint: plan.fingerprint });
 ```
 
 The containment is the **type list**, not the `-own` suffix. When a delegated app acts for someone, `-own` is read as the bare verb and the subject decides which records are in reach — so in a personal stack, where nearly everything is owner-authored, `read-own` is close to `read-any`. Grant an app the types it needs and no more.
@@ -293,7 +293,7 @@ export const manifest: AppManifest = {
 
 **When the owner runs the app**, it opens with `Stack.open(adapter, { migrations })`, calls `install(stack)`, then `new Library(stack)`. A server hands each requester `new Library(stack.asActor(session))`.
 
-**When the app runs elsewhere** — holding its own key and reaching the stack through `APIAdapter` — it can't define types, so it asks: `adapter.requestInstall(manifest)` resolves to `pending` until the owner approves. The owner reviews `stack.planInstall(manifest, { did })` and applies it with `stack.installApp(plan)`, which defines the types, registers the app's key and grants it the requests. The app still opens with its `migrations`, then builds `new Library(stack)` over its own connection. See [App installs](./docs/spec/apps.md).
+**When the app runs elsewhere** — holding its own key and reaching the stack through `APIAdapter` — it can't define types, so it asks: `adapter.requestInstall(manifest)` resolves to `pending` until the owner approves. The owner reviews `stack.planInstall(manifest, { did })` and applies it with `stack.installApp(manifest, { did, fingerprint: plan.fingerprint })`, which defines the types, registers the app's key and grants it the requests. The app still opens with its `migrations`, then builds `new Library(stack)` over its own connection. See [App installs](./docs/spec/apps.md).
 
 **Name content with an interface**, as above. `ContentOf` flattens its result, so a `type` alias shows the expanded object in editor hovers, while an interface keeps its name. typescript-eslint's recommended `no-empty-object-type` rule rejects an empty interface; its `allowInterfaces: 'with-single-extends'` option admits this one.
 
