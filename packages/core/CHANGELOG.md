@@ -1,5 +1,42 @@
 # @haverstack/core
 
+## 0.44.0
+
+### Minor Changes
+
+- [#478](https://github.com/haverstack/core/pull/478) [`f1985fd`](https://github.com/haverstack/core/commit/f1985fdf6af7308c8f6f49e44ae5d06e911177df) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Every install apply names the plan it approves. `installApp(manifest, { did, fingerprint })` replaces `installApp(plan)`: it plans the manifest again for `did` and refuses with `StackConflictError` unless the result is the plan whose `fingerprint` it was given, so a server that shows the owner a plan in one request and applies it in another checks the approval exactly as an in-process caller passing `plan.fingerprint` does. `InstallPlan` carries that `fingerprint`: a SHA-256 over the plan the owner sees, in canonical form — schemas by `schemaHash`, every list as a set — with no Record's `version` in it, so neither a reordering store nor an edit no plan shows makes an approval stale. A list of requests is held to one rule wherever it is written — a manifest or an `_install` Record: each request a grant `grantType()` would accept, each family requested once, and an `_install`'s `defines` listing each version once. An action list is a set written without repeats: `grantType()`, a `_grant` write, a manifest's requests and an `_install` write all refuse an action named twice with `StackValidationError`, a stored list still read as a set. A manifest's refusals are reported together, each at its path in the manifest. `InstallAppOptions` is exported from `@haverstack/core`.
+
+- [#481](https://github.com/haverstack/core/pull/481) [`c4ed857`](https://github.com/haverstack/core/commit/c4ed857a27ee0faea99b425afded4e4bae70e389) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Every immutable field follows one rule. `_config.ownerEntityId`, the `did`/`appId` bindings and `_attachment`'s `fileId`, `mimeType` and `size` are declared in one table and checked on `patchContent()`, `restoreVersion()` and `commitMigration()` alike; a migration is asked over the family the record leaves.
+  - Changing or clearing an immutable field throws `StackConflictError` (`409 conflict`) with the message `Cannot change <family>.<field>: it is immutable once set.` Bindings and attachment fields previously threw `StackValidationError` (422).
+  - A new `_attachment` record whose `mimeType` conflicts with the one established for its `fileId` throws `StackConflictError` (`409 conflict`) instead of `StackValidationError` (422), like a second claim on a DID binding.
+  - Restating a stored value is no change: a patch that sends an `_attachment` record's current `mimeType` is accepted.
+  - Every content write — create, patch, restore and migrate — asks the same claim checks: binding uniqueness, and `mimeType` establishment for a record entering the `_attachment` family. `restoreVersion()` previously skipped attachment fields, binding uniqueness and `mimeType` establishment.
+  - A write that would change several immutable fields is refused naming the first.
+  - Fixtures: `error-validation-attachment-mimetype-conflict-on-create` is renamed `error-conflict-attachment-mimetype-on-create` and answers 409; `error-validation-attachment-mimetype-immutable-on-update` is replaced by `error-conflict-attachment-mimetype-change`; `error-conflict-config-owner-change` carries the shared message.
+
+- [#470](https://github.com/haverstack/core/pull/470) [`e0475d2`](https://github.com/haverstack/core/commit/e0475d2fdd09581310d819d3d2b5effe4191603c) Thanks [@cuibonobo](https://github.com/cuibonobo)! - The stack owner has one name wherever a field can only hold the owner: `ownerEntityId`.
+  - `_config`'s content is `{ ownerEntityId, timezone }`, and `ConfigContent.entityId` is `ConfigContent.ownerEntityId`.
+  - The discovery response (`GET /.well-known/stack`) carries `ownerEntityId` in place of `entityId`, in `DiscoveryResponse` and the discovery fixtures. The `_config` ownership-conflict fixture is `error-conflict-config-owner-change`.
+  - Fields that may hold any entity, such as a relationship target or a grantee, keep `entityId`.
+
+- [#470](https://github.com/haverstack/core/pull/470) [`b02e69c`](https://github.com/haverstack/core/commit/b02e69c4675e7397d2fca76c314261a9744053bf) Thanks [@cuibonobo](https://github.com/cuibonobo)! - A stack can be copied whole between adapters, authorship and history included.
+  - `copyStack(from, create)` in `@haverstack/core/adapter` copies every Record, soft-deleted and unlisted ones too, with its versions and journal, plus every Type and every blob, into a new store `create` makes from the source's `_config` record and its history, and returns it open. `_config` travels as every Record does. Both ends must list their blobs, and the target must hold nothing yet, so `APIAdapter` cannot yet be copied from. Copying into a `LocalAdapter` store is an export; copying out of one is an import.
+  - It writes through the new optional `StackRecordAdapter.importRecord(record, { versions, journal })`, which every local adapter implements and `APIAdapter` does not.
+  - `StackIdentity`, `CreateStore`, `StoreSeed`, `newStoreSeed()` and `identityOf()` are exported beside it. Every adapter that creates stores takes a `seed` in place of `ownerEntityId` and `timezone`: the `_config` record, with its history, a new store is created holding. A seed only creates: storage already holding a store refuses it, and `NativeSQLiteRecordAdapter`/`LocalAdapter` take no `create` beside one. `MemoryAdapter` now holds a real `_config` record.
+  - Every SQLite store names its layout in a one-row `format` table, and opening one in another layout throws the new `FormatMismatchError` (from `@haverstack/core/adapter`). A new store is written whole, tables included, in one transaction — a table of the same name already in the database fails the create — and a failed `NativeSQLiteRecordAdapter.open()` removes a file it created.
+  - `OwnerMismatchError` reads `<where> is owned by "X", not "Y"`, and `copyStack()` throws it too.
+  - `saveVersion()` is removed from the adapter contract: `importRecord()` is the one standalone history write.
+  - `@haverstack/adapter-conformance` checks `importRecord()` in the record suite and adds `runCopyConformance()`, which holds a full adapter to both halves of a copy.
+
+- [#468](https://github.com/haverstack/core/pull/468) [`7f3d108`](https://github.com/haverstack/core/commit/7f3d108100dbb7a358fdc8d1bb6e3edb2455ec45) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Authority is gated the same way whenever it is written.
+  - Resharing needs read on the Record: `editAccess()`, `setAccess()` and `setUnlisted()` refuse a creator who cannot read their Record, such as one removed from the roster that conveyed it, or a drop-box contributor.
+  - `permissions` and `unlisted` at `create()` pass the same gate, asked of the Record the create would make.
+  - A roster entry no longer counts on the principal's side of a delegated request, so a delegated app neither manages a `_group` nor creates one, even with its own DID on the roster. The owner's own software acting for a subject still can.
+
+- [#477](https://github.com/haverstack/core/pull/477) [`2169cff`](https://github.com/haverstack/core/commit/2169cff10f9c30bc44966c8ce90f5394cf50620d) Thanks [@cuibonobo](https://github.com/cuibonobo)! - A time value carries what it means: a `date`'s form says whether it is a moment, a calendar day or a wall-clock reading (see docs/spec/data-model.md § Types). Nothing reads a stack-wide timezone, so `_config` holds only `{ ownerEntityId }`.
+  - `timezone` is removed from `ConfigContent` and the `_config@1` schema, from every adapter's `open()` options, from `stack.timezone` and `StackRecordAdapter` and every adapter that exposed it, and from the discovery response (`DiscoveryResponse` and the discovery fixtures; `discovery-omits-absent-timezone` is removed).
+  - `StackIdentity` and `identityOf()` are removed: `ConfigContent` is what an adapter holds, and `newStoreSeed()` stores the one it is given whole.
+
 ## 0.43.0
 
 ### Minor Changes
