@@ -34,13 +34,9 @@ const exportedArrays: [string, readonly unknown[]][] = Object.entries(
 const NESTING_KEYS = ['steps', 'precedingMutations', 'activity', 'mutation'] as const;
 
 /**
- * The response-body keys that hold a list of Records. Only a listing serves
- * Records in a list; version snapshots and journal entries are not Records
- * and never carry `deletedAt`, so a body is otherwise read as one Record.
+ * The fields a tombstone keeps: what identifies the Record and what governs
+ * reaching it. See docs/spec/versioning.md § The tombstone is literal.
  */
-const RECORD_LIST_KEYS = ['records'] as const;
-
-/** The fields a tombstone keeps. See docs/spec/versioning.md § The tombstone is literal. */
 const TOMBSTONE_KEYS = new Set([
   'id',
   'typeId',
@@ -52,6 +48,20 @@ const TOMBSTONE_KEYS = new Set([
   'permissions',
   'content',
 ]);
+
+/**
+ * Every object a fixture shows a server sending that carries `deletedAt` —
+ * response bodies and feed frames alike, at any depth. A request body is
+ * what a client sends, so it is the one payload left out.
+ */
+function servedDeleted(value: unknown, path: string, into: [string, object][]): [string, object][] {
+  if (typeof value !== 'object' || value === null) return into;
+  if (!Array.isArray(value) && 'deletedAt' in value) into.push([path, value]);
+  for (const [key, child] of Object.entries(value)) {
+    if (key !== 'requestBody') servedDeleted(child, `${path}.${key}`, into);
+  }
+  return into;
+}
 
 /** Every named fixture reachable from a group, including sequence steps and the mutations nested inside a change-feed connection. */
 function collect(value: unknown, into: Named[]): Named[] {
@@ -90,31 +100,18 @@ describe('every fixture group', () => {
   });
 
   // Every channel serves a soft-deleted record the same way, so the rule is
-  // asserted over every response rather than fixture by fixture.
-  // See docs/spec/versioning.md § The tombstone is literal.
+  // asserted over everything a server sends rather than fixture by fixture.
   it('serves every soft-deleted record as the tombstone projection', () => {
-    const served = (body: unknown): Record<string, unknown>[] => {
-      if (typeof body !== 'object' || body === null) return [];
-      const lists = RECORD_LIST_KEYS.map((key) => (body as Record<string, unknown>)[key]);
-      const list = lists.find(Array.isArray);
-      return list ?? [body as Record<string, unknown>];
-    };
-    let tombstones = 0;
-    for (const [group, value] of exportedArrays) {
-      for (const fixture of collect(value, [])) {
-        for (const record of served((fixture as { responseBody?: unknown }).responseBody)) {
-          if (record.deletedAt === undefined) continue;
-          tombstones++;
-          const label = `${group}/${fixture.name}`;
-          expect(record.content, label).toEqual({});
-          expect(
-            Object.keys(record).filter((key) => !TOMBSTONE_KEYS.has(key)),
-            label,
-          ).toEqual([]);
-        }
-      }
+    const groups = exportedArrays.filter(([name]) => name !== 'allConformanceFixtures');
+    const tombstones = groups.flatMap(([name, group]) => servedDeleted(group, name, []));
+    for (const [path, record] of tombstones) {
+      expect((record as { content?: unknown }).content, path).toEqual({});
+      expect(
+        Object.keys(record).filter((key) => !TOMBSTONE_KEYS.has(key)),
+        path,
+      ).toEqual([]);
     }
-    expect(tombstones).toBeGreaterThan(0);
+    expect(tombstones.length).toBeGreaterThan(0);
   });
 
   it('describes what each fixture pins', () => {

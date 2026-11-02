@@ -142,7 +142,7 @@ Filtering is unaffected: the emitter holds the record it destroyed, so a subscri
 
 ## Soft-deleted records reach the feed as tombstones
 
-A purge carries nothing because erasure must leave no trace. Soft delete is the gentler neighbour, and it gets the gentler rule: under `ScopedStack`, a frame whose record carries `deletedAt` delivers [the same tombstone `get()` returns](./versioning.md#the-tombstone-is-literal) — identity, clock, `deletedAt`, `unlistedAt` when set, `permissions`, and an empty `content` — rather than the body.
+A purge carries nothing because erasure must leave no trace. Soft delete is the gentler neighbour, and it gets the gentler rule: under `ScopedStack`, a frame whose record carries `deletedAt` delivers [the same tombstone `get()` returns](./versioning.md#the-tombstone-is-literal) rather than the body.
 
 The reason is the one that governs the [unlisted exclusion](#the-unlisted-transition): a feed that served what `query()` and `get()` withhold would be a strictly better read channel than either, and the withholding would be decoration. A subscriber still learns everything the event exists to tell it — this record is deleted, drop your copy — which needs no body at all.
 

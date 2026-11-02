@@ -343,7 +343,7 @@ export const deleteRecordFixtures: ConformanceFixture<undefined, WireRecord | un
     description:
       'DELETE /records/:id soft-deletes — record and version history are retained — and answers ' +
       'with the tombstone it produced: deletedAt set, version bumped. ' +
-      'See docs/spec/versioning.md § The tombstone is literal.',
+      'See docs/spec/wire-format.md § Records.',
     method: 'DELETE',
     path: '/records/1hk153x00001',
     responseStatus: 200,
