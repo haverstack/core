@@ -50,7 +50,7 @@ let stack: Stack;
 
 /** Applies `plan` as an owner approving exactly it would. */
 function apply(plan: InstallPlan) {
-  return stack.installApp(plan.manifest, { did: plan.did, ifFingerprint: plan.fingerprint });
+  return stack.installApp(plan.manifest, { did: plan.did, fingerprint: plan.fingerprint });
 }
 
 async function install(m: AppManifest, did = APP_DID) {
@@ -166,66 +166,50 @@ describe('installApp()', () => {
     }
   });
 
-  test('a fingerprint is unchanged by reordering what applying ignores the order of', async () => {
-    const BOOK_1 = 'com.example.notes/book@1';
-    const book = (values: string[]) =>
-      ({
-        id: BOOK_1,
-        name: 'Book',
-        schema: { status: { kind: 'enum', values } },
-      }) as AppManifest['types'][number];
-    const base = manifest({
-      types: [NOTE_1_TYPE, book(['want', 'read'])],
-      requests: [
-        { baseId: 'com.example.notes/note', actions: ['create', 'read-any'] },
-        { baseId: 'com.example.notes/book', actions: ['read-any'] },
-      ],
-    });
-    const { fingerprint } = await stack.planInstall(base, { did: APP_DID });
-    const reordered = manifest({
-      types: [book(['read', 'want']), NOTE_1_TYPE],
-      requests: [
-        { baseId: 'com.example.notes/book', actions: ['read-any'] },
-        { baseId: 'com.example.notes/note', actions: ['read-any', 'create'] },
-      ],
-    });
-    const keysReversed = Object.fromEntries(Object.entries(base).reverse()) as AppManifest;
-    for (const m of [reordered, keysReversed]) {
-      expect((await stack.planInstall(m, { did: APP_DID })).fingerprint).toBe(fingerprint);
-    }
+  test('a fingerprint names the plan as given, so a reordered manifest is a new plan', async () => {
+    const both = [
+      { baseId: 'com.example.notes/note', actions: ['create', 'read-any'] },
+      { baseId: 'org.haverstack/note', actions: ['read-any'] },
+    ] as AppManifest['requests'];
+    const plan = await stack.planInstall(manifest({ requests: both }), { did: APP_DID });
+    expect(
+      (await stack.planInstall(manifest({ requests: [...both].reverse() }), { did: APP_DID }))
+        .fingerprint,
+    ).not.toBe(plan.fingerprint);
+    // Planning the same manifest again, with nothing changed, names the same plan.
+    expect(
+      (await stack.planInstall(manifest({ requests: both }), { did: APP_DID })).fingerprint,
+    ).toBe(plan.fingerprint);
   });
 
-  test('a repeated request or action is stored as the one the fingerprint counts', async () => {
-    const note = { baseId: 'com.example.notes/note', actions: ['create', 'read-any'] } as const;
-    const plain = await stack.planInstall(
-      manifest({ requests: [{ ...note, actions: [...note.actions] }] }),
-      {
-        did: APP_DID,
-      },
-    );
-    const repeated = await stack.planInstall(
-      manifest({
-        requests: [
-          { ...note, actions: ['read-any', 'create', 'create'] },
-          { ...note, actions: [...note.actions] },
+  test('a manifest listing a family or an action twice is refused', async () => {
+    const note = 'com.example.notes/note';
+    for (const [requests, path] of [
+      [
+        [
+          { baseId: note, actions: ['create'] },
+          { baseId: note, actions: ['read-any'] },
         ],
-      }),
-      { did: APP_DID },
-    );
-    expect(repeated.fingerprint).toBe(plain.fingerprint);
-    expect(repeated.manifest.requests).toEqual(plain.manifest.requests);
-    const record = await apply(repeated);
-    expect(record.content.requests).toEqual([
-      { baseId: note.baseId, actions: ['create', 'read-any'] },
-    ]);
+        'requests[1].baseId',
+      ],
+      [[{ baseId: note, actions: ['read-any', 'read-any'] }], 'requests[0].actions[1]'],
+    ] as const) {
+      const refused = await stack
+        .planInstall(manifest({ requests: requests as unknown as AppManifest['requests'] }), {
+          did: APP_DID,
+        })
+        .catch((e: unknown) => e);
+      expect(refused).toBeInstanceOf(StackValidationError);
+      expect((refused as StackValidationError).errors.map((e) => e.path)).toEqual([path]);
+    }
   });
 
   test('applies a manifest only while it plans to the approved fingerprint', async () => {
     const reviewed = await stack.planInstall(manifest(), { did: APP_DID });
     await stack.defineType(manifest().types[0]!);
 
-    const approve = (ifFingerprint: string) =>
-      stack.installApp(manifest(), { did: APP_DID, ifFingerprint });
+    const approve = (fingerprint: string) =>
+      stack.installApp(manifest(), { did: APP_DID, fingerprint });
     await expect(approve(reviewed.fingerprint)).rejects.toThrow(StackConflictError);
     expect((await stack.query({ filter: { baseId: '_install' } })).records).toEqual([]);
 
@@ -239,7 +223,7 @@ describe('installApp()', () => {
     await expect(
       stack.installApp(manifest({ version: '2.0.0' }), {
         did: APP_DID,
-        ifFingerprint: reviewed.fingerprint,
+        fingerprint: reviewed.fingerprint,
       }),
     ).rejects.toThrow(StackConflictError);
   });
@@ -335,8 +319,7 @@ describe('installApp()', () => {
       { baseId: 'org.haverstack/note', actions: ['read-any'], owner: 'commons' },
       { baseId: '_entity', actions: ['read-any'], owner: 'system' },
     ];
-    expect(plan.foreignRequests).toHaveLength(expected.length);
-    expect(plan.foreignRequests).toEqual(expect.arrayContaining(expected));
+    expect(plan.foreignRequests).toEqual(expected);
   });
 
   test('another app’s family can be used through a request, never defined', async () => {
@@ -502,18 +485,7 @@ describe('what an installed app sees', () => {
     expect(record.content).toMatchObject({ version: '1.0.1' });
   });
 
-  test('requests compare as sets of actions, so a repeated action cannot keep one dropped', async () => {
-    await install(manifest({ requests: MIGRATING }));
-    const padded = await stack.planInstall(
-      manifest({
-        requests: [{ baseId: 'com.example.notes/note', actions: ['read-any', 'read-any'] }],
-      }),
-      { did: APP_DID },
-    );
-    expect(padded.requestsRemoved).toEqual(MIGRATING);
-    const record = await apply(padded);
-    expect((await linkedGrants(record)).flatMap((g) => g.actions)).not.toContain('update-any');
-
+  test('requests compare as sets of actions', async () => {
     const reordered = (actions: ('create' | 'read-any')[]) =>
       manifest({ requests: [{ baseId: 'com.example.notes/note', actions }] });
     await install(reordered(['read-any', 'create']));

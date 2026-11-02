@@ -1706,7 +1706,7 @@ export class Stack implements StackClient {
 
   /**
    * Apply an approved manifest: types, the key's `_app` card, the
-   * `_install` Record and every linked key's grants. `opts.ifFingerprint`
+   * `_install` Record and every linked key's grants. `opts.fingerprint`
    * names the plan the owner approved — `plan.fingerprint` from
    * planInstall() — and a manifest that no longer plans to it is a
    * StackConflictError, so what lands is what was approved.

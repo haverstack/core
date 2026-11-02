@@ -31,7 +31,6 @@ import {
   planFingerprint,
   sameRequest,
   snapshotManifest,
-  canonicalRequests,
 } from '../install.js';
 import { baseIdOf, diffSchemas, hashSchema, parseTypeId } from '../schema.js';
 import { findAppCardByDid, loadInstallRecords, queryAllPages } from './reads.js';
@@ -70,12 +69,8 @@ export async function planInstall(
   opts: { did: EntityId },
 ): Promise<InstallPlan> {
   const { did } = opts;
-  const checked = snapshotManifest(submitted);
-  checkManifest(checked, did);
-  const manifest = snapshotManifest({
-    ...checked,
-    requests: canonicalRequests(checked.requests),
-  });
+  const manifest = snapshotManifest(submitted);
+  checkManifest(manifest, did);
 
   const installs = await loadInstallRecords(stack);
   const existing = installs.find((r) => r.content.appId === manifest.appId) ?? null;
@@ -150,7 +145,7 @@ export async function installApp(
   opts: InstallAppOptions,
 ): Promise<StackRecord & { content: InstallContent }> {
   const fresh = await planInstall(stack, submitted, { did: opts.did });
-  if (fresh.fingerprint !== opts.ifFingerprint) {
+  if (fresh.fingerprint !== opts.fingerprint) {
     throw new StackConflictError(
       `The install of "${fresh.manifest.appId}" no longer matches the approved plan; plan it again`,
     );
@@ -258,6 +253,26 @@ function checkManifest(manifest: AppManifest, did: EntityId): void {
         });
       }
     }
+  });
+  // A repeat is refused like a type listed twice, so a manifest has one
+  // spelling of each request and the plan applies exactly what it lists.
+  const families = new Set<string>();
+  manifest.requests.forEach((r, i) => {
+    if (families.has(r.baseId)) {
+      errors.push({
+        path: `requests[${i}].baseId`,
+        message: `"${r.baseId}" is listed more than once`,
+      });
+    }
+    families.add(r.baseId);
+    r.actions.forEach((action, j) => {
+      if (r.actions.indexOf(action) !== j) {
+        errors.push({
+          path: `requests[${i}].actions[${j}]`,
+          message: `"${action}" is listed more than once`,
+        });
+      }
+    });
   });
   if (errors.length > 0) throw new StackValidationError(errors, ARGUMENTS_INVALID);
   for (const r of manifest.requests) checkGrantValid(r.baseId, r.actions);

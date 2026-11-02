@@ -19,7 +19,7 @@
  * are in stack/install-app.ts. See docs/spec/apps.md.
  */
 
-import { baseIdOf, familyIdProblem, hashSchema, parseTypeId } from './schema.js';
+import { baseIdOf, familyIdProblem, parseTypeId } from './schema.js';
 import { sha256Hex } from './hash.js';
 import { GRANT_ACTION_SET, UNGRANTABLE_SYSTEM_TYPES, sameActions } from './grants.js';
 import { SYSTEM_TYPES } from './types/index.js';
@@ -36,7 +36,6 @@ import type {
   RelationshipAssociation,
   StackRecord,
   TypeId,
-  TypeSchema,
 } from './types/index.js';
 import type { DefineTypeOptions } from './stack/client.js';
 import type { ValidationError } from './validate.js';
@@ -104,8 +103,8 @@ export type InstallPlan = {
    */
   linkedKeys: EntityId[];
   /**
-   * Names this plan, for `installApp()` to apply only while planning the
-   * same manifest still produces it. See planFingerprint() and
+   * Names this plan, for `installApp()` to apply the manifest only while
+   * planning it still produces this plan. See planFingerprint() and
    * docs/spec/apps.md § Plan, then apply.
    */
   fingerprint: string;
@@ -113,13 +112,13 @@ export type InstallPlan = {
 
 /**
  * What `installApp()` applies a manifest under: the key it is for, and the
- * fingerprint of the plan the owner approved. Named on every apply, so an
+ * `fingerprint` of the plan the owner approved. Named on every apply, so an
  * approval made in one request is checked in another exactly as one made
  * in the same call is. See docs/spec/apps.md § Plan, then apply.
  */
 export type InstallAppOptions = {
   did: EntityId;
-  ifFingerprint: string;
+  fingerprint: string;
 };
 
 /** Relationship label from an install to an `_app` card it was installed for. */
@@ -315,63 +314,11 @@ export function isPlanEmpty(plan: InstallPlan): boolean {
 }
 
 /**
- * The fingerprint of a plan: a SHA-256 over its manifest and the parts of
- * it that depend on the stack. A type is taken by its id, name, lineage and
- * schemaHash, and every list as a sorted set; planInstall() has already put
- * requests in canonicalRequests() form. Two plans share one only when
- * applying either would do the same thing as core compares it.
+ * The fingerprint of a plan: a SHA-256 over the plan exactly as planned —
+ * its manifest as given and everything planInstall() read from the stack.
+ * Two plans share one only when they are the same plan, so reordering a
+ * manifest makes a different plan for the owner to review.
  */
 export async function planFingerprint(plan: Omit<InstallPlan, 'fingerprint'>): Promise<string> {
-  const { manifest } = plan;
-  const types = await Promise.all(
-    manifest.types.map(async (t) => ({
-      id: t.id,
-      name: t.name,
-      migratesFrom: t.migratesFrom ?? null,
-      schemaHash: await hashSchema(t.schema as TypeSchema),
-    })),
-  );
-  return sha256Hex(
-    JSON.stringify([
-      manifest.appId,
-      manifest.name,
-      manifest.version ?? null,
-      sortedSet(types),
-      sortedSet(manifest.requests),
-      plan.did,
-      plan.existing?.id ?? null,
-      plan.existing?.version ?? null,
-      plan.existing?.deletedAt ? true : false,
-      sortedSet(plan.newFamilies),
-      sortedSet(plan.newVersions),
-      sortedSet(plan.requestsAdded),
-      sortedSet(plan.requestsRemoved),
-      sortedSet(plan.foreignRequests),
-      sortedSet(plan.typeChanges),
-      plan.newKey,
-      sortedSet(plan.linkedKeys),
-    ]),
-  );
-}
-
-/** A list read as a set: its members sorted by their JSON form. */
-const sortedSet = <T>(items: readonly T[]): T[] =>
-  items
-    .map((item) => [JSON.stringify(item), item] as const)
-    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-    .map(([, item]) => item);
-
-/**
- * Requests in the form core compares them in — each a family and a set of
- * actions, and the list a set of requests — sorted, with repeats dropped.
- * planInstall() puts a manifest's requests in this form, so what the
- * install stores is what the plan compared.
- */
-export function canonicalRequests(requests: readonly InstallRequest[]): InstallRequest[] {
-  const unique = new Map<string, InstallRequest>();
-  for (const r of requests) {
-    const request = { baseId: r.baseId, actions: [...new Set(r.actions)].sort() };
-    unique.set(JSON.stringify(request), request);
-  }
-  return sortedSet([...unique.values()]);
+  return sha256Hex(JSON.stringify(plan));
 }
