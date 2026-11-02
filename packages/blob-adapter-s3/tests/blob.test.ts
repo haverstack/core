@@ -49,12 +49,12 @@ class FakeBucket {
       return {};
     });
 
-    s3Mock.on(ListObjectsV2Command).callsFake(() => ({
-      Contents: [...this.objects.entries()].map(([Key, obj]) => ({
-        Key,
-        Size: obj.body.byteLength,
-        LastModified: obj.modifiedAt,
-      })),
+    // A real bucket lists keys in byte order and starts after StartAfter.
+    s3Mock.on(ListObjectsV2Command).callsFake(({ StartAfter }) => ({
+      Contents: [...this.objects.entries()]
+        .filter(([Key]) => StartAfter === undefined || Key > StartAfter)
+        .sort(([a], [b]) => (a < b ? -1 : 1))
+        .map(([Key, obj]) => ({ Key, Size: obj.body.byteLength, LastModified: obj.modifiedAt })),
       IsTruncated: false,
     }));
   }
@@ -190,6 +190,17 @@ describe('S3BlobAdapter', () => {
 
       const files = await adapter.listBlobs();
       expect(files.map((f) => f.fileId)).toEqual([fileId]);
+    });
+
+    test('pages in fileId order from afterFileId', async () => {
+      const ids = [];
+      for (const body of ['a', 'b', 'c']) ids.push(await adapter.putBlob(Buffer.from(body)));
+      ids.sort();
+
+      const first = await adapter.listBlobs({ limit: 2 });
+      expect(first.map((f) => f.fileId)).toEqual(ids.slice(0, 2));
+      const rest = await adapter.listBlobs({ afterFileId: ids[1], limit: 2 });
+      expect(rest.map((f) => f.fileId)).toEqual(ids.slice(2));
     });
   });
 

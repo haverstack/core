@@ -1519,6 +1519,7 @@ export class Stack implements StackClient {
         ...(opts.includeRecords !== undefined && { includeRecords: opts.includeRecords }),
         ...(opts.onError !== undefined && { onError: opts.onError }),
         ...(opts.onReset !== undefined && { onReset: opts.onReset }),
+        ...(opts.onReady !== undefined && { onReady: opts.onReady }),
       },
       (change) => delivery.deliver(change),
     );

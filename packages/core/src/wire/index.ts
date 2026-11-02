@@ -59,6 +59,7 @@ export {
   parseChangeParams,
   parseJournalParams,
   parseVersionsParams,
+  parseBlobsParams,
   parseGetRecordParams,
   parseDeleteParams,
   parseDownloadParams,

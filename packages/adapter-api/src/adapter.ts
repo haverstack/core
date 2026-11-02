@@ -49,7 +49,7 @@ import type {
   SubscribeOptions,
 } from '@haverstack/core';
 import { OwnerMismatchError, filtersContent } from '@haverstack/core/adapter';
-import type { AdapterQuery, StackAdapter } from '@haverstack/core/adapter';
+import type { AdapterQuery, BlobInfo, BlobsQuery, StackAdapter } from '@haverstack/core/adapter';
 import type { DidCredential } from '@haverstack/core/wire';
 import {
   isWireError,
@@ -59,6 +59,7 @@ import {
   isValidCursor,
   supportsChangeFeed,
   supportsInstallRequests,
+  supportsBlobListing,
   WIRE_ERROR_STATUS,
   supportsDidChallenge,
   CHANGE_FRAME_READY,
@@ -74,6 +75,7 @@ import type {
   WireVersion,
   WireRecordChange,
   WireJournalResponse,
+  WireBlobsResponse,
   WireVersionsResponse,
   WireReadyFrame,
   DiscoveryChanges,
@@ -92,7 +94,14 @@ import {
 } from './errors.js';
 import { performHandshake } from './handshake.js';
 import { withParams, buildQueryParams, buildChangeParams } from './params.js';
-import { parseRecord, parseType, parseVersion, parseJournalEntry, parseChange } from './parse.js';
+import {
+  parseRecord,
+  parseType,
+  parseVersion,
+  parseJournalEntry,
+  parseChange,
+  parseBlobInfo,
+} from './parse.js';
 import { SseDecoder } from './sse.js';
 import type { SseFrame } from './sse.js';
 import {
@@ -202,6 +211,14 @@ export class APIAdapter implements StackAdapter {
   readonly capabilities: StackCapabilities;
   readonly ownerEntityId: string;
 
+  /**
+   * `GET /blobs`, present only when discovery advertises it: an optional
+   * method's presence is the capability, so a copy or a collection tells
+   * from it alone whether this store can be enumerated.
+   * See docs/spec/wire-format.md § Blobs.
+   */
+  readonly listBlobs?: (query?: BlobsQuery) => Promise<BlobInfo[]>;
+
   /** Shared by every request that finds its token expired at the same moment. */
   private reauthInFlight: Promise<string> | null = null;
 
@@ -215,9 +232,23 @@ export class APIAdapter implements StackAdapter {
     private readonly changeFeed: DiscoveryChanges | undefined,
     /** Whether discovery advertised `POST /installs`. */
     private readonly installRequests: boolean,
+    /** Whether discovery advertised `GET /blobs`. */
+    blobListing: boolean,
   ) {
     this.capabilities = capabilities;
     this.ownerEntityId = ownerEntityId;
+    if (blobListing) {
+      this.listBlobs = (query = {}) =>
+        this.readPages('/blobs', {
+          cursorParam: 'afterFileId',
+          cursor: query.afterFileId,
+          cursorType: 'string',
+          limit: query.limit,
+          items: (body: WireBlobsResponse) => body.blobs,
+          parse: parseBlobInfo,
+          advances: (next, prev) => next > prev,
+        });
+    }
   }
 
   /**
@@ -305,6 +336,7 @@ export class APIAdapter implements StackAdapter {
       // forgot them would assume both.
       supportsChangeFeed(discovery) ? discovery.changes : undefined,
       supportsInstallRequests(discovery),
+      supportsBlobListing(discovery),
     );
   }
 
@@ -648,19 +680,21 @@ export class APIAdapter implements StackAdapter {
    * silently get a prefix if this returned the first page. `cursor` is the
    * only end-of-log signal, exactly as it is on a query.
    */
-  private async readPages<W extends { cursor: number | null }, R, T>(
+  private async readPages<C extends number | string, W extends { cursor: C | null }, R, T>(
     path: string,
     opts: {
       cursorParam: string;
-      cursor: number | undefined;
+      cursor: C | undefined;
+      /** What a cursor is on this endpoint; anything else ends the read. */
+      cursorType: 'number' | 'string';
       limit: number | undefined;
       items: (body: W) => R[];
       parse: (raw: R) => T;
       /** Whether `next` lands somewhere the read from `prev` has not been. */
-      advances: (next: number, prev: number) => boolean;
+      advances: (next: C, prev: C) => boolean;
     },
   ): Promise<T[]> {
-    const { cursorParam, limit, items, parse, advances } = opts;
+    const { cursorParam, cursorType, limit, items, parse, advances } = opts;
     const out: T[] = [];
     let cursor = opts.cursor;
     for (;;) {
@@ -680,12 +714,12 @@ export class APIAdapter implements StackAdapter {
       // A server that omits a cursor, repeats one, or mints one
       // unconditionally ends the read here rather than spinning on it.
       if (
-        typeof body.cursor !== 'number' ||
-        (cursor !== undefined && !advances(body.cursor, cursor))
+        typeof body.cursor !== cursorType ||
+        (cursor !== undefined && !advances(body.cursor as C, cursor))
       ) {
         break;
       }
-      cursor = body.cursor;
+      cursor = body.cursor as C;
     }
     // `limit` is this method's own ceiling, not a request the server is
     // trusted to have honored: a page longer than the one asked for would
@@ -698,6 +732,7 @@ export class APIAdapter implements StackAdapter {
     return this.readPages(`/records/${pathSegment(id)}/versions`, {
       cursorParam: 'beforeVersion',
       cursor: query.beforeVersion,
+      cursorType: 'number',
       limit: query.limit,
       items: (body: WireVersionsResponse) => body.versions,
       parse: parseVersion,
@@ -715,6 +750,7 @@ export class APIAdapter implements StackAdapter {
     return this.readPages(`/records/${pathSegment(id)}/journal`, {
       cursorParam: 'afterSeq',
       cursor: query.afterSeq,
+      cursorType: 'number',
       limit: query.limit,
       items: (body: WireJournalResponse) => body.entries,
       parse: parseJournalEntry,
@@ -873,6 +909,7 @@ export class APIAdapter implements StackAdapter {
 
       switch (frame.event) {
         case CHANGE_FRAME_READY:
+          opts.onReady?.(head);
           if (!settled) {
             settled = true;
             onLive();

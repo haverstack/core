@@ -26,11 +26,21 @@ What it carries is everything the source holds:
 
 **The target is a store as its adapter creates one.** `create` receives that seed, as any new store is created from one, and what it returns is checked as `open()` checks a store: its owner must be the seed's, or the copy throws `OwnerMismatchError`, as `open()` does. The store must also hold nothing else yet — no other Record, no Type, no blob — on an adapter with `importRecord()` and `listBlobs()`. Anything else is a mistake in `create`, refused with `InvalidAdapterError` before anything is written; a store `Stack.open()` has already opened holds the [system Types](./data-model.md#system-types), so it is refused too.
 
-**The source is not written during the copy.** Records are read a page at a time and each one's history separately, so a write landing partway through yields a target matching no moment of the source. Nothing enforces this: a local source's only writer is the process that owns it, which is the one copying.
+**The target is one moment of the source, or the copy refuses.** Records and blobs are read a page at a time and each Record's history separately, so a write landing partway through would yield a target matching no moment at all. Whether anyone else can write is what [`subscribeChanges()`](./events.md#where-events-come-from) already says, so the rule reads it and nothing else:
+
+- **A source with no relay has no other writer.** Its only writer is [the process that owns its storage](./adapters.md#concurrency--storage-ownership), which is the one copying, so there is nothing to watch.
+- **A source with a relay is watched through it.** Before its first read, the copy subscribes to every change, `includeUnlisted` included as every Record it reads is, and keeps the head cursor the far end [reports on connect](./change-feed.md#frames). A change relayed while it reads refuses it at the next page. After its last read it asks for the head again, and refuses unless it is the one it began with, which catches a write whose frame was still in flight. A relay that reports no head is refused with `InvalidAdapterError` before anything is read.
+
+The refusal is `StackConflictError`, a failure part-way like any other, under the rule below: the target is closed, and the copy is run again into a new store when the source is quiet. **The watch reaches every write that could change what a copy reads.** Records are what a feed reports. A blob arrives over the wire only with the `_attachment` Record that names it ([Upload](./wire-format.md#upload)); one deleted meanwhile with no Record left to report it is a bare-bytes orphan, the one thing a target can hold that its source no longer does, and garbage on either side ([Garbage collection](./attachments.md#garbage-collection)). Types emit nothing and are read in one call, so a target holds them as they stood then, which with every Record unchanged is a moment of the source.
 
 **It is not atomic, and the target is the caller's.** Whatever `create` makes belongs to whoever passed `create`: on success it comes back open, theirs to close; on a failure part-way, the refusal included, `copyStack()` closes it, holding the only handle, and the caller removes it, having chosen where it lives. The copy is then run again into a new store, never resumed.
 
-**Both ends list everything they hold.** The source needs `listBlobs()` to be read in full, and the target needs it to be checked empty and to be read in full by a later copy in turn, so a copy never lands a stack where it cannot be copied out again. A source without it is refused with `InvalidAdapterError` before `create` is called. Every blob adapter has it. `APIAdapter` does not, because the wire has no endpoint that lists blobs, so a stack behind one cannot yet be copied out through it.
+**Both ends list everything they hold.** The source needs `listBlobs()` to be read in full, and the target needs it to be checked empty and to be read in full by a later copy in turn, so a copy never lands a stack where it cannot be copied out again. A source without it is refused with `InvalidAdapterError` before `create` is called. Every blob adapter has it, and `APIAdapter` has it when the server advertises [`GET /blobs`](./wire-format.md#blobs), which it serves to the owner acting alone — the standing the rest of a copy already needs, since its query asks for `includeUnlisted`. A hosted stack's owner therefore copies it out with the same call as any other:
+
+```ts
+const host = await APIAdapter.open({ url, credential, ownerEntityId });
+const exported = await copyStack(host, portable('./my-stack.db'));
+```
 
 ## Writing history
 

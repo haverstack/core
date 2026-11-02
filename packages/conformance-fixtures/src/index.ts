@@ -42,6 +42,7 @@ import {
 } from './record-metadata.js';
 import { getVersionsFixtures, getVersionFixtures, restoreVersionFixtures } from './versions.js';
 import { getJournalFixtures } from './journal.js';
+import { listBlobsFixtures } from './blobs.js';
 import { commitMigrationFixtures } from './migration.js';
 import { installRequestFixtures } from './installs.js';
 import { errorResponseFixtures } from './errors.js';
@@ -54,6 +55,7 @@ export * from './query.js';
 export * from './record-metadata.js';
 export * from './versions.js';
 export * from './journal.js';
+export * from './blobs.js';
 export * from './migration.js';
 export * from './installs.js';
 export * from './errors.js';
@@ -92,6 +94,7 @@ export const allConformanceFixtures: ConformanceFixture[] = [
   ...getVersionFixtures,
   ...restoreVersionFixtures,
   ...getJournalFixtures,
+  ...listBlobsFixtures,
   ...commitMigrationFixtures,
   ...installRequestFixtures,
   ...errorResponseFixtures,

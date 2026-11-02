@@ -167,4 +167,12 @@ export type SubscribeOptions = {
    * the far end will not honor `since`.
    */
   onReset?: () => void;
+  /**
+   * The far end came up, at the head `cursor` it reported: a `since` that
+   * resumes from there misses nothing, and an unchanged stack reports the
+   * same head again. Fires on every connection, never on a local stack,
+   * and without a cursor where the far end mints none.
+   * See docs/spec/events.md § Subscribing.
+   */
+  onReady?: (cursor: string | undefined) => void;
 };

@@ -26,7 +26,9 @@ import type {
   WireVersion,
   WireRecordChange,
   WireJournalEntry,
+  WireBlobInfo,
 } from '@haverstack/wire-types';
+import type { BlobInfo } from '@haverstack/core/adapter';
 
 const parseActor = (raw: WireActor): Actor => ({
   subjectId: raw.subjectId,
@@ -105,6 +107,12 @@ export const parseJournalEntry = (raw: WireJournalEntry): RecordJournalEntry => 
   if (raw.associations != null) e.associations = raw.associations;
   return e;
 };
+
+export const parseBlobInfo = (raw: WireBlobInfo): BlobInfo => ({
+  fileId: raw.fileId,
+  size: raw.size,
+  modifiedAt: new Date(raw.modifiedAt),
+});
 
 export const parseChange = (raw: WireRecordChange): RecordChange => {
   const change: RecordChange = {

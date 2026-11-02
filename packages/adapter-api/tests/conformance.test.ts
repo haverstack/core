@@ -38,6 +38,7 @@ import {
   getVersionsSequenceFixtures,
   restoreVersionFixtures,
   getJournalFixtures,
+  listBlobsFixtures,
   commitMigrationFixtures,
   installRequestFixtures,
   discoveryFixtures,
@@ -761,6 +762,38 @@ describe('getJournal fixtures', () => {
         expect(log[i].previousParentId).toBe(entry.previousParentId);
         expect(log[i].associations).toEqual(entry.associations);
       }
+    });
+  }
+});
+
+// -------------------------------------------------------
+// Blobs — listed for the owner acting alone, paged by fileId.
+// -------------------------------------------------------
+
+describe('listBlobs fixtures', () => {
+  const openWithBlobs = (): Promise<APIAdapter> =>
+    openDiscovered({ ...DISCOVERY, blobs: { list: true } }, { token: undefined });
+
+  for (const fixture of listBlobsFixtures) {
+    test(fixture.name, async () => {
+      const adapter = await openWithBlobs();
+      mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
+      const limit = new URL(`${BASE_URL}${fixture.path}`).searchParams.get('limit');
+      const attempt = adapter.listBlobs!(limit === null ? {} : { limit: Number(limit) });
+
+      const body = fixture.responseBody!;
+      if ('error' in body) {
+        await expect(attempt).rejects.toBeInstanceOf(StackPermissionError);
+      } else {
+        const blobs = await attempt;
+        expect(blobs.map((b) => b.fileId)).toEqual(body.blobs.map((b) => b.fileId));
+        expect(blobs.map((b) => b.modifiedAt.toISOString())).toEqual(
+          body.blobs.map((b) => b.modifiedAt),
+        );
+      }
+      const [url, init] = mockFetch.mock.calls[1] as [string, RequestInit];
+      expect(url).toBe(`${BASE_URL}${fixture.path}`);
+      expect(init.method).toBe(fixture.method);
     });
   }
 });

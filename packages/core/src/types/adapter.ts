@@ -329,6 +329,16 @@ export type BlobInfo = {
 };
 
 /**
+ * A `listBlobs()` window, in `fileId` order: blobs after `afterFileId`,
+ * exclusive. Omitting `limit` reads every blob, as it reads every version
+ * in a VersionsQuery. See docs/spec/data-model.md § List order.
+ */
+export type BlobsQuery = {
+  afterFileId?: FileId;
+  limit?: number;
+};
+
+/**
  * The blob-storage half of an adapter. Handles raw binary data only;
  * attachment metadata lives on _attachment@1 records in the record adapter.
  */
@@ -343,12 +353,12 @@ export interface StackBlobAdapter {
   deleteBlob(fileId: FileId): Promise<void>;
 
   /**
-   * Enumerate every blob currently in storage. Optional — without it,
-   * garbage collection can't find bare-bytes orphans (bytes with no
-   * metadata record at all). See docs/spec/attachments.md § Garbage
-   * collection.
+   * Enumerate the blobs in storage, `fileId` ascending. Optional — without
+   * it, garbage collection can't find bare-bytes orphans (bytes with no
+   * metadata record at all), and a stack cannot be copied to or from it.
+   * See docs/spec/attachments.md § Garbage collection.
    */
-  listBlobs?(): Promise<BlobInfo[]>;
+  listBlobs?(query?: BlobsQuery): Promise<BlobInfo[]>;
 
   // Lifecycle
   flush?(): Promise<void>;

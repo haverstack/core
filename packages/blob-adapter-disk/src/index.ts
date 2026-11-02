@@ -17,7 +17,8 @@ import { readFile, writeFile, unlink, readdir, stat, rename } from 'fs/promises'
 import { join } from 'path';
 import { StackNotFoundError, StackBadRequestError } from '@haverstack/core';
 import type { FileId } from '@haverstack/core';
-import type { StackBlobAdapter, BlobInfo } from '@haverstack/core/adapter';
+import { blobWindow } from '@haverstack/core/adapter';
+import type { StackBlobAdapter, BlobInfo, BlobsQuery } from '@haverstack/core/adapter';
 
 const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
 
@@ -73,9 +74,12 @@ export class DiskBlobAdapter implements StackBlobAdapter {
     }
   }
 
-  async listBlobs(): Promise<BlobInfo[]> {
+  async listBlobs(query?: BlobsQuery): Promise<BlobInfo[]> {
     const entries = await readdir(this.dir);
-    const fileIds = entries.filter((name) => SHA256_HEX_RE.test(name));
+    const fileIds = blobWindow(
+      entries.filter((name) => SHA256_HEX_RE.test(name)),
+      query,
+    );
     return Promise.all(
       fileIds.map(async (fileId) => {
         const stats = await stat(join(this.dir, fileId));

@@ -16,7 +16,7 @@ import type { TypeSchema, FieldDef, ScalarFieldKind } from './types/index.js';
 export const MAX_VALIDATION_DEPTH = 32;
 
 /** fileId format: SHA-256 hex, lowercase — matches blob-adapter-disk's assertFileId(). */
-const FILE_ID_RE = /^[0-9a-f]{64}$/;
+export const FILE_ID_RE = /^[0-9a-f]{64}$/;
 
 /**
  * ISO 8601 date or date-time shape. The regex pins the shape (bare

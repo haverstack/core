@@ -36,6 +36,7 @@ import type {
   AdapterQuery,
   StackAdapter,
   BlobInfo,
+  BlobsQuery,
   StackBlobAdapter,
   AspectWriteOptions,
   ElementWriteOptions,
@@ -276,8 +277,8 @@ export class LocalAdapter implements StackAdapter {
   }
 
   /** DiskBlobAdapter always implements this — LocalAdapter always constructs one. */
-  async listBlobs(): Promise<BlobInfo[]> {
-    return this.blob.listBlobs!();
+  async listBlobs(query?: BlobsQuery): Promise<BlobInfo[]> {
+    return this.blob.listBlobs!(query);
   }
 
   // -------------------------------------------------------

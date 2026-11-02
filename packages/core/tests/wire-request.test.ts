@@ -5,6 +5,7 @@ import {
   parseChangeParams,
   parseJournalParams,
   parseVersionsParams,
+  parseBlobsParams,
   parseGetRecordParams,
   parseDeleteParams,
   parseDownloadParams,
@@ -534,6 +535,36 @@ describe('parseJournalParams', () => {
         StackBadRequestError,
       );
     }
+  });
+});
+
+describe('parseBlobsParams', () => {
+  const blobs = (qs: string) => new URL(`https://s.example/blobs${qs}`);
+  const fileId = 'a'.repeat(64);
+
+  test('reads an empty query as every blob, imposing no default page size', () => {
+    expect(parseBlobsParams(blobs(''))).toEqual({});
+  });
+
+  test('round-trips a window', () => {
+    expect(parseBlobsParams(blobs(`?afterFileId=${fileId}&limit=10`))).toEqual({
+      afterFileId: fileId,
+      limit: 10,
+    });
+  });
+
+  test('an unrecognized param is refused rather than ignored', () => {
+    expect(() => parseBlobsParams(blobs('?cursor=x'))).toThrow(/Unknown query param/);
+  });
+
+  test('refuses an afterFileId no blob could be named', () => {
+    for (const qs of ['?afterFileId=abc', `?afterFileId=${'A'.repeat(64)}`, '?afterFileId=']) {
+      expect(() => parseBlobsParams(blobs(qs))).toThrow(StackBadRequestError);
+    }
+  });
+
+  test('refuses a limit that is not a bare non-negative integer', () => {
+    expect(() => parseBlobsParams(blobs('?limit=-1'))).toThrow(StackBadRequestError);
   });
 });
 

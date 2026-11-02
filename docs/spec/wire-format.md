@@ -28,7 +28,7 @@ GET /.well-known/stack
 }
 ```
 
-`auth` is optional and describes how a token can be earned here — see [Authentication § Advertising it](#advertising-it). `changes` is optional and describes the [change feed](./change-feed.md); its absence means the server offers none. `installs` is optional, and `{ "requests": true }` says the server takes [install requests](#installs); `@haverstack/wire-types` exports `supportsInstallRequests()` to read it.
+`auth` is optional and describes how a token can be earned here — see [Authentication § Advertising it](#advertising-it). `changes` is optional and describes the [change feed](./change-feed.md); its absence means the server offers none. `installs` is optional, and `{ "requests": true }` says the server takes [install requests](#installs); `@haverstack/wire-types` exports `supportsInstallRequests()` to read it. `blobs` is optional too, and `{ "list": true }` says the server [lists its blobs](#blobs); `supportsBlobListing()` reads it.
 
 ### Version negotiation
 
@@ -705,6 +705,28 @@ Owner only. Returns `409 Conflict` if any record in the stack still references t
 ### Access
 
 Attachment permissions are governed by the Record(s) that reference them, not the attachment itself. If any Record referencing a `fileId` is accessible to the requester, the attachment is accessible. A non-owner requester can also access a file if they own an `_attachment@1` record for it, enabling access in the window between upload and record association.
+
+## Blobs
+
+```
+GET /blobs                              — every blob, fileId ascending
+GET /blobs?afterFileId=<fileId>&limit=50 — at most 50 blobs after that fileId, exclusive
+```
+
+```json
+{
+  "blobs": [{ "fileId": "039058c6…", "size": 3, "modifiedAt": "2024-01-01T00:00:00.000Z" }],
+  "cursor": null
+}
+```
+
+What [`listBlobs()`](./adapters.md#interface-split) answers locally, so a hosted stack [can be copied out](./portability.md#copying-a-stack) and [collected](./attachments.md#garbage-collection) like any other. Every blob the store holds, named by a Record or not, in [`fileId` order](./data-model.md#list-order). `modifiedAt` is when this store wrote the bytes.
+
+**Served to the owner acting alone**, and `403` (code `permission`) otherwise, delegation included — the gate `includeUnlisted`, purge and [`POST /types`](#types) use, checked with `isOwnerActingAlone()`. A listing names files no Record the requester reaches names, so no grant confers it.
+
+**`cursor` is the only end-of-list signal**, as on [the journal](#journal): a page may be shorter than the `limit` asked for. It carries the `fileId` to send back as `afterFileId`, and is `null` once nothing follows. `APIAdapter.listBlobs()` follows it to the end when no `limit` is given. `@haverstack/core/wire` exports `parseBlobsParams()` to decode both params; neither has a default, and an `afterFileId` that is not a [`fileId`](./attachments.md) is `400`.
+
+**Optional, and advertised in [discovery](#discovery)** as `"blobs": { "list": true }`. `APIAdapter` has `listBlobs()` only when it is, since that method's presence is [the capability](./adapters.md#adapter-capabilities).
 
 ## Installs
 

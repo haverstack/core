@@ -94,7 +94,7 @@ export function combineAdapters(parts: {
     getBlob: (id) => parts.blob.getBlob(id),
     deleteBlob: (id) => parts.blob.deleteBlob(id),
     ...(parts.blob.listBlobs && {
-      listBlobs: () => parts.blob.listBlobs!(),
+      listBlobs: (query) => parts.blob.listBlobs!(query),
     }),
 
     async flush() {

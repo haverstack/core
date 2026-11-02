@@ -16,6 +16,7 @@ export type {
   StackRecordAdapter,
   StackBlobAdapter,
   BlobInfo,
+  BlobsQuery,
   SnapshotOptions,
   JournalEntryInput,
   JournalOptions,
@@ -33,6 +34,7 @@ export {
   OwnerMismatchError,
   softDeletedRefusal,
 } from '../errors.js';
+export { blobWindow } from './blobs.js';
 export { combineAdapters } from './combine.js';
 export { copyStack } from './copy.js';
 export type { CreateStore } from './copy.js';

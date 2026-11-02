@@ -1,9 +1,9 @@
 import { describe, test, expect } from 'vitest';
 import { copyStack } from '../src/adapter/copy.js';
 import { Stack } from '../src/stack/stack.js';
-import { InvalidAdapterError, OwnerMismatchError } from '../src/errors.js';
+import { InvalidAdapterError, OwnerMismatchError, StackConflictError } from '../src/errors.js';
 import { MemoryAdapter } from '../src/testing.js';
-import type { StackAdapter, StoreSeed } from '../src/types/index.js';
+import type { RecordChange, StackAdapter, StoreSeed } from '../src/types/index.js';
 
 const OWNER = 'did:key:owner';
 const NOTE = 'com.example.test/note@1';
@@ -35,6 +35,30 @@ function badStore(make: (seed: StoreSeed) => Promise<StackAdapter>) {
   };
 }
 
+/**
+ * Gives `adapter` a relay, as a hosted source has: each subscription comes
+ * up at the next head in `heads` (the last repeating), and `emit()` reports
+ * a change to every open one.
+ */
+function relayed(adapter: MemoryAdapter, heads: (string | undefined)[]) {
+  const open = new Set<(change: RecordChange) => void>();
+  let connections = 0;
+  const change: RecordChange = {
+    kind: 'changed',
+    ops: ['patch'],
+    recordId: 'someone-elses',
+    typeId: NOTE,
+    version: 2,
+    updatedAt: new Date(),
+  };
+  (adapter as StackAdapter).subscribeChanges = async (opts, handler) => {
+    opts.onReady?.(heads[Math.min(connections++, heads.length - 1)]);
+    open.add(handler);
+    return () => void open.delete(handler);
+  };
+  return { open, emit: () => open.forEach((handler) => handler(change)) };
+}
+
 describe('copyStack', () => {
   // _config travels as every Record does, so the target holds what the
   // source's record says now, not what it was created with.
@@ -63,6 +87,13 @@ describe('copyStack', () => {
     const bare = await source.putBlob(new Uint8Array([9, 9, 9]));
     const target = (await copyStack(source, create)) as MemoryAdapter;
     expect([...target.blobs.keys()].sort()).toEqual([named.content.fileId, bare].sort());
+  });
+
+  test('carries every page of blobs, not just the first', async () => {
+    const source = await sourceWith(0);
+    for (let i = 0; i < 150; i++) await source.putBlob(new Uint8Array([i, 1]));
+    const target = (await copyStack(source, create)) as MemoryAdapter;
+    expect([...target.blobs.keys()].sort()).toEqual([...source.blobs.keys()].sort());
   });
 
   test('refuses a source with no listBlobs(), before creating anything', async () => {
@@ -124,6 +155,51 @@ describe('copyStack', () => {
       const { made, create: bad } = badStore(make);
       await expect(copyStack(source, bad)).rejects.toThrow(error);
       expect(made.closed).toBe(true);
+    });
+  });
+
+  // A source written by others relays those writes; the copy watches the
+  // relay and refuses a source that moved. See docs/spec/portability.md
+  // § Copying a stack.
+  describe('a relayed source', () => {
+    test('is copied when it holds still, and the watch is closed after', async () => {
+      const source = await sourceWith(3);
+      const relay = relayed(source, ['h1']);
+      const target = (await copyStack(source, create)) as MemoryAdapter;
+      expect([...target.records.keys()].sort()).toEqual([...source.records.keys()].sort());
+      expect(relay.open.size).toBe(0);
+    });
+
+    test('is refused when a change is relayed during the copy, and the target closed', async () => {
+      const source = await sourceWith(3);
+      const relay = relayed(source, ['h1']);
+      const { made, create: watched } = badStore(async (seed) => {
+        relay.emit();
+        return create(seed);
+      });
+      await expect(copyStack(source, watched)).rejects.toThrow(StackConflictError);
+      expect(made.closed).toBe(true);
+      expect(relay.open.size).toBe(0);
+    });
+
+    test('is refused when its head moved, though no frame arrived', async () => {
+      const source = await sourceWith(3);
+      relayed(source, ['h1', 'h2']);
+      await expect(copyStack(source, create)).rejects.toThrow(StackConflictError);
+    });
+
+    test('is refused before anything is created when its feed reports no head', async () => {
+      const source = await sourceWith(1);
+      const relay = relayed(source, [undefined]);
+      let created = false;
+      await expect(
+        copyStack(source, (seed) => {
+          created = true;
+          return create(seed);
+        }),
+      ).rejects.toThrow(InvalidAdapterError);
+      expect(created).toBe(false);
+      expect(relay.open.size).toBe(0);
     });
   });
 });

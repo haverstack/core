@@ -60,6 +60,30 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
     },
   },
   {
+    name: 'discovery-advertises-blob-listing',
+    description:
+      'A server that lists its blobs at GET /blobs says so with blobs.list: true. Absent means ' +
+      'it does not, and APIAdapter then has no listBlobs(), so a copy refuses the stack as a ' +
+      'source before reading anything — see docs/spec/wire-format.md § Blobs.',
+    method: 'GET',
+    path: '/.well-known/stack',
+    responseStatus: 200,
+    responseBody: {
+      version: WIRE_PROTOCOL_VERSION,
+      ownerEntityId: 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK',
+      capabilities: {
+        filter: { content: 'none', contentPresent: false, contentByType: false, search: false },
+        sort: {
+          fields: ['createdAt', 'updatedAt', 'version'],
+          contentField: false,
+          contentFieldByType: false,
+        },
+        limits: { attachmentBytes: null, contentBytes: null },
+      },
+      blobs: { list: true },
+    },
+  },
+  {
     name: 'discovery-advertises-did-challenge-auth',
     description:
       'A server implementing the challenge–response handshake says so in discovery, so a client ' +

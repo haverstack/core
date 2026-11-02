@@ -34,6 +34,7 @@ import type {
   DataAssociation,
   StackCapabilities,
   BlobInfo,
+  BlobsQuery,
   Reach,
   RecordHistory,
   StoreSeed,
@@ -46,6 +47,7 @@ import { compareSortEntries, constantSortEntry, contentSortEntry } from './adapt
 import type { SortEntry } from './adapter/sort.js';
 import { inReach } from './adapter/reach.js';
 import { newStoreSeed } from './adapter/seed.js';
+import { blobWindow } from './adapter/blobs.js';
 
 import {
   ElementSetMovedError,
@@ -703,12 +705,11 @@ export class MemoryAdapter implements StackAdapter {
   // Declared as an optional field (not a fixed method) so a test subclass
   // can override it to `undefined`, simulating an adapter that doesn't
   // implement this capability (see stack.test.ts's NoListBlobsAdapter).
-  listBlobs?: () => Promise<BlobInfo[]> = async () => {
-    return [...this.blobs.entries()].map(([fileId, blob]) => ({
-      fileId,
-      size: blob.data.byteLength,
-      modifiedAt: blob.modifiedAt,
-    }));
+  listBlobs?: (query?: BlobsQuery) => Promise<BlobInfo[]> = async (query) => {
+    return blobWindow(this.blobs.keys(), query).map((fileId) => {
+      const blob = this.blobs.get(fileId)!;
+      return { fileId, size: blob.data.byteLength, modifiedAt: blob.modifiedAt };
+    });
   };
 
   flush?: () => Promise<void>;

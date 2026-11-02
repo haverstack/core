@@ -142,6 +142,20 @@ export function runBlobAdapterConformance(options: BlobAdapterConformanceOptions
           const files = await adapter.listBlobs!();
           expect(files.some((f) => f.fileId === fileId)).toBe(false);
         });
+
+        test('reads in fileId order and pages forward from afterFileId, exclusive', async () => {
+          const ids: string[] = [];
+          for (const body of ['one', 'two', 'three']) {
+            ids.push(await adapter.putBlob(new TextEncoder().encode(body)));
+          }
+          ids.sort();
+
+          expect((await adapter.listBlobs!()).map((f) => f.fileId)).toEqual(ids);
+          const first = await adapter.listBlobs!({ limit: 2 });
+          expect(first.map((f) => f.fileId)).toEqual(ids.slice(0, 2));
+          const rest = await adapter.listBlobs!({ afterFileId: ids[1], limit: 2 });
+          expect(rest.map((f) => f.fileId)).toEqual(ids.slice(2));
+        });
       });
     }
   });

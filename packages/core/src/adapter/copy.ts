@@ -10,14 +10,22 @@
  * between storage engines are all this one call, with a different source
  * and a different kind of store to create. Full trust, like any direct
  * adapter access: authorship and history land as recorded, which no write
- * through Stack may do. See docs/spec/portability.md.
+ * through Stack may do.
+ *
+ * A copy reads one moment of its source. A source written by anyone but
+ * this process relays those writes through `subscribeChanges()`, so the
+ * copy watches that relay while it reads and refuses if the source moved;
+ * one with no relay has no other writer to watch for.
+ * See docs/spec/portability.md.
  */
 
-import { InvalidAdapterError, OwnerMismatchError } from '../errors.js';
+import { InvalidAdapterError, OwnerMismatchError, StackConflictError } from '../errors.js';
 import { resolveQuery } from '../query-validation.js';
 import type {
   ConfigContent,
+  FileId,
   PlainQuery,
+  SubscribeOptions,
   StackAdapter,
   StackRecordAdapter,
   StoreSeed,
@@ -41,8 +49,8 @@ const EVERYTHING: PlainQuery = {
  * Copy everything `from` holds into the store `create` makes from its
  * `_config` record and that record's history, and return that store, open.
  * Not atomic: a failure closes the store part-written, and the caller, whose
- * store it is, removes it. The source must not be written meanwhile; nothing
- * here can check that.
+ * store it is, removes it. A source that moves meanwhile is refused with
+ * StackConflictError, and the copy is run again into a new store.
  * See docs/spec/portability.md § Copying a stack.
  */
 export async function copyStack(from: StackAdapter, create: CreateStore): Promise<StackAdapter> {
@@ -52,30 +60,37 @@ export async function copyStack(from: StackAdapter, create: CreateStore): Promis
       'Cannot copy from this adapter: it has no listBlobs(), so its blobs cannot be enumerated.',
     );
   }
-  const config = await from.getRecord(SYSTEM_TYPES.CONFIG);
-  if (!config) {
-    throw new InvalidAdapterError('Cannot copy from this adapter: it holds no _config record.');
-  }
-  const [versions, journal] = await Promise.all([
-    from.getVersions(config.id),
-    from.getJournal(config.id),
-  ]);
-  const to = await create({ config, history: { versions, journal } });
+  // Before the first read, so every write that could land during one is seen.
+  const watch = await watchSource(from);
   try {
-    const importRecord = to.importRecord?.bind(to);
-    if (!importRecord) refuseTarget('it has no importRecord(), so it cannot write history');
-    const listHeld = to.listBlobs?.bind(to);
-    if (!listHeld) refuseTarget('it has no listBlobs(), so it could not be copied from in turn');
-    await assertNewStore(to, (config.content as ConfigContent).ownerEntityId, listHeld);
-    for (const type of await from.listTypes()) await to.saveType(type);
-    // Bytes before the Records that name them, as every upload writes them.
-    for (const { fileId } of await listBlobs()) await to.putBlob(await from.getBlob(fileId));
-    await copyRecords(from, importRecord);
-    return to;
-  } catch (err) {
-    // The failure that stopped the copy is the one to report.
-    await to.close?.().catch(() => {});
-    throw err;
+    const config = await from.getRecord(SYSTEM_TYPES.CONFIG);
+    if (!config) {
+      throw new InvalidAdapterError('Cannot copy from this adapter: it holds no _config record.');
+    }
+    const [versions, journal] = await Promise.all([
+      from.getVersions(config.id),
+      from.getJournal(config.id),
+    ]);
+    const to = await create({ config, history: { versions, journal } });
+    try {
+      const importRecord = to.importRecord?.bind(to);
+      if (!importRecord) refuseTarget('it has no importRecord(), so it cannot write history');
+      const listHeld = to.listBlobs?.bind(to);
+      if (!listHeld) refuseTarget('it has no listBlobs(), so it could not be copied from in turn');
+      await assertNewStore(to, (config.content as ConfigContent).ownerEntityId, listHeld);
+      for (const type of await from.listTypes()) await to.saveType(type);
+      // Bytes before the Records that name them, as every upload writes them.
+      await copyBlobs(from, to, listBlobs, watch);
+      await copyRecords(from, importRecord, watch);
+      await watch.settle();
+      return to;
+    } catch (err) {
+      // The failure that stopped the copy is the one to report.
+      await to.close?.().catch(() => {});
+      throw err;
+    }
+  } finally {
+    watch.stop();
   }
 }
 
@@ -101,12 +116,29 @@ async function assertNewStore(
     refuseTarget('it already holds Records');
   }
   if ((await to.listTypes()).length) refuseTarget('it already holds Types');
-  if ((await listHeld()).length) refuseTarget('it already holds blobs');
+  if ((await listHeld({ limit: 1 })).length) refuseTarget('it already holds blobs');
+}
+
+async function copyBlobs(
+  from: StackAdapter,
+  to: StackAdapter,
+  listBlobs: NonNullable<StackAdapter['listBlobs']>,
+  watch: SourceWatch,
+): Promise<void> {
+  let afterFileId: FileId | undefined;
+  for (;;) {
+    const page = await listBlobs({ afterFileId, limit: PAGE_SIZE });
+    for (const { fileId } of page) await to.putBlob(await from.getBlob(fileId));
+    watch.assertStill();
+    if (page.length < PAGE_SIZE) return;
+    afterFileId = page[page.length - 1].fileId;
+  }
 }
 
 async function copyRecords(
   from: StackAdapter,
   importRecord: NonNullable<StackRecordAdapter['importRecord']>,
+  watch: SourceWatch,
 ): Promise<void> {
   let cursor: string | undefined;
   do {
@@ -118,6 +150,69 @@ async function copyRecords(
       ]);
       await importRecord(record, { versions, journal });
     }
+    watch.assertStill();
     cursor = page.cursor ?? undefined;
   } while (cursor);
+}
+
+/** What a copy knows of whether its source has moved since it began. */
+type SourceWatch = {
+  /** Throws once the relay has reported a change, so a busy source fails early. */
+  assertStill(): void;
+  /** Throws unless the source's head is where it was when the watch began. */
+  settle(): Promise<void>;
+  stop(): void;
+};
+
+const SOURCE_MOVED = 'The source changed while it was copied. Copy it again into a new store.';
+
+/**
+ * Every change, unlisted ones included: the copy reads those too. Records
+ * are all a feed reports, and the rest of a source moves only with them —
+ * see docs/spec/portability.md § Copying a stack.
+ */
+const EVERY_CHANGE: SubscribeOptions = { filter: { includeUnlisted: true } };
+
+/**
+ * Watch `from` through its relay. A frame says it moved; so does a head
+ * that differs at the end from the one reported at the start, which
+ * catches a write whose frame was still in flight when the reads finished.
+ */
+async function watchSource(from: StackAdapter): Promise<SourceWatch> {
+  const subscribe = from.subscribeChanges?.bind(from);
+  if (!subscribe) return { assertStill() {}, async settle() {}, stop() {} };
+
+  const head = async (): Promise<string | undefined> => {
+    let reported: { cursor: string | undefined } | undefined;
+    const stop = await subscribe(
+      { ...EVERY_CHANGE, onReady: (cursor) => (reported ??= { cursor }) },
+      () => {},
+    );
+    stop();
+    return reported?.cursor;
+  };
+
+  let moved = false;
+  let start: { cursor: string | undefined } | undefined;
+  const stop = await subscribe(
+    { ...EVERY_CHANGE, onReady: (cursor) => (start ??= { cursor }) },
+    () => (moved = true),
+  );
+  if (start?.cursor === undefined) {
+    stop();
+    throw new InvalidAdapterError(
+      'Cannot copy from this adapter: its change feed reports no head, so a write landing ' +
+        'during the copy could not be detected.',
+    );
+  }
+  const startCursor = start.cursor;
+  return {
+    assertStill() {
+      if (moved) throw new StackConflictError(SOURCE_MOVED);
+    },
+    async settle() {
+      if (moved || (await head()) !== startCursor) throw new StackConflictError(SOURCE_MOVED);
+    },
+    stop,
+  };
 }
