@@ -2,14 +2,22 @@
  * System field rules
  * -------------------------------------------------------
  * Which system-type content fields are bindings, which of those are
- * unique, and which fields are immutable. Data only, so the write checks
- * and the permission policy read one declaration.
+ * unique, and which fields are immutable, so the write checks and the
+ * permission policy read one declaration. The `_attachment` mimeType
+ * rule is not here: the first record for a fileId decides it, which no
+ * per-field declaration says.
  *
  * See docs/spec/data-model.md § Immutable fields and
  * docs/spec/identity.md § DID bindings.
  */
 
 import { SYSTEM_TYPES } from '../types/index.js';
+
+/**
+ * A field holds no value while absent or the empty string — how a required
+ * string field says "none yet". See docs/spec/data-model.md § Immutable fields.
+ */
+export const isUnset = (value: unknown): boolean => value === undefined || value === '';
 
 interface Binding {
   field: 'did' | 'appId';

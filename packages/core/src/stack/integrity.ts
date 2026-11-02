@@ -12,7 +12,7 @@
 import { hasGroupAdmin, isGroupRecord } from '../access.js';
 import type { RecordResolver } from '../access.js';
 import { ARGUMENTS_INVALID, StackConflictError, StackValidationError } from '../errors.js';
-import { bindingsOf, immutableFieldsOf } from './field-rules.js';
+import { bindingsOf, immutableFieldsOf, isUnset } from './field-rules.js';
 import { filtersContent } from '../query-validation.js';
 import { associationIdentical } from '../associations/identity.js';
 import { validateRecordId } from './record-id.js';
@@ -23,7 +23,6 @@ import type {
   Association,
   AttachmentContent,
   DataAssociation,
-  RecordId,
   StackRecord,
   TypeId,
 } from '../types/index.js';
@@ -34,10 +33,11 @@ import type { Stack } from './stack.js';
 // -------------------------------------------------------
 
 /**
- * Every content integrity check a write owes, asked the same way by create,
- * patch, restore and migrate. `prior` is the record as it stands, absent
- * on create. A value it already held in the destination family is no new
- * claim. See docs/spec/data-model.md § Immutable fields.
+ * Every content integrity check create, patch, restore and migrate owe: a
+ * change, judged against `prior` (absent on create), then claims, judged
+ * against other records. A claim is asked only of a value not already held
+ * in the destination family, so a claim check never finds the record itself.
+ * See docs/spec/data-model.md § Immutable fields.
  */
 export async function checkContentWrite(
   stack: Stack,
@@ -52,7 +52,7 @@ export async function checkContentWrite(
     prior && baseIdOf(prior.typeId) === family ? (prior.content as Record<string, unknown>) : {};
   for (const { field, unique } of bindingsOf(family)) {
     if (!unique || content[field] === held[field]) continue;
-    await checkBindingUnique(stack, family, field, content[field], prior?.id);
+    await checkBindingUnique(stack, family, field, content[field]);
   }
   if (
     family === SYSTEM_TYPES.ATTACHMENT &&
@@ -76,7 +76,7 @@ function checkImmutableFields(existing: StackRecord, next: Record<string, unknow
   const content = existing.content as Record<string, unknown>;
   for (const field of immutableFieldsOf(family)) {
     const held = content[field];
-    if (held === undefined || held === '' || next[field] === held) continue;
+    if (isUnset(held) || next[field] === held) continue;
     throw new StackConflictError(`Cannot change ${family}.${field}: it is immutable once set.`);
   }
 }
@@ -96,9 +96,8 @@ async function checkBindingUnique(
   family: string,
   field: 'did' | 'appId',
   value: unknown,
-  excludeId?: RecordId,
 ): Promise<void> {
-  if (typeof value !== 'string' || value === '') return;
+  if (isUnset(value)) return;
 
   const clash = await findFirstMatch(
     (q) => stack.query(q),
@@ -110,7 +109,7 @@ async function checkBindingUnique(
         ...(filtersContent(stack.capabilities) && { content: { [field]: value } }),
       },
     },
-    (r) => r.id !== excludeId && (r.content as Record<string, unknown>)[field] === value,
+    (r) => (r.content as Record<string, unknown>)[field] === value,
   );
   if (clash) {
     throw new StackConflictError(`Another ${family} record already claims the ${field} "${value}"`);
