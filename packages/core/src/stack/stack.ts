@@ -146,9 +146,7 @@ import {
   assertNoParentCycle,
   assertParentExists,
   checkAttachmentAssociationPointers,
-  checkAttachmentMimeTypeOnCreate,
-  checkBindingsUnique,
-  checkImmutableFields,
+  checkContentWrite,
 } from './integrity.js';
 import { systemTypeDefinitions } from './system-types.js';
 import type {
@@ -642,13 +640,9 @@ export class Stack implements StackClient {
 
     assertContentSize(content, this.capabilities.limits.contentBytes, 'Content');
 
-    if (typeId === `${SYSTEM_TYPES.ATTACHMENT}@1`) {
-      await checkAttachmentMimeTypeOnCreate(this, content as unknown as AttachmentContent);
-    }
+    await checkContentWrite(this, typeId, content as Record<string, unknown>);
 
     await checkAttachmentAssociationPointers(this.readRecord, opts.associations);
-
-    await checkBindingsUnique(this, typeId, content as Record<string, unknown>);
 
     if (opts.id !== undefined) {
       validateRecordId(opts.id);
@@ -795,8 +789,7 @@ export class Stack implements StackClient {
     const contentErrors = typedContentErrors(existing.typeId, merged, type.schema);
     if (contentErrors.length > 0) throw new StackValidationError(contentErrors);
 
-    checkImmutableFields(existing.typeId, existing.typeId, existing.content, merged);
-    await checkBindingsUnique(this, existing.typeId, merged, existing);
+    await checkContentWrite(this, existing.typeId, merged, existing);
     return merged;
   }
 
@@ -1256,8 +1249,7 @@ export class Stack implements StackClient {
 
     // Restoring is a write like any other, so it owes the checks every
     // content write pays. See docs/spec/versioning.md § Restore semantics.
-    checkImmutableFields(existing.typeId, target.typeId, existing.content, target.content);
-    await checkBindingsUnique(this, target.typeId, target.content, existing);
+    await checkContentWrite(this, target.typeId, target.content, existing);
 
     // A restore adds no containment edge and takes none away, so there is
     // no cycle for it to close and nothing for the destination checks to
@@ -1324,7 +1316,6 @@ export class Stack implements StackClient {
 
     const fromFamily = baseIdOf(existing.typeId);
     const toFamily = baseIdOf(toTypeId);
-    const existingContent = existing.content as Record<string, unknown>;
 
     // Only create() stamps a group's first `admin`, so a record migrated
     // *into* `_group` would have an empty roster. Version-to-version within
@@ -1336,15 +1327,7 @@ export class Stack implements StackClient {
       );
     }
 
-    checkImmutableFields(existing.typeId, toTypeId, existingContent, content);
-
-    if (fromFamily !== SYSTEM_TYPES.ATTACHMENT && toFamily === SYSTEM_TYPES.ATTACHMENT) {
-      // A record arriving from outside the family stakes a fresh claim on
-      // its fileId, exactly as create() does — so it owes create()'s check.
-      await checkAttachmentMimeTypeOnCreate(this, content as unknown as AttachmentContent);
-    }
-
-    await checkBindingsUnique(this, toTypeId, content, existing);
+    await checkContentWrite(this, toTypeId, content, existing);
 
     const change = new PendingChange('migrate', {
       actor: normalizeActor(opts.actor),

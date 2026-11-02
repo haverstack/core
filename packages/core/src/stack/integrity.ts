@@ -12,6 +12,7 @@
 import { hasGroupAdmin, isGroupRecord } from '../access.js';
 import type { RecordResolver } from '../access.js';
 import { ARGUMENTS_INVALID, StackConflictError, StackValidationError } from '../errors.js';
+import { bindingsOf, immutableFieldsOf } from './field-rules.js';
 import { filtersContent } from '../query-validation.js';
 import { associationIdentical } from '../associations/identity.js';
 import { validateRecordId } from './record-id.js';
@@ -29,79 +30,60 @@ import type {
 import type { Stack } from './stack.js';
 
 // -------------------------------------------------------
-// Immutable fields
+// Content writes
 // -------------------------------------------------------
 
 /**
- * Each family's fields that no write may move once they hold a value. One
- * rule for all of them; why each field is here belongs to its own spec.
- * See docs/spec/data-model.md § Immutable fields.
+ * Every content integrity check a write owes, asked the same way by create,
+ * patch, restore and migrate. `prior` is the record as it stands, absent
+ * on create. A value it already held in the destination family is no new
+ * claim. See docs/spec/data-model.md § Immutable fields.
  */
-const IMMUTABLE_FIELDS: ReadonlyMap<string, readonly string[]> = new Map([
-  [SYSTEM_TYPES.CONFIG, ['ownerEntityId']],
-  [SYSTEM_TYPES.ENTITY, ['did']],
-  [SYSTEM_TYPES.APP, ['did', 'appId']],
-  [SYSTEM_TYPES.INSTALL, ['appId']],
-  [SYSTEM_TYPES.ATTACHMENT, ['fileId', 'mimeType', 'size']],
-]);
-
-/**
- * Refuse a write whose resulting content moves or clears a field the
- * record holds. Asked over both families a write touches, so leaving a
- * family sheds nothing. See docs/spec/data-model.md § Immutable fields.
- */
-export function checkImmutableFields(
-  fromTypeId: TypeId,
-  toTypeId: TypeId,
-  existing: Record<string, unknown>,
-  next: Record<string, unknown>,
-): void {
-  const families = new Set([baseIdOf(fromTypeId), baseIdOf(toTypeId)]);
-  for (const family of families) {
-    for (const field of IMMUTABLE_FIELDS.get(family) ?? []) {
-      const held = existing[field];
-      if (held === undefined || held === '' || next[field] === held) continue;
-      throw new StackConflictError(`Cannot change ${family}.${field}: it is immutable once set.`);
-    }
-  }
-}
-
-// -------------------------------------------------------
-// DID and appId bindings
-// -------------------------------------------------------
-
-/**
- * The binding fields an Actor is resolved *by*, which are unique per stack:
- * a second claimant leaves the lookup ambiguous. `_app.appId` is
- * deliberately absent — nothing resolves by it, and a new key's card must
- * repeat it. See docs/spec/identity.md § DID bindings.
- */
-const UNIQUE_BINDING_FIELDS: ReadonlyMap<string, readonly ('did' | 'appId')[]> = new Map([
-  [SYSTEM_TYPES.APP, ['did'] as const],
-  [SYSTEM_TYPES.ENTITY, ['did'] as const],
-  // One install answers for each app; see docs/spec/apps.md § The `_install` record.
-  [SYSTEM_TYPES.INSTALL, ['appId'] as const],
-]);
-
-/**
- * Uniqueness for every unique binding field a write's content claims. A
- * value the record already held in the same family is no new claim, so
- * `prior` — the record as it stands, absent on create — exempts it.
- */
-export async function checkBindingsUnique(
+export async function checkContentWrite(
   stack: Stack,
   typeId: TypeId,
   content: Record<string, unknown>,
   prior?: StackRecord,
 ): Promise<void> {
+  if (prior) checkImmutableFields(prior, content);
+
   const family = baseIdOf(typeId);
   const held =
     prior && baseIdOf(prior.typeId) === family ? (prior.content as Record<string, unknown>) : {};
-  for (const field of UNIQUE_BINDING_FIELDS.get(family) ?? []) {
-    if (content[field] === held[field]) continue;
+  for (const { field, unique } of bindingsOf(family)) {
+    if (!unique || content[field] === held[field]) continue;
     await checkBindingUnique(stack, family, field, content[field], prior?.id);
   }
+  if (
+    family === SYSTEM_TYPES.ATTACHMENT &&
+    (content.fileId !== held.fileId || content.mimeType !== held.mimeType)
+  ) {
+    await checkAttachmentMimeType(stack, content as unknown as AttachmentContent);
+  }
 }
+
+// -------------------------------------------------------
+// Immutable fields
+// -------------------------------------------------------
+
+/**
+ * Refuse a write that moves or clears an immutable field the record holds.
+ * Only the family the record is in now is asked: a field of the family it
+ * enters was never held, and arriving with one is a claim, not a change.
+ */
+function checkImmutableFields(existing: StackRecord, next: Record<string, unknown>): void {
+  const family = baseIdOf(existing.typeId);
+  const content = existing.content as Record<string, unknown>;
+  for (const field of immutableFieldsOf(family)) {
+    const held = content[field];
+    if (held === undefined || held === '' || next[field] === held) continue;
+    throw new StackConflictError(`Cannot change ${family}.${field}: it is immutable once set.`);
+  }
+}
+
+// -------------------------------------------------------
+// Claims on stored values
+// -------------------------------------------------------
 
 /**
  * Refuse a second card claiming a value an Actor is resolved by. A
@@ -206,10 +188,7 @@ export async function assertNoParentCycle(
  * upload; what survives the race is a deterministic winner. See
  * docs/spec/attachments.md § The `_attachment` record type.
  */
-export async function checkAttachmentMimeTypeOnCreate(
-  stack: Stack,
-  content: AttachmentContent,
-): Promise<void> {
+async function checkAttachmentMimeType(stack: Stack, content: AttachmentContent): Promise<void> {
   const { fileId, mimeType } = content;
   if (typeof fileId !== 'string') return; // schema validation already rejected this
 

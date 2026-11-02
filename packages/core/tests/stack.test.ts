@@ -2511,6 +2511,40 @@ describe('Stack.commitMigration — _attachment protections', () => {
       }),
     ).rejects.toThrow(StackConflictError);
   });
+
+  test('a field held outside the family is not immutable on arrival', async () => {
+    await stack.defineType({
+      id: 'com.example.test/blob@1',
+      name: 'Blob',
+      schema: { size: { kind: 'number', required: true } },
+    });
+    const a = await stack.putAttachment(new Uint8Array([9]), { mimeType: 'text/plain' });
+    const blob = await stack.create('com.example.test/blob@1', { size: 3 });
+
+    const migrated = await stack.commitMigration(blob.id, '_attachment@1', {
+      fileId: a.content.fileId,
+      mimeType: 'text/plain',
+      size: 1,
+    });
+    expect(migrated.typeId).toBe('_attachment@1');
+  });
+
+  test('restoring into the family applies the mimeType-establishment check', async () => {
+    await stack.defineType({
+      id: 'com.example.test/blob@1',
+      name: 'Blob',
+      schema: {
+        fileId: { kind: 'string', required: true },
+        mimeType: { kind: 'string', required: true },
+        size: { kind: 'number', required: true },
+      },
+    });
+    const a = await stack.putAttachment(new Uint8Array([9]), { mimeType: 'text/plain' });
+    await stack.commitMigration(a.id, 'com.example.test/blob@1', { ...a.content });
+    await stack.putAttachment(new Uint8Array([9]), { mimeType: 'image/png' });
+
+    await expect(stack.restoreVersion(a.id, 1)).rejects.toThrow(/mimeType conflicts/);
+  });
 });
 
 // -------------------------------------------------------

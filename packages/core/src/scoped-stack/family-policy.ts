@@ -17,6 +17,7 @@
  */
 
 import { baseIdOf } from '../schema.js';
+import { bindingFieldsOf } from '../stack/field-rules.js';
 import { SYSTEM_TYPES } from '../types/index.js';
 import type { EntityId, TypeId } from '../types/index.js';
 
@@ -62,7 +63,7 @@ const POLICIES: ReadonlyMap<string, FamilyPolicy> = new Map<string, FamilyPolicy
     {
       writers: 'ordinary',
       ownerFields: {
-        fields: ['did', 'appId'],
+        fields: bindingFieldsOf(SYSTEM_TYPES.APP),
         when: 'any',
         message: 'Only the stack owner may set an _app record’s did or appId',
       },
