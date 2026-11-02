@@ -211,6 +211,27 @@ describe('installApp()', () => {
     }
   });
 
+  test('a manifest reports every refusal at once, each at its place in the manifest', async () => {
+    const note = 'com.example.notes/note';
+    const refused = await stack
+      .planInstall(
+        manifest({
+          requests: [
+            { baseId: note, actions: ['update-any'] },
+            { baseId: note, actions: ['read-any', 'read-any'] },
+          ],
+        }),
+        { did: APP_DID },
+      )
+      .catch((e: unknown) => e);
+    expect(refused).toBeInstanceOf(StackValidationError);
+    expect((refused as StackValidationError).errors.map((e) => e.path).sort()).toEqual([
+      'requests[0].actions[0]',
+      'requests[1].actions[1]',
+      'requests[1].baseId',
+    ]);
+  });
+
   test('a manifest naming an action twice is refused, as grantType() refuses it', async () => {
     const refused = await stack
       .planInstall(
@@ -221,7 +242,9 @@ describe('installApp()', () => {
       )
       .catch((e: unknown) => e);
     expect(refused).toBeInstanceOf(StackValidationError);
-    expect((refused as StackValidationError).errors.map((e) => e.path)).toEqual(['actions[1]']);
+    expect((refused as StackValidationError).errors.map((e) => e.path)).toEqual([
+      'requests[0].actions[1]',
+    ]);
   });
 
   test('a fingerprint names the plan the owner saw, so an edit it does not show leaves it', async () => {
@@ -584,6 +607,25 @@ describe('the _install record', () => {
     expect(refused).toBeInstanceOf(StackValidationError);
     expect((refused as StackValidationError).errors.map((e) => e.path)).toEqual([
       'requests[0].actions[1]',
+    ]);
+  });
+
+  test('a family requested twice or a version defined twice is refused, as in a manifest', async () => {
+    const refused = await stack
+      .create<InstallContent>('_install@1', {
+        appId: 'com.example.notes',
+        name: 'Notes',
+        defines: [NOTE_1, NOTE_1],
+        requests: [
+          { baseId: 'com.example.notes/note', actions: ['create'] },
+          { baseId: 'com.example.notes/note', actions: ['read-any'] },
+        ],
+      })
+      .catch((e: unknown) => e);
+    expect(refused).toBeInstanceOf(StackValidationError);
+    expect((refused as StackValidationError).errors.map((e) => e.path)).toEqual([
+      'defines[1]',
+      'requests[1].baseId',
     ]);
   });
 

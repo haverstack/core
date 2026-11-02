@@ -15,7 +15,6 @@ import {
   StackSchemaDriftError,
   StackValidationError,
 } from '../errors.js';
-import { checkGrantValid } from '../grants.js';
 import {
   INSTALL_APP_LABEL,
   INSTALL_GRANT_LABEL,
@@ -31,6 +30,7 @@ import {
   planFingerprint,
   sameRequest,
   snapshotManifest,
+  validateRequests,
 } from '../install.js';
 import { baseIdOf, diffSchemas, hashSchema, parseTypeId } from '../schema.js';
 import { findAppCardByDid, loadInstallRecords, queryAllPages } from './reads.js';
@@ -255,20 +255,8 @@ function checkManifest(manifest: AppManifest, did: EntityId): void {
       }
     }
   });
-  // A family is listed once, like a type: two requests for one family would
-  // be two grants for the key where the manifest means one.
-  const families = new Set<string>();
-  manifest.requests.forEach((r, i) => {
-    if (families.has(r.baseId)) {
-      errors.push({
-        path: `requests[${i}].baseId`,
-        message: `"${r.baseId}" is listed more than once`,
-      });
-    }
-    families.add(r.baseId);
-  });
+  errors.push(...validateRequests(manifest.requests, 'requests'));
   if (errors.length > 0) throw new StackValidationError(errors, ARGUMENTS_INVALID);
-  for (const r of manifest.requests) checkGrantValid(r.baseId, r.actions);
 }
 
 /** The key's `_app` card, created or undeleted as needed. */

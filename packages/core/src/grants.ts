@@ -10,13 +10,12 @@
  */
 
 import { baseIdOf, familyIdProblem } from './schema.js';
-import { ARGUMENTS_INVALID, StackBadRequestError, StackValidationError } from './errors.js';
+import { StackBadRequestError } from './errors.js';
 import { granteeErrors } from './associations/validation.js';
 import { SYSTEM_TYPES, GRANT_ACTIONS } from './types/index.js';
 import { granteeReaches } from './access.js';
 import type { RosterRoles } from './access.js';
 import type {
-  BaseId,
   EntityId,
   GrantAction,
   GrantContent,
@@ -234,29 +233,34 @@ export function validateGrantActions(typeId: TypeId, content: unknown): Validati
 }
 
 /**
- * Actions are held to validateActionList(); the target is held to the
- * same rule every `_grant` write meets — see validateGrantBaseId().
+ * A grant as every write of one holds it: a family a grant may target, the
+ * same rule every `_grant` write meets (see validateGrantBaseId()), and an
+ * action list held to validateActionList() whose mutate verbs carry their
+ * read companions. `path` prefixes each error, so a request inside a
+ * manifest or an `_install` reports where it sits.
  */
-export function checkGrantValid(baseId: BaseId, actions: GrantAction[]): void {
-  const errors: ValidationError[] = validateActionList(actions, 'actions');
-
-  const problem = familyIdProblem(baseId, 'grantType');
+export function validateGrant(
+  baseId: unknown,
+  actions: readonly unknown[],
+  path = '',
+): ValidationError[] {
+  const errors: ValidationError[] = validateActionList(actions, `${path}actions`);
+  const problem = familyIdProblem(baseId, `${path}baseId`);
   if (problem) {
-    errors.push({ path: 'baseId', message: problem });
+    errors.push({ path: `${path}baseId`, message: problem });
   } else {
-    errors.push(...validateGrantBaseId(`${SYSTEM_TYPES.GRANT}@1`, { baseId }));
+    for (const e of validateGrantBaseId(`${SYSTEM_TYPES.GRANT}@1`, { baseId })) {
+      errors.push({ ...e, path: `${path}${e.path}` });
+    }
   }
-
+  const known = actions.filter((a): a is GrantAction => GRANT_ACTION_SET.has(a as GrantAction));
   actions.forEach((action, j) => {
-    if (grantConveys(actions, action)) return;
-    const companions = READ_COMPANIONS.get(action);
-    if (!companions) return;
+    const companions = READ_COMPANIONS.get(action as GrantAction);
+    if (!companions || grantConveys(known, action as GrantAction)) return;
     errors.push({
-      path: `actions[${j}]`,
-      message: `"${action}" requires ${companions.map((c) => `"${c}"`).join(' or ')} in the same grant: a mutate verb reaches the record and its history, so it conveys nothing without read. Name both in one grant: actions: [${companions.map((c) => `'${c}'`).join(' | ')}, '${action}']`,
+      path: `${path}actions[${j}]`,
+      message: `"${String(action)}" requires ${companions.map((c) => `"${c}"`).join(' or ')} in the same grant: a mutate verb reaches the record and its history, so it conveys nothing without read. Name both in one grant: actions: [${companions.map((c) => `'${c}'`).join(' | ')}, '${String(action)}']`,
     });
   });
-  if (errors.length > 0) {
-    throw new StackValidationError(errors, ARGUMENTS_INVALID);
-  }
+  return errors;
 }

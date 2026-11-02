@@ -19,9 +19,9 @@
  * are in stack/install-app.ts. See docs/spec/apps.md.
  */
 
-import { baseIdOf, familyIdProblem, hashSchema, parseTypeId } from './schema.js';
+import { baseIdOf, hashSchema, parseTypeId } from './schema.js';
 import { sha256Hex } from './hash.js';
-import { UNGRANTABLE_SYSTEM_TYPES, sameActions, validateActionList } from './grants.js';
+import { sameActions, validateGrant } from './grants.js';
 import { SYSTEM_TYPES } from './types/index.js';
 import type {
   AppId,
@@ -203,6 +203,29 @@ export function claimedFamilies(content: unknown): Set<BaseId> {
 }
 
 /**
+ * A list of install requests as every write of one holds it — a manifest's
+ * and an `_install`'s alike: each a grant validateGrant() accepts, and each
+ * family requested once, as a type is listed once.
+ */
+export function validateRequests(requests: readonly unknown[], path: string): ValidationError[] {
+  const errors: ValidationError[] = [];
+  const families = new Set<unknown>();
+  requests.forEach((r, i) => {
+    const req = r as Partial<Record<keyof InstallRequest, unknown>> | null;
+    const at = `${path}[${i}].`;
+    errors.push(...validateGrant(req?.baseId, Array.isArray(req?.actions) ? req.actions : [], at));
+    if (families.has(req?.baseId)) {
+      errors.push({
+        path: `${at}baseId`,
+        message: `"${String(req?.baseId)}" is requested more than once`,
+      });
+    }
+    families.add(req?.baseId);
+  });
+  return errors;
+}
+
+/**
  * An `_install`'s `defines` and `requests`, asked of its content on every
  * write. A schema can say both are lists; only this can say what their
  * entries must name. See docs/spec/apps.md § The `_install` record.
@@ -212,10 +235,13 @@ export function validateInstall(typeId: TypeId, content: unknown): ValidationErr
   const c = content as Partial<Record<keyof InstallContent, unknown>> | null;
   const errors: ValidationError[] = [];
   if (Array.isArray(c?.defines)) {
-    c.defines.forEach((id, i) => {
+    const defines: unknown[] = c.defines;
+    defines.forEach((id, i) => {
       const parsed = typeof id === 'string' ? parseTypeId(id) : null;
       if (!parsed) {
         errors.push({ path: `defines[${i}]`, message: 'Expected a versioned TypeId' });
+      } else if (defines.indexOf(id) !== i) {
+        errors.push({ path: `defines[${i}]`, message: `"${id}" is listed more than once` });
       } else if (typeof c?.appId === 'string' && familyStanding(parsed.baseId, c.appId) !== 'own') {
         errors.push({
           path: `defines[${i}]`,
@@ -224,23 +250,7 @@ export function validateInstall(typeId: TypeId, content: unknown): ValidationErr
       }
     });
   }
-  if (Array.isArray(c?.requests)) {
-    c.requests.forEach((r, i) => {
-      const req = r as Partial<Record<keyof InstallRequest, unknown>> | null;
-      const problem = familyIdProblem(req?.baseId, `requests[${i}].baseId`);
-      if (problem) {
-        errors.push({ path: `requests[${i}].baseId`, message: problem });
-      } else if (UNGRANTABLE_SYSTEM_TYPES.has(req!.baseId as string)) {
-        errors.push({
-          path: `requests[${i}].baseId`,
-          message: `"${String(req!.baseId)}" cannot be granted, so no install can request it`,
-        });
-      }
-      if (Array.isArray(req?.actions)) {
-        errors.push(...validateActionList(req.actions, `requests[${i}].actions`));
-      }
-    });
-  }
+  if (Array.isArray(c?.requests)) errors.push(...validateRequests(c.requests, 'requests'));
   return errors;
 }
 
@@ -340,6 +350,7 @@ export async function planFingerprint(plan: Omit<InstallPlan, 'fingerprint'>): P
       newVersions: [...plan.newVersions].sort(),
       requestsAdded: byKey(plan.requestsAdded.map(request), (r) => r.baseId),
       requestsRemoved: byKey(plan.requestsRemoved.map(request), (r) => r.baseId),
+      // Follows from the manifest, but hashed because the owner is shown it.
       foreignRequests: byKey(
         plan.foreignRequests.map((r) => ({ ...request(r), owner: r.owner })),
         (r) => r.baseId,
