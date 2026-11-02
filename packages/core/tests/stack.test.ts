@@ -2277,7 +2277,7 @@ describe('migrateAll', () => {
     await stack.defineType(EntityV2);
     const card = await stack.create('_entity@1', { did: 'did:key:zAlice', name: 'Alice' });
 
-    await expect(stack.migrateAll('_entity')).rejects.toThrow(StackValidationError);
+    await expect(stack.migrateAll('_entity')).rejects.toThrow(StackConflictError);
     expect((await adapter.getRecord(card.id))?.content).toEqual({
       did: 'did:key:zAlice',
       name: 'Alice',
@@ -2393,7 +2393,7 @@ describe('Stack.commitMigration — binding fields', () => {
 
     await expect(
       stack.commitMigration(card.id, '_entity@1', { did: 'did:key:zBob', name: 'Alice' }),
-    ).rejects.toThrow(StackValidationError);
+    ).rejects.toThrow(StackConflictError);
     expect((await adapter.getRecord(card.id))?.content).toEqual({
       did: 'did:key:zAlice',
       name: 'Alice',
@@ -2404,7 +2404,7 @@ describe('Stack.commitMigration — binding fields', () => {
     const card = await stack.create('_entity@1', { did: 'did:key:zAlice', name: 'Alice' });
 
     await expect(stack.commitMigration(card.id, NOTE_V1, { text: 'shed' })).rejects.toThrow(
-      StackValidationError,
+      StackConflictError,
     );
   });
 
@@ -2451,7 +2451,7 @@ describe('Stack.commitMigration — _attachment protections', () => {
         mimeType: 'text/plain',
         size: 1,
       }),
-    ).rejects.toThrow(StackValidationError);
+    ).rejects.toThrow(StackConflictError);
     expect((await adapter.getRecord(a.id))?.content).toEqual(a.content);
   });
 
@@ -2467,7 +2467,7 @@ describe('Stack.commitMigration — _attachment protections', () => {
         mimeType: 'image/png',
         size: 999,
       }),
-    ).rejects.toThrow(StackValidationError);
+    ).rejects.toThrow(StackConflictError);
   });
 
   test('allows a migration that carries the immutable fields through', async () => {
@@ -6906,11 +6906,11 @@ describe('_attachment@1 mimeType conflict on create', () => {
 });
 
 // -------------------------------------------------------
-// _attachment@1 immutable fields on update: filename is the only
-// field that may change after a metadata record is created.
+// _attachment@1 immutable fields: filename is the only field that may
+// change after a metadata record is created.
 // -------------------------------------------------------
 
-describe('_attachment@1 immutable fields on update', () => {
+describe('_attachment@1 immutable fields', () => {
   test('filename may be changed', async () => {
     const data = new Uint8Array([1, 2, 3]);
     await stack.putAttachment(data, { mimeType: 'image/png', filename: 'old.png' });
@@ -6921,16 +6921,13 @@ describe('_attachment@1 immutable fields on update', () => {
     expect((updated.content as Record<string, unknown>).filename).toBe('new.png');
   });
 
-  test('changing mimeType is rejected, even to the same value', async () => {
+  test('changing mimeType is rejected', async () => {
     const data = new Uint8Array([1, 2, 3]);
     await stack.putAttachment(data, { mimeType: 'image/png' });
     const [record] = (await stack.query({ filter: { typeId: '_attachment@1' } })).records;
 
     await expect(stack.patchContent(record.id, { mimeType: 'image/jpeg' })).rejects.toThrow(
-      StackValidationError,
-    );
-    await expect(stack.patchContent(record.id, { mimeType: 'image/png' })).rejects.toThrow(
-      StackValidationError,
+      StackConflictError,
     );
   });
 
@@ -6940,7 +6937,7 @@ describe('_attachment@1 immutable fields on update', () => {
     const [record] = (await stack.query({ filter: { typeId: '_attachment@1' } })).records;
 
     await expect(stack.patchContent(record.id, { fileId: 'some-other-file' })).rejects.toThrow(
-      StackValidationError,
+      StackConflictError,
     );
   });
 
@@ -6949,20 +6946,28 @@ describe('_attachment@1 immutable fields on update', () => {
     await stack.putAttachment(data, { mimeType: 'image/png' });
     const [record] = (await stack.query({ filter: { typeId: '_attachment@1' } })).records;
 
-    await expect(stack.patchContent(record.id, { size: 999 })).rejects.toThrow(
-      StackValidationError,
-    );
+    await expect(stack.patchContent(record.id, { size: 999 })).rejects.toThrow(StackConflictError);
   });
 
-  test('setting fileId or size to their current value is a no-op, not an error', async () => {
+  test('restating fileId, mimeType or size unchanged is not a change', async () => {
     const data = new Uint8Array([1, 2, 3]);
     await stack.putAttachment(data, { mimeType: 'image/png' });
     const [record] = (await stack.query({ filter: { typeId: '_attachment@1' } })).records;
-    const content = record.content as Record<string, unknown>;
+    const { fileId, mimeType, size } = record.content as Record<string, unknown>;
 
-    await expect(
-      stack.patchContent(record.id, { fileId: content.fileId, size: content.size }),
-    ).resolves.toBeDefined();
+    await expect(stack.patchContent(record.id, { fileId, mimeType, size })).resolves.toBeDefined();
+  });
+
+  test('restoring a snapshot from before a migration cannot move fileId', async () => {
+    const data = new Uint8Array([1, 2, 3]);
+    await stack.putAttachment(data, { mimeType: 'image/png' });
+    const note = await stack.create(NOTE_V1, { text: 'not yet an attachment' });
+    const [record] = (await stack.query({ filter: { typeId: '_attachment@1' } })).records;
+    await stack.commitMigration(note.id, '_attachment@1', {
+      ...(record.content as Record<string, unknown>),
+    });
+
+    await expect(stack.restoreVersion(note.id, 1)).rejects.toThrow(/fileId.*immutable/);
   });
 });
 
@@ -7561,7 +7566,7 @@ describe('_app.did bindings', () => {
       did: APP_DID,
     });
     await expect(stack.patchContent(app.id, { did: 'did:key:z6MkMoved' })).rejects.toThrow(
-      StackValidationError,
+      StackConflictError,
     );
   });
 
@@ -7571,7 +7576,7 @@ describe('_app.did bindings', () => {
       name: 'My Notes App',
       did: APP_DID,
     });
-    await expect(stack.patchContent(app.id, { did: null })).rejects.toThrow(StackValidationError);
+    await expect(stack.patchContent(app.id, { did: null })).rejects.toThrow(StackConflictError);
   });
 
   test('a card carrying no DID may adopt one', async () => {
@@ -7590,7 +7595,7 @@ describe('_app.did bindings', () => {
     });
     await stack.patchContent(app.id, { did: APP_DID });
 
-    await expect(stack.restoreVersion(app.id, 1)).rejects.toThrow(StackValidationError);
+    await expect(stack.restoreVersion(app.id, 1)).rejects.toThrow(StackConflictError);
   });
 
   test('a card may be restored onto the DID it already holds', async () => {
@@ -7647,7 +7652,7 @@ describe('_app.appId bindings', () => {
   test('rejects an update that moves a card off the appId it holds', async () => {
     const app = await stack.create('_app@1', { appId: 'com.example.notes', name: 'My Notes App' });
     await expect(stack.patchContent(app.id, { appId: 'com.example.bank' })).rejects.toThrow(
-      StackValidationError,
+      StackConflictError,
     );
   });
 
@@ -7696,7 +7701,7 @@ describe('_entity.did bindings', () => {
   test('rejects an update that repoints a card at another key', async () => {
     const alice = await stack.create('_entity@1', { did: ALICE, name: 'Alice' });
     await expect(stack.patchContent(alice.id, { did: MALLORY })).rejects.toThrow(
-      StackValidationError,
+      StackConflictError,
     );
   });
 
