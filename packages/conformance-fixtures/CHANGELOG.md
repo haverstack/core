@@ -1,5 +1,33 @@
 # @haverstack/conformance-fixtures
 
+## 0.38.0
+
+### Minor Changes
+
+- [#481](https://github.com/haverstack/core/pull/481) [`c4ed857`](https://github.com/haverstack/core/commit/c4ed857a27ee0faea99b425afded4e4bae70e389) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Every immutable field follows one rule. `_config.ownerEntityId`, the `did`/`appId` bindings and `_attachment`'s `fileId`, `mimeType` and `size` are declared in one table and checked on `patchContent()`, `restoreVersion()` and `commitMigration()` alike; a migration is asked over the family the record leaves.
+  - Changing or clearing an immutable field throws `StackConflictError` (`409 conflict`) with the message `Cannot change <family>.<field>: it is immutable once set.` Bindings and attachment fields previously threw `StackValidationError` (422).
+  - A new `_attachment` record whose `mimeType` conflicts with the one established for its `fileId` throws `StackConflictError` (`409 conflict`) instead of `StackValidationError` (422), like a second claim on a DID binding.
+  - Restating a stored value is no change: a patch that sends an `_attachment` record's current `mimeType` is accepted.
+  - Every content write — create, patch, restore and migrate — asks the same claim checks: binding uniqueness, and `mimeType` establishment for a record entering the `_attachment` family. `restoreVersion()` previously skipped attachment fields, binding uniqueness and `mimeType` establishment.
+  - A write that would change several immutable fields is refused naming the first.
+  - Fixtures: `error-validation-attachment-mimetype-conflict-on-create` is renamed `error-conflict-attachment-mimetype-on-create` and answers 409; `error-validation-attachment-mimetype-immutable-on-update` is replaced by `error-conflict-attachment-mimetype-change`; `error-conflict-config-owner-change` carries the shared message.
+
+- [#470](https://github.com/haverstack/core/pull/470) [`e0475d2`](https://github.com/haverstack/core/commit/e0475d2fdd09581310d819d3d2b5effe4191603c) Thanks [@cuibonobo](https://github.com/cuibonobo)! - The stack owner has one name wherever a field can only hold the owner: `ownerEntityId`.
+  - `_config`'s content is `{ ownerEntityId, timezone }`, and `ConfigContent.entityId` is `ConfigContent.ownerEntityId`.
+  - The discovery response (`GET /.well-known/stack`) carries `ownerEntityId` in place of `entityId`, in `DiscoveryResponse` and the discovery fixtures. The `_config` ownership-conflict fixture is `error-conflict-config-owner-change`.
+  - Fields that may hold any entity, such as a relationship target or a grantee, keep `entityId`.
+
+- [#480](https://github.com/haverstack/core/pull/480) [`35224ae`](https://github.com/haverstack/core/commit/35224aef6c30c7a8d19425082b385b610f7ac453) Thanks [@cuibonobo](https://github.com/cuibonobo)! - The soft `DELETE` responses in `delete-record-soft` and `change-feed-deleted-frame-is-not-terminal` now carry the tombstone projection — `content: {}`, no authorship fields — as `docs/spec/versioning.md § The tombstone is literal` requires. A server built to the old bodies leaked the content a soft delete removes.
+
+- [#477](https://github.com/haverstack/core/pull/477) [`2169cff`](https://github.com/haverstack/core/commit/2169cff10f9c30bc44966c8ce90f5394cf50620d) Thanks [@cuibonobo](https://github.com/cuibonobo)! - A time value carries what it means: a `date`'s form says whether it is a moment, a calendar day or a wall-clock reading (see docs/spec/data-model.md § Types). Nothing reads a stack-wide timezone, so `_config` holds only `{ ownerEntityId }`.
+  - `timezone` is removed from `ConfigContent` and the `_config@1` schema, from every adapter's `open()` options, from `stack.timezone` and `StackRecordAdapter` and every adapter that exposed it, and from the discovery response (`DiscoveryResponse` and the discovery fixtures; `discovery-omits-absent-timezone` is removed).
+  - `StackIdentity` and `identityOf()` are removed: `ConfigContent` is what an adapter holds, and `newStoreSeed()` stores the one it is given whole.
+
+### Patch Changes
+
+- Updated dependencies [[`e0475d2`](https://github.com/haverstack/core/commit/e0475d2fdd09581310d819d3d2b5effe4191603c), [`2169cff`](https://github.com/haverstack/core/commit/2169cff10f9c30bc44966c8ce90f5394cf50620d)]:
+  - @haverstack/wire-types@0.43.0
+
 ## 0.37.0
 
 ### Minor Changes
