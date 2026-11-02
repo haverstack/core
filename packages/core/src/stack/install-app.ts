@@ -44,6 +44,7 @@ import type {
   AppManifest,
   ForeignRequest,
   InstallAppOptions,
+  PlanInputs,
   InstallPlan,
   TypeChange,
 } from '../install.js';
@@ -101,8 +102,10 @@ export async function planInstall(
   }
 
   const typeChanges: TypeChange[] = [];
+  const storedTypes: PlanInputs['storedTypes'] = [];
   for (const t of manifest.types) {
     const current = await stack.getType(t.id);
+    if (current) storedTypes.push(current);
     if (!current) typeChanges.push({ id: t.id, change: 'new' });
     else if (current.schemaHash !== (await hashSchema(t.schema as TypeSchema))) {
       // Refused here, not left to defineType(): installApp() defines types one
@@ -136,7 +139,19 @@ export async function planInstall(
       !linkedIds(existing, INSTALL_APP_LABEL).includes(card.id),
     linkedKeys,
   };
-  return { ...plan, fingerprint: await planFingerprint(plan) };
+  const fingerprint = await planFingerprint({
+    manifest,
+    did,
+    install: existing && {
+      id: existing.id,
+      version: existing.version,
+      linkedCards: linkedIds(existing, INSTALL_APP_LABEL),
+    },
+    card: card ? { id: card.id, version: card.version } : null,
+    storedTypes,
+    linkedKeys,
+  });
+  return { ...plan, fingerprint };
 }
 
 export async function installApp(
@@ -254,8 +269,8 @@ function checkManifest(manifest: AppManifest, did: EntityId): void {
       }
     }
   });
-  // A repeat is refused like a type listed twice, so a manifest has one
-  // spelling of each request and the plan applies exactly what it lists.
+  // A family is listed once, like a type: two requests for one family would
+  // be two grants for the key where the manifest means one.
   const families = new Set<string>();
   manifest.requests.forEach((r, i) => {
     if (families.has(r.baseId)) {
@@ -265,14 +280,6 @@ function checkManifest(manifest: AppManifest, did: EntityId): void {
       });
     }
     families.add(r.baseId);
-    r.actions.forEach((action, j) => {
-      if (r.actions.indexOf(action) !== j) {
-        errors.push({
-          path: `requests[${i}].actions[${j}]`,
-          message: `"${action}" is listed more than once`,
-        });
-      }
-    });
   });
   if (errors.length > 0) throw new StackValidationError(errors, ARGUMENTS_INVALID);
   for (const r of manifest.requests) checkGrantValid(r.baseId, r.actions);

@@ -19,7 +19,7 @@
  * are in stack/install-app.ts. See docs/spec/apps.md.
  */
 
-import { baseIdOf, familyIdProblem, parseTypeId } from './schema.js';
+import { baseIdOf, familyIdProblem, hashSchema, parseTypeId } from './schema.js';
 import { sha256Hex } from './hash.js';
 import { GRANT_ACTION_SET, UNGRANTABLE_SYSTEM_TYPES, sameActions } from './grants.js';
 import { SYSTEM_TYPES } from './types/index.js';
@@ -36,6 +36,7 @@ import type {
   RelationshipAssociation,
   StackRecord,
   TypeId,
+  TypeSchema,
 } from './types/index.js';
 import type { DefineTypeOptions } from './stack/client.js';
 import type { ValidationError } from './validate.js';
@@ -314,11 +315,66 @@ export function isPlanEmpty(plan: InstallPlan): boolean {
 }
 
 /**
- * The fingerprint of a plan: a SHA-256 over the plan exactly as planned —
- * its manifest as given and everything planInstall() read from the stack.
- * Two plans share one only when they are the same plan, so reordering a
- * manifest makes a different plan for the owner to review.
+ * What a plan is made from: the manifest, the key, and what planInstall()
+ * read from the stack — the install, the key's `_app` card, the stored
+ * version of each manifest type, and the keys already linked. Every other
+ * field of a plan follows from these.
  */
-export async function planFingerprint(plan: Omit<InstallPlan, 'fingerprint'>): Promise<string> {
-  return sha256Hex(JSON.stringify(plan));
+export type PlanInputs = {
+  manifest: AppManifest;
+  did: EntityId;
+  install: { id: RecordId; version: number; linkedCards: RecordId[] } | null;
+  card: { id: RecordId; version: number } | null;
+  storedTypes: { id: TypeId; name: string; schemaHash: string }[];
+  linkedKeys: EntityId[];
+};
+
+/**
+ * The fingerprint of a plan: a SHA-256 over a canonical form of its
+ * inputs, as core's other hashes name canonical forms — a schema by its
+ * schemaHash, actions and every list as a set, keys in one fixed order —
+ * so two plans share one only when they would do the same thing as core
+ * compares it. See docs/spec/apps.md § Plan, then apply.
+ */
+export async function planFingerprint(inputs: PlanInputs): Promise<string> {
+  const { manifest } = inputs;
+  const types = await Promise.all(
+    manifest.types.map(async (t) => ({
+      id: t.id,
+      name: t.name,
+      migratesFrom: t.migratesFrom ?? null,
+      schemaHash: await hashSchema(t.schema as TypeSchema),
+    })),
+  );
+  return sha256Hex(
+    JSON.stringify({
+      appId: manifest.appId,
+      name: manifest.name,
+      version: manifest.version ?? null,
+      types: byKey(types, (t) => t.id),
+      requests: byKey(
+        manifest.requests.map((r) => ({
+          baseId: r.baseId,
+          actions: [...new Set(r.actions)].sort(),
+        })),
+        (r) => r.baseId,
+      ),
+      did: inputs.did,
+      install: inputs.install && {
+        id: inputs.install.id,
+        version: inputs.install.version,
+        linkedCards: [...inputs.install.linkedCards].sort(),
+      },
+      card: inputs.card && { id: inputs.card.id, version: inputs.card.version },
+      storedTypes: byKey(
+        inputs.storedTypes.map((t) => ({ id: t.id, name: t.name, schemaHash: t.schemaHash })),
+        (t) => t.id,
+      ),
+      linkedKeys: [...inputs.linkedKeys].sort(),
+    }),
+  );
 }
+
+/** A list read as a set, ordered by a key unique to each member. */
+const byKey = <T>(items: readonly T[], key: (item: T) => string): T[] =>
+  [...items].sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0));

@@ -166,42 +166,68 @@ describe('installApp()', () => {
     }
   });
 
-  test('a fingerprint names the plan as given, so a reordered manifest is a new plan', async () => {
-    const both = [
-      { baseId: 'com.example.notes/note', actions: ['create', 'read-any'] },
-      { baseId: 'org.haverstack/note', actions: ['read-any'] },
-    ] as AppManifest['requests'];
-    const plan = await stack.planInstall(manifest({ requests: both }), { did: APP_DID });
-    expect(
-      (await stack.planInstall(manifest({ requests: [...both].reverse() }), { did: APP_DID }))
-        .fingerprint,
-    ).not.toBe(plan.fingerprint);
-    // Planning the same manifest again, with nothing changed, names the same plan.
-    expect(
-      (await stack.planInstall(manifest({ requests: both }), { did: APP_DID })).fingerprint,
-    ).toBe(plan.fingerprint);
+  test('a fingerprint names a canonical form, so order and repeats are no difference', async () => {
+    const BOOK_1 = 'com.example.notes/book@1';
+    const base = manifest({
+      types: [
+        NOTE_1_TYPE,
+        {
+          id: BOOK_1,
+          name: 'Book',
+          schema: {
+            status: { kind: 'enum', values: ['want', 'read'], required: true },
+            title: { kind: 'string' },
+          },
+        },
+      ],
+      requests: [
+        { baseId: 'com.example.notes/note', actions: ['create', 'read-any'] },
+        { baseId: 'com.example.notes/book', actions: ['read-any'] },
+      ],
+    });
+    const { fingerprint } = await stack.planInstall(base, { did: APP_DID });
+
+    const reordered = manifest({
+      types: [
+        {
+          // Keys inside the schema reordered, and enum values with them.
+          schema: {
+            title: { kind: 'string' },
+            status: { required: true, values: ['read', 'want'], kind: 'enum' },
+          },
+          name: 'Book',
+          id: BOOK_1,
+        },
+        NOTE_1_TYPE,
+      ],
+      requests: [
+        { baseId: 'com.example.notes/book', actions: ['read-any', 'read-any'] },
+        { baseId: 'com.example.notes/note', actions: ['read-any', 'create'] },
+      ],
+    } as Partial<AppManifest>);
+    const keysReversed = Object.fromEntries(Object.entries(base).reverse()) as AppManifest;
+    for (const m of [reordered, keysReversed]) {
+      expect((await stack.planInstall(m, { did: APP_DID })).fingerprint).toBe(fingerprint);
+    }
   });
 
-  test('a manifest listing a family or an action twice is refused', async () => {
+  test('a manifest listing a family twice is refused, as one listing a type twice is', async () => {
     const note = 'com.example.notes/note';
-    for (const [requests, path] of [
-      [
-        [
-          { baseId: note, actions: ['create'] },
-          { baseId: note, actions: ['read-any'] },
-        ],
-        'requests[1].baseId',
-      ],
-      [[{ baseId: note, actions: ['read-any', 'read-any'] }], 'requests[0].actions[1]'],
-    ] as const) {
-      const refused = await stack
-        .planInstall(manifest({ requests: requests as unknown as AppManifest['requests'] }), {
-          did: APP_DID,
-        })
-        .catch((e: unknown) => e);
-      expect(refused).toBeInstanceOf(StackValidationError);
-      expect((refused as StackValidationError).errors.map((e) => e.path)).toEqual([path]);
-    }
+    const refused = await stack
+      .planInstall(
+        manifest({
+          requests: [
+            { baseId: note, actions: ['create'] },
+            { baseId: note, actions: ['read-any'] },
+          ],
+        }),
+        { did: APP_DID },
+      )
+      .catch((e: unknown) => e);
+    expect(refused).toBeInstanceOf(StackValidationError);
+    expect((refused as StackValidationError).errors.map((e) => e.path)).toEqual([
+      'requests[1].baseId',
+    ]);
   });
 
   test('applies a manifest only while it plans to the approved fingerprint', async () => {
