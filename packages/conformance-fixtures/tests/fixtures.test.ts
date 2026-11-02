@@ -33,6 +33,36 @@ const exportedArrays: [string, readonly unknown[]][] = Object.entries(
  */
 const NESTING_KEYS = ['steps', 'precedingMutations', 'activity', 'mutation'] as const;
 
+/**
+ * The fields a tombstone keeps: what identifies the Record and what governs
+ * reaching it. See docs/spec/versioning.md § The tombstone is literal.
+ */
+const TOMBSTONE_KEYS = new Set([
+  'id',
+  'typeId',
+  'createdAt',
+  'updatedAt',
+  'version',
+  'deletedAt',
+  'unlistedAt',
+  'permissions',
+  'content',
+]);
+
+/**
+ * Every object a fixture shows a server sending that carries `deletedAt` —
+ * response bodies and feed frames alike, at any depth. A request body is
+ * what a client sends, so it is the one payload left out.
+ */
+function servedDeleted(value: unknown, path: string, into: [string, object][]): [string, object][] {
+  if (typeof value !== 'object' || value === null) return into;
+  if (!Array.isArray(value) && 'deletedAt' in value) into.push([path, value]);
+  for (const [key, child] of Object.entries(value)) {
+    if (key !== 'requestBody') servedDeleted(child, `${path}.${key}`, into);
+  }
+  return into;
+}
+
 /** Every named fixture reachable from a group, including sequence steps and the mutations nested inside a change-feed connection. */
 function collect(value: unknown, into: Named[]): Named[] {
   if (Array.isArray(value)) {
@@ -67,6 +97,21 @@ describe('every fixture group', () => {
     // A sequence step repeats an earlier fixture byte for byte — that is
     // what makes a replay a replay — so it carries its own name too.
     expect([...counts].filter(([, n]) => n > 1).map(([name]) => name)).toEqual([]);
+  });
+
+  // Every channel serves a soft-deleted record the same way, so the rule is
+  // asserted over everything a server sends rather than fixture by fixture.
+  it('serves every soft-deleted record as the tombstone projection', () => {
+    const groups = exportedArrays.filter(([name]) => name !== 'allConformanceFixtures');
+    const tombstones = groups.flatMap(([name, group]) => servedDeleted(group, name, []));
+    for (const [path, record] of tombstones) {
+      expect((record as { content?: unknown }).content, path).toEqual({});
+      expect(
+        Object.keys(record).filter((key) => !TOMBSTONE_KEYS.has(key)),
+        path,
+      ).toEqual([]);
+    }
+    expect(tombstones.length).toBeGreaterThan(0);
   });
 
   it('describes what each fixture pins', () => {

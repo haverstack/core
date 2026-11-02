@@ -157,16 +157,14 @@ Under `ScopedStack`, a soft-deleted Record is **presented as** a tombstone rathe
 
 ```ts
 {
-  id, typeId, createdAt, updatedAt, version,
-  deletedAt,        // what makes it a tombstone
-  permissions,      // retained — see below
-  content: {},      // empty: the current state is what a soft delete removes
+  id, typeId,                         // what identifies it
+  createdAt, updatedAt, version,
+  deletedAt, unlistedAt, permissions, // what governs reaching it, each when set
+  content: {},
 }
 ```
 
-`associations`, `parentId` and the authorship fields (`createdBy`, `appId`, `updatedBy`) are absent. The [change feed carries the same projection](./events.md#soft-deleted-records-reach-the-feed-as-tombstones), so no channel serves more of a deleted Record than a fetch by ID does.
-
-**`permissions` is retained** because it is what decides whether the caller may `undelete()`. A write-holder who could not see the bit would have to attempt the verb to discover it. It discloses nothing further: a tombstone only ever reaches a requester who passed the same read check the live Record required, and one who fails it gets `null`, exactly as a missing ID gives.
+**A tombstone keeps what identifies the Record and what governs reaching it, and drops everything else**: what it holds (`content`, emptied), what it relates to (`associations`, `parentId`), and who wrote it (`createdBy`, `appId`, `updatedBy`). "Its current state is gone" means exactly the dropped half. The kept half is what a requester needs to act on the tombstone: whether it is deleted, whether it is still [unlisted](./unlisted.md), and whether they may `undelete()` it — which `permissions` decides, so a write-holder need not attempt the verb to find out. None of it discloses more than the read check already granted: a tombstone only ever reaches a requester who passed the same check the live Record required, and one who fails it gets `null`, exactly as a missing ID gives. The [change feed carries the same projection](./events.md#soft-deleted-records-reach-the-feed-as-tombstones), so no channel serves more of a deleted Record than a fetch by ID does.
 
 **It applies to every requester, the owner included.** A Record's state is a property of the Record, not of who is asking — the owner wanting the content back reads history, or holds the unscoped `Stack`, which is trusted by definition and projects nothing.
 
