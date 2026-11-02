@@ -1058,12 +1058,12 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
     },
   },
   {
-    name: 'error-validation-attachment-mimetype-conflict-on-create',
+    name: 'error-conflict-attachment-mimetype-on-create',
     description:
       'POST /records creating an _attachment@1 record whose ' +
       'mimeType conflicts with the mimeType already established (by the first-ever record) for ' +
-      'the same fileId returns 422 with code "validation" — reconstructed as ' +
-      'StackValidationError. A matching mimeType would instead succeed (see ' +
+      'the same fileId returns 409 with code "conflict" — reconstructed as ' +
+      'StackConflictError. A matching mimeType would instead succeed (see ' +
       'create-attachment-record-matching-mimetype-succeeds). The message never names the ' +
       "established mimeType (anti-oracle): stating it would confirm an existing fileId's " +
       'content type to a caller who only guessed the fileId. Assumes the requester is the owner ' +
@@ -1084,17 +1084,11 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       },
       version: 1,
     },
-    responseStatus: 422,
+    responseStatus: 409,
     responseBody: {
       error: {
-        code: 'validation',
-        message: 'Content validation failed',
-        details: [
-          {
-            path: 'mimeType',
-            message: 'mimeType conflicts with the mimeType already established for this fileId',
-          },
-        ],
+        code: 'conflict',
+        message: 'mimeType conflicts with the mimeType already established for this fileId',
       },
     },
   },

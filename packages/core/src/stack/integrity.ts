@@ -201,7 +201,8 @@ export async function assertNoParentCycle(
 
 /**
  * mimeType belongs to the fileId: its first metadata record fixes it, and
- * a conflicting later one is refused. Best-effort against a racing first
+ * a conflicting later one is refused — a clash with stored state, as a
+ * binding's second claimant is. Best-effort against a racing first
  * upload; what survives the race is a deterministic winner. See
  * docs/spec/attachments.md § The `_attachment` record type.
  */
@@ -220,12 +221,9 @@ export async function checkAttachmentMimeTypeOnCreate(
     // Deliberately does not name the established mimeType — that would
     // confirm a guessed fileId's content type. See the anti-oracle rule
     // in docs/spec/attachments.md.
-    throw new StackValidationError([
-      {
-        path: 'mimeType',
-        message: 'mimeType conflicts with the mimeType already established for this fileId',
-      },
-    ]);
+    throw new StackConflictError(
+      'mimeType conflicts with the mimeType already established for this fileId',
+    );
   }
 }
 

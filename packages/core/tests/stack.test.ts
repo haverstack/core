@@ -2509,7 +2509,7 @@ describe('Stack.commitMigration — _attachment protections', () => {
         mimeType: 'image/png',
         size: 1,
       }),
-    ).rejects.toThrow(StackValidationError);
+    ).rejects.toThrow(StackConflictError);
   });
 });
 
@@ -6766,7 +6766,7 @@ describe('_attachment@1 mimeType conflict on create', () => {
     await stack.putAttachment(data, { mimeType: 'text/markdown' });
 
     await expect(stack.putAttachment(data, { mimeType: 'text/plain' })).rejects.toThrow(
-      StackValidationError,
+      StackConflictError,
     );
 
     // The rejected upload's metadata record must not have been created.
@@ -6782,14 +6782,14 @@ describe('_attachment@1 mimeType conflict on create', () => {
     const data = new Uint8Array([1, 2, 3]);
     await stack.putAttachment(data, { mimeType: 'text/markdown' });
 
-    let error: StackValidationError | undefined;
+    let error: StackConflictError | undefined;
     try {
       await stack.putAttachment(data, { mimeType: 'text/plain' });
     } catch (e) {
-      error = e as StackValidationError;
+      error = e as StackConflictError;
     }
-    expect(error).toBeInstanceOf(StackValidationError);
-    const message = JSON.stringify(error?.errors);
+    expect(error).toBeInstanceOf(StackConflictError);
+    const message = error?.message;
     expect(message).not.toContain('text/markdown');
     expect(message).not.toContain('text/plain');
   });
@@ -6813,7 +6813,7 @@ describe('_attachment@1 mimeType conflict on create', () => {
     await incapableStack.putAttachment(data, { mimeType: 'text/markdown' });
 
     await expect(incapableStack.putAttachment(data, { mimeType: 'text/plain' })).rejects.toThrow(
-      StackValidationError,
+      StackConflictError,
     );
   });
 
@@ -6827,7 +6827,7 @@ describe('_attachment@1 mimeType conflict on create', () => {
     await stack.commitMigration(id, '_attachment@2', { fileId, mimeType: 'text/markdown', size });
 
     await expect(stack.putAttachment(data, { mimeType: 'text/plain' })).rejects.toThrow(
-      StackValidationError,
+      StackConflictError,
     );
     await expect(stack.putAttachment(data, { mimeType: 'text/markdown' })).resolves.toBeDefined();
   });
@@ -6839,7 +6839,7 @@ describe('_attachment@1 mimeType conflict on create', () => {
     await stack.delete(metaRecord.id);
 
     await expect(stack.putAttachment(data, { mimeType: 'text/plain' })).rejects.toThrow(
-      StackValidationError,
+      StackConflictError,
     );
   });
 
@@ -6875,7 +6875,7 @@ describe('_attachment@1 mimeType conflict on create', () => {
     // Core's write-time check reads the same winner: a third upload
     // matching it is accepted, one matching the loser is not.
     await expect(stack.putAttachment(data, { mimeType: 'text/html' })).rejects.toThrow(
-      StackValidationError,
+      StackConflictError,
     );
     await expect(stack.putAttachment(data, { mimeType: 'image/png' })).resolves.toBeDefined();
   });
