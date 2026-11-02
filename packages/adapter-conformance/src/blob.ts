@@ -120,6 +120,22 @@ export function runBlobAdapterConformance(options: BlobAdapterConformanceOptions
       await expect(adapter.deleteBlob('b'.repeat(64))).resolves.toBeUndefined();
     });
 
+    // Optional, so each test asks whether the adapter has head() at all.
+    // See docs/spec/portability.md § Copying a stack.
+    describe('head', () => {
+      test('stands still across reads, and moves on putBlob and deleteBlob', async () => {
+        if (!adapter.head) return;
+        const start = await adapter.head();
+        const fileId = await adapter.putBlob(new TextEncoder().encode('moves the head'));
+        const afterPut = await adapter.head();
+        expect(afterPut).not.toBe(start);
+        await adapter.getBlob(fileId);
+        expect(await adapter.head()).toBe(afterPut);
+        await adapter.deleteBlob(fileId);
+        expect(await adapter.head()).not.toBe(afterPut);
+      });
+    });
+
     if (listBlobs) {
       describe('listBlobs', () => {
         test('returns an empty array for an empty store', async () => {

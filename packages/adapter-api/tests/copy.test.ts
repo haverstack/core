@@ -19,15 +19,7 @@ import {
   serializeVersion,
 } from '@haverstack/wire-types';
 import { APIAdapter } from '../src/index.js';
-import {
-  BASE_URL,
-  CHANGE_FEED,
-  DISCOVERY,
-  OWNER,
-  jsonResponse,
-  mockFetch,
-  useFetchMock,
-} from './helpers.js';
+import { BASE_URL, DISCOVERY, OWNER, jsonResponse, mockFetch, useFetchMock } from './helpers.js';
 
 useFetchMock();
 
@@ -46,32 +38,16 @@ async function hostedStack(): Promise<MemoryAdapter> {
   return store;
 }
 
-/**
- * Answer every request a copy makes from `store`. `heads` are the cursors
- * successive `ready` frames report, the last repeating, so a test moves the
- * source by changing the head between the copy's first and last look.
- */
-function serve(store: MemoryAdapter, heads: string[] = ['h1']) {
-  let feeds = 0;
+/** Answer every request a copy makes from `store`, its head included. */
+function serve(store: MemoryAdapter) {
   mockFetch.mockImplementation(async (input: string, init: RequestInit = {}) => {
     const url = new URL(input);
     const path = decodeURIComponent(url.pathname);
     const segments = path.split('/').filter(Boolean);
     if (path === '/.well-known/stack') {
-      return jsonResponse({ ...DISCOVERY, changes: CHANGE_FEED, blobs: { list: true } });
+      return jsonResponse({ ...DISCOVERY, blobs: { list: true }, head: { read: true } });
     }
-    if (path === '/changes') {
-      const head = heads[Math.min(feeds++, heads.length - 1)];
-      const body = new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(
-            new TextEncoder().encode(`event: ready\ndata: {"cursor":"${head}"}\n\n`),
-          );
-          init.signal?.addEventListener('abort', () => controller.error(init.signal!.reason));
-        },
-      });
-      return new Response(body, { headers: { 'Content-Type': 'text/event-stream' } });
-    }
+    if (path === '/head') return jsonResponse({ head: await store.head() });
     if (path === '/records/query') {
       const page = await store.queryRecords(
         resolveQuery(parseQueryBody(JSON.parse(init.body as string))),
@@ -133,15 +109,23 @@ describe('a hosted stack copied out over the wire', () => {
     }
   });
 
-  test('is refused when the host moved during the copy', async () => {
-    serve(await hostedStack(), ['h1', 'h2']);
-    await expect(copyStack(await openHost(), create)).rejects.toThrow(StackConflictError);
+  test('is refused when the host was written during the copy', async () => {
+    const host = await hostedStack();
+    serve(host);
+    const meanwhile = async (seed: StoreSeed) => {
+      await (await Stack.open(host)).create(NOTE, { text: 'a member, mid-copy' });
+      return create(seed);
+    };
+    await expect(copyStack(await openHost(), meanwhile)).rejects.toThrow(StackConflictError);
   });
 
-  test('is refused before anything is read when discovery advertises no blob listing', async () => {
-    mockFetch.mockResolvedValueOnce(jsonResponse({ ...DISCOVERY, changes: CHANGE_FEED }));
+  // Each is refused locally, from discovery, before a request is spent on the copy.
+  test.each([
+    ['a blob listing', { head: { read: true } }],
+    ['a head', { blobs: { list: true } }],
+  ])('is refused before anything is read when discovery advertises no %s', async (_, adds) => {
+    mockFetch.mockResolvedValueOnce(jsonResponse({ ...DISCOVERY, ...adds }));
     const host = await openHost();
-    expect(host.listBlobs).toBeUndefined();
     await expect(copyStack(host, create)).rejects.toThrow(InvalidAdapterError);
     expect(mockFetch).toHaveBeenCalledTimes(1);
   });

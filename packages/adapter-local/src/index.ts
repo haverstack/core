@@ -45,6 +45,7 @@ import type {
   Reach,
   RecordHistory,
 } from '@haverstack/core/adapter';
+import { combinedHead } from '@haverstack/core/adapter';
 import type { TokenSession, TokenInfo } from '@haverstack/core/wire';
 import {
   NativeSQLiteRecordAdapter,
@@ -279,6 +280,11 @@ export class LocalAdapter implements StackAdapter {
   /** DiskBlobAdapter always implements this — LocalAdapter always constructs one. */
   async listBlobs(query?: BlobsQuery): Promise<BlobInfo[]> {
     return this.blob.listBlobs!(query);
+  }
+
+  /** One head for the database and the attachments beside it; DiskBlobAdapter has one too. */
+  async head(): Promise<string> {
+    return combinedHead(await this.record.head(), await this.blob.head!());
   }
 
   // -------------------------------------------------------

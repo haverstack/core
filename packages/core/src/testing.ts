@@ -48,6 +48,8 @@ import type { SortEntry } from './adapter/sort.js';
 import { inReach } from './adapter/reach.js';
 import { newStoreSeed } from './adapter/seed.js';
 import { blobWindow } from './adapter/blobs.js';
+import { WriteHead } from './adapter/head.js';
+import { FILE_ID_RE } from './validate.js';
 
 import {
   ElementSetMovedError,
@@ -60,9 +62,6 @@ import {
 import { matchesContent } from './content-match.js';
 import { sha256Hex } from './hash.js';
 import { applyAssociationEdits, sameAssociationSet } from './associations/identity.js';
-
-/** A FileId is the SHA-256 hex digest of its bytes — see docs/spec/attachments.md. */
-const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
 
 // An `undefined` field is a field the record does not have; storing the key
 // would make `'u' in content` differ from adapters that serialize to JSON.
@@ -102,6 +101,9 @@ export class MemoryAdapter implements StackAdapter {
 
   readonly ownerEntityId: string;
 
+  /** Moved by every write below; see head(). */
+  private readonly written = new WriteHead();
+
   readonly records = new Map<string, StackRecord>();
   readonly order: string[] = [];
   readonly versions = new Map<string, RecordVersion[]>();
@@ -125,6 +127,7 @@ export class MemoryAdapter implements StackAdapter {
   }
 
   async createRecord(record: StackRecord, opts: JournalOptions = {}) {
+    this.written.moved();
     if (this.records.has(record.id)) {
       throw new StackConflictError(`Record already exists: "${record.id}"`);
     }
@@ -136,6 +139,7 @@ export class MemoryAdapter implements StackAdapter {
   }
 
   async importRecord(record: StackRecord, history: RecordHistory) {
+    this.written.moved();
     return this.writeImported(record, history);
   }
 
@@ -204,6 +208,7 @@ export class MemoryAdapter implements StackAdapter {
   }
 
   async patchContent(id: string, patch: Record<string, unknown | null>, opts: MutateOptions = {}) {
+    this.written.moved();
     const existing = this.requireForWrite(id, opts.ifVersion);
     if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
     const content = withoutUndefined(applyMergePatch(existing.content, patch));
@@ -236,11 +241,13 @@ export class MemoryAdapter implements StackAdapter {
   // record grows a `parentId: undefined` every `in` check reads as a container.
 
   async setParent(id: string, parentId: string | null, opts: AspectWriteOptions = {}) {
+    this.written.moved();
     const { parentId: _p, ...rest } = this.requireLiveForWrite(id, opts.ifVersion);
     return this.store(id, { ...rest, ...(parentId !== null && { parentId }) }, opts.journal);
   }
 
   async setUnlisted(id: string, unlisted: boolean, opts: AspectWriteOptions = {}) {
+    this.written.moved();
     const { unlistedAt: _u, ...rest } = this.requireLiveForWrite(id, opts.ifVersion);
     return this.store(id, { ...rest, ...(unlisted && { unlistedAt: new Date() }) }, opts.journal);
   }
@@ -250,6 +257,7 @@ export class MemoryAdapter implements StackAdapter {
     edits: AssociationEdit[],
     opts: ElementWriteOptions<DataAssociation> = {},
   ) {
+    this.written.moved();
     const existing = this.requireSetForWrite(id, 'associations', opts);
     const next = applyAssociationEdits(existing.associations ?? [], edits);
     return this.store(id, withHalf(existing, 'associations', next), opts.journal);
@@ -260,6 +268,7 @@ export class MemoryAdapter implements StackAdapter {
     associations: DataAssociation[],
     opts: ElementWriteOptions<DataAssociation> = {},
   ) {
+    this.written.moved();
     const existing = this.requireSetForWrite(id, 'associations', opts);
     return this.store(id, withHalf(existing, 'associations', associations), opts.journal);
   }
@@ -269,6 +278,7 @@ export class MemoryAdapter implements StackAdapter {
     edits: AssociationEdit[],
     opts: ElementWriteOptions<AuthorityAssociation> = {},
   ) {
+    this.written.moved();
     const existing = this.requireSetForWrite(id, 'permissions', opts);
     const next = applyAssociationEdits(existing.permissions ?? [], edits);
     return this.store(id, withHalf(existing, 'permissions', next), opts.journal);
@@ -279,6 +289,7 @@ export class MemoryAdapter implements StackAdapter {
     permissions: AuthorityAssociation[],
     opts: ElementWriteOptions<AuthorityAssociation> = {},
   ) {
+    this.written.moved();
     const existing = this.requireSetForWrite(id, 'permissions', opts);
     return this.store(id, withHalf(existing, 'permissions', permissions), opts.journal);
   }
@@ -297,6 +308,7 @@ export class MemoryAdapter implements StackAdapter {
   }
 
   async deleteRecord(id: string, opts: { purge?: boolean } & MutateOptions = {}) {
+    this.written.moved();
     const record = this.records.get(id);
     if (!record) {
       // A purge with nothing to fence is the one case the SQL
@@ -325,6 +337,7 @@ export class MemoryAdapter implements StackAdapter {
   }
 
   async undeleteRecord(id: string, opts: MutateOptions = {}) {
+    this.written.moved();
     const record = this.records.get(id);
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
     this.checkExpectedVersion(record, opts.ifVersion);
@@ -603,6 +616,7 @@ export class MemoryAdapter implements StackAdapter {
   }
 
   async restoreVersion(id: string, version: number, opts: MutateOptions = {}) {
+    this.written.moved();
     const record = this.records.get(id);
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
     this.checkExpectedVersion(record, opts.ifVersion);
@@ -624,6 +638,7 @@ export class MemoryAdapter implements StackAdapter {
     content: Record<string, unknown>,
     opts: MutateOptions = {},
   ) {
+    this.written.moved();
     const record = this.records.get(id);
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
     this.checkExpectedVersion(record, opts.ifVersion);
@@ -674,6 +689,7 @@ export class MemoryAdapter implements StackAdapter {
   }
 
   async saveType(type: StackType) {
+    this.written.moved();
     this.types.set(type.id, type);
   }
   async getType(id: TypeId) {
@@ -685,6 +701,7 @@ export class MemoryAdapter implements StackAdapter {
 
   /** Content-addressed, like the real adapters — needed so file-ref values (SHA-256 hex) validate. */
   async putBlob(data: Uint8Array): Promise<string> {
+    this.written.moved();
     const fileId = await sha256Hex(data);
     if (!this.blobs.has(fileId)) {
       this.blobs.set(fileId, { data: new Uint8Array(data), modifiedAt: new Date() });
@@ -692,7 +709,7 @@ export class MemoryAdapter implements StackAdapter {
     return fileId;
   }
   async getBlob(fileId: string): Promise<Uint8Array> {
-    if (!SHA256_HEX_RE.test(fileId)) {
+    if (!FILE_ID_RE.test(fileId)) {
       throw new StackBadRequestError(`Invalid fileId: expected 64-character lowercase hex string`);
     }
     const blob = this.blobs.get(fileId);
@@ -700,6 +717,7 @@ export class MemoryAdapter implements StackAdapter {
     return new Uint8Array(blob.data);
   }
   async deleteBlob(fileId: string) {
+    this.written.moved();
     this.blobs.delete(fileId);
   }
   // Declared as an optional field (not a fixed method) so a test subclass
@@ -711,6 +729,10 @@ export class MemoryAdapter implements StackAdapter {
       return { fileId, size: blob.data.byteLength, modifiedAt: blob.modifiedAt };
     });
   };
+
+  async head(): Promise<string> {
+    return this.written.read();
+  }
 
   flush?: () => Promise<void>;
   close?: () => Promise<void>;

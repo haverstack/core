@@ -39,6 +39,7 @@ import {
   restoreVersionFixtures,
   getJournalFixtures,
   listBlobsFixtures,
+  getHeadFixtures,
   commitMigrationFixtures,
   installRequestFixtures,
   discoveryFixtures,
@@ -790,6 +791,27 @@ describe('listBlobs fixtures', () => {
         expect(blobs.map((b) => b.modifiedAt.toISOString())).toEqual(
           body.blobs.map((b) => b.modifiedAt),
         );
+      }
+      const [url, init] = mockFetch.mock.calls[1] as [string, RequestInit];
+      expect(url).toBe(`${BASE_URL}${fixture.path}`);
+      expect(init.method).toBe(fixture.method);
+    });
+  }
+});
+
+describe('head fixtures', () => {
+  for (const fixture of getHeadFixtures) {
+    test(fixture.name, async () => {
+      const adapter = await openDiscovered(
+        { ...DISCOVERY, head: { read: true } },
+        { token: undefined },
+      );
+      mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
+      const body = fixture.responseBody!;
+      if ('error' in body) {
+        await expect(adapter.head!()).rejects.toBeInstanceOf(StackPermissionError);
+      } else {
+        expect(await adapter.head!()).toBe(body.head);
       }
       const [url, init] = mockFetch.mock.calls[1] as [string, RequestInit];
       expect(url).toBe(`${BASE_URL}${fixture.path}`);

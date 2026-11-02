@@ -7,12 +7,14 @@
 '@haverstack/blob-adapter-disk': minor
 '@haverstack/blob-adapter-s3': minor
 '@haverstack/adapter-conformance': minor
+'@haverstack/record-adapter-sqlite': minor
+'@haverstack/record-adapter-do-sqlite': minor
 ---
 
 A hosted stack's owner can copy it out over the wire with `copyStack(host, create)`.
 
-- `listBlobs({ afterFileId?, limit? })` pages in `fileId` order on every blob adapter. `blobWindow()` in `@haverstack/core/adapter` windows an unordered set of names the same way.
-- `GET /blobs` lists every blob for the owner acting alone, advertised in discovery as `blobs: { list: true }`. `APIAdapter.listBlobs()` is present when it is. `@haverstack/wire-types` adds `WireBlobsResponse`, `serializeBlobInfo()` and `supportsBlobListing()`; `@haverstack/core/wire` adds `parseBlobsParams()`.
-- `SubscribeOptions.onReady` reports the head cursor a relay came up at.
-- `copyStack()` watches a source that relays changes, and refuses it with `StackConflictError` if a change arrives or its head moved by the end of the copy. A relay reporting no head is refused with `InvalidAdapterError`.
-- Conformance fixtures for `GET /blobs`, its discovery key, and a head that stays the same while nothing changes.
+- `head()`, an optional adapter method, says where a store's writes stand: the same string until anything is written, a different one after. Every local adapter has one; `combineAdapters()` and `LocalAdapter` combine both halves'. `WriteHead` in `@haverstack/core/adapter` is the counter they share.
+- `copyStack()` reads the source's head before and after, and refuses with `StackConflictError` if they differ. A source or target without `head()` is refused with `InvalidAdapterError`.
+- `listBlobs({ afterFileId?, limit? })` pages in `fileId` order on every blob adapter. `blobWindow()` and `FILE_ID_RE` in `@haverstack/core/adapter` are shared by the blob adapters.
+- `GET /blobs` and `GET /head` serve the owner acting alone, advertised in discovery as `blobs: { list: true }` and `head: { read: true }`. `APIAdapter.listBlobs()` and `APIAdapter.head()` are present only when advertised. `@haverstack/wire-types` adds `WireBlobsResponse`, `WireHeadResponse`, `serializeBlobInfo()`, `supportsBlobListing()` and `supportsHead()`; `@haverstack/core/wire` adds `parseBlobsParams()`.
+- Conformance fixtures for both endpoints and their discovery keys; the adapter conformance suites check `head()` where an adapter has one.

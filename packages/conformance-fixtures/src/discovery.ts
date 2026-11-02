@@ -60,11 +60,12 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
     },
   },
   {
-    name: 'discovery-advertises-blob-listing',
+    name: 'discovery-advertises-what-a-copy-reads',
     description:
-      'A server that lists its blobs at GET /blobs says so with blobs.list: true. Absent means ' +
-      'it does not, and APIAdapter then has no listBlobs(), so a copy refuses the stack as a ' +
-      'source before reading anything — see docs/spec/wire-format.md § Blobs.',
+      'A server that lists its blobs at GET /blobs says so with blobs.list: true, and one that ' +
+      'reports its head at GET /head with head.read: true. Absent means it does not, and ' +
+      'APIAdapter then has no listBlobs() or head(), so a copy refuses the stack as a source ' +
+      'before reading anything — see docs/spec/wire-format.md § Blobs and § Head.',
     method: 'GET',
     path: '/.well-known/stack',
     responseStatus: 200,
@@ -81,6 +82,7 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
         limits: { attachmentBytes: null, contentBytes: null },
       },
       blobs: { list: true },
+      head: { read: true },
     },
   },
   {

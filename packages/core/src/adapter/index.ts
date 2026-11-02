@@ -35,6 +35,8 @@ export {
   softDeletedRefusal,
 } from '../errors.js';
 export { blobWindow } from './blobs.js';
+export { WriteHead, combinedHead } from './head.js';
+export { FILE_ID_RE } from '../validate.js';
 export { combineAdapters } from './combine.js';
 export { copyStack } from './copy.js';
 export type { CreateStore } from './copy.js';

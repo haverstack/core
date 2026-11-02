@@ -932,32 +932,6 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
 
 export const changeFeedSequenceFixtures: ChangeFeedSequenceFixture[] = [
   {
-    name: 'change-feed-head-stands-still-while-nothing-changes',
-    description:
-      'Two connections with no change between them report the same head, and a change between ' +
-      'them moves it (see change-feed-resume-delivers-what-was-missed). A head names a position ' +
-      'in the stack, not the moment it was asked for, so comparing two is how a client learns ' +
-      'whether anything landed in between: a copy reads its source between two heads and ' +
-      'refuses it when they differ. A server minting a fresh head per connection makes every ' +
-      'copy from it fail. See docs/spec/portability.md § Copying a stack.',
-    steps: [
-      {
-        name: 'change-feed-head-first-connection',
-        description: 'The owner connects with includeUnlisted and retains the head from ready.',
-        path: '/changes?includeUnlisted=true',
-        responseStatus: 200,
-        openingFrames: [READY],
-      },
-      {
-        name: 'change-feed-head-second-connection',
-        description: 'The owner connects again, nothing having changed in between.',
-        path: '/changes?includeUnlisted=true',
-        responseStatus: 200,
-        openingFrames: [READY],
-      },
-    ],
-  },
-  {
     name: 'change-feed-resume-delivers-what-was-missed',
     description:
       'The obligation a single connection cannot express: a client that comes back holding a ' +

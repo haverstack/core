@@ -60,6 +60,7 @@ import {
   supportsChangeFeed,
   supportsInstallRequests,
   supportsBlobListing,
+  supportsHead,
   WIRE_ERROR_STATUS,
   supportsDidChallenge,
   CHANGE_FRAME_READY,
@@ -76,6 +77,7 @@ import type {
   WireRecordChange,
   WireJournalResponse,
   WireBlobsResponse,
+  WireHeadResponse,
   WireVersionsResponse,
   WireReadyFrame,
   DiscoveryChanges,
@@ -219,6 +221,12 @@ export class APIAdapter implements StackAdapter {
    */
   readonly listBlobs?: (query?: BlobsQuery) => Promise<BlobInfo[]>;
 
+  /**
+   * `GET /head`, present only when discovery advertises it, on the same
+   * terms as listBlobs(). See docs/spec/wire-format.md § Head.
+   */
+  readonly head?: () => Promise<string>;
+
   /** Shared by every request that finds its token expired at the same moment. */
   private reauthInFlight: Promise<string> | null = null;
 
@@ -234,6 +242,8 @@ export class APIAdapter implements StackAdapter {
     private readonly installRequests: boolean,
     /** Whether discovery advertised `GET /blobs`. */
     blobListing: boolean,
+    /** Whether discovery advertised `GET /head`. */
+    reportsHead: boolean,
   ) {
     this.capabilities = capabilities;
     this.ownerEntityId = ownerEntityId;
@@ -242,12 +252,15 @@ export class APIAdapter implements StackAdapter {
         this.readPages('/blobs', {
           cursorParam: 'afterFileId',
           cursor: query.afterFileId,
-          cursorType: 'string',
+          isCursor: isString,
           limit: query.limit,
           items: (body: WireBlobsResponse) => body.blobs,
           parse: parseBlobInfo,
           advances: (next, prev) => next > prev,
         });
+    }
+    if (reportsHead) {
+      this.head = async () => (await this.requestBody<WireHeadResponse>('GET', '/head')).head;
     }
   }
 
@@ -337,6 +350,7 @@ export class APIAdapter implements StackAdapter {
       supportsChangeFeed(discovery) ? discovery.changes : undefined,
       supportsInstallRequests(discovery),
       supportsBlobListing(discovery),
+      supportsHead(discovery),
     );
   }
 
@@ -685,8 +699,8 @@ export class APIAdapter implements StackAdapter {
     opts: {
       cursorParam: string;
       cursor: C | undefined;
-      /** What a cursor is on this endpoint; anything else ends the read. */
-      cursorType: 'number' | 'string';
+      /** Whether a body's cursor is one this endpoint names; anything else ends the read. */
+      isCursor: (cursor: unknown) => cursor is C;
       limit: number | undefined;
       items: (body: W) => R[];
       parse: (raw: R) => T;
@@ -694,7 +708,7 @@ export class APIAdapter implements StackAdapter {
       advances: (next: C, prev: C) => boolean;
     },
   ): Promise<T[]> {
-    const { cursorParam, cursorType, limit, items, parse, advances } = opts;
+    const { cursorParam, isCursor, limit, items, parse, advances } = opts;
     const out: T[] = [];
     let cursor = opts.cursor;
     for (;;) {
@@ -713,13 +727,10 @@ export class APIAdapter implements StackAdapter {
       if (page.length === 0) break;
       // A server that omits a cursor, repeats one, or mints one
       // unconditionally ends the read here rather than spinning on it.
-      if (
-        typeof body.cursor !== cursorType ||
-        (cursor !== undefined && !advances(body.cursor as C, cursor))
-      ) {
+      if (!isCursor(body.cursor) || (cursor !== undefined && !advances(body.cursor, cursor))) {
         break;
       }
-      cursor = body.cursor as C;
+      cursor = body.cursor;
     }
     // `limit` is this method's own ceiling, not a request the server is
     // trusted to have honored: a page longer than the one asked for would
@@ -732,7 +743,7 @@ export class APIAdapter implements StackAdapter {
     return this.readPages(`/records/${pathSegment(id)}/versions`, {
       cursorParam: 'beforeVersion',
       cursor: query.beforeVersion,
-      cursorType: 'number',
+      isCursor: isNumber,
       limit: query.limit,
       items: (body: WireVersionsResponse) => body.versions,
       parse: parseVersion,
@@ -750,7 +761,7 @@ export class APIAdapter implements StackAdapter {
     return this.readPages(`/records/${pathSegment(id)}/journal`, {
       cursorParam: 'afterSeq',
       cursor: query.afterSeq,
-      cursorType: 'number',
+      isCursor: isNumber,
       limit: query.limit,
       items: (body: WireJournalResponse) => body.entries,
       parse: parseJournalEntry,
@@ -909,7 +920,6 @@ export class APIAdapter implements StackAdapter {
 
       switch (frame.event) {
         case CHANGE_FRAME_READY:
-          opts.onReady?.(head);
           if (!settled) {
             settled = true;
             onLive();
@@ -1038,3 +1048,6 @@ export class APIAdapter implements StackAdapter {
     }
   }
 }
+
+const isNumber = (value: unknown): value is number => typeof value === 'number';
+const isString = (value: unknown): value is string => typeof value === 'string';

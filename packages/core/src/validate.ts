@@ -15,7 +15,7 @@ import type { TypeSchema, FieldDef, ScalarFieldKind } from './types/index.js';
 /** How deep content may nest below a top-level field, which is depth 0. */
 export const MAX_VALIDATION_DEPTH = 32;
 
-/** fileId format: SHA-256 hex, lowercase — matches blob-adapter-disk's assertFileId(). */
+/** fileId format: SHA-256 hex, lowercase — the one pattern every blob store names files by. */
 export const FILE_ID_RE = /^[0-9a-f]{64}$/;
 
 /**

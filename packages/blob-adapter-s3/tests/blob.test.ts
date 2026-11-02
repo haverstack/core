@@ -153,6 +153,17 @@ describe('S3BlobAdapter', () => {
     await expect(adapter.deleteBlob('nonexistent')).rejects.toThrow(StackBadRequestError);
   });
 
+  test('head stands still across reads, and moves on putBlob and deleteBlob', async () => {
+    const start = await adapter.head();
+    const fileId = await adapter.putBlob(Buffer.from('moves the head'));
+    const afterPut = await adapter.head();
+    expect(afterPut).not.toBe(start);
+    await adapter.getBlob(fileId);
+    expect(await adapter.head()).toBe(afterPut);
+    await adapter.deleteBlob(fileId);
+    expect(await adapter.head()).not.toBe(afterPut);
+  });
+
   describe('listBlobs', () => {
     test('returns an empty array for an empty bucket', async () => {
       expect(await adapter.listBlobs()).toEqual([]);

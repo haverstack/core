@@ -3,7 +3,7 @@
  * -------------------------------------------------------
  * `GET /.well-known/stack` and the protocol version it negotiates. Each
  * optional surface's advertisement lives with that surface — `auth`,
- * `blobs`, `changes`, `installs` — and is only assembled here.
+ * `blobs`, `changes`, `head`, `installs` — and is only assembled here.
  * See docs/spec/wire-format.md § Discovery.
  */
 
@@ -11,6 +11,7 @@ import { NATIVE_SORT_FIELDS } from '@haverstack/core';
 import type { ContentFilterReach, NativeSortField, StackCapabilities } from '@haverstack/core';
 import type { DiscoveryAuth } from './auth.js';
 import type { DiscoveryBlobs } from './blobs.js';
+import type { DiscoveryHead } from './head.js';
 import type { DiscoveryChanges } from './change-feed.js';
 import type { DiscoveryInstalls } from './installs.js';
 
@@ -30,6 +31,7 @@ export type DiscoveryResponse = {
   auth?: DiscoveryAuth;
   blobs?: DiscoveryBlobs;
   changes?: DiscoveryChanges;
+  head?: DiscoveryHead;
   installs?: DiscoveryInstalls;
 };
 

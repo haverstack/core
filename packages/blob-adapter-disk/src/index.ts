@@ -17,13 +17,11 @@ import { readFile, writeFile, unlink, readdir, stat, rename } from 'fs/promises'
 import { join } from 'path';
 import { StackNotFoundError, StackBadRequestError } from '@haverstack/core';
 import type { FileId } from '@haverstack/core';
-import { blobWindow } from '@haverstack/core/adapter';
+import { FILE_ID_RE, WriteHead, blobWindow } from '@haverstack/core/adapter';
 import type { StackBlobAdapter, BlobInfo, BlobsQuery } from '@haverstack/core/adapter';
 
-const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
-
 const assertFileId = (fileId: string): void => {
-  if (!SHA256_HEX_RE.test(fileId)) {
+  if (!FILE_ID_RE.test(fileId)) {
     throw new StackBadRequestError(`Invalid fileId: expected 64-character lowercase hex string`);
   }
 };
@@ -34,6 +32,8 @@ export type DiskBlobAdapterOptions = {
 };
 
 export class DiskBlobAdapter implements StackBlobAdapter {
+  /** Moved by every putBlob() and deleteBlob(); see head(). */
+  private readonly written = new WriteHead();
   private readonly dir: string;
 
   constructor(options: DiskBlobAdapterOptions) {
@@ -42,6 +42,7 @@ export class DiskBlobAdapter implements StackBlobAdapter {
   }
 
   async putBlob(data: Uint8Array): Promise<FileId> {
+    this.written.moved();
     const fileId = createHash('sha256').update(data).digest('hex');
     const finalPath = join(this.dir, fileId);
     if (!existsSync(finalPath)) {
@@ -66,6 +67,7 @@ export class DiskBlobAdapter implements StackBlobAdapter {
   }
 
   async deleteBlob(fileId: FileId): Promise<void> {
+    this.written.moved();
     assertFileId(fileId);
     try {
       await unlink(join(this.dir, fileId));
@@ -77,7 +79,7 @@ export class DiskBlobAdapter implements StackBlobAdapter {
   async listBlobs(query?: BlobsQuery): Promise<BlobInfo[]> {
     const entries = await readdir(this.dir);
     const fileIds = blobWindow(
-      entries.filter((name) => SHA256_HEX_RE.test(name)),
+      entries.filter((name) => FILE_ID_RE.test(name)),
       query,
     );
     return Promise.all(
@@ -86,5 +88,9 @@ export class DiskBlobAdapter implements StackBlobAdapter {
         return { fileId, size: stats.size, modifiedAt: stats.mtime };
       }),
     );
+  }
+
+  async head(): Promise<string> {
+    return this.written.read();
   }
 }

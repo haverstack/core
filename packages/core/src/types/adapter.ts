@@ -315,6 +315,14 @@ export interface StackRecordAdapter {
     handler: (change: RecordChange) => void,
   ): Promise<Unsubscribe>;
 
+  /**
+   * Where this store's writes stand: the same string until something is
+   * written, and a different one after. Opaque, compared only for
+   * equality. Optional — a stack cannot be copied to or from a store
+   * without one. See docs/spec/portability.md § Copying a stack.
+   */
+  head?(): Promise<string>;
+
   // Lifecycle
   flush?(): Promise<void>;
   close?(): Promise<void>;
@@ -359,6 +367,14 @@ export interface StackBlobAdapter {
    * See docs/spec/attachments.md § Garbage collection.
    */
   listBlobs?(query?: BlobsQuery): Promise<BlobInfo[]>;
+
+  /**
+   * Where this store's writes stand: the same string until something is
+   * written, and a different one after. Opaque, compared only for
+   * equality. Optional — a stack cannot be copied to or from a store
+   * without one. See docs/spec/portability.md § Copying a stack.
+   */
+  head?(): Promise<string>;
 
   // Lifecycle
   flush?(): Promise<void>;

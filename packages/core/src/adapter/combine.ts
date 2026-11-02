@@ -17,6 +17,7 @@ import type {
   AdapterQuery,
   SubscribeOptions,
 } from '../types/index.js';
+import { combinedHead } from './head.js';
 
 /**
  * Compose a StackRecordAdapter and a StackBlobAdapter into a single StackAdapter.
@@ -96,6 +97,11 @@ export function combineAdapters(parts: {
     ...(parts.blob.listBlobs && {
       listBlobs: (query) => parts.blob.listBlobs!(query),
     }),
+    // One head for the whole store, so a write to either half moves it.
+    ...(parts.record.head &&
+      parts.blob.head && {
+        head: async () => combinedHead(await parts.record.head!(), await parts.blob.head!()),
+      }),
 
     async flush() {
       await parts.record.flush?.();

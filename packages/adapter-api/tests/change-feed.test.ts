@@ -196,23 +196,6 @@ describe('opening a connection', () => {
     stop();
   });
 
-  test('reports the head ready carried to onReady before it resolves', async () => {
-    const adapter = await openAdapter();
-    const stream = feed();
-    mockFetch.mockResolvedValueOnce(stream.response);
-
-    const heads: (string | undefined)[] = [];
-    const subscription = adapter.subscribeChanges(
-      { onReady: (cursor) => heads.push(cursor) },
-      () => {},
-    );
-    stream.write(READY);
-    const stop = await subscription;
-
-    expect(heads).toEqual([HEAD_CURSOR]);
-    stop();
-  });
-
   test('sends the filter and include as query parameters', async () => {
     const adapter = await openAdapter();
     const stream = feed();

@@ -28,7 +28,7 @@ GET /.well-known/stack
 }
 ```
 
-`auth` is optional and describes how a token can be earned here — see [Authentication § Advertising it](#advertising-it). `changes` is optional and describes the [change feed](./change-feed.md); its absence means the server offers none. `installs` is optional, and `{ "requests": true }` says the server takes [install requests](#installs); `@haverstack/wire-types` exports `supportsInstallRequests()` to read it. `blobs` is optional too, and `{ "list": true }` says the server [lists its blobs](#blobs); `supportsBlobListing()` reads it.
+`auth` is optional and describes how a token can be earned here — see [Authentication § Advertising it](#advertising-it). `changes` is optional and describes the [change feed](./change-feed.md); its absence means the server offers none. `installs` is optional, and `{ "requests": true }` says the server takes [install requests](#installs); `@haverstack/wire-types` exports `supportsInstallRequests()` to read it. `blobs` is optional too, and `{ "list": true }` says the server [lists its blobs](#blobs); `supportsBlobListing()` reads it. So is `head`, and `{ "read": true }` says the server [reports its head](#head); `supportsHead()` reads it.
 
 ### Version negotiation
 
@@ -727,6 +727,18 @@ What [`listBlobs()`](./adapters.md#interface-split) answers locally, so a hosted
 **`cursor` is the only end-of-list signal**, as on [the journal](#journal): a page may be shorter than the `limit` asked for. It carries the `fileId` to send back as `afterFileId`, and is `null` once nothing follows. `APIAdapter.listBlobs()` follows it to the end when no `limit` is given. `@haverstack/core/wire` exports `parseBlobsParams()` to decode both params; neither has a default, and an `afterFileId` that is not a [`fileId`](./attachments.md) is `400`.
 
 **Optional, and advertised in [discovery](#discovery)** as `"blobs": { "list": true }`. `APIAdapter` has `listBlobs()` only when it is, since that method's presence is [the capability](./adapters.md#adapter-capabilities).
+
+## Head
+
+```
+GET /head  → { "head": "9b1c0f6e-3d2a-4c55-9a7e-2f1d8c3b4a10.42" }
+```
+
+What [`head()`](./portability.md#copying-a-stack) answers locally: where the store's writes stand, so a client that reads it before and after reading the store learns whether anything was written between. A server answers from its own adapter's `head()`, which moves on every write — a Record, a Type or a blob, by any requester — and never repeats an earlier value, a restart included. A head minted per request or read from the clock makes every copy from the server fail.
+
+**Served to the owner acting alone**, and `403` (code `permission`) otherwise, as [`GET /blobs`](#blobs) is: a head moves on writes to Records the requester cannot read, so it would report them.
+
+**Optional, and advertised in [discovery](#discovery)** as `"head": { "read": true }`. `APIAdapter` has `head()` only when it is.
 
 ## Installs
 

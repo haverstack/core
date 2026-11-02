@@ -679,6 +679,33 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
     });
 
     // -----------------------------------------------------------------
+    // Head — optional, so each test asks whether the adapter has head() at
+    // all. See docs/spec/portability.md § Copying a stack.
+    // -----------------------------------------------------------------
+    describe('head', () => {
+      test('stands still across reads', async () => {
+        if (!adapter.head) return;
+        const record = makeRecord();
+        await adapter.createRecord(record);
+        const before = await adapter.head();
+        await adapter.getRecord(record.id);
+        await adapter.listTypes();
+        await adapter.getJournal(record.id);
+        expect(await adapter.head()).toBe(before);
+      });
+
+      test('moves on a Record write and on a Type write', async () => {
+        if (!adapter.head) return;
+        const start = await adapter.head();
+        await adapter.createRecord(makeRecord());
+        const afterRecord = await adapter.head();
+        expect(afterRecord).not.toBe(start);
+        await adapter.saveType(conformanceType());
+        expect(await adapter.head()).not.toBe(afterRecord);
+      });
+    });
+
+    // -----------------------------------------------------------------
     // Importing a record — optional, so each test asks whether the adapter
     // has importRecord() at all. See docs/spec/portability.md § Writing
     // history.

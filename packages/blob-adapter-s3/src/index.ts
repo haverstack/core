@@ -27,12 +27,11 @@ import {
 } from '@aws-sdk/client-s3';
 import { StackNotFoundError, StackBadRequestError } from '@haverstack/core';
 import type { FileId } from '@haverstack/core';
+import { FILE_ID_RE, WriteHead } from '@haverstack/core/adapter';
 import type { StackBlobAdapter, BlobInfo, BlobsQuery } from '@haverstack/core/adapter';
 
-const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
-
 const assertFileId = (fileId: string): void => {
-  if (!SHA256_HEX_RE.test(fileId)) {
+  if (!FILE_ID_RE.test(fileId)) {
     throw new StackBadRequestError(`Invalid fileId: expected 64-character lowercase hex string`);
   }
 };
@@ -61,6 +60,8 @@ export type S3BlobAdapterOptions = {
 };
 
 export class S3BlobAdapter implements StackBlobAdapter {
+  /** Moved by every putBlob() and deleteBlob(); see head(). */
+  private readonly written = new WriteHead();
   private readonly client: S3Client;
   private readonly bucket: string;
 
@@ -87,6 +88,7 @@ export class S3BlobAdapter implements StackBlobAdapter {
   }
 
   async putBlob(data: Uint8Array): Promise<FileId> {
+    this.written.moved();
     const fileId = createHash('sha256').update(data).digest('hex');
     if (!(await this.objectExists(fileId))) {
       await this.client.send(
@@ -112,6 +114,7 @@ export class S3BlobAdapter implements StackBlobAdapter {
   }
 
   async deleteBlob(fileId: FileId): Promise<void> {
+    this.written.moved();
     assertFileId(fileId);
     // S3's DeleteObject is idempotent — a missing key is treated as
     // already-deleted rather than an error, so no non-fatal catch is
@@ -136,12 +139,16 @@ export class S3BlobAdapter implements StackBlobAdapter {
         }),
       );
       for (const obj of response.Contents ?? []) {
-        if (obj.Key && SHA256_HEX_RE.test(obj.Key) && obj.Size !== undefined && obj.LastModified) {
+        if (obj.Key && FILE_ID_RE.test(obj.Key) && obj.Size !== undefined && obj.LastModified) {
           files.push({ fileId: obj.Key, size: obj.Size, modifiedAt: obj.LastModified });
         }
       }
       continuationToken = response.IsTruncated ? response.NextContinuationToken : undefined;
     } while (continuationToken && (limit === undefined || files.length < limit));
     return limit === undefined ? files : files.slice(0, limit);
+  }
+
+  async head(): Promise<string> {
+    return this.written.read();
   }
 }
