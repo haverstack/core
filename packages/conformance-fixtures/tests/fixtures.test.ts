@@ -33,6 +33,26 @@ const exportedArrays: [string, readonly unknown[]][] = Object.entries(
  */
 const NESTING_KEYS = ['steps', 'precedingMutations', 'activity', 'mutation'] as const;
 
+/**
+ * The response-body keys that hold a list of Records. Only a listing serves
+ * Records in a list; version snapshots and journal entries are not Records
+ * and never carry `deletedAt`, so a body is otherwise read as one Record.
+ */
+const RECORD_LIST_KEYS = ['records'] as const;
+
+/** The fields a tombstone keeps. See docs/spec/versioning.md § The tombstone is literal. */
+const TOMBSTONE_KEYS = new Set([
+  'id',
+  'typeId',
+  'createdAt',
+  'updatedAt',
+  'version',
+  'deletedAt',
+  'unlistedAt',
+  'permissions',
+  'content',
+]);
+
 /** Every named fixture reachable from a group, including sequence steps and the mutations nested inside a change-feed connection. */
 function collect(value: unknown, into: Named[]): Named[] {
   if (Array.isArray(value)) {
@@ -75,10 +95,10 @@ describe('every fixture group', () => {
   it('serves every soft-deleted record as the tombstone projection', () => {
     const served = (body: unknown): Record<string, unknown>[] => {
       if (typeof body !== 'object' || body === null) return [];
-      const records = (body as { records?: unknown }).records;
-      return Array.isArray(records) ? records : [body as Record<string, unknown>];
+      const lists = RECORD_LIST_KEYS.map((key) => (body as Record<string, unknown>)[key]);
+      const list = lists.find(Array.isArray);
+      return list ?? [body as Record<string, unknown>];
     };
-    const withheld = ['associations', 'parentId', 'createdBy', 'appId', 'updatedBy'];
     let tombstones = 0;
     for (const [group, value] of exportedArrays) {
       for (const fixture of collect(value, [])) {
@@ -88,7 +108,7 @@ describe('every fixture group', () => {
           const label = `${group}/${fixture.name}`;
           expect(record.content, label).toEqual({});
           expect(
-            withheld.filter((key) => key in record),
+            Object.keys(record).filter((key) => !TOMBSTONE_KEYS.has(key)),
             label,
           ).toEqual([]);
         }

@@ -159,6 +159,7 @@ Under `ScopedStack`, a soft-deleted Record is **presented as** a tombstone rathe
 {
   id, typeId, createdAt, updatedAt, version,
   deletedAt,        // what makes it a tombstone
+  unlistedAt,       // retained when set — a sibling mechanism, see below
   permissions,      // retained — see below
   content: {},      // empty: the current state is what a soft delete removes
 }
@@ -169,6 +170,8 @@ Under `ScopedStack`, a soft-deleted Record is **presented as** a tombstone rathe
 **`permissions` is retained** because it is what decides whether the caller may `undelete()`. A write-holder who could not see the bit would have to attempt the verb to discover it. It discloses nothing further: a tombstone only ever reaches a requester who passed the same read check the live Record required, and one who fails it gets `null`, exactly as a missing ID gives.
 
 **It applies to every requester, the owner included.** A Record's state is a property of the Record, not of who is asking — the owner wanting the content back reads history, or holds the unscoped `Stack`, which is trusted by definition and projects nothing.
+
+**`unlistedAt` is retained** because [unlisting](./unlisted.md) withholds a Record from enumeration, not from access: it is a separate state that a soft delete leaves in place, and withholding it would hide that state, not any content.
 
 **History is deliberately exempt.** `getVersions()` still serves the content the tombstone withholds, because reviewing what a Record held is how a caller decides whether to restore it. "Its current state is gone" is the whole of the claim; the history sentence beside it is the other half of the same rule, not an oversight.
 
