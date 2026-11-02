@@ -1058,12 +1058,12 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
     },
   },
   {
-    name: 'error-validation-attachment-mimetype-conflict-on-create',
+    name: 'error-conflict-attachment-mimetype-on-create',
     description:
       'POST /records creating an _attachment@1 record whose ' +
       'mimeType conflicts with the mimeType already established (by the first-ever record) for ' +
-      'the same fileId returns 422 with code "validation" — reconstructed as ' +
-      'StackValidationError. A matching mimeType would instead succeed (see ' +
+      'the same fileId returns 409 with code "conflict" — reconstructed as ' +
+      'StackConflictError. A matching mimeType would instead succeed (see ' +
       'create-attachment-record-matching-mimetype-succeeds). The message never names the ' +
       "established mimeType (anti-oracle): stating it would confirm an existing fileId's " +
       'content type to a caller who only guessed the fileId. Assumes the requester is the owner ' +
@@ -1084,41 +1084,29 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
       },
       version: 1,
     },
-    responseStatus: 422,
+    responseStatus: 409,
     responseBody: {
       error: {
-        code: 'validation',
-        message: 'Content validation failed',
-        details: [
-          {
-            path: 'mimeType',
-            message: 'mimeType conflicts with the mimeType already established for this fileId',
-          },
-        ],
+        code: 'conflict',
+        message: 'mimeType conflicts with the mimeType already established for this fileId',
       },
     },
   },
   {
-    name: 'error-validation-attachment-mimetype-immutable-on-update',
+    name: 'error-conflict-attachment-mimetype-change',
     description:
-      'PATCH /records/:id/content against an _attachment@1 record is rejected with 422 / code ' +
-      '"validation" if the patch touches mimeType at all — even restating the current value. ' +
-      'filename is the only field an _attachment@1 update may change; fileId and size are ' +
-      'rejected the same way if the patch would actually change their stored value.',
+      "PATCH /records/:id/content that would change an _attachment@1 record's mimeType returns " +
+      '409 / code "conflict" — fileId, mimeType and size are immutable once set, like every ' +
+      'immutable field, and filename is the only field an update may change. Assumes the ' +
+      'record\'s stored mimeType is not "image/jpeg"; restating the stored value is no change.',
     method: 'PATCH',
     path: '/records/1hk153x02003/content',
     requestBody: { mimeType: 'image/jpeg' },
-    responseStatus: 422,
+    responseStatus: 409,
     responseBody: {
       error: {
-        code: 'validation',
-        message: 'Content validation failed',
-        details: [
-          {
-            path: 'mimeType',
-            message: 'mimeType is immutable after creation; delete and re-upload to change it',
-          },
-        ],
+        code: 'conflict',
+        message: 'Cannot change _attachment.mimeType: it is immutable once set.',
       },
     },
   },
@@ -1481,9 +1469,8 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
     name: 'error-conflict-config-owner-change',
     description:
       'PATCH /records/_config/content that would change ownerEntityId returns 409 / code ' +
-      '"conflict" — ownerEntityId defines stack ownership, read once at open and consulted by every ' +
-      'permission check thereafter; a write that silently re-anchored it would desync every ' +
-      'already-running owner check.',
+      '"conflict", the refusal every immutable field earns. ownerEntityId defines stack ' +
+      'ownership, read once at open and consulted by every permission check thereafter.',
     method: 'PATCH',
     path: '/records/_config/content',
     requestBody: { ownerEntityId: 'did:key:z6MkvVv7EXm3g3XZ8k4hqYqK5zqfSj6pS4KvL5s6cQzYzZq3' },
@@ -1491,9 +1478,7 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
     responseBody: {
       error: {
         code: 'conflict',
-        message:
-          'Cannot change _config.ownerEntityId: it defines stack ownership. Ownership transfer is ' +
-          'not a supported operation.',
+        message: 'Cannot change _config.ownerEntityId: it is immutable once set.',
       },
     },
   },

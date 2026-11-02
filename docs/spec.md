@@ -97,7 +97,7 @@ A plain-string `ownerEntityId` is also checked against the owner of an existing 
 **`_config` is protected**, by `Stack` itself rather than any one adapter — the same layering as schema validation, so every adapter and `ScopedStack` (which delegates to `Stack`) inherit it automatically:
 
 - **Addressable only by ID.** `get('_config')` works; a generic `query()` never returns it, regardless of filter — matching every other reserved-ID system record, but load-bearing here since `_config` is read at open and consulted by every permission check.
-- **`ownerEntityId` is immutable.** `patchContent('_config', { ownerEntityId: '...' })` throws `StackConflictError` — changing it would silently re-anchor stack ownership out from under a running system, and identity is a DID: the field isn't a label, it's the key the whole stack answers to. `restoreVersion('_config', ...)` inherits the same rule: a snapshot whose `ownerEntityId` disagrees with the live record's cannot be restored. Ownership transfer, if ever added, is a deliberate future API with key-custody semantics — not a field write.
+- **`ownerEntityId` is [immutable](./spec/data-model.md#immutable-fields).** Changing it would silently re-anchor stack ownership out from under a running system, and identity is a DID: the field isn't a label, it's the key the whole stack answers to. Ownership transfer, if ever added, is a deliberate future API with key-custody semantics — not a field write.
 - **Never deletable**, soft or purged. `delete('_config')` always throws `StackConflictError`: a soft-deleted config is unreadable through normal paths, and a purged one leaves nothing to reopen the stack against.
 
 ## Open questions

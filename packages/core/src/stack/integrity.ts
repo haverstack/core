@@ -1,8 +1,8 @@
 /**
  * Write invariants
  * -------------------------------------------------------
- * The integrity rules a Stack write owes whoever makes it — DID and appId
- * bindings, containment, attachment metadata, `_config` ownership and a
+ * The integrity rules a Stack write owes whoever makes it — immutable
+ * fields, DID and appId bindings, containment, attachment metadata and a
  * group's admin roster. They bind every requester, the stack owner
  * included, which is why they live beneath `ScopedStack`'s permission
  * gates rather than among them. Each reads unscoped: through the Stack it
@@ -12,7 +12,7 @@
 import { hasGroupAdmin, isGroupRecord } from '../access.js';
 import type { RecordResolver } from '../access.js';
 import { ARGUMENTS_INVALID, StackConflictError, StackValidationError } from '../errors.js';
-import { bindingFieldsOf, uniqueBindingFieldsOf } from './identity-bindings.js';
+import { bindingsOf, immutableFieldsOf, isUnset } from './field-rules.js';
 import { filtersContent } from '../query-validation.js';
 import { associationIdentical } from '../associations/identity.js';
 import { validateRecordId } from './record-id.js';
@@ -23,84 +23,67 @@ import type {
   Association,
   AttachmentContent,
   DataAssociation,
-  EntityId,
-  RecordId,
   StackRecord,
   TypeId,
 } from '../types/index.js';
 import type { Stack } from './stack.js';
 
 // -------------------------------------------------------
-// DID and appId bindings
+// Content writes
 // -------------------------------------------------------
 
-/** Uniqueness for every unique binding field a newly created card claims. */
-export async function checkBindingsOnCreate(
+/**
+ * Every content integrity check create, patch, restore and migrate owe: a
+ * change, judged against `prior` (absent on create), then claims, judged
+ * against other records. A claim is asked only of a value not already held
+ * in the destination family, so a claim check never finds the record itself.
+ * See docs/spec/data-model.md § Immutable fields.
+ */
+export async function checkContentWrite(
   stack: Stack,
   typeId: TypeId,
   content: Record<string, unknown>,
+  prior?: StackRecord,
 ): Promise<void> {
+  if (prior) checkImmutableFields(prior, content);
+
   const family = baseIdOf(typeId);
-  for (const field of uniqueBindingFieldsOf(family)) {
+  const held =
+    prior && baseIdOf(prior.typeId) === family ? (prior.content as Record<string, unknown>) : {};
+  for (const { field, unique } of bindingsOf(family)) {
+    if (!unique || content[field] === held[field]) continue;
     await checkBindingUnique(stack, family, field, content[field]);
   }
+  if (
+    family === SYSTEM_TYPES.ATTACHMENT &&
+    (content.fileId !== held.fileId || content.mimeType !== held.mimeType)
+  ) {
+    await checkAttachmentMimeType(stack, content as unknown as AttachmentContent);
+  }
 }
+
+// -------------------------------------------------------
+// Immutable fields
+// -------------------------------------------------------
 
 /**
- * Immutability for every binding field a patch touches, then uniqueness
- * for the subset that carries it. Fields absent from the patch carry no
- * new claim — a content patch is a merge, so an untouched binding is the one the
- * card already holds.
+ * Refuse a write that moves or clears an immutable field the record holds.
+ * Only the family the record is in now is asked: a field of the family it
+ * enters was never held, and arriving with one is a claim, not a change.
  */
-export async function checkBindingsOnUpdate(
-  stack: Stack,
-  typeId: TypeId,
-  id: RecordId,
-  patch: Record<string, unknown | null>,
-  existing: Record<string, unknown>,
-  merged: Record<string, unknown>,
-): Promise<void> {
-  const family = baseIdOf(typeId);
-  const unique = uniqueBindingFieldsOf(family);
-  for (const field of bindingFieldsOf(family)) {
-    if (!(field in patch)) continue;
-    checkBindingImmutable(family, field, existing[field], merged[field]);
-    if (unique.includes(field)) {
-      await checkBindingUnique(stack, family, field, merged[field], id);
-    }
+function checkImmutableFields(existing: StackRecord, next: Record<string, unknown>): void {
+  const family = baseIdOf(existing.typeId);
+  const content = existing.content as Record<string, unknown>;
+  for (const field of immutableFieldsOf(family)) {
+    const held = content[field];
+    if (isUnset(held) || next[field] === held) continue;
+    throw new StackConflictError(`Cannot change ${family}.${field}: it is immutable once set.`);
   }
 }
 
-/**
- * Bindings across a migration, whose content replaces the old wholesale.
- * Immutability is asked over both families' binding fields, so a card can
- * neither shed a DID by migrating out nor pick one up on the way in;
- * uniqueness, of the destination only. See docs/spec/identity.md § DID bindings.
- */
-export async function checkBindingsOnMigrate(
-  stack: Stack,
-  fromTypeId: TypeId,
-  toTypeId: TypeId,
-  id: RecordId,
-  existing: Record<string, unknown>,
-  content: Record<string, unknown>,
-): Promise<void> {
-  const fromFamily = baseIdOf(fromTypeId);
-  const toFamily = baseIdOf(toTypeId);
-
-  const checked = new Set<string>();
-  for (const family of fromFamily === toFamily ? [fromFamily] : [fromFamily, toFamily]) {
-    for (const field of bindingFieldsOf(family)) {
-      if (checked.has(field)) continue;
-      checked.add(field);
-      checkBindingImmutable(family, field, existing[field], content[field]);
-    }
-  }
-
-  for (const field of uniqueBindingFieldsOf(toFamily)) {
-    await checkBindingUnique(stack, toFamily, field, content[field], id);
-  }
-}
+// -------------------------------------------------------
+// Claims on stored values
+// -------------------------------------------------------
 
 /**
  * Refuse a second card claiming a value an Actor is resolved by. A
@@ -113,9 +96,8 @@ async function checkBindingUnique(
   family: string,
   field: 'did' | 'appId',
   value: unknown,
-  excludeId?: RecordId,
 ): Promise<void> {
-  if (typeof value !== 'string' || value === '') return;
+  if (isUnset(value)) return;
 
   const clash = await findFirstMatch(
     (q) => stack.query(q),
@@ -127,33 +109,11 @@ async function checkBindingUnique(
         ...(filtersContent(stack.capabilities) && { content: { [field]: value } }),
       },
     },
-    (r) => r.id !== excludeId && (r.content as Record<string, unknown>)[field] === value,
+    (r) => (r.content as Record<string, unknown>)[field] === value,
   );
   if (clash) {
     throw new StackConflictError(`Another ${family} record already claims the ${field} "${value}"`);
   }
-}
-
-/**
- * A binding is permanent once made: uniqueness stops a second card claiming
- * a value, but only immutability stops an existing card being moved onto
- * one. A subject whose key changes gets a new card.
- * See docs/spec/identity.md § DID bindings.
- */
-export function checkBindingImmutable(
-  family: string,
-  field: 'did' | 'appId',
-  existing: unknown,
-  next: unknown,
-): void {
-  if (typeof existing !== 'string' || existing === '') return;
-  if (next === existing) return;
-  throw new StackValidationError([
-    {
-      path: field,
-      message: `${field} is immutable once set; register a new ${family} record instead`,
-    },
-  ]);
 }
 
 // -------------------------------------------------------
@@ -221,28 +181,13 @@ export async function assertNoParentCycle(
 // -------------------------------------------------------
 
 /**
- * The `_attachment@1` fields a write may not move, each with the message it
- * is refused by. Ordered as reported. See docs/spec/attachments.md § The
- * `_attachment` record type.
- */
-const ATTACHMENT_IMMUTABLE_FIELDS = [
-  ['mimeType', 'mimeType is immutable after creation; delete and re-upload to change it'],
-  ['fileId', 'fileId is immutable'],
-  ['size', 'size is immutable'],
-] as const;
-
-type AttachmentImmutableField = (typeof ATTACHMENT_IMMUTABLE_FIELDS)[number][0];
-
-/**
  * mimeType belongs to the fileId: its first metadata record fixes it, and
- * a conflicting later one is refused. Best-effort against a racing first
+ * a conflicting later one is refused — a clash with stored state, as a
+ * binding's second claimant is. Best-effort against a racing first
  * upload; what survives the race is a deterministic winner. See
  * docs/spec/attachments.md § The `_attachment` record type.
  */
-export async function checkAttachmentMimeTypeOnCreate(
-  stack: Stack,
-  content: AttachmentContent,
-): Promise<void> {
+async function checkAttachmentMimeType(stack: Stack, content: AttachmentContent): Promise<void> {
   const { fileId, mimeType } = content;
   if (typeof fileId !== 'string') return; // schema validation already rejected this
 
@@ -254,12 +199,9 @@ export async function checkAttachmentMimeTypeOnCreate(
     // Deliberately does not name the established mimeType — that would
     // confirm a guessed fileId's content type. See the anti-oracle rule
     // in docs/spec/attachments.md.
-    throw new StackValidationError([
-      {
-        path: 'mimeType',
-        message: 'mimeType conflicts with the mimeType already established for this fileId',
-      },
-    ]);
+    throw new StackConflictError(
+      'mimeType conflicts with the mimeType already established for this fileId',
+    );
   }
 }
 
@@ -312,41 +254,9 @@ export async function checkAttachmentAssociationPointers(
   });
 }
 
-/**
- * Refuse a write that moves an `_attachment@1` record's fileId, size or
- * mimeType. `violates` decides what counts as a move, since a patch names
- * only what it changes while a migration re-sends all three.
- * See docs/spec/attachments.md § The `_attachment` record type.
- */
-export function assertAttachmentImmutable(
-  violates: (field: AttachmentImmutableField) => boolean,
-): void {
-  const errors = ATTACHMENT_IMMUTABLE_FIELDS.filter(([field]) => violates(field)).map(
-    ([path, message]) => ({ path, message }),
-  );
-  if (errors.length > 0) {
-    throw new StackValidationError(errors);
-  }
-}
-
 // -------------------------------------------------------
-// Stack identity and groups
+// Groups
 // -------------------------------------------------------
-
-/**
- * `_config.ownerEntityId` defines stack ownership; neither patchContent() nor
- * restoreVersion() may change it. A conflict with stack integrity, not a
- * schema violation — hence StackConflictError. See docs/spec.md § The
- * `_config` record.
- */
-export function checkConfigOwnerUnchanged(existingOwner: EntityId, newOwner: EntityId): void {
-  if (newOwner !== existingOwner) {
-    throw new StackConflictError(
-      'Cannot change _config.ownerEntityId: it defines stack ownership. ' +
-        'Ownership transfer is not a supported operation.',
-    );
-  }
-}
 
 /**
  * Refuse a write that would leave a `_group` Record with no `admin`, asked

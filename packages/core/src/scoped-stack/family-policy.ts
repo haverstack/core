@@ -17,7 +17,7 @@
  */
 
 import { baseIdOf } from '../schema.js';
-import { bindingFieldsOf } from '../stack/identity-bindings.js';
+import { bindingFieldsOf } from '../stack/field-rules.js';
 import { SYSTEM_TYPES } from '../types/index.js';
 import type { EntityId, TypeId } from '../types/index.js';
 

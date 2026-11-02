@@ -5792,7 +5792,7 @@ describe('ScopedStack — _entity bindings hold under a grant', () => {
 
     // Repointing is the impersonation and is refused.
     await expect(scoped.patchContent(alice.id, { did: MEMBER })).rejects.toThrow(
-      StackValidationError,
+      StackConflictError,
     );
   });
 

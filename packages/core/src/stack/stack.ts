@@ -65,7 +65,6 @@ import type {
   PutAttachmentOptions,
   AttachmentContent,
   FileId,
-  ConfigContent,
   EntityId,
   EntityContent,
   AppId,
@@ -120,7 +119,6 @@ import {
 import { applyAssociationEdits, associationDelta } from '../associations/identity.js';
 import { validateGrantee, validateGrantBaseId } from '../grants.js';
 import type { GrantQuery } from '../grants.js';
-import { bindingFieldsOf } from './identity-bindings.js';
 import { validateInstall } from '../install.js';
 import type { AppManifest, InstallPlan } from '../install.js';
 import { assertAttachmentSize, assertContentSize } from './limits.js';
@@ -144,17 +142,11 @@ import * as apps from './install-app.js';
 import * as typeGrants from './type-grants.js';
 import * as attachments from './attachments.js';
 import {
-  assertAttachmentImmutable,
   assertGroupAdminRemains,
   assertNoParentCycle,
   assertParentExists,
   checkAttachmentAssociationPointers,
-  checkAttachmentMimeTypeOnCreate,
-  checkBindingImmutable,
-  checkBindingsOnCreate,
-  checkBindingsOnMigrate,
-  checkBindingsOnUpdate,
-  checkConfigOwnerUnchanged,
+  checkContentWrite,
 } from './integrity.js';
 import { systemTypeDefinitions } from './system-types.js';
 import type {
@@ -648,13 +640,9 @@ export class Stack implements StackClient {
 
     assertContentSize(content, this.capabilities.limits.contentBytes, 'Content');
 
-    if (typeId === `${SYSTEM_TYPES.ATTACHMENT}@1`) {
-      await checkAttachmentMimeTypeOnCreate(this, content as unknown as AttachmentContent);
-    }
+    await checkContentWrite(this, typeId, content as Record<string, unknown>);
 
     await checkAttachmentAssociationPointers(this.readRecord, opts.associations);
-
-    await checkBindingsOnCreate(this, typeId, content as Record<string, unknown>);
 
     if (opts.id !== undefined) {
       validateRecordId(opts.id);
@@ -760,7 +748,7 @@ export class Stack implements StackClient {
     this.assertOpen();
     assertContentPatch(patch);
     const existing = await this.requireWritable(id, opts, true);
-    const merged = await this.validatePatch(id, existing, patch);
+    const merged = await this.validatePatch(existing, patch);
     if (contentEqual(existing.content, merged)) return existing;
 
     const change = new PendingChange('patch', { actor: normalizeActor(opts.actor) });
@@ -778,7 +766,6 @@ export class Stack implements StackClient {
    * content moved.
    */
   private async validatePatch(
-    id: string,
     existing: StackRecord,
     patch: Record<string, unknown | null>,
   ): Promise<Record<string, unknown>> {
@@ -802,27 +789,7 @@ export class Stack implements StackClient {
     const contentErrors = typedContentErrors(existing.typeId, merged, type.schema);
     if (contentErrors.length > 0) throw new StackValidationError(contentErrors);
 
-    if (existing.typeId === `${SYSTEM_TYPES.ATTACHMENT}@1`) {
-      // Presence decides mimeType and value decides the rest: re-sending
-      // the mimeType a record already holds is refused outright, while a
-      // client round-tripping fileId or size unchanged has claimed nothing.
-      assertAttachmentImmutable(
-        (field) =>
-          Object.prototype.hasOwnProperty.call(patch, field) &&
-          (field === 'mimeType' ||
-            (merged as AttachmentContent)[field] !==
-              (existing.content as AttachmentContent)[field]),
-      );
-    }
-
-    await checkBindingsOnUpdate(this, existing.typeId, id, patch, existing.content, merged);
-
-    if (id === SYSTEM_TYPES.CONFIG) {
-      checkConfigOwnerUnchanged(
-        (existing.content as ConfigContent).ownerEntityId,
-        (merged as ConfigContent).ownerEntityId,
-      );
-    }
+    await checkContentWrite(this, existing.typeId, merged, existing);
     return merged;
   }
 
@@ -1280,26 +1247,9 @@ export class Stack implements StackClient {
       throw new StackValidationError(errors);
     }
 
-    if (id === SYSTEM_TYPES.CONFIG) {
-      checkConfigOwnerUnchanged(
-        (existing.content as ConfigContent).ownerEntityId,
-        (target.content as ConfigContent).ownerEntityId,
-      );
-    }
-
-    // Restoring is a write like any other, so it owes the same immutability
-    // check a content patch pays: a snapshot taken before a card claimed
-    // its DID would otherwise move the binding by rolling content back.
-    // Uniqueness needs none — a restore can only put back a value this same
-    // card already held.
-    for (const field of bindingFieldsOf(baseIdOf(target.typeId))) {
-      checkBindingImmutable(
-        baseIdOf(target.typeId),
-        field,
-        (existing.content as Record<string, unknown>)[field],
-        (target.content as Record<string, unknown>)[field],
-      );
-    }
+    // Restoring is a write like any other, so it owes the checks every
+    // content write pays. See docs/spec/versioning.md § Restore semantics.
+    await checkContentWrite(this, target.typeId, target.content, existing);
 
     // A restore adds no containment edge and takes none away, so there is
     // no cycle for it to close and nothing for the destination checks to
@@ -1366,7 +1316,6 @@ export class Stack implements StackClient {
 
     const fromFamily = baseIdOf(existing.typeId);
     const toFamily = baseIdOf(toTypeId);
-    const existingContent = existing.content as Record<string, unknown>;
 
     // Only create() stamps a group's first `admin`, so a record migrated
     // *into* `_group` would have an empty roster. Version-to-version within
@@ -1378,28 +1327,7 @@ export class Stack implements StackClient {
       );
     }
 
-    if (fromFamily === SYSTEM_TYPES.ATTACHMENT) {
-      // Value-wise throughout: a migration re-sends all three required
-      // fields, so presence would refuse every migration of the family.
-      assertAttachmentImmutable(
-        (field) =>
-          (content as unknown as AttachmentContent)[field] !==
-          (existingContent as unknown as AttachmentContent)[field],
-      );
-    } else if (toFamily === SYSTEM_TYPES.ATTACHMENT) {
-      // A record arriving from outside the family stakes a fresh claim on
-      // its fileId, exactly as create() does — so it owes create()'s check.
-      await checkAttachmentMimeTypeOnCreate(this, content as unknown as AttachmentContent);
-    }
-
-    await checkBindingsOnMigrate(this, existing.typeId, toTypeId, id, existingContent, content);
-
-    if (id === SYSTEM_TYPES.CONFIG) {
-      checkConfigOwnerUnchanged(
-        (existing.content as ConfigContent).ownerEntityId,
-        (content as ConfigContent).ownerEntityId,
-      );
-    }
+    await checkContentWrite(this, toTypeId, content, existing);
 
     const change = new PendingChange('migrate', {
       actor: normalizeActor(opts.actor),
