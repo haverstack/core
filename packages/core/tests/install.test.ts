@@ -166,7 +166,7 @@ describe('installApp()', () => {
     }
   });
 
-  test('a fingerprint names a canonical form, so order and repeats are no difference', async () => {
+  test('a fingerprint names a canonical form, so order is no difference', async () => {
     const BOOK_1 = 'com.example.notes/book@1';
     const base = manifest({
       types: [
@@ -201,7 +201,7 @@ describe('installApp()', () => {
         NOTE_1_TYPE,
       ],
       requests: [
-        { baseId: 'com.example.notes/book', actions: ['read-any', 'read-any'] },
+        { baseId: 'com.example.notes/book', actions: ['read-any'] },
         { baseId: 'com.example.notes/note', actions: ['read-any', 'create'] },
       ],
     } as Partial<AppManifest>);
@@ -209,6 +209,32 @@ describe('installApp()', () => {
     for (const m of [reordered, keysReversed]) {
       expect((await stack.planInstall(m, { did: APP_DID })).fingerprint).toBe(fingerprint);
     }
+  });
+
+  test('a manifest naming an action twice is refused, as grantType() refuses it', async () => {
+    const refused = await stack
+      .planInstall(
+        manifest({
+          requests: [{ baseId: 'com.example.notes/note', actions: ['read-any', 'read-any'] }],
+        }),
+        { did: APP_DID },
+      )
+      .catch((e: unknown) => e);
+    expect(refused).toBeInstanceOf(StackValidationError);
+    expect((refused as StackValidationError).errors.map((e) => e.path)).toEqual(['actions[1]']);
+  });
+
+  test('a fingerprint names the plan the owner saw, so an edit it does not show leaves it', async () => {
+    await install(manifest());
+    const reviewed = await stack.planInstall(manifest({ version: '1.1.0' }), { did: APP_DID });
+    // The owner relabels the app's card: their label, which no plan shows.
+    const card = (await stack.query({ filter: { baseId: '_app' } })).records[0]!;
+    await stack.patchContent(card.id, { name: 'My notes' });
+    const record = await stack.installApp(manifest({ version: '1.1.0' }), {
+      did: APP_DID,
+      fingerprint: reviewed.fingerprint,
+    });
+    expect(record.content).toMatchObject({ version: '1.1.0' });
   });
 
   test('a manifest listing a family twice is refused, as one listing a type twice is', async () => {
@@ -511,6 +537,17 @@ describe('what an installed app sees', () => {
     expect(record.content).toMatchObject({ version: '1.0.1' });
   });
 
+  test('narrowing a request revokes the grant actions it drops', async () => {
+    await install(manifest({ requests: MIGRATING }));
+    const narrowed = await stack.planInstall(
+      manifest({ requests: [{ baseId: 'com.example.notes/note', actions: ['read-any'] }] }),
+      { did: APP_DID },
+    );
+    expect(narrowed.requestsRemoved).toEqual(MIGRATING);
+    const record = await apply(narrowed);
+    expect((await linkedGrants(record)).flatMap((g) => g.actions)).not.toContain('update-any');
+  });
+
   test('requests compare as sets of actions', async () => {
     const reordered = (actions: ('create' | 'read-any')[]) =>
       manifest({ requests: [{ baseId: 'com.example.notes/note', actions }] });
@@ -533,6 +570,21 @@ describe('the _install record', () => {
         }),
       ).rejects.toThrow(StackValidationError);
     }
+  });
+
+  test('a request naming an action twice is refused, as on every action list', async () => {
+    const refused = await stack
+      .create<InstallContent>('_install@1', {
+        appId: 'com.example.notes',
+        name: 'Notes',
+        defines: [],
+        requests: [{ baseId: 'com.example.notes/note', actions: ['read-any', 'read-any'] }],
+      })
+      .catch((e: unknown) => e);
+    expect(refused).toBeInstanceOf(StackValidationError);
+    expect((refused as StackValidationError).errors.map((e) => e.path)).toEqual([
+      'requests[0].actions[1]',
+    ]);
   });
 
   test('one install answers for each appId, and appId is immutable', async () => {

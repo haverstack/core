@@ -203,16 +203,42 @@ export const UNGRANTABLE_SYSTEM_TYPES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Actions must be known GrantAction values; the target is held to the
+ * An action list as every write of one holds it: known GrantAction values,
+ * each named once. Actions are a set, and a set is written without repeats,
+ * as a type list or an enum's values are. Shared by grantType(), a
+ * manifest's requests, and the `_grant` and `_install` Records they write.
+ */
+export function validateActionList(actions: readonly unknown[], path: string): ValidationError[] {
+  const errors: ValidationError[] = [];
+  const seen = new Set<unknown>();
+  actions.forEach((action, j) => {
+    if (!GRANT_ACTION_SET.has(action as GrantAction)) {
+      errors.push({ path: `${path}[${j}]`, message: `Unknown grant action "${String(action)}"` });
+    } else if (seen.has(action)) {
+      errors.push({
+        path: `${path}[${j}]`,
+        message: `"${String(action)}" is listed more than once`,
+      });
+    }
+    seen.add(action);
+  });
+  return errors;
+}
+
+/** A `_grant`'s actions, asked of its content on every write. See validateActionList(). */
+export function validateGrantActions(typeId: TypeId, content: unknown): ValidationError[] {
+  if (baseIdOf(typeId) !== SYSTEM_TYPES.GRANT) return [];
+  const actions = (content as { actions?: unknown } | null)?.actions;
+  // A missing or non-array list is the schema's to refuse.
+  return Array.isArray(actions) ? validateActionList(actions, 'actions') : [];
+}
+
+/**
+ * Actions are held to validateActionList(); the target is held to the
  * same rule every `_grant` write meets — see validateGrantBaseId().
  */
 export function checkGrantValid(baseId: BaseId, actions: GrantAction[]): void {
-  const errors: ValidationError[] = [];
-  actions.forEach((action, j) => {
-    if (!GRANT_ACTION_SET.has(action)) {
-      errors.push({ path: `actions[${j}]`, message: `Unknown grant action "${action}"` });
-    }
-  });
+  const errors: ValidationError[] = validateActionList(actions, 'actions');
 
   const problem = familyIdProblem(baseId, 'grantType');
   if (problem) {

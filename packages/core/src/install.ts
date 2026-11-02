@@ -21,14 +21,13 @@
 
 import { baseIdOf, familyIdProblem, hashSchema, parseTypeId } from './schema.js';
 import { sha256Hex } from './hash.js';
-import { GRANT_ACTION_SET, UNGRANTABLE_SYSTEM_TYPES, sameActions } from './grants.js';
+import { UNGRANTABLE_SYSTEM_TYPES, sameActions, validateActionList } from './grants.js';
 import { SYSTEM_TYPES } from './types/index.js';
 import type {
   AppId,
   AuthorityAssociation,
   BaseId,
   EntityId,
-  GrantAction,
   GrantContent,
   InstallContent,
   InstallRequest,
@@ -238,14 +237,7 @@ export function validateInstall(typeId: TypeId, content: unknown): ValidationErr
         });
       }
       if (Array.isArray(req?.actions)) {
-        req.actions.forEach((a, j) => {
-          if (!GRANT_ACTION_SET.has(a as GrantAction)) {
-            errors.push({
-              path: `requests[${i}].actions[${j}]`,
-              message: `Unknown grant action "${String(a)}"`,
-            });
-          }
-        });
+        errors.push(...validateActionList(req.actions, `requests[${i}].actions`));
       }
     });
   }
@@ -315,29 +307,13 @@ export function isPlanEmpty(plan: InstallPlan): boolean {
 }
 
 /**
- * What a plan is made from: the manifest, the key, and what planInstall()
- * read from the stack — the install, the key's `_app` card, the stored
- * version of each manifest type, and the keys already linked. Every other
- * field of a plan follows from these.
+ * The fingerprint of a plan: a SHA-256 over the plan the owner sees, in
+ * canonical form, as a schemaHash names a schema — a type by its id, name,
+ * lineage and schemaHash, every list as a set, keys in one fixed order.
+ * See docs/spec/apps.md § Plan, then apply.
  */
-export type PlanInputs = {
-  manifest: AppManifest;
-  did: EntityId;
-  install: { id: RecordId; version: number; linkedCards: RecordId[] } | null;
-  card: { id: RecordId; version: number } | null;
-  storedTypes: { id: TypeId; name: string; schemaHash: string }[];
-  linkedKeys: EntityId[];
-};
-
-/**
- * The fingerprint of a plan: a SHA-256 over a canonical form of its
- * inputs, as core's other hashes name canonical forms — a schema by its
- * schemaHash, actions and every list as a set, keys in one fixed order —
- * so two plans share one only when they would do the same thing as core
- * compares it. See docs/spec/apps.md § Plan, then apply.
- */
-export async function planFingerprint(inputs: PlanInputs): Promise<string> {
-  const { manifest } = inputs;
+export async function planFingerprint(plan: Omit<InstallPlan, 'fingerprint'>): Promise<string> {
+  const { manifest, existing } = plan;
   const types = await Promise.all(
     manifest.types.map(async (t) => ({
       id: t.id,
@@ -346,31 +322,34 @@ export async function planFingerprint(inputs: PlanInputs): Promise<string> {
       schemaHash: await hashSchema(t.schema as TypeSchema),
     })),
   );
+  const request = (r: InstallRequest) => ({ baseId: r.baseId, actions: [...r.actions].sort() });
   return sha256Hex(
     JSON.stringify({
       appId: manifest.appId,
       name: manifest.name,
       version: manifest.version ?? null,
       types: byKey(types, (t) => t.id),
-      requests: byKey(
-        manifest.requests.map((r) => ({
-          baseId: r.baseId,
-          actions: [...new Set(r.actions)].sort(),
-        })),
+      requests: byKey(manifest.requests.map(request), (r) => r.baseId),
+      did: plan.did,
+      existing: existing && {
+        name: existing.content.name,
+        version: existing.content.version ?? null,
+        deleted: existing.deletedAt !== undefined,
+      },
+      newFamilies: [...plan.newFamilies].sort(),
+      newVersions: [...plan.newVersions].sort(),
+      requestsAdded: byKey(plan.requestsAdded.map(request), (r) => r.baseId),
+      requestsRemoved: byKey(plan.requestsRemoved.map(request), (r) => r.baseId),
+      foreignRequests: byKey(
+        plan.foreignRequests.map((r) => ({ ...request(r), owner: r.owner })),
         (r) => r.baseId,
       ),
-      did: inputs.did,
-      install: inputs.install && {
-        id: inputs.install.id,
-        version: inputs.install.version,
-        linkedCards: [...inputs.install.linkedCards].sort(),
-      },
-      card: inputs.card && { id: inputs.card.id, version: inputs.card.version },
-      storedTypes: byKey(
-        inputs.storedTypes.map((t) => ({ id: t.id, name: t.name, schemaHash: t.schemaHash })),
-        (t) => t.id,
+      typeChanges: byKey(
+        plan.typeChanges.map((c) => ({ id: c.id, change: c.change })),
+        (c) => c.id,
       ),
-      linkedKeys: [...inputs.linkedKeys].sort(),
+      newKey: plan.newKey,
+      linkedKeys: [...plan.linkedKeys].sort(),
     }),
   );
 }

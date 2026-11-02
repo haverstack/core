@@ -44,7 +44,6 @@ import type {
   AppManifest,
   ForeignRequest,
   InstallAppOptions,
-  PlanInputs,
   InstallPlan,
   TypeChange,
 } from '../install.js';
@@ -102,10 +101,8 @@ export async function planInstall(
   }
 
   const typeChanges: TypeChange[] = [];
-  const storedTypes: PlanInputs['storedTypes'] = [];
   for (const t of manifest.types) {
     const current = await stack.getType(t.id);
-    if (current) storedTypes.push(current);
     if (!current) typeChanges.push({ id: t.id, change: 'new' });
     else if (current.schemaHash !== (await hashSchema(t.schema as TypeSchema))) {
       // Refused here, not left to defineType(): installApp() defines types one
@@ -139,18 +136,7 @@ export async function planInstall(
       !linkedIds(existing, INSTALL_APP_LABEL).includes(card.id),
     linkedKeys,
   };
-  const fingerprint = await planFingerprint({
-    manifest,
-    did,
-    install: existing && {
-      id: existing.id,
-      version: existing.version,
-      linkedCards: linkedIds(existing, INSTALL_APP_LABEL),
-    },
-    card: card ? { id: card.id, version: card.version } : null,
-    storedTypes,
-    linkedKeys,
-  });
+  const fingerprint = await planFingerprint(plan);
   return { ...plan, fingerprint };
 }
 

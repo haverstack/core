@@ -118,7 +118,7 @@ import {
   validateAssociations,
 } from '../associations/validation.js';
 import { applyAssociationEdits, associationDelta } from '../associations/identity.js';
-import { validateGrantee, validateGrantBaseId } from '../grants.js';
+import { validateGrantActions, validateGrantee, validateGrantBaseId } from '../grants.js';
 import type { GrantQuery } from '../grants.js';
 import { bindingFieldsOf } from './identity-bindings.js';
 import { validateInstall } from '../install.js';
@@ -237,6 +237,7 @@ function typedContentErrors(
     ...validateContent(content, schema),
     ...validateGrantee(typeId, content),
     ...validateGrantBaseId(typeId, content),
+    ...validateGrantActions(typeId, content),
     ...validateInstall(typeId, content),
   ];
 }
@@ -1705,12 +1706,10 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Apply an approved manifest: types, the key's `_app` card, the
-   * `_install` Record and every linked key's grants. `opts.fingerprint`
-   * names the plan the owner approved — `plan.fingerprint` from
-   * planInstall() — and a manifest that no longer plans to it is a
-   * StackConflictError, so what lands is what was approved.
-   * See docs/spec/apps.md § Plan, then apply.
+   * Apply an approved manifest: its types, the key's `_app` card, the
+   * `_install` Record and every linked key's grants — refused with
+   * StackConflictError unless it still plans to `opts.fingerprint`, the
+   * plan the owner approved. See docs/spec/apps.md § Plan, then apply.
    */
   async installApp(
     manifest: AppManifest,

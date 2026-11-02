@@ -4567,17 +4567,51 @@ describe('revokeType', () => {
     expect(withdrawn.map((r) => r.id)).toEqual([granted.id]);
   });
 
+  // A write refuses a repeated action; one that reached storage some other
+  // way — an import, a foreign server — is still read as a set.
   test('withdraws a stored grant that names an action twice', async () => {
-    const granted = await stack.create('_grant@1', {
-      baseId: fam(NOTE_V1),
-      actions: ['read-any', 'read-any'],
-      grantee: { kind: 'entity', entityId: 'entity-abc' },
+    const now = new Date();
+    const granted = await adapter.createRecord({
+      id: generateId(),
+      typeId: '_grant@1',
+      createdAt: now,
+      updatedAt: now,
+      version: 1,
+      content: {
+        baseId: fam(NOTE_V1),
+        actions: ['read-any', 'read-any'],
+        grantee: { kind: 'entity', entityId: 'entity-abc' },
+      },
     });
     const withdrawn = await stack.revokeType(fam(NOTE_V1), {
       actions: ['read-any'],
       grantee: { kind: 'entity', entityId: 'entity-abc' },
     });
     expect(withdrawn.map((r) => r.id)).toEqual([granted.id]);
+  });
+
+  test.each([
+    [
+      'grantType()',
+      () =>
+        stack.grantType(fam(NOTE_V1), {
+          actions: ['read-any', 'read-any'],
+          grantee: { kind: 'entity', entityId: 'entity-abc' },
+        }),
+    ],
+    [
+      'a _grant write',
+      () =>
+        stack.create('_grant@1', {
+          baseId: fam(NOTE_V1),
+          actions: ['read-any', 'read-any'],
+          grantee: { kind: 'entity', entityId: 'entity-abc' },
+        }),
+    ],
+  ])('%s refuses an action named twice', async (_label, write) => {
+    const refused = await write().catch((e: unknown) => e);
+    expect(refused).toBeInstanceOf(StackValidationError);
+    expect((refused as StackValidationError).errors.map((e) => e.path)).toEqual(['actions[1]']);
   });
 
   test('a subset of the stored actions withdraws nothing', async () => {
