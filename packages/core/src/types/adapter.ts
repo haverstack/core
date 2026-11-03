@@ -158,10 +158,11 @@ export interface StackRecordAdapter {
   readonly ownerEntityId: EntityId;
 
   /**
-   * Who writes this store: `'owner'` when this process is its only writer,
-   * `'shared'` when others write it too, as behind a server. Stack reads it
-   * to know whether a stream of its own writes is complete. A fact about
-   * the store, not a capability, so every adapter states it.
+   * Who writes this store's Records: `'owner'` when this process is their
+   * only writer, `'shared'` when others write them too, as behind a server.
+   * Stack reads it to know whether a stream of its own writes is complete;
+   * blob writes emit no events, so the blob half has no say. A fact about
+   * the store, not a capability, so every record adapter states it.
    * See docs/spec/events.md § Where events come from.
    */
   readonly writers: StoreWriters;
@@ -327,8 +328,9 @@ export interface StackRecordAdapter {
   /**
    * Where this store's writes stand: two equal heads mean nothing was
    * written between them, though a head may move when nothing changed.
-   * Opaque, compared only for equality. Optional — a stack cannot be copied to or from a store
-   * without one. See docs/spec/portability.md § Copying a stack.
+   * Opaque, compared only for equality. Optional — a stack cannot be
+   * copied to or from a store without one.
+   * See docs/spec/portability.md § Copying a stack.
    */
   head?(): Promise<string>;
 
@@ -337,7 +339,7 @@ export interface StackRecordAdapter {
   close?(): Promise<void>;
 }
 
-/** Who writes a store. See StackRecordAdapter.writers. */
+/** Who writes a store's Records. See StackRecordAdapter.writers. */
 export type StoreWriters = 'owner' | 'shared';
 
 /** One stored blob, as reported by StackBlobAdapter.listBlobs(). */
@@ -380,12 +382,7 @@ export interface StackBlobAdapter {
    */
   listBlobs?(query?: BlobsQuery): Promise<BlobInfo[]>;
 
-  /**
-   * Where this store's writes stand: two equal heads mean nothing was
-   * written between them, though a head may move when nothing changed.
-   * Opaque, compared only for equality. Optional — a stack cannot be copied to or from a store
-   * without one. See docs/spec/portability.md § Copying a stack.
-   */
+  /** Where this half's writes stand, as StackRecordAdapter.head() says. */
   head?(): Promise<string>;
 
   // Lifecycle

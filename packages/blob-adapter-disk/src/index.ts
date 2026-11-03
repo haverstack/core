@@ -68,6 +68,7 @@ export class DiskBlobAdapter implements StackBlobAdapter {
     }
   }
 
+  /** Each page reads the whole directory, so a copy of n blobs costs about n² / page size. */
   async listBlobs(query?: BlobsQuery): Promise<BlobInfo[]> {
     const entries = await readdir(this.dir);
     const fileIds = blobWindow(

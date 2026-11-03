@@ -6,8 +6,8 @@
  * local store's writer is the process that owns it, so that process can
  * count its own writes: trackWrites() wraps every write method an adapter
  * has, so no method has to remember to. The count starts in a random
- * epoch, so a store reopened (or a server restarted) never repeats a head
- * it reported before. See docs/spec/portability.md § Copying a stack.
+ * epoch, so a store reopened (or a server restarted) never returns to a
+ * head it reported before. See docs/spec/portability.md § Copying a stack.
  */
 
 import type { StoreWriteMethod } from '../types/index.js';
@@ -71,7 +71,9 @@ export type { WriteHead };
 /**
  * Wrap every write method `adapter` has so it moves the returned head, and
  * return that head for the adapter's `head()` to read. Call once, from the
- * adapter's own constructor.
+ * adapter's own constructor: it wraps the methods present then, so a write
+ * method assigned as a field after that call goes uncounted (the
+ * conformance suite's head tests catch one).
  */
 export function trackWrites(adapter: object): WriteHead {
   const head = new WriteHead();

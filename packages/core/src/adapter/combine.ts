@@ -37,8 +37,7 @@ export function combineAdapters(parts: {
     get ownerEntityId() {
       return parts.record.ownerEntityId;
     },
-    // The record half's: change events report Records, so it is the half
-    // whose writers decide whether a stream of this process's own is whole.
+    // The record half's, since writers names who writes the Records.
     get writers() {
       return parts.record.writers;
     },

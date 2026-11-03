@@ -16,7 +16,8 @@ export const getHeadFixtures: ConformanceFixture<undefined, WireHeadResponse | W
     description:
       'GET /head from the owner acting alone answers the head: opaque, compared only for ' +
       'equality. Two equal heads mean nothing was written between them — no Record, Type or ' +
-      'blob, by anyone — and a head never repeats an earlier one, a server restart included. ' +
+      'blob, by anyone — and once a head has moved it never returns to an earlier value, a ' +
+      'server restart included. ' +
       'It may move when nothing changed, at the cost of a retried copy; a head minted per ' +
       'request, or from the clock, moves every time and so makes every ' +
       'copy from this server fail. See docs/spec/portability.md § Copying a stack.',
