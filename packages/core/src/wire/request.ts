@@ -26,9 +26,11 @@
  */
 
 import { StackBadRequestError } from '../errors.js';
+import { assertFileId } from '../adapter/blobs.js';
 import { TARGET_KEYS } from '../associations/validation.js';
 import { NATIVE_SORT_FIELDS } from '../types/index.js';
 import type {
+  BlobsQuery,
   DataAssociation,
   ChangeFilter,
   ChangeKind,
@@ -757,6 +759,25 @@ export function parseVersionsParams(url: URL): VersionsQuery {
   const beforeVersion = url.searchParams.get('beforeVersion');
   if (beforeVersion !== null) {
     query.beforeVersion = parseUnsignedInt(beforeVersion, 'beforeVersion');
+  }
+  const limit = url.searchParams.get('limit');
+  if (limit !== null) query.limit = parseUnsignedInt(limit, 'limit');
+  return query;
+}
+
+/**
+ * Parse `GET /blobs`' params into a `BlobsQuery`; absent stays absent, as in
+ * parseJournalParams(). `afterFileId` is exclusive, and a value no blob
+ * could be named is refused rather than compared.
+ * See docs/spec/wire-format.md § Blobs.
+ */
+export function parseBlobsParams(url: URL): BlobsQuery {
+  requireKnownParams(url, ['afterFileId', 'limit']);
+  const query: BlobsQuery = {};
+  const afterFileId = url.searchParams.get('afterFileId');
+  if (afterFileId !== null) {
+    assertFileId(afterFileId, 'afterFileId');
+    query.afterFileId = afterFileId;
   }
   const limit = url.searchParams.get('limit');
   if (limit !== null) query.limit = parseUnsignedInt(limit, 'limit');

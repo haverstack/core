@@ -157,6 +157,16 @@ export interface StackRecordAdapter {
   /** DID of the stack owner. Set during adapter initialization. */
   readonly ownerEntityId: EntityId;
 
+  /**
+   * Who writes this store's Records: `'owner'` when this process is their
+   * only writer, `'shared'` when others write them too, as behind a server.
+   * Stack reads it to know whether a stream of its own writes is complete;
+   * blob writes emit no events, so the blob half has no say. A fact about
+   * the store, not a capability, so every record adapter states it.
+   * See docs/spec/events.md § Where events come from.
+   */
+  readonly writers: StoreWriters;
+
   // Records
   /**
    * Throws StackConflictError if `record.id` already exists — never a
@@ -315,10 +325,22 @@ export interface StackRecordAdapter {
     handler: (change: RecordChange) => void,
   ): Promise<Unsubscribe>;
 
+  /**
+   * Where this store's writes stand: two equal heads mean nothing was
+   * written between them, though a head may move when nothing changed.
+   * Opaque, compared only for equality. Optional — a stack cannot be
+   * copied to or from a store without one.
+   * See docs/spec/portability.md § Copying a stack.
+   */
+  head?(): Promise<string>;
+
   // Lifecycle
   flush?(): Promise<void>;
   close?(): Promise<void>;
 }
+
+/** Who writes a store's Records. See StackRecordAdapter.writers. */
+export type StoreWriters = 'owner' | 'shared';
 
 /** One stored blob, as reported by StackBlobAdapter.listBlobs(). */
 export type BlobInfo = {
@@ -326,6 +348,16 @@ export type BlobInfo = {
   size: number;
   /** When the blob was written. Used to apply a GC grace period to fresh, not-yet-associated uploads. */
   modifiedAt: Date;
+};
+
+/**
+ * A `listBlobs()` window, in `fileId` order: blobs after `afterFileId`,
+ * exclusive. Omitting `limit` reads every blob, as it reads every version
+ * in a VersionsQuery. See docs/spec/data-model.md § List order.
+ */
+export type BlobsQuery = {
+  afterFileId?: FileId;
+  limit?: number;
 };
 
 /**
@@ -343,12 +375,15 @@ export interface StackBlobAdapter {
   deleteBlob(fileId: FileId): Promise<void>;
 
   /**
-   * Enumerate every blob currently in storage. Optional — without it,
-   * garbage collection can't find bare-bytes orphans (bytes with no
-   * metadata record at all). See docs/spec/attachments.md § Garbage
-   * collection.
+   * Enumerate the blobs in storage, `fileId` ascending. Optional — without
+   * it, garbage collection can't find bare-bytes orphans (bytes with no
+   * metadata record at all), and a stack cannot be copied to or from it.
+   * See docs/spec/attachments.md § Garbage collection.
    */
-  listBlobs?(): Promise<BlobInfo[]>;
+  listBlobs?(query?: BlobsQuery): Promise<BlobInfo[]>;
+
+  /** Where this half's writes stand, as StackRecordAdapter.head() says. */
+  head?(): Promise<string>;
 
   // Lifecycle
   flush?(): Promise<void>;
@@ -371,3 +406,37 @@ export type StackAdapter = StackRecordAdapter &
      */
     putAttachmentWithMetadata?(data: Uint8Array, opts: PutAttachmentOptions): Promise<StackRecord>;
   };
+
+/**
+ * Every StackAdapter member that never writes the store: it reads,
+ * describes, relays or manages it. Named so the members that do write are
+ * whatever the interface holds besides these, and a write method added to
+ * it is a write until classified otherwise.
+ */
+export type StoreReadMember =
+  | 'capabilities'
+  | 'ownerEntityId'
+  | 'writers'
+  | 'getRecord'
+  | 'queryRecords'
+  | 'queryReadable'
+  | 'getVersions'
+  | 'getVersion'
+  | 'getJournal'
+  | 'getType'
+  | 'listTypes'
+  | 'subscribeChanges'
+  | 'getBlob'
+  | 'listBlobs'
+  | 'head'
+  | 'flush'
+  | 'close';
+
+/** Every StackAdapter method that writes the store, and so moves its head. */
+export type StoreWriteMethod = Exclude<keyof StackAdapter, StoreReadMember>;
+
+/** The write methods of the record half. */
+export type RecordWriteMethod = Extract<StoreWriteMethod, keyof StackRecordAdapter>;
+
+/** The write methods of the blob half. */
+export type BlobWriteMethod = Extract<StoreWriteMethod, keyof StackBlobAdapter>;

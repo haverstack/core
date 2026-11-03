@@ -1,7 +1,7 @@
 import { describe, test, expect } from 'vitest';
 import { copyStack } from '../src/adapter/copy.js';
 import { Stack } from '../src/stack/stack.js';
-import { InvalidAdapterError, OwnerMismatchError } from '../src/errors.js';
+import { InvalidAdapterError, OwnerMismatchError, StackConflictError } from '../src/errors.js';
 import { MemoryAdapter } from '../src/testing.js';
 import type { StackAdapter, StoreSeed } from '../src/types/index.js';
 
@@ -65,17 +65,67 @@ describe('copyStack', () => {
     expect([...target.blobs.keys()].sort()).toEqual([named.content.fileId, bare].sort());
   });
 
-  test('refuses a source with no listBlobs(), before creating anything', async () => {
+  test('carries every page of blobs, not just the first', async () => {
+    const source = await sourceWith(0);
+    for (let i = 0; i < 150; i++) await source.putBlob(new Uint8Array([i, 1]));
+    const target = (await copyStack(source, create)) as MemoryAdapter;
+    expect([...target.blobs.keys()].sort()).toEqual([...source.blobs.keys()].sort());
+  });
+
+  test.each(['listBlobs', 'head'] as const)(
+    'refuses a source with no %s(), before creating anything',
+    async (method) => {
+      const source = await sourceWith(1);
+      Object.defineProperty(source, method, { value: undefined });
+      let created = false;
+      await expect(
+        copyStack(source, (seed) => {
+          created = true;
+          return create(seed);
+        }),
+      ).rejects.toThrow(InvalidAdapterError);
+      expect(created).toBe(false);
+    },
+  );
+
+  // Whoever else writes to the source, the head it reports before and after
+  // is the one rule. See docs/spec/portability.md § Copying a stack.
+  test('refuses a source written during the copy, and closes the target', async () => {
+    const source = await sourceWith(3);
+    const { made, create: meanwhile } = badStore(async (seed) => {
+      await (await Stack.open(source)).create(NOTE, { text: 'landed mid-copy' });
+      return create(seed);
+    });
+    await expect(copyStack(source, meanwhile)).rejects.toThrow(StackConflictError);
+    expect(made.closed).toBe(true);
+  });
+
+  test('a Type defined during the copy moves the head too', async () => {
     const source = await sourceWith(1);
-    source.listBlobs = undefined;
-    let created = false;
-    await expect(
-      copyStack(source, (seed) => {
-        created = true;
-        return create(seed);
-      }),
-    ).rejects.toThrow(InvalidAdapterError);
-    expect(created).toBe(false);
+    const stack = await Stack.open(source);
+    const { create: meanwhile } = badStore(async (seed) => {
+      await stack.defineType({ id: 'com.example.test/tag@1', name: 'Tag', schema: {} });
+      return create(seed);
+    });
+    await expect(copyStack(source, meanwhile)).rejects.toThrow(StackConflictError);
+  });
+
+  // A write that began before the copy read its first head and lands
+  // partway through is still a write during the copy.
+  test('refuses a source with a write in flight when the copy began', async () => {
+    const source = await sourceWith(1);
+    const landing = source.putBlob(new Uint8Array([7, 7]));
+    const refused = expect(copyStack(source, create)).rejects.toThrow(StackConflictError);
+    await Promise.all([landing, refused]);
+  });
+
+  test('a bare blob written during the copy moves the head too', async () => {
+    const source = await sourceWith(1);
+    const { create: meanwhile } = badStore(async (seed) => {
+      await source.putBlob(new Uint8Array([4, 2]));
+      return create(seed);
+    });
+    await expect(copyStack(source, meanwhile)).rejects.toThrow(StackConflictError);
   });
 
   // One rule for every way the store create() returns can differ from a new
@@ -84,7 +134,7 @@ describe('copyStack', () => {
   describe('refuses a store that is not a new, empty one with the source identity, and closes it', () => {
     type Make = (seed: StoreSeed) => Promise<StackAdapter>;
     const without =
-      (method: 'importRecord' | 'listBlobs'): Make =>
+      (method: 'importRecord' | 'listBlobs' | 'head'): Make =>
       async (seed) => {
         const store = await create(seed);
         Object.defineProperty(store, method, { value: undefined });
@@ -93,6 +143,7 @@ describe('copyStack', () => {
     const cases: [string, Make, typeof InvalidAdapterError | typeof OwnerMismatchError][] = [
       ['no importRecord()', without('importRecord'), InvalidAdapterError],
       ['no listBlobs()', without('listBlobs'), InvalidAdapterError],
+      ['no head()', without('head'), InvalidAdapterError],
       [
         'another owner',
         async () => MemoryAdapter.open({ ownerEntityId: 'did:key:other' }),

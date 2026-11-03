@@ -7,12 +7,7 @@
  * the documented response. See that package for the fixture data itself.
  */
 import { describe, test, expect } from 'vitest';
-import {
-  APIAdapter,
-  APIAdapterAuthError,
-  APIAdapterCapabilityError,
-  APIAdapterHandshakeError,
-} from '../src/index.js';
+import { APIAdapter, APIAdapterAuthError, APIAdapterHandshakeError } from '../src/index.js';
 import {
   BASE_URL,
   DISCOVERY,
@@ -38,6 +33,8 @@ import {
   getVersionsSequenceFixtures,
   restoreVersionFixtures,
   getJournalFixtures,
+  listBlobsFixtures,
+  getHeadFixtures,
   commitMigrationFixtures,
   installRequestFixtures,
   discoveryFixtures,
@@ -765,6 +762,59 @@ describe('getJournal fixtures', () => {
   }
 });
 
+// -------------------------------------------------------
+// Blobs — listed for the owner acting alone, paged by fileId.
+// -------------------------------------------------------
+
+describe('listBlobs fixtures', () => {
+  const openWithBlobs = (): Promise<APIAdapter> =>
+    openDiscovered({ ...DISCOVERY, blobs: { list: true } }, { token: undefined });
+
+  for (const fixture of listBlobsFixtures) {
+    test(fixture.name, async () => {
+      const adapter = await openWithBlobs();
+      mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
+      const limit = new URL(`${BASE_URL}${fixture.path}`).searchParams.get('limit');
+      const attempt = adapter.listBlobs!(limit === null ? {} : { limit: Number(limit) });
+
+      const body = fixture.responseBody!;
+      if ('error' in body) {
+        await expect(attempt).rejects.toBeInstanceOf(StackPermissionError);
+      } else {
+        const blobs = await attempt;
+        expect(blobs.map((b) => b.fileId)).toEqual(body.blobs.map((b) => b.fileId));
+        expect(blobs.map((b) => b.modifiedAt.toISOString())).toEqual(
+          body.blobs.map((b) => b.modifiedAt),
+        );
+      }
+      const [url, init] = mockFetch.mock.calls[1] as [string, RequestInit];
+      expect(url).toBe(`${BASE_URL}${fixture.path}`);
+      expect(init.method).toBe(fixture.method);
+    });
+  }
+});
+
+describe('head fixtures', () => {
+  for (const fixture of getHeadFixtures) {
+    test(fixture.name, async () => {
+      const adapter = await openDiscovered(
+        { ...DISCOVERY, head: { read: true } },
+        { token: undefined },
+      );
+      mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
+      const body = fixture.responseBody!;
+      if ('error' in body) {
+        await expect(adapter.head!()).rejects.toBeInstanceOf(StackPermissionError);
+      } else {
+        expect(await adapter.head!()).toBe(body.head);
+      }
+      const [url, init] = mockFetch.mock.calls[1] as [string, RequestInit];
+      expect(url).toBe(`${BASE_URL}${fixture.path}`);
+      expect(init.method).toBe(fixture.method);
+    });
+  }
+});
+
 describe('commitMigration fixtures', () => {
   for (const fixture of commitMigrationFixtures) {
     test(fixture.name, async () => {
@@ -797,7 +847,7 @@ describe('install request fixtures', () => {
       const adapter = await openWithInstalls();
       mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
 
-      const attempt = adapter.requestInstall(fixture.requestBody!.manifest);
+      const attempt = adapter.requestInstall!(fixture.requestBody!.manifest);
       const body = fixture.responseBody!;
       if ('error' in body) {
         await expect(attempt).rejects.toBeInstanceOf(
@@ -820,13 +870,9 @@ describe('install request fixtures', () => {
     });
   }
 
-  test('a server advertising no install requests is refused locally', async () => {
+  test('has no requestInstall() when the server advertises no install requests', async () => {
     const adapter = await openAdapter();
-    const calls = mockFetch.mock.calls.length;
-    await expect(
-      adapter.requestInstall(installRequestFixtures[0]!.requestBody!.manifest),
-    ).rejects.toBeInstanceOf(APIAdapterCapabilityError);
-    expect(mockFetch.mock.calls.length).toBe(calls);
+    expect(adapter.requestInstall).toBeUndefined();
   });
 });
 

@@ -36,6 +36,7 @@ import type {
   AdapterQuery,
   StackAdapter,
   BlobInfo,
+  BlobsQuery,
   StackBlobAdapter,
   AspectWriteOptions,
   ElementWriteOptions,
@@ -43,7 +44,9 @@ import type {
   MutateOptions,
   Reach,
   RecordHistory,
+  StoreWriters,
 } from '@haverstack/core/adapter';
+import { combinedHead } from '@haverstack/core/adapter';
 import type { TokenSession, TokenInfo } from '@haverstack/core/wire';
 import {
   NativeSQLiteRecordAdapter,
@@ -126,6 +129,10 @@ export class LocalAdapter implements StackAdapter {
 
   get ownerEntityId(): string {
     return this.record.ownerEntityId;
+  }
+
+  get writers(): StoreWriters {
+    return this.record.writers;
   }
 
   async createRecord(record: StackRecord, opts?: JournalOptions): Promise<StackRecord> {
@@ -276,8 +283,13 @@ export class LocalAdapter implements StackAdapter {
   }
 
   /** DiskBlobAdapter always implements this — LocalAdapter always constructs one. */
-  async listBlobs(): Promise<BlobInfo[]> {
-    return this.blob.listBlobs!();
+  async listBlobs(query?: BlobsQuery): Promise<BlobInfo[]> {
+    return this.blob.listBlobs!(query);
+  }
+
+  /** One head for the database and the attachments beside it; DiskBlobAdapter has one too. */
+  async head(): Promise<string> {
+    return combinedHead(await this.record.head(), await this.blob.head!());
   }
 
   // -------------------------------------------------------

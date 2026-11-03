@@ -49,7 +49,7 @@ import type {
   SubscribeOptions,
 } from '@haverstack/core';
 import { OwnerMismatchError, filtersContent } from '@haverstack/core/adapter';
-import type { AdapterQuery, StackAdapter } from '@haverstack/core/adapter';
+import type { AdapterQuery, BlobInfo, BlobsQuery, StackAdapter } from '@haverstack/core/adapter';
 import type { DidCredential } from '@haverstack/core/wire';
 import {
   isWireError,
@@ -59,6 +59,8 @@ import {
   isValidCursor,
   supportsChangeFeed,
   supportsInstallRequests,
+  supportsBlobListing,
+  supportsHead,
   WIRE_ERROR_STATUS,
   supportsDidChallenge,
   CHANGE_FRAME_READY,
@@ -74,6 +76,8 @@ import type {
   WireVersion,
   WireRecordChange,
   WireJournalResponse,
+  WireBlobsResponse,
+  WireHeadResponse,
   WireVersionsResponse,
   WireReadyFrame,
   DiscoveryChanges,
@@ -83,7 +87,6 @@ import type {
 import {
   APIAdapterError,
   APIAdapterAuthError,
-  APIAdapterCapabilityError,
   APIAdapterVersionError,
   APIAdapterHandshakeError,
   APIAdapterReauthError,
@@ -92,7 +95,14 @@ import {
 } from './errors.js';
 import { performHandshake } from './handshake.js';
 import { withParams, buildQueryParams, buildChangeParams } from './params.js';
-import { parseRecord, parseType, parseVersion, parseJournalEntry, parseChange } from './parse.js';
+import {
+  parseRecord,
+  parseType,
+  parseVersion,
+  parseJournalEntry,
+  parseChange,
+  parseBlobInfo,
+} from './parse.js';
 import { SseDecoder } from './sse.js';
 import type { SseFrame } from './sse.js';
 import {
@@ -202,6 +212,42 @@ export class APIAdapter implements StackAdapter {
   readonly capabilities: StackCapabilities;
   readonly ownerEntityId: string;
 
+  /** Members and apps write a hosted store too. */
+  readonly writers = 'shared';
+
+  /**
+   * `GET /changes`, present only when discovery advertises a feed. Without
+   * one, Stack refuses subscribe() rather than serve this client's own
+   * writes as the whole. See docs/spec/change-feed.md.
+   */
+  readonly subscribeChanges?: (
+    opts: SubscribeOptions,
+    handler: (change: RecordChange) => void,
+  ) => Promise<() => void>;
+
+  /**
+   * Present this app's manifest for the owner to approve, as the key this
+   * adapter authenticated with. `pending` until the owner approves this
+   * manifest for this key; `installed`, with the `_install` record, once
+   * applying it would change nothing. Present only when discovery
+   * advertises install requests. See docs/spec/wire-format.md § Installs.
+   */
+  readonly requestInstall?: (manifest: AppManifest) => Promise<InstallRequestResult>;
+
+  /**
+   * `GET /blobs`, present only when discovery advertises it: an optional
+   * method's presence is the capability, so a copy or a collection tells
+   * from it alone whether this store can be enumerated.
+   * See docs/spec/wire-format.md § Blobs.
+   */
+  readonly listBlobs?: (query?: BlobsQuery) => Promise<BlobInfo[]>;
+
+  /**
+   * `GET /head`, present only when discovery advertises it, on the same
+   * terms as listBlobs(). See docs/spec/wire-format.md § Head.
+   */
+  readonly head?: () => Promise<string>;
+
   /** Shared by every request that finds its token expired at the same moment. */
   private reauthInFlight: Promise<string> | null = null;
 
@@ -214,10 +260,31 @@ export class APIAdapter implements StackAdapter {
     /** The feed discovery advertised, if any. Absent means the server offers none. */
     private readonly changeFeed: DiscoveryChanges | undefined,
     /** Whether discovery advertised `POST /installs`. */
-    private readonly installRequests: boolean,
+    installRequests: boolean,
+    /** Whether discovery advertised `GET /blobs`. */
+    blobListing: boolean,
+    /** Whether discovery advertised `GET /head`. */
+    reportsHead: boolean,
   ) {
     this.capabilities = capabilities;
     this.ownerEntityId = ownerEntityId;
+    if (blobListing) {
+      this.listBlobs = (query = {}) =>
+        this.readPages('/blobs', {
+          cursorParam: 'afterFileId',
+          cursor: query.afterFileId,
+          isCursor: isString,
+          limit: query.limit,
+          items: (body: WireBlobsResponse) => body.blobs,
+          parse: parseBlobInfo,
+          advances: (next, prev) => next > prev,
+        });
+    }
+    if (changeFeed) this.subscribeChanges = (opts, handler) => this.relayFeed(opts, handler);
+    if (installRequests) this.requestInstall = (manifest) => this.postInstall(manifest);
+    if (reportsHead) {
+      this.head = async () => (await this.requestBody<WireHeadResponse>('GET', '/head')).head;
+    }
   }
 
   /**
@@ -305,6 +372,8 @@ export class APIAdapter implements StackAdapter {
       // forgot them would assume both.
       supportsChangeFeed(discovery) ? discovery.changes : undefined,
       supportsInstallRequests(discovery),
+      supportsBlobListing(discovery),
+      supportsHead(discovery),
     );
   }
 
@@ -501,21 +570,8 @@ export class APIAdapter implements StackAdapter {
     return this.writeAspect('PUT', id, 'unlisted', { unlisted }, opts);
   }
 
-  /**
-   * Present this app's manifest for the owner to approve, as the key this
-   * adapter authenticated with. `pending` until the owner approves this
-   * manifest for this key; `installed`, with the `_install` record, once
-   * applying it would change nothing. Refused locally when the server does
-   * not advertise install requests. See docs/spec/wire-format.md § Installs.
-   */
-  async requestInstall(manifest: AppManifest): Promise<InstallRequestResult> {
-    if (!this.installRequests) {
-      throw new APIAdapterCapabilityError(
-        'installs',
-        `Server at "${this.baseUrl}" does not take install requests; ask its owner to install ` +
-          'the app another way.',
-      );
-    }
+  /** `POST /installs`, behind requestInstall(). */
+  private async postInstall(manifest: AppManifest): Promise<InstallRequestResult> {
     const raw = await this.request<WireInstallResponse>('POST', '/installs', { manifest });
     if (raw?.status === 'pending') return { status: 'pending' };
     if (raw?.status === 'installed' && raw.install) {
@@ -648,19 +704,21 @@ export class APIAdapter implements StackAdapter {
    * silently get a prefix if this returned the first page. `cursor` is the
    * only end-of-log signal, exactly as it is on a query.
    */
-  private async readPages<W extends { cursor: number | null }, R, T>(
+  private async readPages<C extends number | string, W extends { cursor: C | null }, R, T>(
     path: string,
     opts: {
       cursorParam: string;
-      cursor: number | undefined;
+      cursor: C | undefined;
+      /** Whether a body's cursor is one this endpoint names; anything else ends the read. */
+      isCursor: (cursor: unknown) => cursor is C;
       limit: number | undefined;
       items: (body: W) => R[];
       parse: (raw: R) => T;
       /** Whether `next` lands somewhere the read from `prev` has not been. */
-      advances: (next: number, prev: number) => boolean;
+      advances: (next: C, prev: C) => boolean;
     },
   ): Promise<T[]> {
-    const { cursorParam, limit, items, parse, advances } = opts;
+    const { cursorParam, isCursor, limit, items, parse, advances } = opts;
     const out: T[] = [];
     let cursor = opts.cursor;
     for (;;) {
@@ -679,10 +737,7 @@ export class APIAdapter implements StackAdapter {
       if (page.length === 0) break;
       // A server that omits a cursor, repeats one, or mints one
       // unconditionally ends the read here rather than spinning on it.
-      if (
-        typeof body.cursor !== 'number' ||
-        (cursor !== undefined && !advances(body.cursor, cursor))
-      ) {
+      if (!isCursor(body.cursor) || (cursor !== undefined && !advances(body.cursor, cursor))) {
         break;
       }
       cursor = body.cursor;
@@ -698,6 +753,7 @@ export class APIAdapter implements StackAdapter {
     return this.readPages(`/records/${pathSegment(id)}/versions`, {
       cursorParam: 'beforeVersion',
       cursor: query.beforeVersion,
+      isCursor: isNumber,
       limit: query.limit,
       items: (body: WireVersionsResponse) => body.versions,
       parse: parseVersion,
@@ -715,6 +771,7 @@ export class APIAdapter implements StackAdapter {
     return this.readPages(`/records/${pathSegment(id)}/journal`, {
       cursorParam: 'afterSeq',
       cursor: query.afterSeq,
+      isCursor: isNumber,
       limit: query.limit,
       items: (body: WireJournalResponse) => body.entries,
       parse: parseJournalEntry,
@@ -826,21 +883,10 @@ export class APIAdapter implements StackAdapter {
    * could not close, which reconciling by query repairs.
    * See docs/spec/change-feed.md.
    */
-  async subscribeChanges(
+  private async relayFeed(
     opts: SubscribeOptions,
     handler: (change: RecordChange) => void,
   ): Promise<() => void> {
-    // Refused locally, before any request: a server advertising no feed has
-    // no endpoint to answer, and learning that as a 404 partway through a
-    // connection is the failure discovery exists to prevent.
-    if (!this.changeFeed) {
-      throw new APIAdapterCapabilityError(
-        'changes',
-        `Server at "${this.baseUrl}" advertises no change feed. Poll query() for changes, or ` +
-          'connect to a server that offers one.',
-      );
-    }
-
     // A resume cursor becomes a Last-Event-ID header, so it must stay
     // inside the framable charset for the same reason a frame's own id
     // does: an out-of-charset value would span the header line. Refused
@@ -1001,3 +1047,6 @@ export class APIAdapter implements StackAdapter {
     }
   }
 }
+
+const isNumber = (value: unknown): value is number => typeof value === 'number';
+const isString = (value: unknown): value is string => typeof value === 'string';

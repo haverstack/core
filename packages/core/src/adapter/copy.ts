@@ -10,13 +10,18 @@
  * between storage engines are all this one call, with a different source
  * and a different kind of store to create. Full trust, like any direct
  * adapter access: authorship and history land as recorded, which no write
- * through Stack may do. See docs/spec/portability.md.
+ * through Stack may do.
+ *
+ * A copy reads one moment of its source: it reads the source's head before
+ * and after, and refuses the copy if the two differ. One rule for every
+ * source, whoever else writes to it. See docs/spec/portability.md.
  */
 
-import { InvalidAdapterError, OwnerMismatchError } from '../errors.js';
+import { InvalidAdapterError, OwnerMismatchError, StackConflictError } from '../errors.js';
 import { resolveQuery } from '../query-validation.js';
 import type {
   ConfigContent,
+  FileId,
   PlainQuery,
   StackAdapter,
   StackRecordAdapter,
@@ -41,21 +46,19 @@ const EVERYTHING: PlainQuery = {
  * Copy everything `from` holds into the store `create` makes from its
  * `_config` record and that record's history, and return that store, open.
  * Not atomic: a failure closes the store part-written, and the caller, whose
- * store it is, removes it. The source must not be written meanwhile; nothing
- * here can check that.
+ * store it is, removes it. A source written meanwhile is refused with
+ * StackConflictError, and the copy is run again into a new store.
  * See docs/spec/portability.md § Copying a stack.
  */
 export async function copyStack(from: StackAdapter, create: CreateStore): Promise<StackAdapter> {
   const listBlobs = from.listBlobs?.bind(from);
-  if (!listBlobs) {
-    throw new InvalidAdapterError(
-      'Cannot copy from this adapter: it has no listBlobs(), so its blobs cannot be enumerated.',
-    );
-  }
+  if (!listBlobs) refuseSource('it has no listBlobs(), so its blobs cannot be enumerated');
+  const head = from.head?.bind(from);
+  if (!head) refuseSource('it has no head(), so a write during the copy could not be detected');
+  // Before the first read, so every write that could land during one moves it.
+  const started = await head();
   const config = await from.getRecord(SYSTEM_TYPES.CONFIG);
-  if (!config) {
-    throw new InvalidAdapterError('Cannot copy from this adapter: it holds no _config record.');
-  }
+  if (!config) refuseSource('it holds no _config record');
   const [versions, journal] = await Promise.all([
     from.getVersions(config.id),
     from.getJournal(config.id),
@@ -66,17 +69,27 @@ export async function copyStack(from: StackAdapter, create: CreateStore): Promis
     if (!importRecord) refuseTarget('it has no importRecord(), so it cannot write history');
     const listHeld = to.listBlobs?.bind(to);
     if (!listHeld) refuseTarget('it has no listBlobs(), so it could not be copied from in turn');
+    if (!to.head) refuseTarget('it has no head(), so it could not be copied from in turn');
     await assertNewStore(to, (config.content as ConfigContent).ownerEntityId, listHeld);
     for (const type of await from.listTypes()) await to.saveType(type);
     // Bytes before the Records that name them, as every upload writes them.
-    for (const { fileId } of await listBlobs()) await to.putBlob(await from.getBlob(fileId));
+    await copyBlobs(from, to, listBlobs);
     await copyRecords(from, importRecord);
+    if ((await head()) !== started) {
+      throw new StackConflictError(
+        'The source was written while it was copied. Copy it again into a new store.',
+      );
+    }
     return to;
   } catch (err) {
     // The failure that stopped the copy is the one to report.
     await to.close?.().catch(() => {});
     throw err;
   }
+}
+
+function refuseSource(why: string): never {
+  throw new InvalidAdapterError(`Cannot copy from this adapter: ${why}.`);
 }
 
 function refuseTarget(why: string): never {
@@ -86,8 +99,8 @@ function refuseTarget(why: string): never {
 /**
  * A target is a store as its adapter creates one: the source's owner,
  * checked as open() checks it, and nothing held yet — no Record, no Type, no
- * blob. Every end of a copy lists all it holds, so a target is itself a
- * store a later copy can read in full.
+ * blob. Every end of a copy lists all it holds and has a head, so a target
+ * is itself a store a later copy can read.
  */
 async function assertNewStore(
   to: StackAdapter,
@@ -101,7 +114,21 @@ async function assertNewStore(
     refuseTarget('it already holds Records');
   }
   if ((await to.listTypes()).length) refuseTarget('it already holds Types');
-  if ((await listHeld()).length) refuseTarget('it already holds blobs');
+  if ((await listHeld({ limit: 1 })).length) refuseTarget('it already holds blobs');
+}
+
+async function copyBlobs(
+  from: StackAdapter,
+  to: StackAdapter,
+  listBlobs: NonNullable<StackAdapter['listBlobs']>,
+): Promise<void> {
+  let afterFileId: FileId | undefined;
+  for (;;) {
+    const page = await listBlobs({ afterFileId, limit: PAGE_SIZE });
+    for (const { fileId } of page) await to.putBlob(await from.getBlob(fileId));
+    if (page.length < PAGE_SIZE) return;
+    afterFileId = page[page.length - 1].fileId;
+  }
 }
 
 async function copyRecords(
@@ -112,6 +139,7 @@ async function copyRecords(
   do {
     const page = await from.queryRecords(resolveQuery({ ...EVERYTHING, cursor }));
     for (const record of page.records) {
+      // One Record's history is read whole, as importRecord() takes it.
       const [versions, journal] = await Promise.all([
         from.getVersions(record.id),
         from.getJournal(record.id),

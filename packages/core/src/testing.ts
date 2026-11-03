@@ -34,6 +34,8 @@ import type {
   DataAssociation,
   StackCapabilities,
   BlobInfo,
+  BlobsQuery,
+  StoreWriters,
   Reach,
   RecordHistory,
   StoreSeed,
@@ -46,6 +48,8 @@ import { compareSortEntries, constantSortEntry, contentSortEntry } from './adapt
 import type { SortEntry } from './adapter/sort.js';
 import { inReach } from './adapter/reach.js';
 import { newStoreSeed } from './adapter/seed.js';
+import { assertFileId, blobWindow } from './adapter/blobs.js';
+import { trackWrites } from './adapter/head.js';
 
 import {
   ElementSetMovedError,
@@ -58,9 +62,6 @@ import {
 import { matchesContent } from './content-match.js';
 import { sha256Hex } from './hash.js';
 import { applyAssociationEdits, sameAssociationSet } from './associations/identity.js';
-
-/** A FileId is the SHA-256 hex digest of its bytes — see docs/spec/attachments.md. */
-const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
 
 // An `undefined` field is a field the record does not have; storing the key
 // would make `'u' in content` differ from adapters that serialize to JSON.
@@ -99,6 +100,10 @@ export class MemoryAdapter implements StackAdapter {
   };
 
   readonly ownerEntityId: string;
+  readonly writers: StoreWriters = 'owner';
+
+  /** Moved by every write method; see head(). */
+  private readonly written = trackWrites(this);
 
   readonly records = new Map<string, StackRecord>();
   readonly order: string[] = [];
@@ -690,9 +695,7 @@ export class MemoryAdapter implements StackAdapter {
     return fileId;
   }
   async getBlob(fileId: string): Promise<Uint8Array> {
-    if (!SHA256_HEX_RE.test(fileId)) {
-      throw new StackBadRequestError(`Invalid fileId: expected 64-character lowercase hex string`);
-    }
+    assertFileId(fileId);
     const blob = this.blobs.get(fileId);
     if (!blob) throw new StackNotFoundError(`Attachment not found: "${fileId}"`);
     return new Uint8Array(blob.data);
@@ -703,13 +706,16 @@ export class MemoryAdapter implements StackAdapter {
   // Declared as an optional field (not a fixed method) so a test subclass
   // can override it to `undefined`, simulating an adapter that doesn't
   // implement this capability (see stack.test.ts's NoListBlobsAdapter).
-  listBlobs?: () => Promise<BlobInfo[]> = async () => {
-    return [...this.blobs.entries()].map(([fileId, blob]) => ({
-      fileId,
-      size: blob.data.byteLength,
-      modifiedAt: blob.modifiedAt,
-    }));
+  listBlobs?: (query?: BlobsQuery) => Promise<BlobInfo[]> = async (query) => {
+    return blobWindow(this.blobs.keys(), query).map((fileId) => {
+      const blob = this.blobs.get(fileId)!;
+      return { fileId, size: blob.data.byteLength, modifiedAt: blob.modifiedAt };
+    });
   };
+
+  async head(): Promise<string> {
+    return this.written.read();
+  }
 
   flush?: () => Promise<void>;
   close?: () => Promise<void>;

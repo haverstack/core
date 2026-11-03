@@ -17,6 +17,7 @@ import type {
   AdapterQuery,
   SubscribeOptions,
 } from '../types/index.js';
+import { combinedHead } from './head.js';
 
 /**
  * Compose a StackRecordAdapter and a StackBlobAdapter into a single StackAdapter.
@@ -35,6 +36,10 @@ export function combineAdapters(parts: {
     },
     get ownerEntityId() {
       return parts.record.ownerEntityId;
+    },
+    // The record half's, since writers names who writes the Records.
+    get writers() {
+      return parts.record.writers;
     },
 
     createRecord: (r, opts) => parts.record.createRecord(r, opts),
@@ -77,10 +82,8 @@ export function combineAdapters(parts: {
       queryReadable: (q: AdapterQuery, reach: Reach) => parts.record.queryReadable!(q, reach),
     }),
 
-    // Forwarded on the same terms, and it decides more than it looks:
-    // Stack.relaysChanges reads its presence, so dropping it here would
-    // leave a combined stack quietly emitting only its own writes while a
-    // remote record backend's feed went unread.
+    // Forwarded on the same terms: dropping it would leave a shared record
+    // backend's feed unread, and Stack would refuse to subscribe at all.
     ...(parts.record.subscribeChanges && {
       subscribeChanges: (opts: SubscribeOptions, handler: (change: RecordChange) => void) =>
         parts.record.subscribeChanges!(opts, handler),
@@ -94,8 +97,13 @@ export function combineAdapters(parts: {
     getBlob: (id) => parts.blob.getBlob(id),
     deleteBlob: (id) => parts.blob.deleteBlob(id),
     ...(parts.blob.listBlobs && {
-      listBlobs: () => parts.blob.listBlobs!(),
+      listBlobs: (query) => parts.blob.listBlobs!(query),
     }),
+    // One head for the whole store, so a write to either half moves it.
+    ...(parts.record.head &&
+      parts.blob.head && {
+        head: async () => combinedHead(await parts.record.head!(), await parts.blob.head!()),
+      }),
 
     async flush() {
       await parts.record.flush?.();

@@ -28,7 +28,7 @@ GET /.well-known/stack
 }
 ```
 
-`auth` is optional and describes how a token can be earned here — see [Authentication § Advertising it](#advertising-it). `changes` is optional and describes the [change feed](./change-feed.md); its absence means the server offers none. `installs` is optional, and `{ "requests": true }` says the server takes [install requests](#installs); `@haverstack/wire-types` exports `supportsInstallRequests()` to read it.
+`auth` is optional and describes how a token can be earned here — see [Authentication § Advertising it](#advertising-it). `changes` is optional and describes the [change feed](./change-feed.md); its absence means the server offers none. `installs` is optional, and `{ "requests": true }` says the server takes [install requests](#installs); `@haverstack/wire-types` exports `supportsInstallRequests()` to read it. `blobs` is optional too, and `{ "list": true }` says the server [lists its blobs](#blobs); `supportsBlobListing()` reads it. So is `head`, and `{ "read": true }` says the server [reports its head](#head); `supportsHead()` reads it.
 
 ### Version negotiation
 
@@ -149,6 +149,7 @@ Core runs no server, so every control below lives in the implementer's code — 
 - **Log the refusal you didn't send.** A 404 covering a record the requester could not read is [deliberately indistinguishable from a missing one](./disclosure.md) — to the client. The operator is not the adversary, so record which of the two it was, along with the requester DID (as [Identity](./identity.md#authentication-challengeresponse) already asks for denied-but-verified requests), the record ID, and the check that refused. Without it the distinction is lost to everyone: a grant that is subtly wrong looks exactly like a bad ID or a write that never landed, so it sends whoever is debugging it to the write path, which is the one place the bug is not. This is the bullet that makes the anti-oracle rule cheap to live with, and skipping it is how a deployment concludes the rule is not worth keeping. Treat the log as sensitive in its own right — "who asked after what, and was refused" is the sharing graph, written down.
 - **Rate-limit record reads, not just writes.** The remaining ID-guessing attack is online — every candidate costs a request — so a limit sane for a personal Stack is most of the defence. One known millisecond is 32,768 candidates: 33 seconds to exhaust at 1000 req/s, 55 minutes at 10 req/s, and a single second of uncertainty about the timestamp multiplies both by a thousand. A server that answers an unauthenticated 404 with `WWW-Authenticate` keeps the login prompt working without reopening the distinction, since it says the same thing for a missing record.
 - **Strip `includeUnlisted` before it reaches an unscoped `Stack`.** Routing the request through `ScopedStack` makes the owner-only refusal automatic; a server that maps query params or a subscribe request straight onto an unscoped adapter call must refuse or strip the flag itself, exactly as it already must for `createdBy` on a create body. See [Unlisted § The one unsafe path](#unlisted).
+- **Serve a [head](#head) that every writer moves**, as that section requires. No fixture can see a second writer.
 - **A duplicate client-minted `id` answers 409, and that is an existence check.** Anyone holding a `create` grant on any type can learn whether an ID is taken by trying to use it (see [Record IDs](./data-model.md#record-ids)). This one cannot be closed in the response — any answer other than "created" confirms the ID — and it is accepted rather than closed, because it is what makes a create safe to retry after a network blip. Unlike a read, it is loud: every probe writes a record stamped with the requester as `createdBy` that the owner can see and count, and that the requester cannot purge. Rate-limit creates, and narrow `idTimestampSkewMs` if a deployment wants the window tighter than 24 hours.
 
 Two more sit in code this spec doesn't reach but a server does: `createdBy` [must be ignored on input](#records), and a session's two identities must reach `ScopedStack` without being swapped — `Stack.asActor()` takes the session whole, by field name, for that reason. A server built on core reaches the first through `createOptionsFromWireRecord()`, which cannot return the field.
@@ -706,6 +707,40 @@ Owner only. Returns `409 Conflict` if any record in the stack still references t
 
 Attachment permissions are governed by the Record(s) that reference them, not the attachment itself. If any Record referencing a `fileId` is accessible to the requester, the attachment is accessible. A non-owner requester can also access a file if they own an `_attachment@1` record for it, enabling access in the window between upload and record association.
 
+## Blobs
+
+```
+GET /blobs                              — every blob, fileId ascending
+GET /blobs?afterFileId=<fileId>&limit=50 — at most 50 blobs after that fileId, exclusive
+```
+
+```json
+{
+  "blobs": [{ "fileId": "039058c6…", "size": 3, "modifiedAt": "2024-01-01T00:00:00.000Z" }],
+  "cursor": null
+}
+```
+
+What [`listBlobs()`](./adapters.md#interface-split) answers locally, so a hosted stack [can be copied out](./portability.md#copying-a-stack) and [collected](./attachments.md#garbage-collection) like any other. Every blob the store holds, named by a Record or not, in [`fileId` order](./data-model.md#list-order). `modifiedAt` is when this store wrote the bytes.
+
+**Served to the owner acting alone**, and `403` (code `permission`) otherwise, delegation included — the gate `includeUnlisted`, purge and [`POST /types`](#types) use, checked with `isOwnerActingAlone()`. A listing names files no Record the requester reaches names, so no grant confers it.
+
+**`cursor` is the only end-of-list signal**, as on [the journal](#journal): a page may be shorter than the `limit` asked for. It carries the `fileId` to send back as `afterFileId`, and is `null` once nothing follows. `APIAdapter.listBlobs()` follows it to the end when no `limit` is given. `@haverstack/core/wire` exports `parseBlobsParams()` to decode both params; neither has a default, and an `afterFileId` that is not a [`fileId`](./attachments.md) is `400`.
+
+**Optional, and advertised in [discovery](#discovery)** as `"blobs": { "list": true }`. `APIAdapter` has `listBlobs()` only when it is, since that method's presence is [the capability](./adapters.md#adapter-capabilities).
+
+## Head
+
+```
+GET /head  → { "head": "9b1c0f6e-3d2a-4c55-9a7e-2f1d8c3b4a10.42" }
+```
+
+What [`head()`](./portability.md#copying-a-stack) answers locally: where the store's writes stand, so a client that reads it before and after reading the store learns whether anything was written between. A server answers from its own adapter's `head()`, which moves on every write — a Record, a Type or a blob, by any requester — and once it has moved never returns to an earlier value, a restart included. **It must cover every process that writes the store.** An adapter's head counts only its own writes, which is the whole store under [the one-owner rule](./adapters.md#concurrency--storage-ownership); a deployment that lets another process write it, such as stateless workers putting uploads straight into a bucket, routes those writes through the owner or folds them into the head itself. A head that misses a writer lets a copy through that matches no moment of the stack. A head minted per request or read from the clock makes every copy from the server fail.
+
+**Served to the owner acting alone**, and `403` (code `permission`) otherwise, as [`GET /blobs`](#blobs) is: a head moves on writes to Records the requester cannot read, so it would report them.
+
+**Optional, and advertised in [discovery](#discovery)** as `"head": { "read": true }`. `APIAdapter` has `head()` only when it is.
+
 ## Installs
 
 ```
@@ -727,7 +762,7 @@ The server plans the manifest for the session's key and answers with the result:
 | `422`  | `validation`                              | The manifest is one [`planInstall()` refuses](./apps.md#plan-then-apply): a type outside the app's [own namespace](./apps.md#who-owns-a-family) and the commons or listed twice, a request breaking the grant rules, or a family requested twice. |
 | `409`  | `conflict`                                | The key's `_app` card names a different `appId`.                                                                                                                                                                                                  |
 
-Re-sending the same manifest is how an app checks: it answers `202` until the owner approves and `200` after. A manifest that changes anything an approved one said — a new version, a changed request — is `202` again, so an upgrade takes the same path as a first install. A client refuses `requestInstall()` locally when discovery does not advertise `installs`, rather than learning it as a `404`.
+Re-sending the same manifest is how an app checks: it answers `202` until the owner approves and `200` after. A manifest that changes anything an approved one said — a new version, a changed request — is `202` again, so an upgrade takes the same path as a first install. `APIAdapter` has `requestInstall()` only when discovery advertises `installs`, so a client learns it from discovery rather than as a `404`.
 
 ## Entity
 

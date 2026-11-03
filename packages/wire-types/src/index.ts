@@ -27,6 +27,12 @@ export {
 export type { WireJournalEntry, WireJournalResponse } from './journal.js';
 export { serializeJournalEntry } from './journal.js';
 
+export type { DiscoveryBlobs, WireBlobInfo, WireBlobsResponse } from './blobs.js';
+export { serializeBlobInfo, supportsBlobListing } from './blobs.js';
+
+export type { DiscoveryHead, WireHeadResponse } from './head.js';
+export { supportsHead } from './head.js';
+
 export type { WireErrorCode, WireError } from './errors.js';
 export {
   WIRE_ERROR_STATUS,

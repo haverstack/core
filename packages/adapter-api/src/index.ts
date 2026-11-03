@@ -15,7 +15,6 @@ export {
   APIAdapterError,
   APIAdapterAuthError,
   APIAdapterConnectionError,
-  APIAdapterCapabilityError,
   APIAdapterVersionError,
   APIAdapterHandshakeError,
   APIAdapterReauthError,

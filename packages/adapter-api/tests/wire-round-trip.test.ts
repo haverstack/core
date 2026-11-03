@@ -89,7 +89,7 @@ async function roundTripChanges(
       { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
     ),
   );
-  const unsubscribe = await adapter.subscribeChanges(opts, () => {});
+  const unsubscribe = await adapter.subscribeChanges!(opts, () => {});
   unsubscribe();
 
   const [url] = mockFetch.mock.calls[1] as [string];

@@ -15,17 +15,10 @@ import { createHash, randomBytes } from 'node:crypto';
 import { mkdirSync, existsSync } from 'fs';
 import { readFile, writeFile, unlink, readdir, stat, rename } from 'fs/promises';
 import { join } from 'path';
-import { StackNotFoundError, StackBadRequestError } from '@haverstack/core';
+import { StackNotFoundError } from '@haverstack/core';
 import type { FileId } from '@haverstack/core';
-import type { StackBlobAdapter, BlobInfo } from '@haverstack/core/adapter';
-
-const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
-
-const assertFileId = (fileId: string): void => {
-  if (!SHA256_HEX_RE.test(fileId)) {
-    throw new StackBadRequestError(`Invalid fileId: expected 64-character lowercase hex string`);
-  }
-};
+import { FILE_ID_RE, trackWrites, assertFileId, blobWindow } from '@haverstack/core/adapter';
+import type { StackBlobAdapter, BlobInfo, BlobsQuery } from '@haverstack/core/adapter';
 
 export type DiskBlobAdapterOptions = {
   /** Directory to store blobs in. Created if it doesn't exist. */
@@ -33,6 +26,8 @@ export type DiskBlobAdapterOptions = {
 };
 
 export class DiskBlobAdapter implements StackBlobAdapter {
+  /** Moved by putBlob() and deleteBlob(); see head(). */
+  private readonly written = trackWrites(this);
   private readonly dir: string;
 
   constructor(options: DiskBlobAdapterOptions) {
@@ -73,14 +68,22 @@ export class DiskBlobAdapter implements StackBlobAdapter {
     }
   }
 
-  async listBlobs(): Promise<BlobInfo[]> {
+  /** Each page reads the whole directory, so a copy of n blobs costs about n² / page size. */
+  async listBlobs(query?: BlobsQuery): Promise<BlobInfo[]> {
     const entries = await readdir(this.dir);
-    const fileIds = entries.filter((name) => SHA256_HEX_RE.test(name));
+    const fileIds = blobWindow(
+      entries.filter((name) => FILE_ID_RE.test(name)),
+      query,
+    );
     return Promise.all(
       fileIds.map(async (fileId) => {
         const stats = await stat(join(this.dir, fileId));
         return { fileId, size: stats.size, modifiedAt: stats.mtime };
       }),
     );
+  }
+
+  async head(): Promise<string> {
+    return this.written.read();
   }
 }

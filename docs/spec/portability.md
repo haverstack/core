@@ -26,11 +26,24 @@ What it carries is everything the source holds:
 
 **The target is a store as its adapter creates one.** `create` receives that seed, as any new store is created from one, and what it returns is checked as `open()` checks a store: its owner must be the seed's, or the copy throws `OwnerMismatchError`, as `open()` does. The store must also hold nothing else yet — no other Record, no Type, no blob — on an adapter with `importRecord()` and `listBlobs()`. Anything else is a mistake in `create`, refused with `InvalidAdapterError` before anything is written; a store `Stack.open()` has already opened holds the [system Types](./data-model.md#system-types), so it is refused too.
 
-**The source is not written during the copy.** Records are read a page at a time and each one's history separately, so a write landing partway through yields a target matching no moment of the source. Nothing enforces this: a local source's only writer is the process that owns it, which is the one copying.
+**The target is one moment of the source, or the copy refuses.** Records and blobs are read a page at a time and each Record's history separately, so a write landing partway through would yield a target matching no moment at all. The copy reads the source's **head** before its first read and again after its last, and refuses with `StackConflictError` unless the two are equal. That is the whole rule, and it is the same whoever else writes to the source: a local process that owns its storage, or a host taking writes from members and apps.
+
+```ts
+head?(): Promise<string>;
+```
+
+**A head says where a store's writes stand.** **Equal heads mean nothing was written between them** — no Record, no Type, no blob — and that is the only promise a head makes. Once a head has moved, it never returns to an earlier value. It is opaque and compared only for equality, so each adapter keeps it however its storage allows: a local adapter counts its own writes, which are all of them since [one process owns its storage](./adapters.md#concurrency--storage-ownership), from a random epoch, so a store reopened never returns to a head it reported before. Every local adapter counts them one way, `trackWrites()` from `@haverstack/core/adapter`, which wraps each write method the adapter has. `combineAdapters()` and `LocalAdapter` answer with both halves' heads together, so a write to either moves it. `APIAdapter` reads it from [`GET /head`](./wire-format.md#head), which a server answers from its own adapter's head.
+
+**A write in flight is a write.** A head read while one is in flight matches no other head, since the write may land on either side of the read, and the head moves when it settles, refused or not. A copy refused for a write that changed nothing costs a retry; one accepted across a write that did would be a target matching no moment.
 
 **It is not atomic, and the target is the caller's.** Whatever `create` makes belongs to whoever passed `create`: on success it comes back open, theirs to close; on a failure part-way, the refusal included, `copyStack()` closes it, holding the only handle, and the caller removes it, having chosen where it lives. The copy is then run again into a new store, never resumed.
 
-**Both ends list everything they hold.** The source needs `listBlobs()` to be read in full, and the target needs it to be checked empty and to be read in full by a later copy in turn, so a copy never lands a stack where it cannot be copied out again. A source without it is refused with `InvalidAdapterError` before `create` is called. Every blob adapter has it. `APIAdapter` does not, because the wire has no endpoint that lists blobs, so a stack behind one cannot yet be copied out through it.
+**Both ends list everything they hold and report a head.** The source needs `listBlobs()` to be read in full and `head()` to be read as one moment, and the target needs `listBlobs()` to be checked empty and both to be copied from in turn, so a copy never lands a stack where it cannot be copied out again. A source without either is refused with `InvalidAdapterError` before `create` is called. Every local adapter has both, and `APIAdapter` has each when the server advertises it — [`GET /blobs`](./wire-format.md#blobs) and [`GET /head`](./wire-format.md#head), both served to the owner acting alone, the standing the rest of a copy already needs, since its query asks for `includeUnlisted`. A hosted stack's owner therefore copies it out with the same call as any other:
+
+```ts
+const host = await APIAdapter.open({ url, credential, ownerEntityId });
+const exported = await copyStack(host, portable('./my-stack.db'));
+```
 
 ## Writing history
 

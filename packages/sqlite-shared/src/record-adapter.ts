@@ -41,7 +41,9 @@ import type {
   MutateOptions,
   Reach,
   RecordHistory,
+  StoreWriters,
 } from '@haverstack/core/adapter';
+import { trackWrites } from '@haverstack/core/adapter';
 import type { SqlExecutor } from './executor.js';
 import { SharedSqlRecordLogic } from './record-logic.js';
 
@@ -74,11 +76,21 @@ export abstract class SharedSqlRecordAdapter implements StackRecordAdapter {
 
   readonly ownerEntityId: string;
 
+  /** Each engine holds its database for one process; see docs/spec/adapters.md § Concurrency & storage ownership. */
+  readonly writers: StoreWriters = 'owner';
+
   private readonly record: SharedSqlRecordLogic;
+
+  /** Moved by every write method; see head(). */
+  private readonly written = trackWrites(this);
 
   protected constructor(exec: SqlExecutor, config: ConfigContent) {
     this.record = new SharedSqlRecordLogic({ exec });
     this.ownerEntityId = config.ownerEntityId;
+  }
+
+  async head(): Promise<string> {
+    return this.written.read();
   }
 
   // -------------------------------------------------------

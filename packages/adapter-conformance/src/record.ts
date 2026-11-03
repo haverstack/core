@@ -32,7 +32,7 @@ import type {
   StackRecord,
 } from '@haverstack/core';
 import { ElementSetMovedError, inReach, resolveQuery } from '@haverstack/core/adapter';
-import type { Reach, StackRecordAdapter } from '@haverstack/core/adapter';
+import type { Reach, RecordWriteMethod, StackRecordAdapter } from '@haverstack/core/adapter';
 
 type PermissionElement = Extract<AuthorityAssociation, { kind: 'permission' }>;
 import { expectStackErrorCode } from './errors.js';
@@ -43,6 +43,9 @@ import {
   snapshotOf,
   uniqueId,
 } from './helpers.js';
+
+/** One call of a write method, against a record set up for it. */
+type Write = (record: StackRecord) => Promise<unknown> | undefined;
 
 export interface RecordAdapterConformanceOptions {
   /** Used in describe() titles, so pick something that reads well there. */
@@ -675,6 +678,89 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         const record = makeRecord();
         await adapter.createRecord(record);
         await expectStackErrorCode(adapter.restoreVersion(record.id, 999), 'not_found');
+      });
+    });
+
+    // -----------------------------------------------------------------
+    // Head — optional, so each test asks whether the adapter has head() at
+    // all. See docs/spec/portability.md § Copying a stack.
+    // -----------------------------------------------------------------
+    describe('head', () => {
+      test('stands still across reads', async () => {
+        if (!adapter.head) return;
+        const record = makeRecord();
+        await adapter.createRecord(record);
+        const before = await adapter.head();
+        await adapter.getRecord(record.id);
+        await adapter.listTypes();
+        await adapter.getJournal(record.id);
+        expect(await adapter.head()).toBe(before);
+      });
+
+      // Keyed by every write method on StackRecordAdapter: a method added
+      // to the interface fails typecheck here until it is listed, so every
+      // write is held to moving the head, however an adapter counts them.
+      const ATTACHMENT_FILE = 'a'.repeat(64);
+      const writes: Record<RecordWriteMethod, Write[]> = {
+        createRecord: [() => adapter.createRecord(makeRecord())],
+        importRecord: [() => adapter.importRecord?.(makeRecord(), { versions: [], journal: [] })],
+        patchContent: [(r) => adapter.patchContent(r.id, { title: 'moved' })],
+        setParent: [(r) => adapter.setParent(r.id, null)],
+        setUnlisted: [(r) => adapter.setUnlisted(r.id, true)],
+        editAssociations: [
+          (r) =>
+            adapter.editAssociations(r.id, [
+              { op: 'add', association: { kind: 'tag', label: 't' } },
+            ]),
+        ],
+        setAssociations: [(r) => adapter.setAssociations(r.id, [{ kind: 'tag', label: 't' }])],
+        editAccess: [
+          (r) =>
+            adapter.editAccess(r.id, [
+              { op: 'add', association: { kind: 'anyone', label: 'read' } },
+            ]),
+        ],
+        setAccess: [(r) => adapter.setAccess(r.id, [{ kind: 'anyone', label: 'read' }])],
+        deleteRecord: [
+          (r) => adapter.deleteRecord(r.id),
+          (r) => adapter.deleteRecord(r.id, { purge: true }),
+        ],
+        undeleteRecord: [(r) => adapter.undeleteRecord(r.id)],
+        restoreVersion: [(r) => adapter.restoreVersion(r.id, r.version)],
+        commitMigration: [
+          (r) => adapter.commitMigration(r.id, 'org.haverstack.conformance/note@2', { title: 'm' }),
+        ],
+        saveType: [() => adapter.saveType(conformanceType())],
+        deleteUnreferencedAttachmentRecords: [
+          () => adapter.deleteUnreferencedAttachmentRecords?.(ATTACHMENT_FILE, '_attachment'),
+        ],
+      };
+      const cases = Object.entries(writes).flatMap(([method, acts]) =>
+        acts.map(
+          (write, i) => [acts.length > 1 ? `${method} #${i + 1}` : method, method, write] as const,
+        ),
+      );
+
+      test.each(cases)('moves on %s', async (_name, method, write) => {
+        if (!adapter.head) return;
+        // Optional methods are held to this only where the adapter has them.
+        if (!adapter[method as RecordWriteMethod]) return;
+        // A record each write can act on: one past version to restore, soft
+        // deleted for the undelete, and an unreferenced attachment record.
+        const record = makeRecord();
+        await adapter.createRecord(record);
+        await adapter.patchContent(record.id, { title: 'v2' }, { snapshot: snapshotOf(record) });
+        if (method === 'undeleteRecord') await adapter.deleteRecord(record.id);
+        await adapter.createRecord(
+          makeRecord({
+            typeId: '_attachment@1',
+            content: { fileId: ATTACHMENT_FILE, mimeType: 'text/plain', size: 1 },
+          }),
+        );
+
+        const before = await adapter.head();
+        await write(record);
+        expect(await adapter.head()).not.toBe(before);
       });
     });
 
