@@ -7,12 +7,7 @@
  * the documented response. See that package for the fixture data itself.
  */
 import { describe, test, expect } from 'vitest';
-import {
-  APIAdapter,
-  APIAdapterAuthError,
-  APIAdapterCapabilityError,
-  APIAdapterHandshakeError,
-} from '../src/index.js';
+import { APIAdapter, APIAdapterAuthError, APIAdapterHandshakeError } from '../src/index.js';
 import {
   BASE_URL,
   DISCOVERY,
@@ -852,7 +847,7 @@ describe('install request fixtures', () => {
       const adapter = await openWithInstalls();
       mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
 
-      const attempt = adapter.requestInstall(fixture.requestBody!.manifest);
+      const attempt = adapter.requestInstall!(fixture.requestBody!.manifest);
       const body = fixture.responseBody!;
       if ('error' in body) {
         await expect(attempt).rejects.toBeInstanceOf(
@@ -875,13 +870,9 @@ describe('install request fixtures', () => {
     });
   }
 
-  test('a server advertising no install requests is refused locally', async () => {
+  test('has no requestInstall() when the server advertises no install requests', async () => {
     const adapter = await openAdapter();
-    const calls = mockFetch.mock.calls.length;
-    await expect(
-      adapter.requestInstall(installRequestFixtures[0]!.requestBody!.manifest),
-    ).rejects.toBeInstanceOf(APIAdapterCapabilityError);
-    expect(mockFetch.mock.calls.length).toBe(calls);
+    expect(adapter.requestInstall).toBeUndefined();
   });
 });
 

@@ -17,7 +17,7 @@ import { readFile, writeFile, unlink, readdir, stat, rename } from 'fs/promises'
 import { join } from 'path';
 import { StackNotFoundError } from '@haverstack/core';
 import type { FileId } from '@haverstack/core';
-import { FILE_ID_RE, WriteHead, assertFileId, blobWindow } from '@haverstack/core/adapter';
+import { FILE_ID_RE, trackWrites, assertFileId, blobWindow } from '@haverstack/core/adapter';
 import type { StackBlobAdapter, BlobInfo, BlobsQuery } from '@haverstack/core/adapter';
 
 export type DiskBlobAdapterOptions = {
@@ -26,8 +26,8 @@ export type DiskBlobAdapterOptions = {
 };
 
 export class DiskBlobAdapter implements StackBlobAdapter {
-  /** Moved by every putBlob() and deleteBlob(); see head(). */
-  private readonly written = new WriteHead();
+  /** Moved by putBlob() and deleteBlob(); see head(). */
+  private readonly written = trackWrites(this);
   private readonly dir: string;
 
   constructor(options: DiskBlobAdapterOptions) {
@@ -36,7 +36,6 @@ export class DiskBlobAdapter implements StackBlobAdapter {
   }
 
   async putBlob(data: Uint8Array): Promise<FileId> {
-    this.written.moved();
     const fileId = createHash('sha256').update(data).digest('hex');
     const finalPath = join(this.dir, fileId);
     if (!existsSync(finalPath)) {
@@ -61,7 +60,6 @@ export class DiskBlobAdapter implements StackBlobAdapter {
   }
 
   async deleteBlob(fileId: FileId): Promise<void> {
-    this.written.moved();
     assertFileId(fileId);
     try {
       await unlink(join(this.dir, fileId));

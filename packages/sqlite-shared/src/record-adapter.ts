@@ -43,7 +43,7 @@ import type {
   RecordHistory,
   StoreWriters,
 } from '@haverstack/core/adapter';
-import { WriteHead } from '@haverstack/core/adapter';
+import { trackWrites } from '@haverstack/core/adapter';
 import type { SqlExecutor } from './executor.js';
 import { SharedSqlRecordLogic } from './record-logic.js';
 
@@ -81,11 +81,11 @@ export abstract class SharedSqlRecordAdapter implements StackRecordAdapter {
 
   private readonly record: SharedSqlRecordLogic;
 
-  /** Moved by every statement that writes; see head(). */
-  private readonly written = new WriteHead();
+  /** Moved by every write method; see head(). */
+  private readonly written = trackWrites(this);
 
   protected constructor(exec: SqlExecutor, config: ConfigContent) {
-    this.record = new SharedSqlRecordLogic({ exec: countingWrites(exec, this.written) });
+    this.record = new SharedSqlRecordLogic({ exec });
     this.ownerEntityId = config.ownerEntityId;
   }
 
@@ -242,25 +242,4 @@ export abstract class SharedSqlRecordAdapter implements StackRecordAdapter {
 
   abstract flush(): Promise<void>;
   abstract close(): Promise<void>;
-}
-
-/**
- * Every write the shared logic makes is a `run()` or an `exec()`, so
- * counting there moves the head for every write method, present and
- * future, without each one remembering to.
- */
-function countingWrites(exec: SqlExecutor, written: WriteHead): SqlExecutor {
-  return {
-    exec: (sql) => {
-      written.moved();
-      exec.exec(sql);
-    },
-    run: (sql, params) => {
-      written.moved();
-      return exec.run(sql, params);
-    },
-    get: <T>(sql: string, params?: readonly unknown[]) => exec.get<T>(sql, params),
-    all: <T>(sql: string, params?: readonly unknown[]) => exec.all<T>(sql, params),
-    transaction: <T>(fn: () => T) => exec.transaction(fn),
-  };
 }

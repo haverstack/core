@@ -27,7 +27,7 @@ import {
 } from '@aws-sdk/client-s3';
 import { StackNotFoundError } from '@haverstack/core';
 import type { FileId } from '@haverstack/core';
-import { FILE_ID_RE, WriteHead, assertFileId } from '@haverstack/core/adapter';
+import { FILE_ID_RE, trackWrites, assertFileId } from '@haverstack/core/adapter';
 import type { StackBlobAdapter, BlobInfo, BlobsQuery } from '@haverstack/core/adapter';
 
 export type S3BlobAdapterOptions = {
@@ -54,8 +54,8 @@ export type S3BlobAdapterOptions = {
 };
 
 export class S3BlobAdapter implements StackBlobAdapter {
-  /** Moved by every putBlob() and deleteBlob(); see head(). */
-  private readonly written = new WriteHead();
+  /** Moved by putBlob() and deleteBlob(); see head(). */
+  private readonly written = trackWrites(this);
   private readonly client: S3Client;
   private readonly bucket: string;
 
@@ -82,7 +82,6 @@ export class S3BlobAdapter implements StackBlobAdapter {
   }
 
   async putBlob(data: Uint8Array): Promise<FileId> {
-    this.written.moved();
     const fileId = createHash('sha256').update(data).digest('hex');
     if (!(await this.objectExists(fileId))) {
       await this.client.send(
@@ -108,7 +107,6 @@ export class S3BlobAdapter implements StackBlobAdapter {
   }
 
   async deleteBlob(fileId: FileId): Promise<void> {
-    this.written.moved();
     assertFileId(fileId);
     // S3's DeleteObject is idempotent — a missing key is treated as
     // already-deleted rather than an error, so no non-fatal catch is

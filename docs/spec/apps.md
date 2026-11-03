@@ -146,6 +146,8 @@ Installing the same `appId` again undeletes the install and grants its requests 
 Install has two halves, and only one of them is the same on every server. **The app's half** — present a manifest, learn whether it was approved — is pinned by [`POST /installs`](./wire-format.md#installs), so an app installs itself the same way on any stack. **The owner's half** — review the plan, approve it — is a person deciding, through whatever the server offers (an admin page, a notification); it is not on the wire, and underneath it is `planInstall()` then `installApp()`.
 
 ```ts
+// Present only when the server advertises install requests.
+if (!adapter.requestInstall) throw new Error('This stack takes no install requests');
 const result = await adapter.requestInstall(manifest);
 // { status: 'pending' } until the owner approves this manifest for this key,
 // then { status: 'installed', install } once applying it would change nothing

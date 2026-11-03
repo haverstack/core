@@ -87,7 +87,6 @@ import type {
 import {
   APIAdapterError,
   APIAdapterAuthError,
-  APIAdapterCapabilityError,
   APIAdapterVersionError,
   APIAdapterHandshakeError,
   APIAdapterReauthError,
@@ -227,6 +226,15 @@ export class APIAdapter implements StackAdapter {
   ) => Promise<() => void>;
 
   /**
+   * Present this app's manifest for the owner to approve, as the key this
+   * adapter authenticated with. `pending` until the owner approves this
+   * manifest for this key; `installed`, with the `_install` record, once
+   * applying it would change nothing. Present only when discovery
+   * advertises install requests. See docs/spec/wire-format.md § Installs.
+   */
+  readonly requestInstall?: (manifest: AppManifest) => Promise<InstallRequestResult>;
+
+  /**
    * `GET /blobs`, present only when discovery advertises it: an optional
    * method's presence is the capability, so a copy or a collection tells
    * from it alone whether this store can be enumerated.
@@ -252,7 +260,7 @@ export class APIAdapter implements StackAdapter {
     /** The feed discovery advertised, if any. Absent means the server offers none. */
     private readonly changeFeed: DiscoveryChanges | undefined,
     /** Whether discovery advertised `POST /installs`. */
-    private readonly installRequests: boolean,
+    installRequests: boolean,
     /** Whether discovery advertised `GET /blobs`. */
     blobListing: boolean,
     /** Whether discovery advertised `GET /head`. */
@@ -273,6 +281,7 @@ export class APIAdapter implements StackAdapter {
         });
     }
     if (changeFeed) this.subscribeChanges = (opts, handler) => this.relayFeed(opts, handler);
+    if (installRequests) this.requestInstall = (manifest) => this.postInstall(manifest);
     if (reportsHead) {
       this.head = async () => (await this.requestBody<WireHeadResponse>('GET', '/head')).head;
     }
@@ -561,21 +570,8 @@ export class APIAdapter implements StackAdapter {
     return this.writeAspect('PUT', id, 'unlisted', { unlisted }, opts);
   }
 
-  /**
-   * Present this app's manifest for the owner to approve, as the key this
-   * adapter authenticated with. `pending` until the owner approves this
-   * manifest for this key; `installed`, with the `_install` record, once
-   * applying it would change nothing. Refused locally when the server does
-   * not advertise install requests. See docs/spec/wire-format.md § Installs.
-   */
-  async requestInstall(manifest: AppManifest): Promise<InstallRequestResult> {
-    if (!this.installRequests) {
-      throw new APIAdapterCapabilityError(
-        'installs',
-        `Server at "${this.baseUrl}" does not take install requests; ask its owner to install ` +
-          'the app another way.',
-      );
-    }
+  /** `POST /installs`, behind requestInstall(). */
+  private async postInstall(manifest: AppManifest): Promise<InstallRequestResult> {
     const raw = await this.request<WireInstallResponse>('POST', '/installs', { manifest });
     if (raw?.status === 'pending') return { status: 'pending' };
     if (raw?.status === 'installed' && raw.install) {

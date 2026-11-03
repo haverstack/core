@@ -1537,7 +1537,7 @@ export class Stack implements StackClient {
     };
   }
 
-  /** Whether changes reach this stack from elsewhere. */
+  /** Whether a relay can be opened; whether one is needed is `writers`. */
   private get relaysChanges(): boolean {
     return typeof this.adapter.subscribeChanges === 'function';
   }

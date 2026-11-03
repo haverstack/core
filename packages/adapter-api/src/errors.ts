@@ -34,25 +34,6 @@ export class APIAdapterConnectionError extends APIAdapterError {
 }
 
 /**
- * Thrown locally — before any request is sent — when a call needs an
- * endpoint discovery does not advertise: the change feed or install
- * requests, which sit beside `capabilities` rather than in it. A query the
- * server's `capabilities` cannot answer is `Stack`'s to refuse, with the
- * `StackBadRequestError` any adapter's would get. See
- * docs/spec/wire-format.md § Discovery.
- */
-export class APIAdapterCapabilityError extends APIAdapterError {
-  constructor(
-    /** `'changes'` names the feed and `'installs'` the install endpoint. */
-    public readonly capability: 'changes' | 'installs',
-    message: string,
-  ) {
-    super(message);
-    this.name = 'APIAdapterCapabilityError';
-  }
-}
-
-/**
  * Thrown by open() when the server's protocol major differs from this
  * client's, or when discovery reports no parseable version at all. Refusing
  * at the door beats the alternative: a major difference means some response

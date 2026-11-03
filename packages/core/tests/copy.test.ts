@@ -110,6 +110,15 @@ describe('copyStack', () => {
     await expect(copyStack(source, meanwhile)).rejects.toThrow(StackConflictError);
   });
 
+  // A write that began before the copy read its first head and lands
+  // partway through is still a write during the copy.
+  test('refuses a source with a write in flight when the copy began', async () => {
+    const source = await sourceWith(1);
+    const landing = source.putBlob(new Uint8Array([7, 7]));
+    const refused = expect(copyStack(source, create)).rejects.toThrow(StackConflictError);
+    await Promise.all([landing, refused]);
+  });
+
   test('a bare blob written during the copy moves the head too', async () => {
     const source = await sourceWith(1);
     const { create: meanwhile } = badStore(async (seed) => {

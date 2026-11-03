@@ -39,8 +39,8 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
     name: 'discovery-advertises-install-requests',
     description:
       'A server that takes install requests says so with installs.requests: true. Absent ' +
-      'means it does not, and a client refuses requestInstall() locally rather than learning ' +
-      'it as a 404 — see docs/spec/wire-format.md § Installs.',
+      'means it does not, and APIAdapter then has no requestInstall(), so a client learns it ' +
+      'from discovery rather than as a 404 — see docs/spec/wire-format.md § Installs.',
     method: 'GET',
     path: '/.well-known/stack',
     responseStatus: 200,

@@ -409,3 +409,37 @@ export type StackAdapter = StackRecordAdapter &
      */
     putAttachmentWithMetadata?(data: Uint8Array, opts: PutAttachmentOptions): Promise<StackRecord>;
   };
+
+/**
+ * Every StackAdapter member that never writes the store: it reads,
+ * describes, relays or manages it. Named so the members that do write are
+ * whatever the interface holds besides these, and a write method added to
+ * it is a write until classified otherwise.
+ */
+export type StoreReadMember =
+  | 'capabilities'
+  | 'ownerEntityId'
+  | 'writers'
+  | 'getRecord'
+  | 'queryRecords'
+  | 'queryReadable'
+  | 'getVersions'
+  | 'getVersion'
+  | 'getJournal'
+  | 'getType'
+  | 'listTypes'
+  | 'subscribeChanges'
+  | 'getBlob'
+  | 'listBlobs'
+  | 'head'
+  | 'flush'
+  | 'close';
+
+/** Every StackAdapter method that writes the store, and so moves its head. */
+export type StoreWriteMethod = Exclude<keyof StackAdapter, StoreReadMember>;
+
+/** The write methods of the record half. */
+export type RecordWriteMethod = Extract<StoreWriteMethod, keyof StackRecordAdapter>;
+
+/** The write methods of the blob half. */
+export type BlobWriteMethod = Extract<StoreWriteMethod, keyof StackBlobAdapter>;

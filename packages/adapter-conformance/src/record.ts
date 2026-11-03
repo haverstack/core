@@ -32,7 +32,7 @@ import type {
   StackRecord,
 } from '@haverstack/core';
 import { ElementSetMovedError, inReach, resolveQuery } from '@haverstack/core/adapter';
-import type { Reach, StackRecordAdapter } from '@haverstack/core/adapter';
+import type { Reach, RecordWriteMethod, StackRecordAdapter } from '@haverstack/core/adapter';
 
 type PermissionElement = Extract<AuthorityAssociation, { kind: 'permission' }>;
 import { expectStackErrorCode } from './errors.js';
@@ -43,27 +43,6 @@ import {
   snapshotOf,
   uniqueId,
 } from './helpers.js';
-
-/** Every StackRecordAdapter member that reads, describes or manages a store, never writing it. */
-type RecordReadMember =
-  | 'capabilities'
-  | 'ownerEntityId'
-  | 'writers'
-  | 'getRecord'
-  | 'queryRecords'
-  | 'queryReadable'
-  | 'getVersions'
-  | 'getVersion'
-  | 'getJournal'
-  | 'getType'
-  | 'listTypes'
-  | 'subscribeChanges'
-  | 'head'
-  | 'flush'
-  | 'close';
-
-/** Every method that writes: whatever the interface holds that is not a read. */
-type RecordWriteMethod = Exclude<keyof StackRecordAdapter, RecordReadMember>;
 
 /** One call of a write method, against a record set up for it. */
 type Write = (record: StackRecord) => Promise<unknown> | undefined;
@@ -719,8 +698,8 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
       });
 
       // Keyed by every write method on StackRecordAdapter: a method added
-      // to the interface fails typecheck here until it is listed, so an
-      // adapter moving its head by hand cannot miss one and still pass.
+      // to the interface fails typecheck here until it is listed, so every
+      // write is held to moving the head, however an adapter counts them.
       const ATTACHMENT_FILE = 'a'.repeat(64);
       const writes: Record<RecordWriteMethod, Write[]> = {
         createRecord: [() => adapter.createRecord(makeRecord())],

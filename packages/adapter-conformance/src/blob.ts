@@ -14,7 +14,7 @@
 import { describe, test, expect, beforeEach, afterEach } from 'vitest';
 import type { FileId } from '@haverstack/core';
 import { FILE_ID_RE } from '@haverstack/core/adapter';
-import type { StackBlobAdapter } from '@haverstack/core/adapter';
+import type { BlobWriteMethod, StackBlobAdapter } from '@haverstack/core/adapter';
 import { expectStackErrorCode } from './errors.js';
 
 async function sha256Hex(data: Uint8Array): Promise<string> {
@@ -23,12 +23,6 @@ async function sha256Hex(data: Uint8Array): Promise<string> {
     .map((b) => b.toString(16).padStart(2, '0'))
     .join('');
 }
-
-/** Every StackBlobAdapter method that reads or manages a store, never writing it. */
-type BlobReadMember = 'getBlob' | 'listBlobs' | 'head' | 'flush' | 'close';
-
-/** Every method that writes: whatever the interface holds that is not a read. */
-type BlobWriteMethod = Exclude<keyof StackBlobAdapter, BlobReadMember>;
 
 export interface BlobAdapterConformanceOptions {
   /** Used in describe() titles. */
