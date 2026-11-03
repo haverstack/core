@@ -12,10 +12,10 @@
  */
 
 import { describe, test, expect, beforeEach, afterEach } from 'vitest';
+import type { FileId } from '@haverstack/core';
+import { FILE_ID_RE } from '@haverstack/core/adapter';
 import type { StackBlobAdapter } from '@haverstack/core/adapter';
 import { expectStackErrorCode } from './errors.js';
-
-const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
 
 async function sha256Hex(data: Uint8Array): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', data as BufferSource);
@@ -23,6 +23,12 @@ async function sha256Hex(data: Uint8Array): Promise<string> {
     .map((b) => b.toString(16).padStart(2, '0'))
     .join('');
 }
+
+/** Every StackBlobAdapter method that reads or manages a store, never writing it. */
+type BlobReadMember = 'getBlob' | 'listBlobs' | 'head' | 'flush' | 'close';
+
+/** Every method that writes: whatever the interface holds that is not a read. */
+type BlobWriteMethod = Exclude<keyof StackBlobAdapter, BlobReadMember>;
 
 export interface BlobAdapterConformanceOptions {
   /** Used in describe() titles. */
@@ -66,7 +72,7 @@ export function runBlobAdapterConformance(options: BlobAdapterConformanceOptions
     test('putBlob returns the SHA-256 hex of the stored bytes', async () => {
       const data = new TextEncoder().encode('hello attachment');
       const fileId = await adapter.putBlob(data);
-      expect(fileId).toMatch(SHA256_HEX_RE);
+      expect(fileId).toMatch(FILE_ID_RE);
       expect(fileId).toBe(await sha256Hex(data));
     });
 
@@ -123,16 +129,29 @@ export function runBlobAdapterConformance(options: BlobAdapterConformanceOptions
     // Optional, so each test asks whether the adapter has head() at all.
     // See docs/spec/portability.md § Copying a stack.
     describe('head', () => {
-      test('stands still across reads, and moves on putBlob and deleteBlob', async () => {
+      test('stands still across reads', async () => {
         if (!adapter.head) return;
-        const start = await adapter.head();
-        const fileId = await adapter.putBlob(new TextEncoder().encode('moves the head'));
-        const afterPut = await adapter.head();
-        expect(afterPut).not.toBe(start);
+        const fileId = await adapter.putBlob(new TextEncoder().encode('read, not written'));
+        const before = await adapter.head();
         await adapter.getBlob(fileId);
-        expect(await adapter.head()).toBe(afterPut);
-        await adapter.deleteBlob(fileId);
-        expect(await adapter.head()).not.toBe(afterPut);
+        await adapter.listBlobs?.();
+        expect(await adapter.head()).toBe(before);
+      });
+
+      // Keyed by every write method on StackBlobAdapter, as the record
+      // suite's list is: a method added to the interface fails typecheck
+      // here until it is listed.
+      const writes: Record<BlobWriteMethod, (fileId: FileId) => Promise<unknown>> = {
+        putBlob: () => adapter.putBlob(new TextEncoder().encode('moves the head')),
+        deleteBlob: (fileId) => adapter.deleteBlob(fileId),
+      };
+
+      test.each(Object.entries(writes))('moves on %s', async (_method, write) => {
+        if (!adapter.head) return;
+        const fileId = await adapter.putBlob(new TextEncoder().encode('already here'));
+        const before = await adapter.head();
+        await write(fileId);
+        expect(await adapter.head()).not.toBe(before);
       });
     });
 

@@ -15,9 +15,10 @@ export const getHeadFixtures: ConformanceFixture<undefined, WireHeadResponse | W
     name: 'get-head-reports-where-writes-stand',
     description:
       'GET /head from the owner acting alone answers the head: opaque, compared only for ' +
-      'equality. It is the same string until anything is written — a Record, a Type or a ' +
-      'blob, by anyone — and a different one after, never a value an earlier head held, a ' +
-      'server restart included. A head minted per request, or from the clock, makes every ' +
+      'equality. Two equal heads mean nothing was written between them — no Record, Type or ' +
+      'blob, by anyone — and a head never repeats an earlier one, a server restart included. ' +
+      'It may move when nothing changed, at the cost of a retried copy; a head minted per ' +
+      'request, or from the clock, moves every time and so makes every ' +
       'copy from this server fail. See docs/spec/portability.md § Copying a stack.',
     method: 'GET',
     path: '/head',

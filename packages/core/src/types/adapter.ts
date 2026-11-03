@@ -316,9 +316,9 @@ export interface StackRecordAdapter {
   ): Promise<Unsubscribe>;
 
   /**
-   * Where this store's writes stand: the same string until something is
-   * written, and a different one after. Opaque, compared only for
-   * equality. Optional — a stack cannot be copied to or from a store
+   * Where this store's writes stand: two equal heads mean nothing was
+   * written between them, though a head may move when nothing changed.
+   * Opaque, compared only for equality. Optional — a stack cannot be copied to or from a store
    * without one. See docs/spec/portability.md § Copying a stack.
    */
   head?(): Promise<string>;
@@ -369,9 +369,9 @@ export interface StackBlobAdapter {
   listBlobs?(query?: BlobsQuery): Promise<BlobInfo[]>;
 
   /**
-   * Where this store's writes stand: the same string until something is
-   * written, and a different one after. Opaque, compared only for
-   * equality. Optional — a stack cannot be copied to or from a store
+   * Where this store's writes stand: two equal heads mean nothing was
+   * written between them, though a head may move when nothing changed.
+   * Opaque, compared only for equality. Optional — a stack cannot be copied to or from a store
    * without one. See docs/spec/portability.md § Copying a stack.
    */
   head?(): Promise<string>;

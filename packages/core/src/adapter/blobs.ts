@@ -19,9 +19,12 @@ export function blobWindow(fileIds: Iterable<FileId>, query: BlobsQuery = {}): F
   return limit === undefined ? after : after.slice(0, limit);
 }
 
-/** Refuses a name no blob could have, before a store is asked for it. */
-export function assertFileId(fileId: string): void {
+/**
+ * Refuses a name no blob could have, before a store or a page is asked for
+ * it. `label` names where it arrived, such as a request's `afterFileId`.
+ */
+export function assertFileId(fileId: string, label = 'fileId'): void {
   if (!FILE_ID_RE.test(fileId)) {
-    throw new StackBadRequestError('Invalid fileId: expected 64-character lowercase hex string');
+    throw new StackBadRequestError(`Invalid ${label}: expected 64-character lowercase hex string`);
   }
 }

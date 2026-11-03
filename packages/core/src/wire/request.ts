@@ -26,7 +26,7 @@
  */
 
 import { StackBadRequestError } from '../errors.js';
-import { FILE_ID_RE } from '../validate.js';
+import { assertFileId } from '../adapter/blobs.js';
 import { TARGET_KEYS } from '../associations/validation.js';
 import { NATIVE_SORT_FIELDS } from '../types/index.js';
 import type {
@@ -776,9 +776,7 @@ export function parseBlobsParams(url: URL): BlobsQuery {
   const query: BlobsQuery = {};
   const afterFileId = url.searchParams.get('afterFileId');
   if (afterFileId !== null) {
-    if (!FILE_ID_RE.test(afterFileId)) {
-      throw new StackBadRequestError(`Invalid afterFileId: "${afterFileId}"`);
-    }
+    assertFileId(afterFileId, 'afterFileId');
     query.afterFileId = afterFileId;
   }
   const limit = url.searchParams.get('limit');

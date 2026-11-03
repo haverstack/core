@@ -14,7 +14,7 @@ export class WriteHead {
   private readonly epoch = crypto.randomUUID();
   private writes = 0;
 
-  /** Call on every write, before it runs: a write that fails still may have moved something. */
+  /** Call on every write. Before it runs is safe: a head may move when nothing changed. */
   moved(): void {
     this.writes++;
   }

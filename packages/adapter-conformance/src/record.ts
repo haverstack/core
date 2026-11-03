@@ -44,6 +44,29 @@ import {
   uniqueId,
 } from './helpers.js';
 
+/** Every StackRecordAdapter member that reads, describes or manages a store, never writing it. */
+type RecordReadMember =
+  | 'capabilities'
+  | 'ownerEntityId'
+  | 'getRecord'
+  | 'queryRecords'
+  | 'queryReadable'
+  | 'getVersions'
+  | 'getVersion'
+  | 'getJournal'
+  | 'getType'
+  | 'listTypes'
+  | 'subscribeChanges'
+  | 'head'
+  | 'flush'
+  | 'close';
+
+/** Every method that writes: whatever the interface holds that is not a read. */
+type RecordWriteMethod = Exclude<keyof StackRecordAdapter, RecordReadMember>;
+
+/** One call of a write method, against a record set up for it. */
+type Write = (record: StackRecord) => Promise<unknown> | undefined;
+
 export interface RecordAdapterConformanceOptions {
   /** Used in describe() titles, so pick something that reads well there. */
   name: string;
@@ -694,49 +717,54 @@ export function runRecordAdapterConformance(options: RecordAdapterConformanceOpt
         expect(await adapter.head()).toBe(before);
       });
 
-      // Every write method on StackRecordAdapter, so an adapter that moves
-      // its head by hand cannot miss one and still pass.
+      // Keyed by every write method on StackRecordAdapter: a method added
+      // to the interface fails typecheck here until it is listed, so an
+      // adapter moving its head by hand cannot miss one and still pass.
       const ATTACHMENT_FILE = 'a'.repeat(64);
-      const writes: [string, (record: StackRecord) => Promise<unknown> | undefined][] = [
-        ['createRecord', () => adapter.createRecord(makeRecord())],
-        ['importRecord', () => adapter.importRecord?.(makeRecord(), { versions: [], journal: [] })],
-        ['patchContent', (r) => adapter.patchContent(r.id, { title: 'moved' })],
-        ['setParent', async (r) => adapter.setParent(r.id, null)],
-        ['setUnlisted', (r) => adapter.setUnlisted(r.id, true)],
-        [
-          'editAssociations',
+      const writes: Record<RecordWriteMethod, Write[]> = {
+        createRecord: [() => adapter.createRecord(makeRecord())],
+        importRecord: [() => adapter.importRecord?.(makeRecord(), { versions: [], journal: [] })],
+        patchContent: [(r) => adapter.patchContent(r.id, { title: 'moved' })],
+        setParent: [(r) => adapter.setParent(r.id, null)],
+        setUnlisted: [(r) => adapter.setUnlisted(r.id, true)],
+        editAssociations: [
           (r) =>
             adapter.editAssociations(r.id, [
               { op: 'add', association: { kind: 'tag', label: 't' } },
             ]),
         ],
-        ['setAssociations', (r) => adapter.setAssociations(r.id, [{ kind: 'tag', label: 't' }])],
-        [
-          'editAccess',
+        setAssociations: [(r) => adapter.setAssociations(r.id, [{ kind: 'tag', label: 't' }])],
+        editAccess: [
           (r) =>
             adapter.editAccess(r.id, [
               { op: 'add', association: { kind: 'anyone', label: 'read' } },
             ]),
         ],
-        ['setAccess', (r) => adapter.setAccess(r.id, [{ kind: 'anyone', label: 'read' }])],
-        ['deleteRecord', (r) => adapter.deleteRecord(r.id)],
-        ['deleteRecord with purge', (r) => adapter.deleteRecord(r.id, { purge: true })],
-        ['undeleteRecord', (r) => adapter.undeleteRecord(r.id)],
-        ['restoreVersion', (r) => adapter.restoreVersion(r.id, r.version)],
-        [
-          'commitMigration',
+        setAccess: [(r) => adapter.setAccess(r.id, [{ kind: 'anyone', label: 'read' }])],
+        deleteRecord: [
+          (r) => adapter.deleteRecord(r.id),
+          (r) => adapter.deleteRecord(r.id, { purge: true }),
+        ],
+        undeleteRecord: [(r) => adapter.undeleteRecord(r.id)],
+        restoreVersion: [(r) => adapter.restoreVersion(r.id, r.version)],
+        commitMigration: [
           (r) => adapter.commitMigration(r.id, 'org.haverstack.conformance/note@2', { title: 'm' }),
         ],
-        ['saveType', () => adapter.saveType(conformanceType())],
-        [
-          'deleteUnreferencedAttachmentRecords',
+        saveType: [() => adapter.saveType(conformanceType())],
+        deleteUnreferencedAttachmentRecords: [
           () => adapter.deleteUnreferencedAttachmentRecords?.(ATTACHMENT_FILE, '_attachment'),
         ],
-      ];
+      };
+      const cases = Object.entries(writes).flatMap(([method, acts]) =>
+        acts.map(
+          (write, i) => [acts.length > 1 ? `${method} #${i + 1}` : method, method, write] as const,
+        ),
+      );
 
-      test.each(writes)('moves on %s', async (method, write) => {
+      test.each(cases)('moves on %s', async (_name, method, write) => {
         if (!adapter.head) return;
-        if (!(adapter as unknown as Record<string, unknown>)[method.split(' ')[0]]) return;
+        // Optional methods are held to this only where the adapter has them.
+        if (!adapter[method as RecordWriteMethod]) return;
         // A record each write can act on: one past version to restore, soft
         // deleted for the undelete, and an unreferenced attachment record.
         const record = makeRecord();
