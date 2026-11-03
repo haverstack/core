@@ -18,7 +18,7 @@ import { associationIdentical } from '../associations/identity.js';
 import { validateRecordId } from './record-id.js';
 import { baseIdOf } from '../schema.js';
 import { findFirstMatch } from './reads.js';
-import { SYSTEM_TYPES } from '../types/index.js';
+import { EVERY_RECORD, SYSTEM_TYPES } from '../types/index.js';
 import type {
   Association,
   AttachmentContent,
@@ -104,8 +104,7 @@ async function checkBindingUnique(
     {
       filter: {
         baseId: family,
-        includeDeleted: true,
-        includeUnlisted: true,
+        ...EVERY_RECORD,
         ...(filtersContent(stack.capabilities) && { content: { [field]: value } }),
       },
     },

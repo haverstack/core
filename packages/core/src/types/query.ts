@@ -121,7 +121,27 @@ export type RecordFilter = {
    * docs/spec/unlisted.md.
    */
   includeUnlisted?: boolean;
+
+  /**
+   * With `includeDeleted`: soft-deleted records come back whole, `deletedAt`
+   * set, rather than as tombstones. Owner-only under `ScopedStack`; local
+   * adapters return records as stored, so they read past it. See
+   * docs/spec/versioning.md § The tombstone is literal.
+   */
+  wholeDeleted?: boolean;
 };
+
+/**
+ * Every Record a query can reach, each as stored: past deletion and listing,
+ * soft-deleted ones whole. The filter of every read made on the owner's
+ * standing, which an adapter that projects honors as a local one does.
+ * See docs/spec/versioning.md § The tombstone is literal.
+ */
+export const EVERY_RECORD = {
+  includeDeleted: true,
+  includeUnlisted: true,
+  wholeDeleted: true,
+} as const satisfies RecordFilter;
 
 /**
  * The Record columns every adapter stores natively, and can order by. The

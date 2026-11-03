@@ -168,6 +168,15 @@ Under `ScopedStack`, a soft-deleted Record is **presented as** a tombstone rathe
 
 **It applies to every requester, the owner included.** A Record's state is a property of the Record, not of who is asking — the owner wanting the content back reads history, or holds the unscoped `Stack`, which is trusted by definition and projects nothing.
 
+**`wholeDeleted` asks for the Record as stored, and only the owner acting alone may ask.** A query passing it beside `includeDeleted` gets each soft-deleted Record whole, `deletedAt` still set, where it would get the tombstone:
+
+```ts
+scoped.query({ filter: { includeDeleted: true, wholeDeleted: true } }); // owner acting alone: whole
+scoped.query({ filter: { includeDeleted: true, wholeDeleted: true } }); // anyone else: StackPermissionError
+```
+
+It is the reach of the unscoped `Stack` carried to a reader who holds the same standing elsewhere: the owner reading a stack they host, as a [copy](./portability.md#copying-a-stack) or one of `Stack`'s own sweeps does. It is opt-in, so a read that does not ask still shows a deleted Record as deleted, and an app listing deleted Records cannot present one as live by forgetting to check `deletedAt`. It is gated as [`includeUnlisted`](./unlisted.md#includeunlisted-is-owner-only) is, refused rather than dropped, and for the same reason: a whole Record discloses what the tombstone withholds, which no grant confers. Without `includeDeleted` it means nothing and is refused as a malformed query. Local adapters return every Record as stored, so they read past it; an adapter that projects, as `APIAdapter`'s server does, honors it. Every read `Stack` makes past deletion on the owner's standing passes it with `includeUnlisted`, so the unscoped `Stack` over `APIAdapter` reads what it reads over a local adapter.
+
 **History is deliberately exempt.** `getVersions()` still serves the content the tombstone withholds, because reviewing what a Record held is how a caller decides whether to restore it. "Its current state is gone" is the whole of the claim; the history sentence beside it is the other half of the same rule, not an oversight.
 
 ### Mutations are refused, not applied to a tombstone

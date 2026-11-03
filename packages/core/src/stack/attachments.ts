@@ -12,7 +12,7 @@
 
 import { StackConflictError, StackNotFoundError } from '../errors.js';
 import { queryAllPages } from './reads.js';
-import { SYSTEM_TYPES } from '../types/index.js';
+import { EVERY_RECORD, SYSTEM_TYPES } from '../types/index.js';
 import type {
   ActorOptions,
   AttachmentContent,
@@ -47,7 +47,7 @@ export function uploadContent(
  */
 async function isFileReferenced(stack: Stack, fileId: FileId): Promise<boolean> {
   const { records } = await stack.query({
-    filter: { referencesFileId: fileId, includeDeleted: true, includeUnlisted: true },
+    filter: { referencesFileId: fileId, ...EVERY_RECORD },
     limit: 1,
   });
   return records.length > 0;
@@ -88,7 +88,7 @@ export async function collectAttachmentGarbage(
   const now = Date.now();
 
   const metaRecords = await queryAllPages((q) => stack.query(q), {
-    filter: { baseId: SYSTEM_TYPES.ATTACHMENT, includeDeleted: true, includeUnlisted: true },
+    filter: { baseId: SYSTEM_TYPES.ATTACHMENT, ...EVERY_RECORD },
   });
 
   // Newest metadata record's createdAt per fileId, and its size (constant

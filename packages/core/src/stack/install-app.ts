@@ -34,7 +34,7 @@ import {
 } from '../install.js';
 import { baseIdOf, diffSchemas, hashSchema, parseTypeId } from '../schema.js';
 import { findAppCardByDid, loadInstallRecords, queryAllPages } from './reads.js';
-import { SYSTEM_TYPES } from '../types/index.js';
+import { EVERY_RECORD, SYSTEM_TYPES } from '../types/index.js';
 import {
   validateSchemaFieldNames,
   validateSchemaReservedNames,
@@ -326,7 +326,7 @@ async function reconcileInstallGrants(stack: Stack, install: StackRecord): Promi
   const appKeys = new Set(
     (
       await queryAllPages((q) => stack.query(q), {
-        filter: { baseId: SYSTEM_TYPES.APP, includeDeleted: true, includeUnlisted: true },
+        filter: { baseId: SYSTEM_TYPES.APP, ...EVERY_RECORD },
       })
     )
       .map((r) => r.content as AppContent)

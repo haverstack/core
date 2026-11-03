@@ -151,6 +151,7 @@ describe('GET /records round trip', () => {
     ['search', { filter: { search: 'quarterly report' } }],
     ['includeDeleted', { filter: { includeDeleted: true } }],
     ['includeUnlisted', { filter: { includeUnlisted: true } }],
+    ['wholeDeleted', { filter: { includeDeleted: true, wholeDeleted: true } }],
     ['relatedTo label alone', { filter: { relatedTo: { label: 'attachment' } } }],
     [
       'relatedTo record target',

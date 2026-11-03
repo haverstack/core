@@ -6441,6 +6441,49 @@ describe('ScopedStack — each write verb passes exactly one gate', () => {
     expect(record!.content).toEqual({});
     expect(record!.associations).toBeUndefined();
   });
+
+  // The owner's standing reads past the tombstone only when asked, so an
+  // ordinary read still shows a deleted record as deleted. See
+  // docs/spec/versioning.md § The tombstone is literal.
+  describe('wholeDeleted', () => {
+    const WHOLE = { filter: { includeDeleted: true, wholeDeleted: true } };
+
+    beforeEach(async () => {
+      await stack.editAssociations(note.id, [
+        { op: 'add', association: { kind: 'tag', label: 'kept' } },
+      ]);
+      await stack.delete(note.id);
+    });
+
+    test('reads a soft-deleted record whole for the owner acting alone', async () => {
+      const { records } = await stack.asEntity(OWNER).query(WHOLE);
+      const found = records.find((r) => r.id === note.id)!;
+      expect(found).toEqual(await stack.get(note.id, { includeDeleted: true }));
+      expect(found.deletedAt).toBeInstanceOf(Date);
+      expect(found.content).toEqual({ text: 'hello' });
+    });
+
+    test('leaves the tombstone in place when not asked', async () => {
+      const { records } = await stack.asEntity(OWNER).query({ filter: { includeDeleted: true } });
+      expect(records.find((r) => r.id === note.id)!.content).toEqual({});
+    });
+
+    test('is refused to anyone but the owner acting alone', async () => {
+      for (const scoped of [
+        stack.asEntity(MEMBER),
+        stack.asEntity(null),
+        stack.asActor({ principalId: 'did:key:zApp', subjectId: OWNER }),
+      ]) {
+        await expect(scoped.query(WHOLE)).rejects.toThrow(StackPermissionError);
+      }
+    });
+
+    test('means nothing without includeDeleted, and is refused as malformed', async () => {
+      await expect(stack.asEntity(OWNER).query({ filter: { wholeDeleted: true } })).rejects.toThrow(
+        StackBadRequestError,
+      );
+    });
+  });
 });
 
 describe('ScopedStack writes — delegated principals', () => {

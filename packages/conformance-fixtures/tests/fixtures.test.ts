@@ -49,16 +49,31 @@ const TOMBSTONE_KEYS = new Set([
   'content',
 ]);
 
+/** Whether a fixture's request asks for soft-deleted records whole. */
+function asksWholeDeleted(value: object): boolean {
+  const { path, requestBody } = value as { path?: unknown; requestBody?: unknown };
+  if (typeof path === 'string' && /[?&]wholeDeleted=true\b/.test(path)) return true;
+  const filter = (requestBody as { filter?: { wholeDeleted?: unknown } } | undefined)?.filter;
+  return filter?.wholeDeleted === true;
+}
+
 /**
  * Every object a fixture shows a server sending that carries `deletedAt` —
  * response bodies and feed frames alike, at any depth. A request body is
- * what a client sends, so it is the one payload left out.
+ * what a client sends, so it is the one payload left out. `whole` picks the
+ * responses to requests that asked for wholeDeleted, or every other one.
  */
-function servedDeleted(value: unknown, path: string, into: [string, object][]): [string, object][] {
+function servedDeleted(
+  value: unknown,
+  path: string,
+  into: [string, object][],
+  whole = false,
+): [string, object][] {
   if (typeof value !== 'object' || value === null) return into;
+  if ('responseStatus' in value && asksWholeDeleted(value) !== whole) return into;
   if (!Array.isArray(value) && 'deletedAt' in value) into.push([path, value]);
   for (const [key, child] of Object.entries(value)) {
-    if (key !== 'requestBody') servedDeleted(child, `${path}.${key}`, into);
+    if (key !== 'requestBody') servedDeleted(child, `${path}.${key}`, into, whole);
   }
   return into;
 }
@@ -112,6 +127,17 @@ describe('every fixture group', () => {
       ).toEqual([]);
     }
     expect(tombstones.length).toBeGreaterThan(0);
+  });
+
+  // The one exception, asked for by name: see docs/spec/versioning.md
+  // § The tombstone is literal.
+  it('serves a soft-deleted record whole only to a request that asks for wholeDeleted', () => {
+    const groups = exportedArrays.filter(([name]) => name !== 'allConformanceFixtures');
+    const whole = groups.flatMap(([name, group]) => servedDeleted(group, name, [], true));
+    for (const [path, record] of whole) {
+      expect((record as { content?: unknown }).content, path).not.toEqual({});
+    }
+    expect(whole.length).toBeGreaterThan(0);
   });
 
   it('describes what each fixture pins', () => {

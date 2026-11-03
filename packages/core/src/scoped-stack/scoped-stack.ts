@@ -480,8 +480,12 @@ export class ScopedStack implements StackClient {
     if (query.filter?.includeUnlisted && !this.#authority.ownerActingAlone) {
       throw new StackPermissionError('includeUnlisted is owner-only');
     }
+    if (query.filter?.wholeDeleted && !this.#authority.ownerActingAlone) {
+      throw new StackPermissionError('wholeDeleted is owner-only');
+    }
     const reach = await this.#authority.snapshot().reach('read');
     const page = await this.queryReadable(split, reach);
+    if (query.filter?.wholeDeleted) return page;
     // Projected here as well as in get(), or `includeDeleted` would be a
     // strictly better read channel than the fetch-by-ID it is supposed to
     // match.

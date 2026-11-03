@@ -54,6 +54,18 @@ describe('parseQueryParams', () => {
     expect(() => parseQueryParams(url('?includeUnlisted=yes'))).toThrow(StackBadRequestError);
   });
 
+  test('wholeDeleted takes only "true" or "false", as a param and a body key', () => {
+    expect(parseQueryParams(url('?includeDeleted=true&wholeDeleted=true')).filter).toEqual({
+      includeDeleted: true,
+      wholeDeleted: true,
+    });
+    expect(() => parseQueryParams(url('?wholeDeleted=1'))).toThrow(StackBadRequestError);
+    expect(parseQueryBody({ filter: { includeDeleted: true, wholeDeleted: true } }).filter).toEqual(
+      { includeDeleted: true, wholeDeleted: true },
+    );
+    expect(() => parseQueryBody({ filter: { wholeDeleted: 'yes' } })).toThrow(StackBadRequestError);
+  });
+
   test('an unrecognized param is refused rather than ignored', () => {
     expect(() => parseQueryParams(url('?entityId=did:key:x'))).toThrow(/Unknown query param/);
   });

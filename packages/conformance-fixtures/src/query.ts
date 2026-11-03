@@ -1,4 +1,4 @@
-import type { WireQueryResponse } from '@haverstack/wire-types';
+import type { WireError, WireQueryResponse } from '@haverstack/wire-types';
 import type { ConformanceFixture } from './types.js';
 
 // What these pin is the *envelope*, not the filtering: `cursor` — not
@@ -469,5 +469,72 @@ export const queryRecordsFixtures: ConformanceFixture<
     path: '/records?referencesFileId=933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d',
     responseStatus: 200,
     responseBody: { records: [], cursor: null },
+  },
+];
+
+// wholeDeleted reads a soft-deleted Record as stored rather than as its
+// tombstone, which is what lets the owner read a hosted stack in full. It
+// is served to the owner acting alone, as includeUnlisted is
+// (docs/spec/versioning.md § The tombstone is literal).
+
+const WHOLE_DELETED_OWNER_ONLY: WireError = {
+  error: { code: 'permission', message: 'wholeDeleted is owner-only' },
+};
+
+export const queryWholeDeletedFixtures: ConformanceFixture<
+  Record<string, unknown>,
+  WireQueryResponse | WireError
+>[] = [
+  {
+    name: 'query-whole-deleted-reads-a-soft-deleted-record-as-stored',
+    description:
+      'POST /records/query from the owner acting alone, with includeDeleted and wholeDeleted, ' +
+      'answers a soft-deleted Record whole: its content, associations and authorship as ' +
+      'stored, deletedAt still set. Without wholeDeleted the same Record is its tombstone. ' +
+      'Assumes the owner soft-deleted "1hk153x00020" after tagging it.',
+    method: 'POST',
+    path: '/records/query',
+    requestBody: {
+      filter: { typeId: 'com.example/note@1', includeDeleted: true, wholeDeleted: true },
+    },
+    responseStatus: 200,
+    responseBody: {
+      records: [
+        {
+          id: '1hk153x00020',
+          typeId: 'com.example/note@1',
+          createdAt: '2024-01-01T00:00:00.000Z',
+          updatedAt: '2024-01-02T00:00:00.000Z',
+          createdBy: { subjectId: 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK' },
+          content: { title: 'Deleted, not gone' },
+          associations: [{ kind: 'tag', label: 'kept' }],
+          version: 2,
+          deletedAt: '2024-01-02T00:00:00.000Z',
+        },
+      ],
+      cursor: null,
+    },
+  },
+  {
+    name: 'query-whole-deleted-non-owner',
+    description:
+      'wholeDeleted from anyone but the owner answers 403 / code "permission", whatever ' +
+      'they may read: a whole Record discloses what its tombstone withholds, and no grant ' +
+      'confers that. Refused rather than dropped, as includeUnlisted is.',
+    method: 'GET',
+    path: '/records?includeDeleted=true&wholeDeleted=true',
+    responseStatus: 403,
+    responseBody: WHOLE_DELETED_OWNER_ONLY,
+  },
+  {
+    name: 'query-whole-deleted-delegated-session',
+    description:
+      'wholeDeleted from a delegated session, even one whose subject is the owner, answers ' +
+      '403 / code "permission": the owner acting alone is the gate.',
+    method: 'POST',
+    path: '/records/query',
+    requestBody: { filter: { includeDeleted: true, wholeDeleted: true } },
+    responseStatus: 403,
+    responseBody: WHOLE_DELETED_OWNER_ONLY,
   },
 ];
