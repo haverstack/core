@@ -41,6 +41,7 @@ import type {
   MutateOptions,
   Reach,
   RecordHistory,
+  StoreWriters,
 } from '@haverstack/core/adapter';
 import { WriteHead } from '@haverstack/core/adapter';
 import type { SqlExecutor } from './executor.js';
@@ -74,6 +75,9 @@ export abstract class SharedSqlRecordAdapter implements StackRecordAdapter {
   readonly capabilities: StackCapabilities = SQLITE_RECORD_CAPABILITIES;
 
   readonly ownerEntityId: string;
+
+  /** Each engine holds its database for one process; see docs/spec/adapters.md § Concurrency & storage ownership. */
+  readonly writers: StoreWriters = 'owner';
 
   private readonly record: SharedSqlRecordLogic;
 

@@ -213,6 +213,19 @@ export class APIAdapter implements StackAdapter {
   readonly capabilities: StackCapabilities;
   readonly ownerEntityId: string;
 
+  /** Members and apps write a hosted store too. */
+  readonly writers = 'shared';
+
+  /**
+   * `GET /changes`, present only when discovery advertises a feed. Without
+   * one, Stack refuses subscribe() rather than serve this client's own
+   * writes as the whole. See docs/spec/change-feed.md.
+   */
+  readonly subscribeChanges?: (
+    opts: SubscribeOptions,
+    handler: (change: RecordChange) => void,
+  ) => Promise<() => void>;
+
   /**
    * `GET /blobs`, present only when discovery advertises it: an optional
    * method's presence is the capability, so a copy or a collection tells
@@ -259,6 +272,7 @@ export class APIAdapter implements StackAdapter {
           advances: (next, prev) => next > prev,
         });
     }
+    if (changeFeed) this.subscribeChanges = (opts, handler) => this.relayFeed(opts, handler);
     if (reportsHead) {
       this.head = async () => (await this.requestBody<WireHeadResponse>('GET', '/head')).head;
     }
@@ -873,21 +887,10 @@ export class APIAdapter implements StackAdapter {
    * could not close, which reconciling by query repairs.
    * See docs/spec/change-feed.md.
    */
-  async subscribeChanges(
+  private async relayFeed(
     opts: SubscribeOptions,
     handler: (change: RecordChange) => void,
   ): Promise<() => void> {
-    // Refused locally, before any request: a server advertising no feed has
-    // no endpoint to answer, and learning that as a 404 partway through a
-    // connection is the failure discovery exists to prevent.
-    if (!this.changeFeed) {
-      throw new APIAdapterCapabilityError(
-        'changes',
-        `Server at "${this.baseUrl}" advertises no change feed. Poll query() for changes, or ` +
-          'connect to a server that offers one.',
-      );
-    }
-
     // A resume cursor becomes a Last-Event-ID header, so it must stay
     // inside the framable charset for the same reason a frame's own id
     // does: an out-of-charset value would span the header line. Refused

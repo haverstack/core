@@ -157,6 +157,15 @@ export interface StackRecordAdapter {
   /** DID of the stack owner. Set during adapter initialization. */
   readonly ownerEntityId: EntityId;
 
+  /**
+   * Who writes this store: `'owner'` when this process is its only writer,
+   * `'shared'` when others write it too, as behind a server. Stack reads it
+   * to know whether a stream of its own writes is complete. A fact about
+   * the store, not a capability, so every adapter states it.
+   * See docs/spec/events.md § Where events come from.
+   */
+  readonly writers: StoreWriters;
+
   // Records
   /**
    * Throws StackConflictError if `record.id` already exists — never a
@@ -327,6 +336,9 @@ export interface StackRecordAdapter {
   flush?(): Promise<void>;
   close?(): Promise<void>;
 }
+
+/** Who writes a store. See StackRecordAdapter.writers. */
+export type StoreWriters = 'owner' | 'shared';
 
 /** One stored blob, as reported by StackBlobAdapter.listBlobs(). */
 export type BlobInfo = {

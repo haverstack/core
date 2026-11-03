@@ -17,6 +17,7 @@ export type {
   StackBlobAdapter,
   BlobInfo,
   BlobsQuery,
+  StoreWriters,
   SnapshotOptions,
   JournalEntryInput,
   JournalOptions,

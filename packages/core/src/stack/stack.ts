@@ -373,8 +373,8 @@ export class Stack implements StackClient {
 
   /**
    * A scoped view needs a stack that owns its storage: one whose adapter
-   * queries within a reach and relays no changes from elsewhere. A
-   * server-backed stack is scoped by the session that opened it instead.
+   * queries within a reach and is its store's only writer. A server-backed
+   * stack is scoped by the session that opened it instead.
    * See docs/spec/access-control.md § Enforcement: Stack.asEntity().
    */
   private scope(principalId: EntityId | null, subjectId: EntityId | null): ScopedStack {
@@ -387,10 +387,11 @@ export class Stack implements StackClient {
           'server-backed stack is scoped by opening it with the session you mean.',
       );
     }
-    if (this.relaysChanges) {
+    if (this.adapter.writers === 'shared') {
       throw new ScopeUnavailableError(
-        'This stack cannot be scoped: it relays changes made elsewhere, whose frames were ' +
-          'scoped by the session that opened the feed. Open it with the session you mean.',
+        'This stack cannot be scoped: others write its store, and their changes reach it ' +
+          'scoped by the session that opened the feed, if at all. Open it with the session ' +
+          'you mean.',
       );
     }
     return new ScopedStack(scopeToken, {
@@ -1482,6 +1483,14 @@ export class Stack implements StackClient {
     opts: SubscribeOptions = {},
   ): Promise<Unsubscribe> {
     this.assertOpen();
+    if (this.adapter.writers === 'shared' && !this.relaysChanges) {
+      throw new StackBadRequestError(
+        'subscribe() cannot be served: others write this stack, and its adapter has no ' +
+          "subscribeChanges() to relay their changes, so a stream of this client's own writes " +
+          'would pass for the whole. Connect to a server that advertises a change feed, or ' +
+          'poll query().',
+      );
+    }
     assertSinceUsable(opts.since, this.relaysChanges);
     assertValidBaseIdFilter(opts.filter);
     const unsubscribe = this.changes.subscribe(handler, opts);

@@ -49,6 +49,7 @@ function makeRecordAdapter(overrides: Partial<StackRecordAdapter> = {}): StackRe
   return {
     capabilities,
     ownerEntityId: 'owner-123',
+    writers: 'owner',
     createRecord: async (r) => r,
     getRecord: async () => null,
     patchContent: async () => {

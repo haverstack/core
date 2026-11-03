@@ -48,6 +48,7 @@ import {
 type RecordReadMember =
   | 'capabilities'
   | 'ownerEntityId'
+  | 'writers'
   | 'getRecord'
   | 'queryRecords'
   | 'queryReadable'

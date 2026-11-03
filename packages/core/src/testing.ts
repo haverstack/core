@@ -35,6 +35,7 @@ import type {
   StackCapabilities,
   BlobInfo,
   BlobsQuery,
+  StoreWriters,
   Reach,
   RecordHistory,
   StoreSeed,
@@ -99,6 +100,7 @@ export class MemoryAdapter implements StackAdapter {
   };
 
   readonly ownerEntityId: string;
+  readonly writers: StoreWriters = 'owner';
 
   /** Moved by every write below; see head(). */
   private readonly written = new WriteHead();

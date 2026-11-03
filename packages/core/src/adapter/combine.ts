@@ -37,6 +37,11 @@ export function combineAdapters(parts: {
     get ownerEntityId() {
       return parts.record.ownerEntityId;
     },
+    // The record half's: change events report Records, so it is the half
+    // whose writers decide whether a stream of this process's own is whole.
+    get writers() {
+      return parts.record.writers;
+    },
 
     createRecord: (r, opts) => parts.record.createRecord(r, opts),
     getRecord: (id) => parts.record.getRecord(id),
@@ -78,10 +83,8 @@ export function combineAdapters(parts: {
       queryReadable: (q: AdapterQuery, reach: Reach) => parts.record.queryReadable!(q, reach),
     }),
 
-    // Forwarded on the same terms, and it decides more than it looks:
-    // Stack.relaysChanges reads its presence, so dropping it here would
-    // leave a combined stack quietly emitting only its own writes while a
-    // remote record backend's feed went unread.
+    // Forwarded on the same terms: dropping it would leave a shared record
+    // backend's feed unread, and Stack would refuse to subscribe at all.
     ...(parts.record.subscribeChanges && {
       subscribeChanges: (opts: SubscribeOptions, handler: (change: RecordChange) => void) =>
         parts.record.subscribeChanges!(opts, handler),

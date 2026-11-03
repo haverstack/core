@@ -44,6 +44,7 @@ import type {
   MutateOptions,
   Reach,
   RecordHistory,
+  StoreWriters,
 } from '@haverstack/core/adapter';
 import { combinedHead } from '@haverstack/core/adapter';
 import type { TokenSession, TokenInfo } from '@haverstack/core/wire';
@@ -128,6 +129,10 @@ export class LocalAdapter implements StackAdapter {
 
   get ownerEntityId(): string {
     return this.record.ownerEntityId;
+  }
+
+  get writers(): StoreWriters {
+    return this.record.writers;
   }
 
   async createRecord(record: StackRecord, opts?: JournalOptions): Promise<StackRecord> {

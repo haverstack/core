@@ -8,7 +8,7 @@ import { describe, test, expect, beforeEach, vi } from 'vitest';
 import { Stack } from '../src/stack/stack.js';
 import { StackBadRequestError, ScopeUnavailableError } from '../src/errors.js';
 import { MemoryAdapter, type MemoryAdapterOpenOptions } from '../src/testing.js';
-import type { RecordChange, SubscribeOptions } from '../src/types/index.js';
+import type { RecordChange, StoreWriters, SubscribeOptions } from '../src/types/index.js';
 
 const NOTE = 'com.example.test/note@1';
 const OWNER = 'owner-123';
@@ -23,6 +23,9 @@ class RelayingMemoryAdapter extends MemoryAdapter {
   static override async open(opts: MemoryAdapterOpenOptions): Promise<RelayingMemoryAdapter> {
     return new RelayingMemoryAdapter(opts);
   }
+  /** Others write the store behind it, which is why it relays. */
+  override readonly writers: StoreWriters = 'shared';
+
   readonly relays: {
     opts: SubscribeOptions;
     push: (change: RecordChange) => void;
@@ -226,13 +229,37 @@ describe('a stack whose adapter does not relay', () => {
   });
 });
 
+// Others write the store, and nothing relays their changes: a stream of
+// this process's own writes would pass for the whole. See
+// docs/spec/events.md § Where events come from.
+describe('a stack others write, with no relay', () => {
+  class SharedMemoryAdapter extends MemoryAdapter {
+    static override async open(opts: MemoryAdapterOpenOptions): Promise<SharedMemoryAdapter> {
+      return new SharedMemoryAdapter(opts);
+    }
+    override readonly writers: StoreWriters = 'shared';
+  }
+
+  test('refuses subscribe()', async () => {
+    const shared = await Stack.open(await SharedMemoryAdapter.open({ ownerEntityId: OWNER }));
+    await expect(shared.subscribe(() => {})).rejects.toBeInstanceOf(StackBadRequestError);
+    await shared.close();
+  });
+
+  test('refuses a scoped view', async () => {
+    const shared = await Stack.open(await SharedMemoryAdapter.open({ ownerEntityId: OWNER }));
+    expect(() => shared.asEntity(OWNER)).toThrow(ScopeUnavailableError);
+    await shared.close();
+  });
+});
+
 describe('a scoped view of a stack that relays', () => {
   // A relayed frame was scoped by the session that opened the feed, so no
   // narrower scope can be kept over it. See docs/spec/access-control.md
   // § Enforcement: Stack.asEntity().
   test('is refused up front, for every requester', () => {
     expect(() => stack.asEntity(REMOTE_EDITOR)).toThrow(ScopeUnavailableError);
-    expect(() => stack.asEntity(REMOTE_EDITOR)).toThrow(/relays changes made elsewhere/);
+    expect(() => stack.asEntity(REMOTE_EDITOR)).toThrow(/others write its store/);
     expect(() => stack.asEntity(OWNER)).toThrow(ScopeUnavailableError);
   });
 
