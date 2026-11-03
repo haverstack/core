@@ -6,8 +6,11 @@
  * the adapter under test creates. Every Record, version snapshot, journal
  * entry, Type and blob must arrive as it was. The source is the adapter
  * under test too unless `source` names another engine, so a suite can hold
- * an adapter to the read half, the write half, or both. Point it at a full
- * StackAdapter that implements importRecord(). See docs/spec/portability.md.
+ * an adapter to the read half, the write half, or both. `readThrough` reads
+ * the source through another adapter, such as a server's store read over
+ * the wire, and the copy is held to what that store itself holds. Point it
+ * at a full StackAdapter that implements importRecord().
+ * See docs/spec/portability.md.
  */
 
 import { describe, test, expect } from 'vitest';
@@ -23,7 +26,12 @@ export interface CopyConformanceOptions {
   create: CreateStore;
   /** Create the store the stack is written into and copied from. Defaults to `create`. */
   source?: CreateStore;
-  /** Release what either factory acquired. Called on every store they made. */
+  /**
+   * The adapter the copy reads `source`'s store through, given that store.
+   * Defaults to the store itself.
+   */
+  readThrough?: (store: StackAdapter) => Promise<StackAdapter>;
+  /** Release what was acquired. Called on every adapter the options made. */
   close?: (adapter: StackAdapter) => Promise<void> | void;
 }
 
@@ -123,7 +131,7 @@ async function writePast(adapter: StackAdapter): Promise<FileId[]> {
 }
 
 export function runCopyConformance(options: CopyConformanceOptions): void {
-  const { name, create, source: createSource = create, close } = options;
+  const { name, create, source: createSource = create, readThrough, close } = options;
 
   describe(`stack copy conformance: ${name}`, () => {
     test('implements importRecord()', async () => {
@@ -137,15 +145,18 @@ export function runCopyConformance(options: CopyConformanceOptions): void {
 
     test('a copy carries every Record, version, journal entry, Type and blob unchanged', async () => {
       const source = await createSource(SEED);
+      let reader: StackAdapter | undefined;
       let target: StackAdapter | undefined;
       try {
         const fileIds = await writePast(source);
         const expected = await contentsOf(source, fileIds);
         expect(expected.records.length).toBeGreaterThan(3);
 
-        target = await copyStack(source, create);
+        reader = readThrough ? await readThrough(source) : source;
+        target = await copyStack(reader, create);
         expect(await contentsOf(target, fileIds)).toEqual(expected);
       } finally {
+        if (reader && reader !== source) await close?.(reader);
         await close?.(source);
         if (target) await close?.(target);
       }
