@@ -1,5 +1,22 @@
 # @haverstack/blob-adapter-disk
 
+## 0.43.0
+
+### Minor Changes
+
+- [#482](https://github.com/haverstack/core/pull/482) [`fae64b4`](https://github.com/haverstack/core/commit/fae64b480a193eb71fbf7ebb56d3da11d56f9f2f) Thanks [@cuibonobo](https://github.com/cuibonobo)! - A hosted stack's owner can copy it out over the wire with `copyStack(host, create)`.
+  - `head()`, an optional adapter method, says where a store's writes stand: the same string until anything is written, a different one after. A head read while a write is in flight matches no other. Every local adapter has one, counted by `trackWrites()` in `@haverstack/core/adapter`, which wraps each write method listed by the new `StoreWriteMethod` type; `combineAdapters()` and `LocalAdapter` combine both halves'.
+  - `copyStack()` reads the source's head before and after, and refuses with `StackConflictError` if they differ. A source or target without `head()` is refused with `InvalidAdapterError`.
+  - `listBlobs({ afterFileId?, limit? })` pages in `fileId` order on every blob adapter. `blobWindow()`, `FILE_ID_RE` and `assertFileId()` in `@haverstack/core/adapter` are shared by the blob adapters.
+  - `GET /blobs` and `GET /head` serve the owner acting alone, advertised in discovery as `blobs: { list: true }` and `head: { read: true }`. `APIAdapter.listBlobs()` and `APIAdapter.head()` are present only when advertised. `@haverstack/wire-types` adds `WireBlobsResponse`, `WireHeadResponse`, `serializeBlobInfo()`, `supportsBlobListing()` and `supportsHead()`; `@haverstack/core/wire` adds `parseBlobsParams()`.
+  - Every record adapter states `writers: 'owner' | 'shared'`, who writes its store. `Stack` reads it, not the presence of `subscribeChanges()`, to refuse scoping a shared stack, and refuses `subscribe()` with `StackBadRequestError` on a shared stack with no relay. `APIAdapter` is `'shared'`, and its `subscribeChanges()` is present only when discovery advertises a feed; `requestInstall()` likewise only when discovery advertises install requests. `APIAdapterCapabilityError` is removed.
+  - Conformance fixtures for both endpoints and their discovery keys; the adapter conformance suites check that `head()`, where an adapter has one, moves on every write method and stands still across reads.
+
+### Patch Changes
+
+- Updated dependencies [[`fae64b4`](https://github.com/haverstack/core/commit/fae64b480a193eb71fbf7ebb56d3da11d56f9f2f)]:
+  - @haverstack/core@0.45.0
+
 ## 0.42.0
 
 ### Minor Changes

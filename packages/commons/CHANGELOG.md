@@ -1,5 +1,16 @@
 # @haverstack/commons
 
+## 0.40.0
+
+### Minor Changes
+
+- Released for a breaking change in `@haverstack/core`.
+
+### Patch Changes
+
+- Updated dependencies [[`fae64b4`](https://github.com/haverstack/core/commit/fae64b480a193eb71fbf7ebb56d3da11d56f9f2f)]:
+  - @haverstack/core@0.45.0
+
 ## 0.39.0
 
 ### Minor Changes
