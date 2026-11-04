@@ -90,25 +90,25 @@ export async function findFirstMatch(
 }
 
 /**
- * Shared implementation behind Stack.getEntityByDid() and
- * ScopedStack.getEntityByDid() — see docs/spec/identity.md § DID bindings
- * for the matching rules. `ownerStanding` says whether the caller may read
- * every Record, so one who may not asks for less instead of having query()
- * throw.
+ * The `_entity` card claiming `did`, soft-deleted ones included, read as
+ * stored through the unscoped Stack: matched on its content, which a
+ * tombstone no longer carries. Unlisted cards count only on the owner's
+ * standing. Behind Stack.getEntityByDid() and ScopedStack.getEntityByDid(),
+ * which gates and presents what this finds. See docs/spec/identity.md
+ * § DID bindings.
  */
 export async function lookupEntityByDid(
-  run: (query: StackQuery) => Promise<QueryResult>,
+  stack: Stack,
   did: EntityId,
-  canFilterContent: boolean,
   ownerStanding: boolean,
 ): Promise<StackRecord | null> {
   const record = await findFirstMatch(
-    run,
+    (q) => stack.query(q),
     {
       filter: {
         baseId: SYSTEM_TYPES.ENTITY,
         ...(ownerStanding ? EVERY_RECORD : { includeDeleted: true }),
-        ...(canFilterContent && { content: { did } }),
+        ...(filtersContent(stack.capabilities) && { content: { did } }),
       },
     },
     (r) => (r.content as EntityContent).did === did,

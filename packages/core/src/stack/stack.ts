@@ -338,7 +338,7 @@ export class Stack implements StackClient {
   }
 
   async getEntityByDid(did: EntityId): Promise<StackRecord | null> {
-    return lookupEntityByDid((q) => this.query(q), did, filtersContent(this.capabilities), true);
+    return lookupEntityByDid(this, did, true);
   }
 
   async getOwnerEntity(): Promise<StackRecord | null> {

@@ -6305,6 +6305,36 @@ describe('ScopedStack.getEntityByDid / getOwnerEntity', () => {
     expect(await stack.asEntity(STRANGER).getEntityByDid('did:key:x')).toBeNull();
   });
 
+  // A soft-deleted card still claims its DID (docs/spec/identity.md § DID
+  // bindings), so a reader who may read it finds it, presented as get()
+  // presents it: the tombstone, or the card whole to the owner acting alone.
+  test.each([
+    ['an adapter filtering content', () => MemoryAdapter.open({ ownerEntityId: OWNER })],
+    ['an adapter reaching no content', () => IncapableMemoryAdapter.open({ ownerEntityId: OWNER })],
+  ])('a soft-deleted card is found as get() presents it, on %s', async (_, open) => {
+    const s = await Stack.open(await open());
+    const card = await s.create(
+      '_entity@1',
+      { did: 'did:key:x', name: 'X' },
+      { permissions: [{ kind: 'anyone', label: 'read' }] },
+    );
+    await s.delete(card.id);
+    const reader = s.asEntity(STRANGER);
+    const found = await reader.getEntityByDid('did:key:x');
+    expect(found).toEqual(await reader.get(card.id, { includeDeleted: true }));
+    expect(found!.content).toEqual({});
+    expect((await s.asEntity(OWNER).getEntityByDid('did:key:x'))!.content).toEqual({
+      did: 'did:key:x',
+      name: 'X',
+    });
+  });
+
+  test('a soft-deleted card the requester cannot read is null', async () => {
+    const card = await stack.create('_entity@1', { did: 'did:key:x', name: 'X' });
+    await stack.delete(card.id);
+    expect(await stack.asEntity(STRANGER).getEntityByDid('did:key:x')).toBeNull();
+  });
+
   test('getOwnerEntity resolves the owner’s own card regardless of permissions', async () => {
     const record = await adapter.createRecord(
       makeRecord({ typeId: '_entity@1', content: { did: OWNER, name: 'Owner' } }),

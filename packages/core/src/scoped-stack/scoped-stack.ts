@@ -72,7 +72,6 @@ import {
   assertQueryCapabilities,
   assertValidBaseIdFilter,
   splitQuery,
-  filtersContent,
 } from '../query-validation.js';
 import type { SplitQuery } from '../query-validation.js';
 import {
@@ -460,18 +459,17 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Runs through this.query(), so the read reach still applies — this
-   * answers a question the caller asks on its own behalf. includeUnlisted
-   * is passed only when the request is the owner acting alone, per
+   * The card is found as stored, then gated and presented as get() does:
+   * matching it after presentation would look for a `did` in a tombstone's
+   * emptied content. This answers a question the caller asks on its own
+   * behalf, so unlisted cards count only for the owner acting alone. See
    * docs/spec/identity.md § DID bindings.
    */
   async getEntityByDid(did: EntityId): Promise<StackRecord | null> {
-    return lookupEntityByDid(
-      (q) => this.query(q),
-      did,
-      filtersContent(this.stack.capabilities),
-      this.#authority.ownerActingAlone,
-    );
+    const card = await lookupEntityByDid(this.stack, did, this.#authority.ownerActingAlone);
+    if (!card) return null;
+    if (!(await this.#authority.canRead(card, this.#authority.snapshot()))) return null;
+    return this.present(card);
   }
 
   async getOwnerEntity(): Promise<StackRecord | null> {
