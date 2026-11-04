@@ -442,11 +442,21 @@ export class ScopedStack implements StackClient {
    * one does, so a caller learns only what it may read.
    * See docs/spec/disclosure.md § Which refusal a Record answers with.
    */
+  /**
+   * How a Record reaches this requester: a soft-deleted one as its
+   * tombstone, except to the owner acting alone, who holds the unscoped
+   * Stack's standing. Every read, a soft delete's answer and the feed use
+   * it. See docs/spec/versioning.md § The tombstone is literal.
+   */
+  private present(record: StackRecord): StackRecord {
+    return this.#authority.ownerActingAlone ? record : presentDeleted(record);
+  }
+
   async get(id: RecordId, opts: GetRecordOptions = {}): Promise<StackRecord | null> {
     const record = await this.stack.get(id, opts);
     if (!record) return null;
     if (!(await this.#authority.canRead(record, this.#authority.snapshot()))) return null;
-    return presentDeleted(record);
+    return this.present(record);
   }
 
   /**
@@ -480,16 +490,12 @@ export class ScopedStack implements StackClient {
     if (query.filter?.includeUnlisted && !this.#authority.ownerActingAlone) {
       throw new StackPermissionError('includeUnlisted is owner-only');
     }
-    if (query.filter?.wholeDeleted && !this.#authority.ownerActingAlone) {
-      throw new StackPermissionError('wholeDeleted is owner-only');
-    }
     const reach = await this.#authority.snapshot().reach('read');
     const page = await this.queryReadable(split, reach);
-    if (query.filter?.wholeDeleted) return page;
-    // Projected here as well as in get(), or `includeDeleted` would be a
+    // Presented here as well as in get(), or `includeDeleted` would be a
     // strictly better read channel than the fetch-by-ID it is supposed to
     // match.
-    return { records: page.records.map(presentDeleted), cursor: page.cursor };
+    return { records: page.records.map((r) => this.present(r)), cursor: page.cursor };
   }
 
   /**
@@ -790,7 +796,7 @@ export class ScopedStack implements StackClient {
     // See docs/spec/versioning.md § The tombstone is literal.
     return opts.purge || !result.record
       ? result
-      : { ...result, record: presentDeleted(result.record) };
+      : { ...result, record: this.present(result.record) };
   }
 
   /**
@@ -1007,6 +1013,7 @@ export class ScopedStack implements StackClient {
       new ScopedSubscription(
         this.#authority.snapshot(),
         (record, snapshot) => this.#authority.canRead(record, snapshot),
+        (record) => this.present(record),
         handler,
         opts,
       ),

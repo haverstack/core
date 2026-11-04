@@ -271,19 +271,6 @@ export const errorResponseFixtures: ConformanceFixture<unknown, WireError>[] = [
     },
   },
   {
-    name: 'error-bad-request-whole-deleted-without-include-deleted',
-    description:
-      'wholeDeleted says how a soft-deleted Record comes back, so without includeDeleted it ' +
-      'means nothing, and the query is refused as malformed: 400 / code "bad_request". ' +
-      'See docs/spec/versioning.md § The tombstone is literal.',
-    method: 'GET',
-    path: '/records?wholeDeleted=true',
-    responseStatus: 400,
-    responseBody: {
-      error: { code: 'bad_request', message: 'filter.wholeDeleted needs filter.includeDeleted.' },
-    },
-  },
-  {
     name: 'error-bad-request-unknown-query-body-key',
     description:
       'POST /records/query refuses a key it does not define at any depth of the body — here ' +

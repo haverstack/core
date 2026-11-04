@@ -519,6 +519,20 @@ describe('the feed carries no more of a soft-deleted record than get() does', ()
     expect(frame!.record!.deletedAt).toBeInstanceOf(Date);
   });
 
+  // As the owner acting alone reads one: whole, deletedAt set.
+  test('a soft-delete frame reaches the owner acting alone whole', async () => {
+    const note = await stack.create(NOTE, { text: 'secret' });
+    const owner = collector();
+    await stack.asEntity(OWNER).subscribe(owner.handler, { includeRecords: true });
+
+    await stack.delete(note.id);
+    await settle();
+
+    const frame = owner.seen.find((c) => c.recordId === note.id);
+    expect(frame!.record).toEqual(await stack.get(note.id, { includeDeleted: true }));
+    expect(frame!.record!.content).toEqual({ text: 'secret' });
+  });
+
   test('an ordinary change still carries its body', async () => {
     const note = await stack.create(NOTE, { text: 'before' }, { permissions: publicRead });
     const reader = collector();

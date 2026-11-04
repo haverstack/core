@@ -75,7 +75,6 @@ export const buildQueryParams = (query: AdapterQuery): URLSearchParams => {
   if (f.search) p.set('search', f.search);
   if (f.includeDeleted) p.set('includeDeleted', 'true');
   if (f.includeUnlisted) p.set('includeUnlisted', 'true');
-  if (f.wholeDeleted) p.set('wholeDeleted', 'true');
   // Which parameter carries the name is what says whether it names a
   // native column or a content field — the same "kind implied by the
   // parameter" shape the relationship filter uses above.

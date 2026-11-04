@@ -31,7 +31,7 @@ import {
   deleteRecordFixtures,
   undeleteRecordFixtures,
 } from './records.js';
-import { queryRecordsFixtures, queryWholeDeletedFixtures } from './query.js';
+import { queryRecordsFixtures } from './query.js';
 import {
   editAssociationsFixtures,
   setAssociationsFixtures,
@@ -83,7 +83,6 @@ export const allConformanceFixtures: ConformanceFixture[] = [
   ...authTokenFixtures,
   ...createRecordFixtures,
   ...queryRecordsFixtures,
-  ...queryWholeDeletedFixtures,
   ...patchContentFixtures,
   ...deleteRecordFixtures,
   ...undeleteRecordFixtures,

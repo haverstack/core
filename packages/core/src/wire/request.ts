@@ -91,7 +91,6 @@ const RECORD_QUERY_PARAMS = [
   'updatedAfter',
   'includeDeleted',
   'includeUnlisted',
-  'wholeDeleted',
   'sort',
   'sortContent',
   'direction',
@@ -115,7 +114,6 @@ const QUERY_BODY_FILTER_KEYS = [
   'search',
   'includeDeleted',
   'includeUnlisted',
-  'wholeDeleted',
   'createdAt',
   'updatedAt',
 ] as const;
@@ -524,7 +522,6 @@ export function parseQueryParams(url: URL): PlainQuery {
 
   if (booleanParam(url, 'includeDeleted')) filter.includeDeleted = true;
   if (booleanParam(url, 'includeUnlisted')) filter.includeUnlisted = true;
-  if (booleanParam(url, 'wholeDeleted')) filter.wholeDeleted = true;
 
   const query: PlainQuery = {};
   if (Object.keys(filter).length) query.filter = filter;
@@ -642,7 +639,6 @@ export function parseQueryBody(raw: unknown): PlainQuery {
     if (f.search !== undefined) filter.search = requireString(f.search, 'filter.search');
     if (optionalBoolean(f.includeDeleted, 'filter.includeDeleted')) filter.includeDeleted = true;
     if (optionalBoolean(f.includeUnlisted, 'filter.includeUnlisted')) filter.includeUnlisted = true;
-    if (optionalBoolean(f.wholeDeleted, 'filter.wholeDeleted')) filter.wholeDeleted = true;
 
     if (f.createdAt !== undefined) {
       const r = requireKnownKeys(f.createdAt, ['before', 'after'], 'filter.createdAt');

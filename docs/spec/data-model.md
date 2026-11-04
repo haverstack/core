@@ -611,7 +611,6 @@ type RecordFilter = {
   // Lifecycle states excluded by default
   includeDeleted?: boolean; // see Versioning & deletion; get() takes the same option
   includeUnlisted?: boolean; // owner-only under ScopedStack — see Unlisted records
-  wholeDeleted?: boolean; // with includeDeleted: soft-deleted Records whole, not as tombstones; owner-only under ScopedStack — see Versioning § The tombstone is literal
 };
 
 type DateRange = {

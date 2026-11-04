@@ -49,34 +49,33 @@ const TOMBSTONE_KEYS = new Set([
   'content',
 ]);
 
-/** Whether a fixture's request asks for soft-deleted records whole. */
-function asksWholeDeleted(value: object): boolean {
-  const { path, requestBody } = value as { path?: unknown; requestBody?: unknown };
-  if (typeof path === 'string' && /[?&]wholeDeleted=true\b/.test(path)) return true;
-  const filter = (requestBody as { filter?: { wholeDeleted?: unknown } } | undefined)?.filter;
-  return filter?.wholeDeleted === true;
-}
-
 /**
  * Every object a fixture shows a server sending that carries `deletedAt` —
- * response bodies and feed frames alike, at any depth. A request body is
- * what a client sends, so it is the one payload left out. `whole` picks the
- * responses to requests that asked for wholeDeleted, or every other one.
+ * response bodies and feed frames alike, at any depth — keyed by the name
+ * of the innermost fixture serving it. A request body is what a client
+ * sends, so it is the one payload left out.
  */
-function servedDeleted(
-  value: unknown,
-  path: string,
-  into: [string, object][],
-  whole = false,
-): [string, object][] {
+function servedDeleted(value: unknown, path: string, into: [string, object][]): [string, object][] {
   if (typeof value !== 'object' || value === null) return into;
-  if ('responseStatus' in value && asksWholeDeleted(value) !== whole) return into;
-  if (!Array.isArray(value) && 'deletedAt' in value) into.push([path, value]);
+  const named = isNamed(value) ? value.name : path;
+  if (!Array.isArray(value) && 'deletedAt' in value) into.push([named, value]);
   for (const [key, child] of Object.entries(value)) {
-    if (key !== 'requestBody') servedDeleted(child, `${path}.${key}`, into, whole);
+    if (key !== 'requestBody') servedDeleted(child, named, into);
   }
   return into;
 }
+
+/**
+ * The fixtures whose requester is the owner acting alone, who reads a
+ * soft-deleted record whole; everyone else reads its tombstone. See
+ * docs/spec/versioning.md § The tombstone is literal.
+ */
+const OWNER_READS = new Set([
+  'delete-record-soft',
+  'get-record-after-soft-delete-owner-delete',
+  'get-record-after-soft-delete-owner-include-deleted',
+  'change-feed-deleted-frame-mutation',
+]);
 
 /** Every named fixture reachable from a group, including sequence steps and the mutations nested inside a change-feed connection. */
 function collect(value: unknown, into: Named[]): Named[] {
@@ -116,9 +115,13 @@ describe('every fixture group', () => {
 
   // Every channel serves a soft-deleted record the same way, so the rule is
   // asserted over everything a server sends rather than fixture by fixture.
-  it('serves every soft-deleted record as the tombstone projection', () => {
-    const groups = exportedArrays.filter(([name]) => name !== 'allConformanceFixtures');
-    const tombstones = groups.flatMap(([name, group]) => servedDeleted(group, name, []));
+  const served = () =>
+    exportedArrays
+      .filter(([name]) => name !== 'allConformanceFixtures')
+      .flatMap(([name, group]) => servedDeleted(group, name, []));
+
+  it('serves every soft-deleted record as the tombstone projection, but to the owner', () => {
+    const tombstones = served().filter(([name]) => !OWNER_READS.has(name));
     for (const [path, record] of tombstones) {
       expect((record as { content?: unknown }).content, path).toEqual({});
       expect(
@@ -129,15 +132,12 @@ describe('every fixture group', () => {
     expect(tombstones.length).toBeGreaterThan(0);
   });
 
-  // The one exception, asked for by name: see docs/spec/versioning.md
-  // § The tombstone is literal.
-  it('serves a soft-deleted record whole only to a request that asks for wholeDeleted', () => {
-    const groups = exportedArrays.filter(([name]) => name !== 'allConformanceFixtures');
-    const whole = groups.flatMap(([name, group]) => servedDeleted(group, name, [], true));
-    for (const [path, record] of whole) {
-      expect((record as { content?: unknown }).content, path).not.toEqual({});
+  it('serves a soft-deleted record whole to the owner acting alone', () => {
+    const whole = served().filter(([name]) => OWNER_READS.has(name));
+    for (const [name, record] of whole) {
+      expect((record as { content?: unknown }).content, name).not.toEqual({});
     }
-    expect(whole.length).toBeGreaterThan(0);
+    expect(new Set(whole.map(([name]) => name))).toEqual(OWNER_READS);
   });
 
   it('describes what each fixture pins', () => {

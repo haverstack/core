@@ -6106,11 +6106,33 @@ describe('ScopedStack — soft delete presents a tombstone', () => {
     expect(got!.permissions).toEqual(writeBit);
   });
 
-  test('the owner acting alone sees a tombstone too — state is the record’s, not the asker’s', async () => {
+  // The owner acting alone holds the unscoped Stack's standing, so reads a
+  // soft-deleted record as stored on every channel. See
+  // docs/spec/versioning.md § The tombstone is literal.
+  test('the owner acting alone reads it whole, deletedAt set, as the unscoped Stack does', async () => {
     const record = await deletedRecord();
-    const got = await stack.asEntity(OWNER).get(record.id, { includeDeleted: true });
+    const stored = await stack.get(record.id, { includeDeleted: true });
+    const owner = stack.asEntity(OWNER);
+    expect(await owner.get(record.id, { includeDeleted: true })).toEqual(stored);
+    const { records } = await owner.query({ filter: { includeDeleted: true } });
+    expect(records.find((r) => r.id === record.id)).toEqual(stored);
+    expect(stored!.content).toEqual({ text: 'secret text' });
+    expect(stored!.deletedAt).toBeInstanceOf(Date);
+  });
+
+  test('a soft delete answers the owner acting alone with the record whole', async () => {
+    const record = await stack.create(NOTE, { text: 'kept' }, { createdBy: { subjectId: OWNER } });
+    const { record: answered } = await stack.asEntity(OWNER).delete(record.id);
+    expect(answered).toEqual(await stack.get(record.id, { includeDeleted: true }));
+  });
+
+  test('an owner delegated for someone else reads the tombstone', async () => {
+    const record = await deletedRecord();
+    const got = await stack
+      .asActor({ principalId: OWNER, subjectId: MEMBER })
+      .get(record.id, { includeDeleted: true });
     expect(got!.content).toEqual({});
-    expect(got!.deletedAt).toBeInstanceOf(Date);
+    expect(got!.associations).toBeUndefined();
   });
 
   test('an unreadable soft-deleted record is still null, not a tombstone', async () => {
@@ -6440,49 +6462,6 @@ describe('ScopedStack — each write verb passes exactly one gate', () => {
     expect(record).toEqual(await stack.asEntity(MEMBER).get(note.id, { includeDeleted: true }));
     expect(record!.content).toEqual({});
     expect(record!.associations).toBeUndefined();
-  });
-
-  // The owner's standing reads past the tombstone only when asked, so an
-  // ordinary read still shows a deleted record as deleted. See
-  // docs/spec/versioning.md § The tombstone is literal.
-  describe('wholeDeleted', () => {
-    const WHOLE = { filter: { includeDeleted: true, wholeDeleted: true } };
-
-    beforeEach(async () => {
-      await stack.editAssociations(note.id, [
-        { op: 'add', association: { kind: 'tag', label: 'kept' } },
-      ]);
-      await stack.delete(note.id);
-    });
-
-    test('reads a soft-deleted record whole for the owner acting alone', async () => {
-      const { records } = await stack.asEntity(OWNER).query(WHOLE);
-      const found = records.find((r) => r.id === note.id)!;
-      expect(found).toEqual(await stack.get(note.id, { includeDeleted: true }));
-      expect(found.deletedAt).toBeInstanceOf(Date);
-      expect(found.content).toEqual({ text: 'hello' });
-    });
-
-    test('leaves the tombstone in place when not asked', async () => {
-      const { records } = await stack.asEntity(OWNER).query({ filter: { includeDeleted: true } });
-      expect(records.find((r) => r.id === note.id)!.content).toEqual({});
-    });
-
-    test('is refused to anyone but the owner acting alone', async () => {
-      for (const scoped of [
-        stack.asEntity(MEMBER),
-        stack.asEntity(null),
-        stack.asActor({ principalId: 'did:key:zApp', subjectId: OWNER }),
-      ]) {
-        await expect(scoped.query(WHOLE)).rejects.toThrow(StackPermissionError);
-      }
-    });
-
-    test('means nothing without includeDeleted, and is refused as malformed', async () => {
-      await expect(stack.asEntity(OWNER).query({ filter: { wholeDeleted: true } })).rejects.toThrow(
-        StackBadRequestError,
-      );
-    });
   });
 });
 

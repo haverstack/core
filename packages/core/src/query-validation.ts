@@ -111,17 +111,6 @@ function assertFilterCapability(
 }
 
 /**
- * `wholeDeleted` says how a soft-deleted record comes back, so it means
- * nothing unless the query asks for them. See docs/spec/versioning.md
- * § The tombstone is literal.
- */
-export function assertValidWholeDeleted(filter: RecordFilter | undefined): void {
-  if (filter?.wholeDeleted && !filter.includeDeleted) {
-    throw new StackBadRequestError('filter.wholeDeleted needs filter.includeDeleted.');
-  }
-}
-
-/**
  * Hold `filter.contentByType` to a split along Types: at least one arm,
  * each pinned to a TypeId and flat, and never beside a top-level content
  * predicate, whose relation to the arms would be ambiguous. A map that
@@ -337,7 +326,6 @@ export function resolveQuery(query: PlainQuery): AdapterQuery {
   const { sort, limit, ...rest } = query;
   assertValidBaseIdFilter(query.filter);
   assertValidContentByType(query.filter);
-  assertValidWholeDeleted(query.filter);
   assertValidSort(sort);
   assertWindowInteger(limit, 'limit', 1);
   assertValidAssociationFilters(query.filter);

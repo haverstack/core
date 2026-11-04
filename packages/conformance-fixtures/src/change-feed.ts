@@ -302,7 +302,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
       {
         mutation: {
           name: 'change-feed-deleted-frame-mutation',
-          description: 'The owner soft-deletes the note, and gets the tombstone back.',
+          description: 'The owner soft-deletes the note, and gets it back whole.',
           method: 'DELETE',
           path: '/records/1hk153x00001',
           responseStatus: 200,
@@ -311,7 +311,7 @@ export const changeFeedFixtures: ChangeFeedFixture[] = [
             typeId: 'com.example/note@1',
             createdAt: '2024-01-01T00:00:00.000Z',
             updatedAt: '2024-01-03T00:00:00.000Z',
-            content: {},
+            content: { title: 'Hello' },
             version: 3,
             deletedAt: '2024-01-03T00:00:00.000Z',
           },

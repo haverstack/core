@@ -19,7 +19,6 @@ import {
 import {
   createRecordFixtures,
   queryRecordsFixtures,
-  queryWholeDeletedFixtures,
   patchContentFixtures,
   deleteRecordFixtures,
   undeleteRecordFixtures,
@@ -411,50 +410,6 @@ describe('queryRecords fixtures', () => {
       const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
       expect(sentQuery(url)).toEqual(fixtureQuery(fixture.path));
       expect(init.method).toBe('GET');
-    });
-  }
-});
-
-describe('query wholeDeleted fixtures', () => {
-  const NATIVE_ONLY_DISCOVERY = {
-    ...DISCOVERY,
-    capabilities: {
-      ...DISCOVERY.capabilities,
-      filter: { ...DISCOVERY.capabilities.filter, content: 'none' },
-    },
-  };
-
-  for (const fixture of queryWholeDeletedFixtures) {
-    test(fixture.name, async () => {
-      // Each fixture's own route: POST when the server reaches content, GET when not.
-      const adapter = await openDiscovered(
-        fixture.method === 'POST' ? DISCOVERY : NATIVE_ONLY_DISCOVERY,
-        { token: undefined },
-      );
-      mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
-      const plain =
-        fixture.method === 'POST'
-          ? (fixture.requestBody as PlainQuery)
-          : parseQueryParams(new URL(`${BASE_URL}${fixture.path}`));
-      const attempt = adapter.queryRecords(resolveQuery(plain));
-
-      const body = fixture.responseBody!;
-      if ('error' in body) {
-        await expect(attempt).rejects.toBeInstanceOf(StackPermissionError);
-      } else {
-        const { records } = await attempt;
-        // Whole: what the tombstone withholds arrives, deletedAt with it.
-        expect(records[0]!.content).toEqual(body.records[0]!.content);
-        expect(records[0]!.associations).toEqual(body.records[0]!.associations);
-        expect(records[0]!.deletedAt).toBeInstanceOf(Date);
-      }
-      const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
-      expect(init.method).toBe(fixture.method);
-      if (fixture.method === 'GET') {
-        expect(parseQueryParams(new URL(url)).filter).toEqual(plain.filter);
-      } else {
-        expect(JSON.parse(init.body as string).filter).toEqual(plain.filter);
-      }
     });
   }
 });
@@ -955,8 +910,6 @@ const SERVER_ONLY_ERROR_FIXTURES = new Set([
   'error-bad-request-edit-associations-repoint',
   'error-bad-request-non-boolean-purge',
   'error-bad-request-unknown-auth-token-key',
-  // resolveQuery() refuses it before APIAdapter could send it.
-  'error-bad-request-whole-deleted-without-include-deleted',
 ]);
 
 describe('error response fixtures', () => {
