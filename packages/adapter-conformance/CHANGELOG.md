@@ -1,5 +1,16 @@
 # @haverstack/adapter-conformance
 
+## 0.15.0
+
+### Minor Changes
+
+- [#484](https://github.com/haverstack/core/pull/484) [`40395dc`](https://github.com/haverstack/core/commit/40395dc4e2388359fedf9d3a7bc0380438c6d90e) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `runCopyConformance()` takes `readThrough`, the adapter a copy reads its source store through, such as a server's store read over the wire by `APIAdapter`. The copy is still held to what the store itself holds, and `close` is called on the adapter `readThrough` opens too.
+
+### Patch Changes
+
+- Updated dependencies [[`eeeaf69`](https://github.com/haverstack/core/commit/eeeaf694bac965db1756952919de1f2cbbf77f0a)]:
+  - @haverstack/core@0.46.0
+
 ## 0.14.0
 
 ### Minor Changes
