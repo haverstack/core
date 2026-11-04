@@ -436,12 +436,6 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * A record this request may read, or null. Never throws
-   * StackPermissionError: an unreadable record answers exactly as a missing
-   * one does, so a caller learns only what it may read.
-   * See docs/spec/disclosure.md § Which refusal a Record answers with.
-   */
-  /**
    * How a Record reaches this requester: a soft-deleted one as its
    * tombstone, except to the owner acting alone, who holds the unscoped
    * Stack's standing. Every read, a soft delete's answer and the feed use
@@ -451,6 +445,12 @@ export class ScopedStack implements StackClient {
     return this.#authority.ownerActingAlone ? record : presentDeleted(record);
   }
 
+  /**
+   * A record this request may read, or null. Never throws
+   * StackPermissionError: an unreadable record answers exactly as a missing
+   * one does, so a caller learns only what it may read.
+   * See docs/spec/disclosure.md § Which refusal a Record answers with.
+   */
   async get(id: RecordId, opts: GetRecordOptions = {}): Promise<StackRecord | null> {
     const record = await this.stack.get(id, opts);
     if (!record) return null;

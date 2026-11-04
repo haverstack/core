@@ -123,12 +123,7 @@ export type RecordFilter = {
   includeUnlisted?: boolean;
 };
 
-/**
- * Every Record a query can reach: past deletion and listing. The filter of
- * every read made on the owner's standing, which reads each soft-deleted
- * Record whole wherever it is served. See docs/spec/versioning.md § The
- * tombstone is literal.
- */
+/** Every Record a query can reach: past deletion and listing. */
 export const EVERY_RECORD = {
   includeDeleted: true,
   includeUnlisted: true,

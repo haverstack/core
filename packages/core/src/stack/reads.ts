@@ -92,22 +92,23 @@ export async function findFirstMatch(
 /**
  * The `_entity` card claiming `did`, soft-deleted ones included, read as
  * stored through the unscoped Stack: matched on its content, which a
- * tombstone no longer carries. Unlisted cards count only on the owner's
- * standing. Behind Stack.getEntityByDid() and ScopedStack.getEntityByDid(),
+ * tombstone no longer carries. Unlisted cards count only for the owner
+ * acting alone. Behind Stack.getEntityByDid() and ScopedStack.getEntityByDid(),
  * which gates and presents what this finds. See docs/spec/identity.md
  * § DID bindings.
  */
 export async function lookupEntityByDid(
   stack: Stack,
   did: EntityId,
-  ownerStanding: boolean,
+  ownerActingAlone: boolean,
 ): Promise<StackRecord | null> {
   const record = await findFirstMatch(
     (q) => stack.query(q),
     {
       filter: {
         baseId: SYSTEM_TYPES.ENTITY,
-        ...(ownerStanding ? EVERY_RECORD : { includeDeleted: true }),
+        includeDeleted: true,
+        ...(ownerActingAlone && { includeUnlisted: true }),
         ...(filtersContent(stack.capabilities) && { content: { did } }),
       },
     },

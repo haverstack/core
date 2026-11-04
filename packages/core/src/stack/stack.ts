@@ -556,7 +556,7 @@ export class Stack implements StackClient {
       do {
         const result: QueryResult = await this.adapter.queryRecords(
           resolveQuery({
-            filter: listedOnly ? { typeId, includeDeleted: true } : { typeId, ...EVERY_RECORD },
+            filter: { typeId, includeDeleted: true, includeUnlisted: !listedOnly },
             limit: MIGRATE_ALL_BATCH,
             cursor,
           }),
