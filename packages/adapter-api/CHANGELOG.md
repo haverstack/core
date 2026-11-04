@@ -1,5 +1,17 @@
 # @haverstack/adapter-api
 
+## 0.45.0
+
+### Minor Changes
+
+- Released for a breaking change in `@haverstack/core`, `@haverstack/wire-types`.
+
+### Patch Changes
+
+- Updated dependencies [[`eeeaf69`](https://github.com/haverstack/core/commit/eeeaf694bac965db1756952919de1f2cbbf77f0a)]:
+  - @haverstack/wire-types@0.45.0
+  - @haverstack/core@0.46.0
+
 ## 0.44.0
 
 ### Minor Changes
