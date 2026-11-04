@@ -6106,11 +6106,33 @@ describe('ScopedStack — soft delete presents a tombstone', () => {
     expect(got!.permissions).toEqual(writeBit);
   });
 
-  test('the owner acting alone sees a tombstone too — state is the record’s, not the asker’s', async () => {
+  // The owner acting alone holds the unscoped Stack's standing, so reads a
+  // soft-deleted record as stored on every channel. See
+  // docs/spec/versioning.md § The tombstone is literal.
+  test('the owner acting alone reads it whole, deletedAt set, as the unscoped Stack does', async () => {
     const record = await deletedRecord();
-    const got = await stack.asEntity(OWNER).get(record.id, { includeDeleted: true });
+    const stored = await stack.get(record.id, { includeDeleted: true });
+    const owner = stack.asEntity(OWNER);
+    expect(await owner.get(record.id, { includeDeleted: true })).toEqual(stored);
+    const { records } = await owner.query({ filter: { includeDeleted: true } });
+    expect(records.find((r) => r.id === record.id)).toEqual(stored);
+    expect(stored!.content).toEqual({ text: 'secret text' });
+    expect(stored!.deletedAt).toBeInstanceOf(Date);
+  });
+
+  test('a soft delete answers the owner acting alone with the record whole', async () => {
+    const record = await stack.create(NOTE, { text: 'kept' }, { createdBy: { subjectId: OWNER } });
+    const { record: answered } = await stack.asEntity(OWNER).delete(record.id);
+    expect(answered).toEqual(await stack.get(record.id, { includeDeleted: true }));
+  });
+
+  test('an owner delegated for someone else reads the tombstone', async () => {
+    const record = await deletedRecord();
+    const got = await stack
+      .asActor({ principalId: OWNER, subjectId: MEMBER })
+      .get(record.id, { includeDeleted: true });
     expect(got!.content).toEqual({});
-    expect(got!.deletedAt).toBeInstanceOf(Date);
+    expect(got!.associations).toBeUndefined();
   });
 
   test('an unreadable soft-deleted record is still null, not a tombstone', async () => {
@@ -6280,6 +6302,36 @@ describe('ScopedStack.getEntityByDid / getOwnerEntity', () => {
         permissions: [{ kind: 'anyone', label: 'read' }],
       }),
     );
+    expect(await stack.asEntity(STRANGER).getEntityByDid('did:key:x')).toBeNull();
+  });
+
+  // A soft-deleted card still claims its DID (docs/spec/identity.md § DID
+  // bindings), so a reader who may read it finds it, presented as get()
+  // presents it: the tombstone, or the card whole to the owner acting alone.
+  test.each([
+    ['an adapter filtering content', () => MemoryAdapter.open({ ownerEntityId: OWNER })],
+    ['an adapter reaching no content', () => IncapableMemoryAdapter.open({ ownerEntityId: OWNER })],
+  ])('a soft-deleted card is found as get() presents it, on %s', async (_, open) => {
+    const s = await Stack.open(await open());
+    const card = await s.create(
+      '_entity@1',
+      { did: 'did:key:x', name: 'X' },
+      { permissions: [{ kind: 'anyone', label: 'read' }] },
+    );
+    await s.delete(card.id);
+    const reader = s.asEntity(STRANGER);
+    const found = await reader.getEntityByDid('did:key:x');
+    expect(found).toEqual(await reader.get(card.id, { includeDeleted: true }));
+    expect(found!.content).toEqual({});
+    expect((await s.asEntity(OWNER).getEntityByDid('did:key:x'))!.content).toEqual({
+      did: 'did:key:x',
+      name: 'X',
+    });
+  });
+
+  test('a soft-deleted card the requester cannot read is null', async () => {
+    const card = await stack.create('_entity@1', { did: 'did:key:x', name: 'X' });
+    await stack.delete(card.id);
     expect(await stack.asEntity(STRANGER).getEntityByDid('did:key:x')).toBeNull();
   });
 

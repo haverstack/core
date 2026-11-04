@@ -15,7 +15,7 @@
 import { groupRoleFromAssociations } from '../access.js';
 import { StackBadRequestError } from '../errors.js';
 import { filtersContent } from '../query-validation.js';
-import { SYSTEM_TYPES } from '../types/index.js';
+import { EVERY_RECORD, SYSTEM_TYPES } from '../types/index.js';
 import type { Stack } from './stack.js';
 import type {
   AppContent,
@@ -90,26 +90,26 @@ export async function findFirstMatch(
 }
 
 /**
- * Shared implementation behind Stack.getEntityByDid() and
- * ScopedStack.getEntityByDid() — see docs/spec/identity.md § DID bindings
- * for the matching rules. `includeUnlisted` is a parameter rather than
- * hardcoded, so a caller not permitted to set it can omit it instead of
- * having query() throw.
+ * The `_entity` card claiming `did`, soft-deleted ones included, read as
+ * stored through the unscoped Stack: matched on its content, which a
+ * tombstone no longer carries. Unlisted cards count only for the owner
+ * acting alone. Behind Stack.getEntityByDid() and ScopedStack.getEntityByDid(),
+ * which gates and presents what this finds. See docs/spec/identity.md
+ * § DID bindings.
  */
 export async function lookupEntityByDid(
-  run: (query: StackQuery) => Promise<QueryResult>,
+  stack: Stack,
   did: EntityId,
-  canFilterContent: boolean,
-  includeUnlisted: boolean,
+  ownerActingAlone: boolean,
 ): Promise<StackRecord | null> {
   const record = await findFirstMatch(
-    run,
+    (q) => stack.query(q),
     {
       filter: {
         baseId: SYSTEM_TYPES.ENTITY,
         includeDeleted: true,
-        ...(includeUnlisted && { includeUnlisted: true }),
-        ...(canFilterContent && { content: { did } }),
+        ...(ownerActingAlone && { includeUnlisted: true }),
+        ...(filtersContent(stack.capabilities) && { content: { did } }),
       },
     },
     (r) => (r.content as EntityContent).did === did,
@@ -129,8 +129,7 @@ export function findAppCardByDid(stack: Stack, did: EntityId): Promise<StackReco
     {
       filter: {
         baseId: SYSTEM_TYPES.APP,
-        includeDeleted: true,
-        includeUnlisted: true,
+        ...EVERY_RECORD,
         ...(filtersContent(stack.capabilities) && { content: { did } }),
       },
     },
@@ -146,7 +145,7 @@ export async function loadInstallRecords(
   stack: Stack,
 ): Promise<(StackRecord & { content: InstallContent })[]> {
   const records = await queryAllPages((q) => stack.query(q), {
-    filter: { baseId: SYSTEM_TYPES.INSTALL, includeDeleted: true, includeUnlisted: true },
+    filter: { baseId: SYSTEM_TYPES.INSTALL, ...EVERY_RECORD },
   });
   return records as (StackRecord & { content: InstallContent })[];
 }

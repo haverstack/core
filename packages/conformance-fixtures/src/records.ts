@@ -341,9 +341,10 @@ export const deleteRecordFixtures: ConformanceFixture<undefined, WireRecord | un
   {
     name: 'delete-record-soft',
     description:
-      'DELETE /records/:id soft-deletes — record and version history are retained — and answers ' +
-      'with the tombstone it produced: deletedAt set, version bumped. ' +
-      'See docs/spec/wire-format.md § Records.',
+      'DELETE /records/:id from the owner acting alone soft-deletes — record and version ' +
+      'history are retained — and answers with the record it produced, as the owner reads it: ' +
+      'whole, deletedAt set, version bumped. Anyone else is answered with the tombstone, as ' +
+      'get-record-after-soft-delete pins. See docs/spec/wire-format.md § Records.',
     method: 'DELETE',
     path: '/records/1hk153x00001',
     responseStatus: 200,
@@ -352,7 +353,7 @@ export const deleteRecordFixtures: ConformanceFixture<undefined, WireRecord | un
       typeId: 'com.example/note@1',
       createdAt: '2024-01-01T00:00:00.000Z',
       updatedAt: '2024-01-02T00:00:00.000Z',
-      content: {},
+      content: { title: 'Hello', body: 'World' },
       version: 2,
       deletedAt: '2024-01-02T00:00:00.000Z',
     },
@@ -527,11 +528,13 @@ export const getRecordSequenceFixtures: ConformanceSequenceFixture[] = [
     name: 'get-record-after-soft-delete',
     description:
       'GET /records/:id hides a soft-deleted record unless ?includeDeleted=true, as ' +
-      'GET /records does. Assumes a record readable by this requester at "1hk153x00001".',
+      'GET /records does, and serves it as its tombstone to anyone but the owner acting ' +
+      'alone. Assumes a requester other than the owner who may read and write the record at ' +
+      '"1hk153x00001".',
     steps: [
       {
         name: 'get-record-after-soft-delete-delete',
-        description: 'The soft delete that turns the record into a tombstone.',
+        description: 'The soft delete, answered with the tombstone it produced.',
         method: 'DELETE',
         path: '/records/1hk153x00001',
         responseStatus: 200,
@@ -571,6 +574,51 @@ export const getRecordSequenceFixtures: ConformanceSequenceFixture[] = [
           createdAt: '2024-01-01T00:00:00.000Z',
           updatedAt: '2024-01-02T00:00:00.000Z',
           content: {},
+          version: 2,
+          deletedAt: '2024-01-02T00:00:00.000Z',
+        },
+      },
+    ],
+  },
+  {
+    name: 'get-record-after-soft-delete-owner',
+    description:
+      'The owner acting alone reads a soft-deleted record whole, deletedAt set, on every ' +
+      'channel: the delete answers it so, and so does GET /records/:id?includeDeleted=true. ' +
+      "The owner holds the unscoped Stack's standing over the wire, as for includeUnlisted. " +
+      'Assumes the owner\'s record { title: "Hello" } at "1hk153x00003". See ' +
+      'docs/spec/versioning.md § The tombstone is literal.',
+    steps: [
+      {
+        name: 'get-record-after-soft-delete-owner-delete',
+        description: 'The owner soft-deletes the record, and gets it back whole.',
+        method: 'DELETE',
+        path: '/records/1hk153x00003',
+        responseStatus: 200,
+        responseBody: {
+          id: '1hk153x00003',
+          typeId: 'com.example/note@1',
+          createdAt: '2024-01-01T00:00:00.000Z',
+          updatedAt: '2024-01-02T00:00:00.000Z',
+          content: { title: 'Hello' },
+          version: 2,
+          deletedAt: '2024-01-02T00:00:00.000Z',
+        },
+      },
+      {
+        name: 'get-record-after-soft-delete-owner-include-deleted',
+        description:
+          'With ?includeDeleted=true the owner reads the same whole record; without it, 404, ' +
+          'as for any requester.',
+        method: 'GET',
+        path: '/records/1hk153x00003?includeDeleted=true',
+        responseStatus: 200,
+        responseBody: {
+          id: '1hk153x00003',
+          typeId: 'com.example/note@1',
+          createdAt: '2024-01-01T00:00:00.000Z',
+          updatedAt: '2024-01-02T00:00:00.000Z',
+          content: { title: 'Hello' },
           version: 2,
           deletedAt: '2024-01-02T00:00:00.000Z',
         },

@@ -123,6 +123,12 @@ export type RecordFilter = {
   includeUnlisted?: boolean;
 };
 
+/** Every Record a query can reach: past deletion and listing. */
+export const EVERY_RECORD = {
+  includeDeleted: true,
+  includeUnlisted: true,
+} as const satisfies RecordFilter;
+
 /**
  * The Record columns every adapter stores natively, and can order by. The
  * array is the source of truth, so the runtime checks that narrow a wire

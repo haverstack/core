@@ -41,7 +41,7 @@ import { applyMergePatch } from '../merge.js';
 import { compareRecordedAttachments } from '../attachment-records.js';
 import { createAssociations, validatePermissions } from '../access.js';
 import { ChangeEmitter, RelayDelivery, PendingChange, assertSinceUsable } from './changes.js';
-import { SYSTEM_TYPES } from '../types/index.js';
+import { EVERY_RECORD, SYSTEM_TYPES } from '../types/index.js';
 import type { ValidationError } from '../validate.js';
 import type {
   StackRecord,
@@ -338,7 +338,7 @@ export class Stack implements StackClient {
   }
 
   async getEntityByDid(did: EntityId): Promise<StackRecord | null> {
-    return lookupEntityByDid((q) => this.query(q), did, filtersContent(this.capabilities), true);
+    return lookupEntityByDid(this, did, true);
   }
 
   async getOwnerEntity(): Promise<StackRecord | null> {
@@ -1396,8 +1396,7 @@ export class Stack implements StackClient {
     const results = await queryAllPages((q) => this.query(q), {
       filter: {
         baseId: SYSTEM_TYPES.ATTACHMENT,
-        includeDeleted: true,
-        includeUnlisted: true,
+        ...EVERY_RECORD,
         ...(filtersContent(this.capabilities) && { content: { fileId } }),
       },
     });

@@ -142,11 +142,11 @@ Filtering is unaffected: the emitter holds the record it destroyed, so a subscri
 
 ## Soft-deleted records reach the feed as tombstones
 
-A purge carries nothing because erasure must leave no trace. Soft delete is the gentler neighbour, and it gets the gentler rule: under `ScopedStack`, a frame whose record carries `deletedAt` delivers [the same tombstone `get()` returns](./versioning.md#the-tombstone-is-literal) rather than the body.
+A purge carries nothing because erasure must leave no trace. Soft delete is the gentler neighbour, and it gets the gentler rule: under `ScopedStack`, a frame whose record carries `deletedAt` delivers it [as `get()` returns it](./versioning.md#the-tombstone-is-literal) to the same subscriber: the tombstone, or the whole Record to the owner acting alone.
 
 The reason is the one that governs the [unlisted exclusion](#the-unlisted-transition): a feed that served what `query()` and `get()` withhold would be a strictly better read channel than either, and the withholding would be decoration. A subscriber still learns everything the event exists to tell it — this record is deleted, drop your copy — which needs no body at all.
 
-The projection keys on the record's `deletedAt`, not on the op, so it covers the `delete` transition and any later frame about a record that is still deleted, while an `unlist` frame — whose record stays fully readable — is untouched. Unscoped `Stack` subscribers receive the whole record: that layer is trusted by definition and reaches every record by other means.
+The projection keys on the record's `deletedAt`, not on the op, so it covers the `delete` transition and any later frame about a record that is still deleted, while an `unlist` frame — whose record stays fully readable — is untouched. Unscoped `Stack` subscribers receive the whole record, and so does the owner acting alone, who holds the same standing: that layer is trusted by definition and reaches every record by other means.
 
 ## Prior state is not in the envelope
 

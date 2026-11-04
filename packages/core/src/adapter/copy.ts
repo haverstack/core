@@ -27,7 +27,7 @@ import type {
   StackRecordAdapter,
   StoreSeed,
 } from '../types/index.js';
-import { SYSTEM_TYPES } from '../types/index.js';
+import { EVERY_RECORD, SYSTEM_TYPES } from '../types/index.js';
 
 /** Creates a new store from `seed`: `LocalAdapter.open({ path, seed })`, say. */
 export type CreateStore = (seed: StoreSeed) => Promise<StackAdapter> | StackAdapter;
@@ -37,7 +37,7 @@ const PAGE_SIZE = 100;
 
 /** Every Record a store holds but `_config`, which no query reaches: a store is created from it. */
 const EVERYTHING: PlainQuery = {
-  filter: { includeDeleted: true, includeUnlisted: true },
+  filter: EVERY_RECORD,
   sort: { field: 'createdAt', direction: 'asc' },
   limit: PAGE_SIZE,
 };

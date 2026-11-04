@@ -10,7 +10,6 @@
 import { baseIdOf } from '../schema.js';
 import { Subscription, matchesFilter } from '../stack/changes.js';
 import type { EmittedChange } from '../stack/changes.js';
-import { presentDeleted } from '../record-changes.js';
 import type { RecordChange, StackRecord, SubscribeOptions } from '../types/index.js';
 import type { AuthoritySnapshot } from './authority-snapshot.js';
 
@@ -30,6 +29,7 @@ export class ScopedSubscription extends Subscription {
       record: StackRecord,
       snapshot: AuthoritySnapshot,
     ) => Promise<boolean>,
+    private readonly present: (record: StackRecord) => StackRecord,
     handler: (change: RecordChange) => void,
     opts: SubscribeOptions,
   ) {
@@ -64,15 +64,15 @@ export class ScopedSubscription extends Subscription {
       this.reportError(err);
       return;
     }
-    // After the permission decision, which needs the whole record: a frame
-    // carrying a deleted record's body would be a read channel around the
-    // tombstone. See docs/spec/events.md § Soft-deleted records reach the
-    // feed as tombstones.
+    // After the permission decision, which needs the whole record, and as
+    // the requester's reads present it: a frame carrying more would be a
+    // read channel around the tombstone. See docs/spec/events.md
+    // § Soft-deleted records reach the feed as tombstones.
     this.deliver(this.project(emission));
   }
 
   private project(emission: EmittedChange): EmittedChange {
-    const record = presentDeleted(emission.record);
+    const record = this.present(emission.record);
     return record === emission.record ? emission : { ...emission, record };
   }
 }

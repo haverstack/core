@@ -72,7 +72,6 @@ import {
   assertQueryCapabilities,
   assertValidBaseIdFilter,
   splitQuery,
-  filtersContent,
 } from '../query-validation.js';
 import type { SplitQuery } from '../query-validation.js';
 import {
@@ -437,6 +436,16 @@ export class ScopedStack implements StackClient {
   }
 
   /**
+   * How a Record reaches this requester: a soft-deleted one as its
+   * tombstone, except to the owner acting alone, who holds the unscoped
+   * Stack's standing. Every read, a soft delete's answer and the feed use
+   * it. See docs/spec/versioning.md § The tombstone is literal.
+   */
+  private present(record: StackRecord): StackRecord {
+    return this.#authority.ownerActingAlone ? record : presentDeleted(record);
+  }
+
+  /**
    * A record this request may read, or null. Never throws
    * StackPermissionError: an unreadable record answers exactly as a missing
    * one does, so a caller learns only what it may read.
@@ -446,22 +455,21 @@ export class ScopedStack implements StackClient {
     const record = await this.stack.get(id, opts);
     if (!record) return null;
     if (!(await this.#authority.canRead(record, this.#authority.snapshot()))) return null;
-    return presentDeleted(record);
+    return this.present(record);
   }
 
   /**
-   * Runs through this.query(), so the read reach still applies — this
-   * answers a question the caller asks on its own behalf. includeUnlisted
-   * is passed only when the request is the owner acting alone, per
+   * The card is found as stored, then gated and presented as get() does:
+   * matching it after presentation would look for a `did` in a tombstone's
+   * emptied content. This answers a question the caller asks on its own
+   * behalf, so unlisted cards count only for the owner acting alone. See
    * docs/spec/identity.md § DID bindings.
    */
   async getEntityByDid(did: EntityId): Promise<StackRecord | null> {
-    return lookupEntityByDid(
-      (q) => this.query(q),
-      did,
-      filtersContent(this.stack.capabilities),
-      this.#authority.ownerActingAlone,
-    );
+    const card = await lookupEntityByDid(this.stack, did, this.#authority.ownerActingAlone);
+    if (!card) return null;
+    if (!(await this.#authority.canRead(card, this.#authority.snapshot()))) return null;
+    return this.present(card);
   }
 
   async getOwnerEntity(): Promise<StackRecord | null> {
@@ -482,10 +490,10 @@ export class ScopedStack implements StackClient {
     }
     const reach = await this.#authority.snapshot().reach('read');
     const page = await this.queryReadable(split, reach);
-    // Projected here as well as in get(), or `includeDeleted` would be a
+    // Presented here as well as in get(), or `includeDeleted` would be a
     // strictly better read channel than the fetch-by-ID it is supposed to
     // match.
-    return { records: page.records.map(presentDeleted), cursor: page.cursor };
+    return { records: page.records.map((r) => this.present(r)), cursor: page.cursor };
   }
 
   /**
@@ -786,7 +794,7 @@ export class ScopedStack implements StackClient {
     // See docs/spec/versioning.md § The tombstone is literal.
     return opts.purge || !result.record
       ? result
-      : { ...result, record: presentDeleted(result.record) };
+      : { ...result, record: this.present(result.record) };
   }
 
   /**
@@ -1003,6 +1011,7 @@ export class ScopedStack implements StackClient {
       new ScopedSubscription(
         this.#authority.snapshot(),
         (record, snapshot) => this.#authority.canRead(record, snapshot),
+        (record) => this.present(record),
         handler,
         opts,
       ),
