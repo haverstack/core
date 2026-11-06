@@ -121,7 +121,7 @@ import {
 import { applyAssociationEdits, associationDelta } from '../associations/identity.js';
 import { validateGrantActions, validateGrantee, validateGrantBaseId } from '../grants.js';
 import type { GrantQuery } from '../grants.js';
-import { validateInstall } from '../install.js';
+import { isPlanEmpty, validateInstall } from '../install.js';
 import type {
   AppManifest,
   InstallAppOptions,
@@ -268,7 +268,6 @@ export class Stack implements StackClient {
   // through. See docs/spec/adapters.md § Adapter capabilities.
   declare readonly listBlobs?: (query?: BlobsQuery) => Promise<BlobInfo[]>;
   declare readonly head?: () => Promise<string>;
-  declare readonly requestInstall?: (manifest: AppManifest) => Promise<InstallRequestResult>;
 
   private constructor(
     private readonly adapter: StackAdapter,
@@ -285,12 +284,6 @@ export class Stack implements StackClient {
       this.head = async () => {
         this.assertOpen();
         return this.adapter.head!();
-      };
-    }
-    if (adapter.requestInstall) {
-      this.requestInstall = async (manifest) => {
-        this.assertOpen();
-        return this.adapter.requestInstall!(manifest);
       };
     }
   }
@@ -1663,6 +1656,21 @@ export class Stack implements StackClient {
   async planInstall(submitted: AppManifest, opts: { did: EntityId }): Promise<InstallPlan> {
     this.assertOpen();
     return apps.planInstall(this, submitted, opts);
+  }
+
+  /**
+   * Answer a key's request to install `manifest`: `installed` once applying
+   * it for `opts.did` would change nothing, `pending` otherwise, for the
+   * owner to approve. Writes nothing. See docs/spec/wire-format.md § Installs.
+   */
+  async answerInstall(
+    manifest: AppManifest,
+    opts: { did: EntityId },
+  ): Promise<InstallRequestResult> {
+    const plan = await this.planInstall(manifest, opts);
+    return isPlanEmpty(plan)
+      ? { status: 'installed', install: plan.existing! }
+      : { status: 'pending' };
   }
 
   /**

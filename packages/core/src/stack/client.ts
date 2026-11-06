@@ -37,7 +37,6 @@ import type {
 } from '../types/index.js';
 import type { ContentOf, Migration, ReadonlyTypeSchema, TypeHandle } from '../type-handle.js';
 import type { Collection } from '../collection.js';
-import type { AppManifest, InstallRequestResult } from '../install.js';
 
 export type CreateRecordOptions = {
   /**
@@ -329,10 +328,4 @@ export interface StackClient {
    * Under `ScopedStack`, the owner acting alone only.
    */
   head?(): Promise<string>;
-  /**
-   * Ask for `manifest` to be installed for the key making the request —
-   * present when there is a key and an owner to ask. Under `ScopedStack`,
-   * the key acting as itself only. See docs/spec/apps.md § Over the wire.
-   */
-  requestInstall?(manifest: AppManifest): Promise<InstallRequestResult>;
 }

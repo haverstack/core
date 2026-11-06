@@ -103,7 +103,6 @@ import {
 // Type-only: a ScopedStack never constructs a Stack, so nothing here
 // closes a runtime cycle with stack.ts, which does construct a ScopedStack.
 import type { Stack } from '../stack/stack.js';
-import { isPlanEmpty } from '../install.js';
 import type { AppManifest, InstallRequestResult } from '../install.js';
 import { ScopeAuthority } from './authority.js';
 import { familyPolicy, ownerFieldRefusal } from './family-policy.js';
@@ -248,11 +247,10 @@ export class ScopedStack implements StackClient {
     }
   }
 
-  /** Refuse an anonymous or delegated request; returns the key acting as itself. */
+  /** Refuse anything but a key acting as itself, and name it — see ScopeAuthority.actingAlone. */
   private requireActingAlone(message: string): EntityId {
-    const { principalId } = this.#authority;
-    if (principalId === null || this.#authority.delegated) throw new StackPermissionError(message);
-    return principalId;
+    if (!this.#authority.actingAlone) throw new StackPermissionError(message);
+    return this.#authority.principalId!;
   }
 
   /** Refuse anything but the owner acting as itself — see ScopeAuthority.ownerActingAlone. */
@@ -1053,17 +1051,13 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Ask for `manifest` to be installed for this request's own key. Writes
-   * nothing: a `pending` answer is the server's to queue for the owner,
-   * who approves through Stack.planInstall() and installApp().
-   * See docs/spec/wire-format.md § Installs.
+   * Answer this request's own key asking to install `manifest`, as
+   * Stack.answerInstall() does for a named key. A `pending` answer is the
+   * server's to queue for the owner. See docs/spec/wire-format.md § Installs.
    */
-  async requestInstall(manifest: AppManifest): Promise<InstallRequestResult> {
+  async answerInstall(manifest: AppManifest): Promise<InstallRequestResult> {
     const did = this.requireActingAlone('An install is requested by the key acting as itself');
-    const plan = await this.stack.planInstall(manifest, { did });
-    return isPlanEmpty(plan)
-      ? { status: 'installed', install: plan.existing! }
-      : { status: 'pending' };
+    return this.stack.answerInstall(manifest, { did });
   }
 
   /**

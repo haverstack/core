@@ -86,7 +86,10 @@ function ownerDate(body: Record<string, unknown>, key: string): Date | undefined
  * the owner-acting-alone decision in core. Values beyond shape are
  * `Stack`'s to judge, or two answers drift.
  */
-export function createOptionsFromWireRecord(body: unknown, scoped: ScopedStack): WireCreateRequest {
+export function createOptionsFromWireRecord(
+  body: unknown,
+  scoped: Pick<ScopedStack, 'ownerActingAlone'>,
+): WireCreateRequest {
   const record = requireBody(body, 'record body');
   const unknown = Object.keys(record).filter((key) => !WIRE_RECORD_KEYS.includes(key));
   if (unknown.length > 0)

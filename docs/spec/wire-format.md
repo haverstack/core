@@ -751,7 +751,7 @@ How an app holding its own key asks to be installed (see [App installs § Over t
 
 **The body is `{ "manifest": { … } }`**, an `AppManifest`: `appId`, `name`, optional `version`, `types` (each read as a [`POST /types`](#types) body is) and `requests` (each `{ baseId, actions }`). `parseInstallBody()` from `@haverstack/core/wire` reads it, refusing an unknown key at either level with **400** like any other [unrecognized input](#unrecognized-input). **The key being installed is never in the body**: it is the session's principal.
 
-**The request must come from the key acting as itself.** A delegated session names someone else as the subject, and an install is for the key that authenticated, so it answers **403** (code `permission`). `ScopedStack.requestInstall(manifest)` makes this refusal and returns the answer below, so a server built on it only queues a `pending` one.
+**The request must come from the key acting as itself.** A delegated session names someone else as the subject, and an install is for the key that authenticated, so it answers **403** (code `permission`). `ScopedStack.answerInstall(manifest)` makes this refusal and returns the answer below, so a server built on it only queues a `pending` one.
 
 The server plans the manifest for the session's key and answers with the result:
 
@@ -762,7 +762,7 @@ The server plans the manifest for the session's key and answers with the result:
 | `422`  | `validation`                              | The manifest is one [`planInstall()` refuses](./apps.md#plan-then-apply): a type outside the app's [own namespace](./apps.md#who-owns-a-family) and the commons or listed twice, a request breaking the grant rules, or a family requested twice. |
 | `409`  | `conflict`                                | The key's `_app` card names a different `appId`.                                                                                                                                                                                                  |
 
-Re-sending the same manifest is how an app checks: it answers `202` until the owner approves and `200` after. A manifest that changes anything an approved one said — a new version, a changed request — is `202` again, so an upgrade takes the same path as a first install. `APIAdapter` has `requestInstall()` only when discovery advertises `installs`, and a `Stack` over it has `requestInstall()` exactly then, so a client learns it from discovery rather than as a `404`.
+Re-sending the same manifest is how an app checks: it answers `202` until the owner approves and `200` after. A manifest that changes anything an approved one said — a new version, a changed request — is `202` again, so an upgrade takes the same path as a first install. `APIAdapter` has `requestInstall()` only when discovery advertises `installs`, so a client learns it from discovery rather than as a `404`.
 
 ## Entity
 

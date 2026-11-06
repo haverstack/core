@@ -1,6 +1,5 @@
 import { describe, test, expect, beforeEach } from 'vitest';
 import { createOptionsFromWireRecord } from '../src/wire/index.js';
-import { isOwnerActingAlone } from '../src/access.js';
 import { Stack } from '../src/stack/stack.js';
 import { StackBadRequestError, StackValidationError } from '../src/errors.js';
 import { MemoryAdapter } from '../src/testing.js';
@@ -210,19 +209,19 @@ describe('createOptionsFromWireRecord — refusals', () => {
 });
 
 // -------------------------------------------------------
-// isOwnerActingAlone
+// ScopedStack.ownerActingAlone
 // -------------------------------------------------------
 
-describe('isOwnerActingAlone', () => {
+describe('ScopedStack.ownerActingAlone', () => {
   test('the owner authenticated as itself qualifies, and no other pairing does', () => {
-    expect(isOwnerActingAlone(owner, OWNER)).toBe(true);
-    expect(isOwnerActingAlone(grantee, OWNER)).toBe(false);
-    expect(isOwnerActingAlone(ownerForMember, OWNER)).toBe(false);
-    expect(isOwnerActingAlone(appForOwner, OWNER)).toBe(false);
+    expect(parsingStack.asActor(owner).ownerActingAlone).toBe(true);
+    expect(parsingStack.asActor(grantee).ownerActingAlone).toBe(false);
+    expect(parsingStack.asActor(ownerForMember).ownerActingAlone).toBe(false);
+    expect(parsingStack.asActor(appForOwner).ownerActingAlone).toBe(false);
   });
 
   test('an anonymous request never qualifies', () => {
-    expect(isOwnerActingAlone({ principalId: null, subjectId: null }, OWNER)).toBe(false);
+    expect(parsingStack.asEntity(null).ownerActingAlone).toBe(false);
   });
 });
 

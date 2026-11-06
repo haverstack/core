@@ -1,4 +1,3 @@
-import type { AppManifest } from '../src/install.js';
 import { describe, test, expect } from 'vitest';
 import { combineAdapters } from '../src/adapter/combine.js';
 import type {
@@ -344,19 +343,6 @@ describe('combineAdapters', () => {
         blob: makeBlobAdapter(),
       });
       expect(adapter.subscribeChanges).toBeUndefined();
-    });
-
-    test('requestInstall is present when the record adapter implements it', async () => {
-      const adapter = combineAdapters({
-        record: makeRecordAdapter({ requestInstall: async () => ({ status: 'pending' }) }),
-        blob: makeBlobAdapter(),
-      });
-      expect(await adapter.requestInstall!({} as AppManifest)).toEqual({ status: 'pending' });
-    });
-
-    test('requestInstall is absent when the record adapter does not implement it', () => {
-      const adapter = combineAdapters({ record: makeRecordAdapter(), blob: makeBlobAdapter() });
-      expect(adapter.requestInstall).toBeUndefined();
     });
   });
 

@@ -9,12 +9,7 @@
  * subject.
  */
 
-import {
-  groupRoleFromAssociations,
-  isOwnerActingAlone,
-  readCompanions,
-  roleSatisfies,
-} from '../access.js';
+import { groupRoleFromAssociations, readCompanions, roleSatisfies } from '../access.js';
 import { inReach } from '../adapter/reach.js';
 import type { ReachedRecord } from '../adapter/reach.js';
 import { StackError, StackNotFoundError, StackPermissionError } from '../errors.js';
@@ -150,10 +145,16 @@ export class ScopeAuthority {
    * See docs/spec/access-control.md § Delegation: principal and subject.
    */
   get ownerActingAlone(): boolean {
-    return isOwnerActingAlone(
-      { principalId: this.principalId, subjectId: this.subjectId },
-      this.stack.ownerEntityId,
-    );
+    return this.actingAlone && this.principalId === this.stack.ownerEntityId;
+  }
+
+  /**
+   * Whether a key is acting as itself: identified and undelegated. The
+   * standing for what concerns the requester's own key, and the base of
+   * ownerActingAlone. See docs/spec/access-control.md § Serving requests.
+   */
+  get actingAlone(): boolean {
+    return this.principalId !== null && !this.delegated;
   }
 
   /**
