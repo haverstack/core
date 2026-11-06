@@ -38,6 +38,7 @@ export type {
   AppManifest,
   InstallAppOptions,
   InstallPlan,
+  InstallRequestResult,
   ForeignRequest,
   TypeChange,
 } from './install.js';

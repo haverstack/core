@@ -11,10 +11,12 @@ import {
 } from '../src/errors.js';
 import { generateId, crockford32Encode } from '../src/id.js';
 import { MemoryAdapter, IncapableMemoryAdapter } from '../src/testing.js';
+import type { MemoryAdapterOpenOptions } from '../src/testing.js';
 import type {
   StackRecord,
   Association,
   AuthorityAssociation,
+  BlobInfo,
   DataAssociation,
   GrantGrantee,
 } from '../src/types/index.js';
@@ -3373,17 +3375,80 @@ describe('ScopedStack.collectAttachmentGarbage', () => {
 
     expect(result.deletedFileIds).toEqual([fileId]);
   });
+});
 
-  test('non-owner is denied', async () => {
-    await expect(stack.asEntity(MEMBER).collectAttachmentGarbage({ graceMs: 0 })).rejects.toThrow(
-      StackPermissionError,
-    );
+// -------------------------------------------------------
+// Owner-only reads and Type definition
+// -------------------------------------------------------
+
+describe('ScopedStack — owner-only operations', () => {
+  const APP = 'did:key:z6MkApp';
+  const TAG = 'com.example.test/tag@1';
+  const defineTag = (scoped: ScopedStack) =>
+    scoped.defineType({ id: TAG, name: 'Tag', schema: { label: { kind: 'text' } } });
+
+  const refused: [string, () => ScopedStack][] = [
+    ['a non-owner', () => stack.asEntity(MEMBER)],
+    ['an anonymous requester', () => stack.asEntity(null)],
+    ['an app acting for the owner', () => stack.asActor({ principalId: APP, subjectId: OWNER })],
+    [
+      'the owner acting for someone else',
+      () => stack.asActor({ principalId: OWNER, subjectId: MEMBER }),
+    ],
+  ];
+
+  const ownerOnly: [string, (scoped: ScopedStack) => Promise<unknown>][] = [
+    ['defineType()', defineTag],
+    ['listBlobs()', (scoped) => scoped.listBlobs!()],
+    ['head()', (scoped) => scoped.head!()],
+    ['deleteAttachment()', (scoped) => scoped.deleteAttachment(fakeFileId('owner-only'))],
+    ['collectAttachmentGarbage()', (scoped) => scoped.collectAttachmentGarbage({ graceMs: 0 })],
+  ];
+
+  test('the owner acting alone lists blobs, reads the head and defines a type', async () => {
+    const {
+      content: { fileId },
+    } = await stack.putAttachment(new Uint8Array([1]), { mimeType: 'image/png' });
+    const owner = stack.asEntity(OWNER);
+
+    expect((await owner.listBlobs!()).map((b) => b.fileId)).toEqual([fileId]);
+    expect(await owner.head!()).toBe(await adapter.head!());
+    expect((await defineTag(owner)).id).toBe(TAG);
+    expect(await stack.getType(TAG)).not.toBeNull();
   });
 
-  test('anonymous requester is denied', async () => {
-    await expect(stack.asEntity(null).collectAttachmentGarbage({ graceMs: 0 })).rejects.toThrow(
-      StackPermissionError,
+  test.each(refused)('%s is refused every one', async (_, scope) => {
+    const scoped = scope();
+    for (const [name, call] of ownerOnly) {
+      await expect(call(scoped), name).rejects.toThrow(StackPermissionError);
+    }
+    expect(await stack.getType(TAG)).toBeNull();
+  });
+
+  test('getType(), listTypes() and typeIsCompatible() are open to every requester', async () => {
+    for (const [, scope] of refused) {
+      expect((await scope().getType(NOTE))?.id).toBe(NOTE);
+      expect((await scope().listTypes()).map((t) => t.id)).toContain(NOTE);
+      expect(await scope().typeIsCompatible(NOTE, { text: { kind: 'text' } })).toBe(true);
+    }
+  });
+
+  test('listBlobs() and head() are absent when the adapter has neither', async () => {
+    class UnlistedHeadlessAdapter extends MemoryAdapter {
+      static override async open(opts: MemoryAdapterOpenOptions): Promise<UnlistedHeadlessAdapter> {
+        return new UnlistedHeadlessAdapter(opts);
+      }
+      override listBlobs: (() => Promise<BlobInfo[]>) | undefined = undefined;
+      override head: (() => Promise<string>) | undefined = undefined;
+    }
+    const bareStack = await Stack.open(
+      await UnlistedHeadlessAdapter.open({ ownerEntityId: OWNER }),
     );
+
+    expect(bareStack.listBlobs).toBeUndefined();
+    expect(bareStack.head).toBeUndefined();
+    expect(bareStack.asEntity(OWNER).listBlobs).toBeUndefined();
+    expect(bareStack.asEntity(OWNER).head).toBeUndefined();
   });
 });
 

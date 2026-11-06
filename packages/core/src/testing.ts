@@ -705,7 +705,7 @@ export class MemoryAdapter implements StackAdapter {
   }
   // Declared as an optional field (not a fixed method) so a test subclass
   // can override it to `undefined`, simulating an adapter that doesn't
-  // implement this capability (see stack.test.ts's NoListBlobsAdapter).
+  // implement this capability.
   listBlobs?: (query?: BlobsQuery) => Promise<BlobInfo[]> = async (query) => {
     return blobWindow(this.blobs.keys(), query).map((fileId) => {
       const blob = this.blobs.get(fileId)!;
@@ -713,9 +713,8 @@ export class MemoryAdapter implements StackAdapter {
     });
   };
 
-  async head(): Promise<string> {
-    return this.written.read();
-  }
+  // An optional field for the same reason as listBlobs.
+  head?: () => Promise<string> = async () => this.written.read();
 
   flush?: () => Promise<void>;
   close?: () => Promise<void>;

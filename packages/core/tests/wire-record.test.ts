@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach } from 'vitest';
-import { createOptionsFromWireRecord, isOwnerActingAlone } from '../src/wire/index.js';
+import { createOptionsFromWireRecord } from '../src/wire/index.js';
 import { Stack } from '../src/stack/stack.js';
 import { StackBadRequestError, StackValidationError } from '../src/errors.js';
 import { MemoryAdapter } from '../src/testing.js';
@@ -34,8 +34,11 @@ const wireBody = (overrides: Record<string, unknown> = {}): Record<string, unkno
   ...overrides,
 });
 
+// Only the view's identities are read, so one stack serves every parse.
+const parsingStack = await Stack.open(await MemoryAdapter.open({ ownerEntityId: OWNER }));
+
 const parse = (body: unknown, as: TokenSession = owner) =>
-  createOptionsFromWireRecord(body, as, OWNER);
+  createOptionsFromWireRecord(body, parsingStack.asActor(as));
 
 // -------------------------------------------------------
 // The identity fields
@@ -206,19 +209,19 @@ describe('createOptionsFromWireRecord — refusals', () => {
 });
 
 // -------------------------------------------------------
-// isOwnerActingAlone
+// ScopedStack.ownerActingAlone
 // -------------------------------------------------------
 
-describe('isOwnerActingAlone', () => {
+describe('ScopedStack.ownerActingAlone', () => {
   test('the owner authenticated as itself qualifies, and no other pairing does', () => {
-    expect(isOwnerActingAlone(owner, OWNER)).toBe(true);
-    expect(isOwnerActingAlone(grantee, OWNER)).toBe(false);
-    expect(isOwnerActingAlone(ownerForMember, OWNER)).toBe(false);
-    expect(isOwnerActingAlone(appForOwner, OWNER)).toBe(false);
+    expect(parsingStack.asActor(owner).ownerActingAlone).toBe(true);
+    expect(parsingStack.asActor(grantee).ownerActingAlone).toBe(false);
+    expect(parsingStack.asActor(ownerForMember).ownerActingAlone).toBe(false);
+    expect(parsingStack.asActor(appForOwner).ownerActingAlone).toBe(false);
   });
 
   test('an anonymous request never qualifies', () => {
-    expect(isOwnerActingAlone({ principalId: null, subjectId: null }, OWNER)).toBe(false);
+    expect(parsingStack.asEntity(null).ownerActingAlone).toBe(false);
   });
 });
 
@@ -241,8 +244,9 @@ describe('createOptionsFromWireRecord — through ScopedStack.create()', () => {
   });
 
   const create = async (body: Record<string, unknown>, as: TokenSession): Promise<StackRecord> => {
-    const { typeId, content, options } = createOptionsFromWireRecord(body, as, OWNER);
-    return stack.asActor(as).create(typeId, content, options);
+    const scoped = stack.asActor(as);
+    const { typeId, content, options } = createOptionsFromWireRecord(body, scoped);
+    return scoped.create(typeId, content, options);
   };
 
   // The failure the helper exists to prevent: a client sends both clock

@@ -836,3 +836,25 @@ describe('the _app card an install registers', () => {
     expect(card.createdBy).toBeUndefined();
   });
 });
+
+describe('answerInstall()', () => {
+  test("answers pending for the request's own key until the owner installs it", async () => {
+    const scoped = stack.asEntity(APP_DID);
+    expect(await scoped.answerInstall(manifest())).toEqual({ status: 'pending' });
+    const install = await apply(await stack.planInstall(manifest(), { did: APP_DID }));
+    expect(await scoped.answerInstall(manifest())).toEqual({ status: 'installed', install });
+  });
+
+  test('a changed manifest is pending again', async () => {
+    await install(manifest());
+    const result = await stack.asEntity(APP_DID).answerInstall(manifest({ version: '2.0.0' }));
+    expect(result).toEqual({ status: 'pending' });
+  });
+
+  test.each([
+    ['an anonymous request', () => stack.asEntity(null)],
+    ['a key acting for someone', () => stack.asActor({ principalId: APP_DID, subjectId: PERSON })],
+  ])('refuses %s', async (_, scope) => {
+    await expect(scope().answerInstall(manifest())).rejects.toThrow(StackPermissionError);
+  });
+});

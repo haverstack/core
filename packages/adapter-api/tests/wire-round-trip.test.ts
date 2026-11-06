@@ -16,6 +16,8 @@ import {
   createOptionsFromWireRecord,
 } from '@haverstack/core/wire';
 import type { WireCreateRequest, TokenSession } from '@haverstack/core/wire';
+import { Stack } from '@haverstack/core';
+import { MemoryAdapter } from '@haverstack/core/testing';
 import type { StackRecord, SubscribeOptions } from '@haverstack/core';
 import type { PlainQuery } from '@haverstack/core/adapter';
 import { serializeRecord } from '@haverstack/wire-types';
@@ -324,7 +326,8 @@ async function roundTripCreate(
   await adapter.createRecord(record);
 
   const [, init] = mockFetch.mock.calls[1] as [string, RequestInit];
-  return createOptionsFromWireRecord(JSON.parse(init.body as string), session, OWNER);
+  const server = await Stack.open(await MemoryAdapter.open({ ownerEntityId: OWNER }));
+  return createOptionsFromWireRecord(JSON.parse(init.body as string), server.asActor(session));
 }
 
 const OWNER = 'did:key:zOwner';

@@ -40,6 +40,8 @@ import type {
   AssociationEdit,
   AttachmentContent,
   AuthorityAssociation,
+  BlobInfo,
+  BlobsQuery,
   DataAssociation,
   EntityId,
   FileId,
@@ -56,8 +58,10 @@ import type {
   IfVersionOptions,
   StackQuery,
   StackRecord,
+  StackType,
   SubscribeOptions,
   TypeId,
+  TypeSchema,
   Unsubscribe,
 } from '../types/index.js';
 import {
@@ -99,6 +103,8 @@ import {
 // Type-only: a ScopedStack never constructs a Stack, so nothing here
 // closes a runtime cycle with stack.ts, which does construct a ScopedStack.
 import type { Stack } from '../stack/stack.js';
+import { isPlanEmpty } from '../install.js';
+import type { AppManifest, InstallRequestResult } from '../install.js';
 import { ScopeAuthority } from './authority.js';
 import { familyPolicy, ownerFieldRefusal } from './family-policy.js';
 import { ScopedSubscription } from './subscription.js';
@@ -107,6 +113,7 @@ import type {
   BackdatableCreateRecordOptions,
   CollectAttachmentGarbageOptions,
   CollectAttachmentGarbageResult,
+  DefineTypeOptions,
   DeleteRecordOptions,
   DeleteResult,
   GetRecordOptions,
@@ -156,6 +163,10 @@ export class ScopedStack implements StackClient {
   private readonly assertStackOpen: () => void;
   private readonly migrations: MigrationRegistry;
   private readonly queryReadable: ScopedStackInit['queryReadable'];
+  // Assigned only when the Stack has the method, so its absence carries
+  // through. See docs/spec/adapters.md § Adapter capabilities.
+  declare readonly listBlobs?: (query?: BlobsQuery) => Promise<BlobInfo[]>;
+  declare readonly head?: () => Promise<string>;
 
   /** Not callable from outside the package — see ScopedStackInit. */
   constructor(token: typeof scopeToken, init: ScopedStackInit) {
@@ -175,6 +186,18 @@ export class ScopedStack implements StackClient {
     this.assertStackOpen = init.assertOpen;
     this.migrations = init.migrations;
     this.queryReadable = init.queryReadable;
+    if (init.stack.listBlobs) {
+      this.listBlobs = async (query) => {
+        this.requireOwnerActingAlone('Only the stack owner can list blobs');
+        return this.stack.listBlobs!(query);
+      };
+    }
+    if (init.stack.head) {
+      this.head = async () => {
+        this.requireOwnerActingAlone("Only the stack owner can read the stack's head");
+        return this.stack.head!();
+      };
+    }
   }
 
   collection<S extends ReadonlyTypeSchema>(handle: TypeHandle<S>): Collection<ContentOf<S>> {
@@ -198,6 +221,15 @@ export class ScopedStack implements StackClient {
     return this.#authority.subjectId;
   }
 
+  /**
+   * Whether this view is the stack owner acting as itself — core's answer,
+   * for a server that must act on it, as in dropping a create body's clock
+   * fields. See docs/spec/access-control.md § Serving requests.
+   */
+  get ownerActingAlone(): boolean {
+    return this.#authority.ownerActingAlone;
+  }
+
   get capabilities(): StackCapabilities {
     return this.stack.capabilities;
   }
@@ -214,6 +246,12 @@ export class ScopedStack implements StackClient {
     if (!(await this.#authority.canCreate(typeId, snapshot))) {
       throw new StackPermissionError(`No create grant for type "${typeId}"`);
     }
+  }
+
+  /** Refuse anything but a key acting as itself, and name it — see ScopeAuthority.actingAlone. */
+  private requireActingAlone(message: string): EntityId {
+    if (!this.#authority.actingAlone) throw new StackPermissionError(message);
+    return this.#authority.principalId!;
   }
 
   /** Refuse anything but the owner acting as itself — see ScopeAuthority.ownerActingAlone. */
@@ -987,6 +1025,43 @@ export class ScopedStack implements StackClient {
   ): Promise<CollectAttachmentGarbageResult> {
     this.requireOwnerActingAlone('Only the stack owner can collect attachment garbage');
     return this.stack.collectAttachmentGarbage({ ...opts, ...this.actor });
+  }
+
+  /**
+   * Define a Type. Only the stack owner acting alone may: a Type is
+   * stack-wide and no grant names it. Delegates to Stack.defineType().
+   */
+  async defineType(opts: DefineTypeOptions): Promise<StackType> {
+    this.requireOwnerActingAlone('Only the stack owner can define types');
+    return this.stack.defineType(opts);
+  }
+
+  /** Open to every requester: a client needs a schema to read what it reaches. */
+  async getType(id: TypeId): Promise<StackType | null> {
+    return this.stack.getType(id);
+  }
+
+  /** Open to every requester, as getType() is. */
+  async listTypes(): Promise<StackType[]> {
+    return this.stack.listTypes();
+  }
+
+  /** Open to every requester, as getType() is. */
+  async typeIsCompatible(typeId: TypeId, requiredSchema: TypeSchema): Promise<boolean> {
+    return this.stack.typeIsCompatible(typeId, requiredSchema);
+  }
+
+  /**
+   * Answer this request's own key asking to install `manifest`: `installed`
+   * once applying it would change nothing, `pending` for the server to queue
+   * for the owner. Writes nothing. See docs/spec/wire-format.md § Installs.
+   */
+  async answerInstall(manifest: AppManifest): Promise<InstallRequestResult> {
+    const did = this.requireActingAlone('An install is requested by the key acting as itself');
+    const plan = await this.stack.planInstall(manifest, { did });
+    return isPlanEmpty(plan)
+      ? { status: 'installed', install: plan.existing! }
+      : { status: 'pending' };
   }
 
   /**

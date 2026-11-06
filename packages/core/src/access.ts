@@ -195,17 +195,3 @@ function stampGroupAdmin(
     { kind: 'relationship', label: 'admin', target: { kind: 'entity', entityId: creator } },
   ];
 }
-
-/**
- * Whether a request is the stack owner acting alone — the tier behind every
- * unconditional owner authority. Being the owner is never sufficient on its
- * own, whichever side of a delegation the owner is on.
- * See docs/spec/access-control.md § Delegation: principal and subject.
- */
-export function isOwnerActingAlone(
-  actor: { subjectId: EntityId | null; principalId?: EntityId | null },
-  ownerEntityId: EntityId,
-): boolean {
-  const principalId = actor.principalId === undefined ? actor.subjectId : actor.principalId;
-  return principalId === ownerEntityId && actor.subjectId === ownerEntityId;
-}

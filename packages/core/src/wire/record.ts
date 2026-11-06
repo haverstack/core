@@ -11,18 +11,11 @@
  * here: docs/spec/wire-format.md § Records.
  */
 
-import { isOwnerActingAlone } from '../access.js';
+import type { ScopedStack } from '../scoped-stack/scoped-stack.js';
 import { StackBadRequestError } from '../errors.js';
 import { fieldError, requireBody } from './body.js';
 import type { BackdatableCreateRecordOptions } from '../stack/client.js';
-import type {
-  EntityId,
-  AuthorityAssociation,
-  DataAssociation,
-  StackRecord,
-  TokenSession,
-  TypeId,
-} from '../types/index.js';
+import type { AuthorityAssociation, DataAssociation, StackRecord, TypeId } from '../types/index.js';
 
 /**
  * A `POST /records` body as the three arguments `ScopedStack.create()`
@@ -88,14 +81,14 @@ function ownerDate(body: Record<string, unknown>, key: string): Date | undefined
 }
 
 /**
- * Read a `POST /records` body as a create. Takes the session, not a
- * precomputed boolean, so the owner-acting-alone decision stays with its
- * rule. Values beyond shape are `Stack`'s to judge, or two answers drift.
+ * Read a `POST /records` body as a create by `scoped`, the view the server
+ * will create through. Taking the view, not a session or a boolean, keeps
+ * the owner-acting-alone decision in core. Values beyond shape are
+ * `Stack`'s to judge, or two answers drift.
  */
 export function createOptionsFromWireRecord(
   body: unknown,
-  session: TokenSession,
-  ownerEntityId: EntityId,
+  scoped: Pick<ScopedStack, 'ownerActingAlone'>,
 ): WireCreateRequest {
   const record = requireBody(body, 'record body');
   const unknown = Object.keys(record).filter((key) => !WIRE_RECORD_KEYS.includes(key));
@@ -129,7 +122,7 @@ export function createOptionsFromWireRecord(
   // birth, so the timestamp a client sends has nothing to say.
   if (optionalString(record, 'unlistedAt') !== undefined) options.unlisted = true;
 
-  if (isOwnerActingAlone(session, ownerEntityId)) {
+  if (scoped.ownerActingAlone) {
     const createdAt = ownerDate(record, 'createdAt');
     if (createdAt !== undefined) options.createdAt = createdAt;
     const updatedAt = ownerDate(record, 'updatedAt');

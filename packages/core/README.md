@@ -94,8 +94,8 @@ await stack.close();
 
 An app has two layers, because the stack draws a line between them:
 
-- **A data layer that takes a `StackClient`** — the record API `Stack` and `ScopedStack` both implement. The same code then runs embedded as the owner, or behind a server as a requester who reaches only what they were granted.
-- **An install that the owner approves.** Defining types, `migrateAll()` and `grantType()` change the whole stack rather than one record, so they live on `Stack` alone and are absent from `StackClient`.
+- **A data layer that takes a `StackClient`** — everything a session can ask, which `Stack` and `ScopedStack` both implement. The same code then runs embedded as the owner, or behind a server as a requester who reaches only what they were granted; what only the owner may do, such as `defineType()`, is refused to anyone else.
+- **An install that the owner approves.** `migrateAll()`, `grantType()` and the install itself are the owner's alone, so they live on `Stack` and are absent from `StackClient`.
 
 Migrations belong to neither. They are passed to `Stack.open()` on **every startup**, so the chain is complete before the first read.
 
