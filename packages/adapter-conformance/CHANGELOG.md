@@ -1,5 +1,16 @@
 # @haverstack/adapter-conformance
 
+## 0.16.0
+
+### Minor Changes
+
+- Released for a breaking change in `@haverstack/core`.
+
+### Patch Changes
+
+- Updated dependencies [[`e75fd78`](https://github.com/haverstack/core/commit/e75fd787d653e0ef9257832121d3d5c7e90fdd35)]:
+  - @haverstack/core@0.47.0
+
 ## 0.15.0
 
 ### Minor Changes
