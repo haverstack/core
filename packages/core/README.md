@@ -94,8 +94,8 @@ await stack.close();
 
 An app has two layers, because the stack draws a line between them:
 
-- **A data layer that takes a `StackClient`** — the record API `Stack` and `ScopedStack` both implement. The same code then runs embedded as the owner, or behind a server as a requester who reaches only what they were granted.
-- **An install that the owner approves.** Defining types, `migrateAll()` and `grantType()` change the whole stack rather than one record, so they are absent from `StackClient`. A server still reaches `defineType()` through `ScopedStack`, which refuses everyone but the owner acting alone.
+- **A data layer that takes a `StackClient`** — everything a session can ask, which `Stack` and `ScopedStack` both implement. The same code then runs embedded as the owner, or behind a server as a requester who reaches only what they were granted; what only the owner may do, such as `defineType()`, is refused to anyone else.
+- **An install that the owner approves.** `migrateAll()`, `grantType()` and the install itself are the owner's alone, so they live on `Stack` and are absent from `StackClient`.
 
 Migrations belong to neither. They are passed to `Stack.open()` on **every startup**, so the chain is complete before the first read.
 
@@ -203,7 +203,7 @@ export const manifest: AppManifest = {
 
 **When the owner runs the app**, it opens with `Stack.open(adapter, { migrations })`, calls `install(stack)`, then `new Library(stack)`. A server hands each requester `new Library(stack.asActor(session))`.
 
-**When the app runs elsewhere** — holding its own key and reaching the stack through `APIAdapter` — it can't define types, so it asks: `adapter.requestInstall(manifest)`, present when the server advertises install requests, resolves to `pending` until the owner approves. The owner reviews `stack.planInstall(manifest, { did })` and applies it with `stack.installApp(manifest, { did, fingerprint: plan.fingerprint })`, which defines the types, registers the app's key and grants it the requests. The app still opens with its `migrations`, then builds `new Library(stack)` over its own connection. See [App installs](https://github.com/haverstack/core/blob/main/docs/spec/apps.md).
+**When the app runs elsewhere** — holding its own key and reaching the stack through `APIAdapter` — it can't define types, so it asks: `stack.requestInstall(manifest)`, present when the server advertises install requests, resolves to `pending` until the owner approves. The owner reviews `stack.planInstall(manifest, { did })` and applies it with `stack.installApp(manifest, { did, fingerprint: plan.fingerprint })`, which defines the types, registers the app's key and grants it the requests. The app still opens with its `migrations`, then builds `new Library(stack)` over its own connection. See [App installs](https://github.com/haverstack/core/blob/main/docs/spec/apps.md).
 
 **Name content with an interface**, as above. `ContentOf` flattens its result, so a `type` alias shows the expanded object in editor hovers, while an interface keeps its name. typescript-eslint's recommended `no-empty-object-type` rule rejects an empty interface; its `allowInterfaces: 'with-single-extends'` option admits this one.
 

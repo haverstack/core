@@ -11,7 +11,6 @@
  * here: docs/spec/wire-format.md § Records.
  */
 
-import { ownerActingAlone } from '../scoped-stack/scoped-stack.js';
 import type { ScopedStack } from '../scoped-stack/scoped-stack.js';
 import { StackBadRequestError } from '../errors.js';
 import { fieldError, requireBody } from './body.js';
@@ -120,7 +119,7 @@ export function createOptionsFromWireRecord(body: unknown, scoped: ScopedStack):
   // birth, so the timestamp a client sends has nothing to say.
   if (optionalString(record, 'unlistedAt') !== undefined) options.unlisted = true;
 
-  if (ownerActingAlone(scoped)) {
+  if (scoped.ownerActingAlone) {
     const createdAt = ownerDate(record, 'createdAt');
     if (createdAt !== undefined) options.createdAt = createdAt;
     const updatedAt = ownerDate(record, 'updatedAt');

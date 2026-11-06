@@ -122,7 +122,12 @@ import { applyAssociationEdits, associationDelta } from '../associations/identit
 import { validateGrantActions, validateGrantee, validateGrantBaseId } from '../grants.js';
 import type { GrantQuery } from '../grants.js';
 import { validateInstall } from '../install.js';
-import type { AppManifest, InstallAppOptions, InstallPlan } from '../install.js';
+import type {
+  AppManifest,
+  InstallAppOptions,
+  InstallPlan,
+  InstallRequestResult,
+} from '../install.js';
 import { assertAttachmentSize, assertContentSize } from './limits.js';
 import {
   validateRecordId,
@@ -263,6 +268,7 @@ export class Stack implements StackClient {
   // through. See docs/spec/adapters.md § Adapter capabilities.
   declare readonly listBlobs?: (query?: BlobsQuery) => Promise<BlobInfo[]>;
   declare readonly head?: () => Promise<string>;
+  declare readonly requestInstall?: (manifest: AppManifest) => Promise<InstallRequestResult>;
 
   private constructor(
     private readonly adapter: StackAdapter,
@@ -279,6 +285,12 @@ export class Stack implements StackClient {
       this.head = async () => {
         this.assertOpen();
         return this.adapter.head!();
+      };
+    }
+    if (adapter.requestInstall) {
+      this.requestInstall = async (manifest) => {
+        this.assertOpen();
+        return this.adapter.requestInstall!(manifest);
       };
     }
   }

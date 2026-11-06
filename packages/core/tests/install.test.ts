@@ -837,22 +837,40 @@ describe('the _app card an install registers', () => {
   });
 });
 
-describe('ScopedStack.planInstall()', () => {
-  test("plans for the request's own key", async () => {
-    const plan = await stack.asEntity(APP_DID).planInstall(manifest());
-    expect(plan.did).toBe(APP_DID);
-    expect(plan).toEqual(await stack.planInstall(manifest(), { did: APP_DID }));
+describe('requestInstall()', () => {
+  test("answers pending for the request's own key until the owner installs it", async () => {
+    const scoped = stack.asEntity(APP_DID);
+    expect(await scoped.requestInstall(manifest())).toEqual({ status: 'pending' });
+    const install = await apply(await stack.planInstall(manifest(), { did: APP_DID }));
+    expect(await scoped.requestInstall(manifest())).toEqual({ status: 'installed', install });
   });
 
-  test('answers empty once the manifest is installed for that key', async () => {
+  test('a changed manifest is pending again', async () => {
     await install(manifest());
-    expect(isPlanEmpty(await stack.asEntity(APP_DID).planInstall(manifest()))).toBe(true);
+    const result = await stack.asEntity(APP_DID).requestInstall(manifest({ version: '2.0.0' }));
+    expect(result).toEqual({ status: 'pending' });
   });
 
   test.each([
     ['an anonymous request', () => stack.asEntity(null)],
     ['a key acting for someone', () => stack.asActor({ principalId: APP_DID, subjectId: PERSON })],
   ])('refuses %s', async (_, scope) => {
-    await expect(scope().planInstall(manifest())).rejects.toThrow(StackPermissionError);
+    await expect(scope().requestInstall(manifest())).rejects.toThrow(StackPermissionError);
+  });
+
+  test("a Stack forwards to its adapter's, and has none when the adapter has none", async () => {
+    expect(stack.requestInstall).toBeUndefined();
+    const adapter = await MemoryAdapter.open({ ownerEntityId: OWNER });
+    const asked: AppManifest[] = [];
+    const remote = await Stack.open(
+      Object.assign(adapter, {
+        requestInstall: async (m: AppManifest) => {
+          asked.push(m);
+          return { status: 'pending' as const };
+        },
+      }),
+    );
+    expect(await remote.requestInstall!(manifest())).toEqual({ status: 'pending' });
+    expect(asked).toEqual([manifest()]);
   });
 });

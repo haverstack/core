@@ -15,6 +15,7 @@ import type { JournalEntryInput, RecordJournalEntry, JournalQuery } from './jour
 import type { StackQuery, QuerySort, QueryResult } from './query.js';
 import type { StackRecord, RecordVersion, VersionsQuery } from './records.js';
 import type { StackType } from './schema.js';
+import type { AppManifest, InstallRequestResult } from '../install.js';
 
 /**
  * Opt-in optimistic-concurrency precondition. On mismatch the mutation
@@ -326,6 +327,13 @@ export interface StackRecordAdapter {
   ): Promise<Unsubscribe>;
 
   /**
+   * Ask the server holding this store to install `manifest` for the key
+   * this adapter authenticated as. Optional — only a store a server holds
+   * has an owner to ask. See docs/spec/apps.md § Over the wire.
+   */
+  requestInstall?(manifest: AppManifest): Promise<InstallRequestResult>;
+
+  /**
    * Where this store's writes stand: two equal heads mean nothing was
    * written between them, though a head may move when nothing changed.
    * Opaque, compared only for equality. Optional — a stack cannot be
@@ -426,6 +434,7 @@ export type StoreReadMember =
   | 'getType'
   | 'listTypes'
   | 'subscribeChanges'
+  | 'requestInstall'
   | 'getBlob'
   | 'listBlobs'
   | 'head'

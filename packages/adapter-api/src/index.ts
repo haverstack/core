@@ -9,7 +9,7 @@
  */
 
 export { APIAdapter } from './adapter.js';
-export type { APIAdapterOpenOptions, InstallRequestResult } from './adapter.js';
+export type { APIAdapterOpenOptions } from './adapter.js';
 
 export {
   APIAdapterError,

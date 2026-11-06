@@ -111,6 +111,15 @@ export type InstallPlan = {
 };
 
 /**
+ * What asking for an install answers: `pending` until the owner approves
+ * this manifest for this key, `installed` with the `_install` record once
+ * applying it would change nothing. See docs/spec/wire-format.md § Installs.
+ */
+export type InstallRequestResult =
+  | { status: 'pending' }
+  | { status: 'installed'; install: StackRecord & { content: InstallContent } };
+
+/**
  * What `installApp()` applies a manifest under: the key it is for, and the
  * `fingerprint` of the plan the owner approved. Named on every apply, so an
  * approval made in one request is checked in another exactly as one made

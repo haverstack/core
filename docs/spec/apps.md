@@ -22,7 +22,7 @@ await stack.installApp(manifest, { did: appDid, fingerprint: plan.fingerprint })
 
 Migrations are not part of a manifest. They are app code, passed to `Stack.open()` on every startup (see [Data model § Type migrations](./data-model.md#type-migrations)), and the app runs them itself — see [Migrating an installed app's types](#migrating-an-installed-apps-types).
 
-`planInstall()`, `installApp()` and `uninstallApp()` live on `Stack` and are absent from `StackClient`, like `grantType()` and `defineType()`: everything they write is the owner's to write. An app reaches them only through the request it can make over the wire — see [Over the wire](#over-the-wire).
+`planInstall()`, `installApp()` and `uninstallApp()` live on `Stack` and are absent from `StackClient`, like `grantType()`: they are the owner's half of an install, which no session asks (see [Access control § Serving requests](./access-control.md#serving-requests)). An app reaches them only through `requestInstall()` — see [Over the wire](#over-the-wire).
 
 ## The `_install` record
 
@@ -143,12 +143,12 @@ Installing the same `appId` again undeletes the install and grants its requests 
 
 ## Over the wire
 
-Install has two halves, and only one of them is the same on every server. **The app's half** — present a manifest, learn whether it was approved — is pinned by [`POST /installs`](./wire-format.md#installs), so an app installs itself the same way on any stack. **The owner's half** — review the plan, approve it — is a person deciding, through whatever the server offers (an admin page, a notification); it is not on the wire, and underneath it is `planInstall()` then `installApp()`. The app's half is `ScopedStack.planInstall(manifest)`, which plans for the session's own key and refuses any other session.
+Install has two halves, and only one of them is the same on every server. **The app's half** — present a manifest, learn whether it was approved — is pinned by [`POST /installs`](./wire-format.md#installs), so an app installs itself the same way on any stack. **The owner's half** — review the plan, approve it — is a person deciding, through whatever the server offers (an admin page, a notification); it is not on the wire, and underneath it is `planInstall()` then `installApp()`. The app's half is `requestInstall(manifest)` on `StackClient`: a `Stack` over `APIAdapter` sends it, and the server's `ScopedStack` answers it for the session's own key.
 
 ```ts
 // Present only when the server advertises install requests.
-if (!adapter.requestInstall) throw new Error('This stack takes no install requests');
-const result = await adapter.requestInstall(manifest);
+if (!stack.requestInstall) throw new Error('This stack takes no install requests');
+const result = await stack.requestInstall(manifest);
 // { status: 'pending' } until the owner approves this manifest for this key,
 // then { status: 'installed', install } once applying it would change nothing
 ```

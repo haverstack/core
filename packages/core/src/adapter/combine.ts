@@ -89,6 +89,10 @@ export function combineAdapters(parts: {
         parts.record.subscribeChanges!(opts, handler),
     }),
 
+    ...(parts.record.requestInstall && {
+      requestInstall: (manifest) => parts.record.requestInstall!(manifest),
+    }),
+
     // StackAdapter.putAttachmentWithMetadata is deliberately never
     // synthesized here: glued backends have no shared transaction to honor
     // its atomicity promise (docs/spec/adapters.md § Interface split).

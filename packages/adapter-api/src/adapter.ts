@@ -46,6 +46,7 @@ import type {
   StackCapabilities,
   AppManifest,
   InstallContent,
+  InstallRequestResult,
   SubscribeOptions,
 } from '@haverstack/core';
 import { OwnerMismatchError, filtersContent } from '@haverstack/core/adapter';
@@ -122,11 +123,6 @@ import {
 // -------------------------------------------------------
 // Public option types
 // -------------------------------------------------------
-
-/** What `APIAdapter.requestInstall()` resolves to. */
-export type InstallRequestResult =
-  | { status: 'pending' }
-  | { status: 'installed'; install: StackRecord & { content: InstallContent } };
 
 export type APIAdapterOpenOptions = {
   /** Base URL of the stack server e.g. "https://example.com". Trailing slash is stripped. */

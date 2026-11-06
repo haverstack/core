@@ -12,6 +12,8 @@ import type {
   AssociationEdit,
   AttachmentContent,
   AuthorityAssociation,
+  BlobInfo,
+  BlobsQuery,
   DataAssociation,
   EntityId,
   FileId,
@@ -26,13 +28,16 @@ import type {
   StackCapabilities,
   StackQuery,
   StackRecord,
+  StackType,
   SubscribeOptions,
   TypeId,
+  TypeSchema,
   Unsubscribe,
   VersionsQuery,
 } from '../types/index.js';
 import type { ContentOf, Migration, ReadonlyTypeSchema, TypeHandle } from '../type-handle.js';
 import type { Collection } from '../collection.js';
+import type { AppManifest, InstallRequestResult } from '../install.js';
 
 export type CreateRecordOptions = {
   /**
@@ -305,4 +310,29 @@ export interface StackClient {
     opts?: CollectAttachmentGarbageOptions,
   ): Promise<CollectAttachmentGarbageResult>;
   subscribe(handler: (change: RecordChange) => void, opts?: SubscribeOptions): Promise<Unsubscribe>;
+  /**
+   * Define and persist a Type, held to the schema drift check. Under
+   * `ScopedStack`, the owner acting alone only.
+   */
+  defineType(opts: DefineTypeOptions): Promise<StackType>;
+  getType(id: TypeId): Promise<StackType | null>;
+  listTypes(): Promise<StackType[]>;
+  /** Whether `typeId`'s schema satisfies `requiredSchema`, for duck-typed reads across types. */
+  typeIsCompatible(typeId: TypeId, requiredSchema: TypeSchema): Promise<boolean>;
+  /**
+   * Every blob the store holds, `fileId` ascending — present when it can
+   * be answered. Under `ScopedStack`, the owner acting alone only.
+   */
+  listBlobs?(query?: BlobsQuery): Promise<BlobInfo[]>;
+  /**
+   * Where the store's writes stand — present when it can be answered.
+   * Under `ScopedStack`, the owner acting alone only.
+   */
+  head?(): Promise<string>;
+  /**
+   * Ask for `manifest` to be installed for the key making the request —
+   * present when there is a key and an owner to ask. Under `ScopedStack`,
+   * the key acting as itself only. See docs/spec/apps.md § Over the wire.
+   */
+  requestInstall?(manifest: AppManifest): Promise<InstallRequestResult>;
 }

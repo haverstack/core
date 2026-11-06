@@ -61,6 +61,7 @@ import type {
   StackType,
   SubscribeOptions,
   TypeId,
+  TypeSchema,
   Unsubscribe,
 } from '../types/index.js';
 import {
@@ -102,7 +103,8 @@ import {
 // Type-only: a ScopedStack never constructs a Stack, so nothing here
 // closes a runtime cycle with stack.ts, which does construct a ScopedStack.
 import type { Stack } from '../stack/stack.js';
-import type { AppManifest, InstallPlan } from '../install.js';
+import { isPlanEmpty } from '../install.js';
+import type { AppManifest, InstallRequestResult } from '../install.js';
 import { ScopeAuthority } from './authority.js';
 import { familyPolicy, ownerFieldRefusal } from './family-policy.js';
 import { ScopedSubscription } from './subscription.js';
@@ -124,17 +126,6 @@ import type {
  * normalization and open-check they run can't be skipped.
  */
 export const scopeToken: unique symbol = Symbol('ScopedStack');
-
-let readOwnerActingAlone: (scoped: ScopedStack) => boolean;
-
-/**
- * Whether `scoped` is the owner acting alone, for core's wire body readers.
- * Not re-exported from the index, as scopeToken is not: a server reaches
- * this determination only through what core builds on it.
- */
-export function ownerActingAlone(scoped: ScopedStack): boolean {
-  return readOwnerActingAlone(scoped);
-}
 
 /** Everything a ScopedStack borrows from the Stack that scoped it. */
 export type ScopedStackInit = {
@@ -176,10 +167,6 @@ export class ScopedStack implements StackClient {
   // through. See docs/spec/adapters.md § Adapter capabilities.
   declare readonly listBlobs?: (query?: BlobsQuery) => Promise<BlobInfo[]>;
   declare readonly head?: () => Promise<string>;
-
-  static {
-    readOwnerActingAlone = (scoped) => scoped.#authority.ownerActingAlone;
-  }
 
   /** Not callable from outside the package — see ScopedStackInit. */
   constructor(token: typeof scopeToken, init: ScopedStackInit) {
@@ -232,6 +219,15 @@ export class ScopedStack implements StackClient {
    */
   get subjectId(): EntityId | null {
     return this.#authority.subjectId;
+  }
+
+  /**
+   * Whether this view is the stack owner acting as itself — core's answer,
+   * for a server that must act on it, as in dropping a create body's clock
+   * fields. See docs/spec/access-control.md § Serving requests.
+   */
+  get ownerActingAlone(): boolean {
+    return this.#authority.ownerActingAlone;
   }
 
   get capabilities(): StackCapabilities {
@@ -1051,15 +1047,23 @@ export class ScopedStack implements StackClient {
     return this.stack.listTypes();
   }
 
+  /** Open to every requester, as getType() is. */
+  async typeIsCompatible(typeId: TypeId, requiredSchema: TypeSchema): Promise<boolean> {
+    return this.stack.typeIsCompatible(typeId, requiredSchema);
+  }
+
   /**
-   * Plan `manifest` for this request's own key, as Stack.planInstall()
-   * does for a named one. Refused to anonymous and delegated requests: an
-   * install is for the key that authenticated. Writes nothing.
-   * See docs/spec/apps.md § Over the wire.
+   * Ask for `manifest` to be installed for this request's own key. Writes
+   * nothing: a `pending` answer is the server's to queue for the owner,
+   * who approves through Stack.planInstall() and installApp().
+   * See docs/spec/wire-format.md § Installs.
    */
-  async planInstall(manifest: AppManifest): Promise<InstallPlan> {
+  async requestInstall(manifest: AppManifest): Promise<InstallRequestResult> {
     const did = this.requireActingAlone('An install is requested by the key acting as itself');
-    return this.stack.planInstall(manifest, { did });
+    const plan = await this.stack.planInstall(manifest, { did });
+    return isPlanEmpty(plan)
+      ? { status: 'installed', install: plan.existing! }
+      : { status: 'pending' };
   }
 
   /**
