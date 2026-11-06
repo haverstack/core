@@ -836,3 +836,23 @@ describe('the _app card an install registers', () => {
     expect(card.createdBy).toBeUndefined();
   });
 });
+
+describe('ScopedStack.planInstall()', () => {
+  test("plans for the request's own key", async () => {
+    const plan = await stack.asEntity(APP_DID).planInstall(manifest());
+    expect(plan.did).toBe(APP_DID);
+    expect(plan).toEqual(await stack.planInstall(manifest(), { did: APP_DID }));
+  });
+
+  test('answers empty once the manifest is installed for that key', async () => {
+    await install(manifest());
+    expect(isPlanEmpty(await stack.asEntity(APP_DID).planInstall(manifest()))).toBe(true);
+  });
+
+  test.each([
+    ['an anonymous request', () => stack.asEntity(null)],
+    ['a key acting for someone', () => stack.asActor({ principalId: APP_DID, subjectId: PERSON })],
+  ])('refuses %s', async (_, scope) => {
+    await expect(scope().planInstall(manifest())).rejects.toThrow(StackPermissionError);
+  });
+});

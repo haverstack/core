@@ -143,7 +143,7 @@ Installing the same `appId` again undeletes the install and grants its requests 
 
 ## Over the wire
 
-Install has two halves, and only one of them is the same on every server. **The app's half** — present a manifest, learn whether it was approved — is pinned by [`POST /installs`](./wire-format.md#installs), so an app installs itself the same way on any stack. **The owner's half** — review the plan, approve it — is a person deciding, through whatever the server offers (an admin page, a notification); it is not on the wire, and underneath it is `planInstall()` then `installApp()`.
+Install has two halves, and only one of them is the same on every server. **The app's half** — present a manifest, learn whether it was approved — is pinned by [`POST /installs`](./wire-format.md#installs), so an app installs itself the same way on any stack. **The owner's half** — review the plan, approve it — is a person deciding, through whatever the server offers (an admin page, a notification); it is not on the wire, and underneath it is `planInstall()` then `installApp()`. The app's half is `ScopedStack.planInstall(manifest)`, which plans for the session's own key and refuses any other session.
 
 ```ts
 // Present only when the server advertises install requests.

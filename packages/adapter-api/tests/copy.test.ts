@@ -47,7 +47,7 @@ function serve(store: MemoryAdapter) {
     if (path === '/.well-known/stack') {
       return jsonResponse({ ...DISCOVERY, blobs: { list: true }, head: { read: true } });
     }
-    if (path === '/head') return jsonResponse({ head: await store.head() });
+    if (path === '/head') return jsonResponse({ head: await store.head!() });
     if (path === '/records/query') {
       const page = await store.queryRecords(
         resolveQuery(parseQueryBody(JSON.parse(init.body as string))),

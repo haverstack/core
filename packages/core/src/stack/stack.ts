@@ -44,6 +44,8 @@ import { ChangeEmitter, RelayDelivery, PendingChange, assertSinceUsable } from '
 import { EVERY_RECORD, SYSTEM_TYPES } from '../types/index.js';
 import type { ValidationError } from '../validate.js';
 import type {
+  BlobInfo,
+  BlobsQuery,
   StackRecord,
   StackType,
   TypeSchema,
@@ -257,11 +259,29 @@ export class Stack implements StackClient {
    */
   private readonly changes = new ChangeEmitter();
 
+  // Assigned only when the adapter has the method, so its absence carries
+  // through. See docs/spec/adapters.md § Adapter capabilities.
+  declare readonly listBlobs?: (query?: BlobsQuery) => Promise<BlobInfo[]>;
+  declare readonly head?: () => Promise<string>;
+
   private constructor(
     private readonly adapter: StackAdapter,
     private readonly idTimestampSkewMsValue: number | null,
     private readonly migrations: MigrationRegistry,
-  ) {}
+  ) {
+    if (adapter.listBlobs) {
+      this.listBlobs = async (query) => {
+        this.assertOpen();
+        return this.adapter.listBlobs!(query);
+      };
+    }
+    if (adapter.head) {
+      this.head = async () => {
+        this.assertOpen();
+        return this.adapter.head!();
+      };
+    }
+  }
 
   /**
    * Announce a mutation that has already been persisted. Called after the
@@ -1461,11 +1481,7 @@ export class Stack implements StackClient {
     opts: CollectAttachmentGarbageOptions & ActorOptions = {},
   ): Promise<CollectAttachmentGarbageResult> {
     this.assertOpen();
-    return attachments.collectAttachmentGarbage(
-      this,
-      this.adapter.listBlobs?.bind(this.adapter),
-      opts,
-    );
+    return attachments.collectAttachmentGarbage(this, this.listBlobs, opts);
   }
 
   // -------------------------------------------------------

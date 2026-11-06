@@ -110,8 +110,3 @@ export type {
   WireAuthTokenRequest,
   WireMigrationRequest,
 } from './body.js';
-
-// The tier gating purge, commitMigration() and includeUnlisted, which
-// a server must decide for those routes itself. Computing it as "is the
-// owner" is a privilege bug with no symptom.
-export { isOwnerActingAlone } from '../access.js';
