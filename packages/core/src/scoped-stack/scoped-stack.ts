@@ -103,6 +103,7 @@ import {
 // Type-only: a ScopedStack never constructs a Stack, so nothing here
 // closes a runtime cycle with stack.ts, which does construct a ScopedStack.
 import type { Stack } from '../stack/stack.js';
+import { isPlanEmpty } from '../install.js';
 import type { AppManifest, InstallRequestResult } from '../install.js';
 import { ScopeAuthority } from './authority.js';
 import { familyPolicy, ownerFieldRefusal } from './family-policy.js';
@@ -1051,13 +1052,16 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Answer this request's own key asking to install `manifest`, as
-   * Stack.answerInstall() does for a named key. A `pending` answer is the
-   * server's to queue for the owner. See docs/spec/wire-format.md § Installs.
+   * Answer this request's own key asking to install `manifest`: `installed`
+   * once applying it would change nothing, `pending` for the server to queue
+   * for the owner. Writes nothing. See docs/spec/wire-format.md § Installs.
    */
   async answerInstall(manifest: AppManifest): Promise<InstallRequestResult> {
     const did = this.requireActingAlone('An install is requested by the key acting as itself');
-    return this.stack.answerInstall(manifest, { did });
+    const plan = await this.stack.planInstall(manifest, { did });
+    return isPlanEmpty(plan)
+      ? { status: 'installed', install: plan.existing! }
+      : { status: 'pending' };
   }
 
   /**

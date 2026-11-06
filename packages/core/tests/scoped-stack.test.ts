@@ -3425,10 +3425,11 @@ describe('ScopedStack — owner-only operations', () => {
     expect(await stack.getType(TAG)).toBeNull();
   });
 
-  test('getType() and listTypes() are open to every requester', async () => {
+  test('getType(), listTypes() and typeIsCompatible() are open to every requester', async () => {
     for (const [, scope] of refused) {
       expect((await scope().getType(NOTE))?.id).toBe(NOTE);
       expect((await scope().listTypes()).map((t) => t.id)).toContain(NOTE);
+      expect(await scope().typeIsCompatible(NOTE, { text: { kind: 'text' } })).toBe(true);
     }
   });
 

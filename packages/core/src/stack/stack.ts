@@ -121,13 +121,8 @@ import {
 import { applyAssociationEdits, associationDelta } from '../associations/identity.js';
 import { validateGrantActions, validateGrantee, validateGrantBaseId } from '../grants.js';
 import type { GrantQuery } from '../grants.js';
-import { isPlanEmpty, validateInstall } from '../install.js';
-import type {
-  AppManifest,
-  InstallAppOptions,
-  InstallPlan,
-  InstallRequestResult,
-} from '../install.js';
+import { validateInstall } from '../install.js';
+import type { AppManifest, InstallAppOptions, InstallPlan } from '../install.js';
 import { assertAttachmentSize, assertContentSize } from './limits.js';
 import {
   validateRecordId,
@@ -1656,21 +1651,6 @@ export class Stack implements StackClient {
   async planInstall(submitted: AppManifest, opts: { did: EntityId }): Promise<InstallPlan> {
     this.assertOpen();
     return apps.planInstall(this, submitted, opts);
-  }
-
-  /**
-   * Answer a key's request to install `manifest`: `installed` once applying
-   * it for `opts.did` would change nothing, `pending` otherwise, for the
-   * owner to approve. Writes nothing. See docs/spec/wire-format.md § Installs.
-   */
-  async answerInstall(
-    manifest: AppManifest,
-    opts: { did: EntityId },
-  ): Promise<InstallRequestResult> {
-    const plan = await this.planInstall(manifest, opts);
-    return isPlanEmpty(plan)
-      ? { status: 'installed', install: plan.existing! }
-      : { status: 'pending' };
   }
 
   /**

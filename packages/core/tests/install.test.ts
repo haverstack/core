@@ -845,15 +845,6 @@ describe('answerInstall()', () => {
     expect(await scoped.answerInstall(manifest())).toEqual({ status: 'installed', install });
   });
 
-  test('answers as Stack.answerInstall() does for the same key', async () => {
-    await install(manifest());
-    for (const m of [manifest(), manifest({ version: '2.0.0' })]) {
-      expect(await stack.asEntity(APP_DID).answerInstall(m)).toEqual(
-        await stack.answerInstall(m, { did: APP_DID }),
-      );
-    }
-  });
-
   test('a changed manifest is pending again', async () => {
     await install(manifest());
     const result = await stack.asEntity(APP_DID).answerInstall(manifest({ version: '2.0.0' }));
