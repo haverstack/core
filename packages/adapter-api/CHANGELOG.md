@@ -1,5 +1,25 @@
 # @haverstack/adapter-api
 
+## 0.46.0
+
+### Minor Changes
+
+- [#487](https://github.com/haverstack/core/pull/487) [`e75fd78`](https://github.com/haverstack/core/commit/e75fd787d653e0ef9257832121d3d5c7e90fdd35) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `StackClient` is now everything a session can ask of a stack, and `ScopedStack` decides each one, so a server built on it makes no ownership or permission determination of its own. `StackClient` gains `defineType()`, `getType()`, `listTypes()`, `typeIsCompatible()`, and the optional `listBlobs()` and `head()`, which `Stack` has exactly when its adapter does and `ScopedStack` exactly when its `Stack` does. `ScopedStack` refuses `defineType()`, `listBlobs()` and `head()` to all but the owner acting alone.
+
+  `ScopedStack.answerInstall(manifest)` answers an install request for the session's own key, `installed` or `pending`, refusing anonymous and delegated sessions.
+
+  `createOptionsFromWireRecord(body, scoped)` takes the `ScopedStack` the server will create through, in place of a session and the owner's id, and reads its new `ownerActingAlone`. `isOwnerActingAlone()` is removed.
+
+  `InstallRequestResult` is exported from `@haverstack/core` instead of `@haverstack/adapter-api`.
+
+  `MemoryAdapter.head` in `@haverstack/core/testing` is now an optional field, as `listBlobs` is, so a test subclass can remove it; a caller invoking it directly asserts it present (`adapter.head!()`).
+
+### Patch Changes
+
+- Updated dependencies [[`e75fd78`](https://github.com/haverstack/core/commit/e75fd787d653e0ef9257832121d3d5c7e90fdd35)]:
+  - @haverstack/wire-types@0.46.0
+  - @haverstack/core@0.47.0
+
 ## 0.45.0
 
 ### Minor Changes
