@@ -103,7 +103,13 @@ describe('read-compat cores', () => {
       choices: {
         kind: 'array',
         required: true,
-        items: { kind: 'object', properties: { optionId: { kind: 'string', required: true } } },
+        items: {
+          kind: 'object',
+          properties: {
+            optionId: { kind: 'string', required: true },
+            score: { kind: 'number', required: true },
+          },
+        },
       },
     },
   };
@@ -125,9 +131,9 @@ describe('IMAGE', () => {
 describe('POLL and VOTE', () => {
   test('a ballot without a poll is refused at write time', async () => {
     await defineCommonsTypes(stack, [VOTE]);
-    await expect(stack.create(VOTE.id, { choices: [{ optionId: 'a' }] })).rejects.toBeInstanceOf(
-      StackValidationError,
-    );
+    await expect(
+      stack.create(VOTE.id, { choices: [{ optionId: 'a', score: 1 }] }),
+    ).rejects.toBeInstanceOf(StackValidationError);
   });
 
   test("a poll's ballots are one content query on pollId", async () => {
@@ -144,11 +150,11 @@ describe('POLL and VOTE', () => {
       options: [{ id: 'a', label: 'Pizza' }],
     });
     const votes = stack.collection(VOTE);
-    await votes.create({ pollId: poll.id, choices: [{ optionId: 'b' }] });
-    await votes.create({ pollId: other.id, choices: [{ optionId: 'a' }] });
+    await votes.create({ pollId: poll.id, choices: [{ optionId: 'b', score: 1 }] });
+    await votes.create({ pollId: other.id, choices: [{ optionId: 'a', score: 1 }] });
 
     const { records } = await votes.query({ filter: { content: { pollId: poll.id } } });
-    expect(records.map((r) => r.content.choices)).toEqual([[{ optionId: 'b' }]]);
+    expect(records.map((r) => r.content.choices)).toEqual([[{ optionId: 'b', score: 1 }]]);
   });
 });
 

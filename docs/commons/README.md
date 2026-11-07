@@ -74,7 +74,9 @@ Three postures, in order of preference:
    required fields with matching kinds. Other apps that consume via `isCompatible()`
    can then read your records even though they've never heard of your type. Each type
    file documents its **read-compat core** — the minimal shape consumers should code
-   against.
+   against. A core declares its arrays' element fields too, since `isCompatible()`
+   reads an array through its `items`: a compatible type promises every field a
+   consumer reads, at any depth.
 3. **Migrate in later.** An existing app with its own type can pass `Stack.open()` a
    migration into the commons type when ready and commit it with `migrateAll()` — a
    migration path may cross type families (see
@@ -127,13 +129,18 @@ these.
    `snapshot`), the label is specified in the type file with the same authority as a
    schema field.
 7. **String vocabularies over booleans-in-waiting.** Where a field has a small open set
-   of values (`note.format`), the type file specifies the well-known values. Every
-   field a reader can fail to recognize — a word it doesn't know, a number out of
-   range — states two readings: what absence means, and what an unrecognized value
-   falls back to. **The fallback is the reading that claims least**: `note.format`
-   falls back to `"plain"`, never a richer format than declared, and a ballot's bad
-   `score` to 0. Readers apply the fallback rather than reject the record, so the
-   vocabulary can grow additively.
+   of values (`note.format`), the type file specifies the well-known values and two
+   readings: what absence means, and what an unknown value falls back to. Readers apply
+   the fallback rather than reject the record, so the vocabulary can grow additively.
+   **The fallback is the value that claims least** — `note.format` falls back to
+   `"plain"`, never a richer format than declared — and where no value claims less
+   than another, it is the absence reading.
+8. **An invalid value reads as absent.** Where a type file states a range or form for a
+   field (`place.latitude`, a ballot's `score`), a value outside it is a writer's bug,
+   not vocabulary growth, and reads as if the field were absent. A required field has
+   no absence to read, so the entry or record holding the invalid value is dropped: a
+   place with out-of-range coordinates is no place, and a ballot entry with a bad score
+   counts for nothing.
 
 ---
 
@@ -284,7 +291,7 @@ named implementation dependency, so a required field is schema-enforced rather t
 convention-only from day one. No type currently holds this status. _Proposed_: design
 recorded to fix intent, but per the governance rule it stays parked until a concrete
 intended writer exists — each group-cluster type graduates when a group-tools app or
-demo writing it is real, building on the grant/group primitives (`_group`, type-level
+demo intends to write it, building on the grant/group primitives (`_group`, type-level
 grants) documented in the identity and access-control specs.
 
 Deliberately absent from the initial set: recurrence rules (see `event`: occurrences are

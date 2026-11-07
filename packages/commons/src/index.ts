@@ -189,7 +189,7 @@ export const VOTE = typeHandle({
         kind: 'object',
         properties: {
           optionId: { kind: 'string', required: true },
-          score: { kind: 'number' },
+          score: { kind: 'number', required: true },
         },
       },
     },
