@@ -127,9 +127,13 @@ these.
    `snapshot`), the label is specified in the type file with the same authority as a
    schema field.
 7. **String vocabularies over booleans-in-waiting.** Where a field has a small open set
-   of values (`note.format`), the type file specifies the well-known values and the
-   default meaning of absence; unknown values must be tolerated by readers
-   (treat-as-default), so the vocabulary can grow additively.
+   of values (`note.format`), the type file specifies the well-known values. Every
+   field a reader can fail to recognize — a word it doesn't know, a number out of
+   range — states two readings: what absence means, and what an unrecognized value
+   falls back to. **The fallback is the reading that claims least**: `note.format`
+   falls back to `"plain"`, never a richer format than declared, and a ballot's bad
+   `score` to 0. Readers apply the fallback rather than reject the record, so the
+   vocabulary can grow additively.
 
 ---
 
