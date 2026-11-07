@@ -171,6 +171,7 @@ export const POLL = typeHandle({
       },
     },
     method: { kind: 'string' },
+    scoreMax: { kind: 'number' },
     closesAt: { kind: 'date' },
     details: { kind: 'text' },
   },
@@ -189,6 +190,7 @@ export const VOTE = typeHandle({
         properties: {
           optionId: { kind: 'string', required: true },
           response: { kind: 'string' },
+          score: { kind: 'number' },
         },
       },
     },

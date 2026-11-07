@@ -19,8 +19,9 @@ the stack reads a result, and no write anywhere is gated on one. What an outcome
 advisory, binding by the group's own agreement, or a nudge to whoever holds the stack —
 is each group's to decide, outside the data.
 
-Prior art: ActivityStreams `Question` (Mastodon polls), Doodle/when2meet, Loomio,
-Condorcet/approval balloting literature for the method vocabulary.
+Prior art: ActivityStreams `Question` (Mastodon polls), Doodle/when2meet, Loomio, and
+the social-choice literature (plurality, approval, instant-runoff, Borda and score
+voting) for the method vocabulary.
 
 ## Schema
 
@@ -44,6 +45,7 @@ await stack.defineType({
       },
     },
     method: { kind: 'string' },
+    scoreMax: { kind: 'number' },
     closesAt: { kind: 'date' },
     details: { kind: 'text' },
   },
@@ -62,6 +64,7 @@ await stack.defineType({
         properties: {
           optionId: { kind: 'string', required: true },
           response: { kind: 'string' },
+          score: { kind: 'number' },
         },
       },
     },
@@ -71,20 +74,47 @@ await stack.defineType({
 
 ## Field semantics — `poll@1`
 
-| Field      | Kind     | Required | Meaning                                                                                                                                                                                                                                                                                                                                                                                        |
-| ---------- | -------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `question` | `string` | yes      | What's being decided.                                                                                                                                                                                                                                                                                                                                                                          |
-| `options`  | `array`  | yes      | The choices. Each has a stable `id` (identity — never reused or repurposed), a `label`, and optionally `startsAt`/`endsAt` when the option is a time slot (the when-to-meet case).                                                                                                                                                                                                             |
-| `method`   | `string` | no       | How ballots are counted. Well-known values: `"single"` (default when absent — a ballot's first choice is its vote) and `"multiple"` (every choice counts). An open vocabulary (`"ranked"`, `"score"` are anticipated proposals); a reader treats an unknown method as `"single"`, which counts each ballot's first preference — a plurality reading of any ballot, since `choices` is ordered. |
-| `closesAt` | `date`   | no       | Voting deadline. Absent means open; closing a poll is setting it.                                                                                                                                                                                                                                                                                                                              |
-| `details`  | `text`   | no       | Context for the decision. Markdown by convention.                                                                                                                                                                                                                                                                                                                                              |
+| Field      | Kind     | Required | Meaning                                                                                                                                                                            |
+| ---------- | -------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `question` | `string` | yes      | What's being decided.                                                                                                                                                              |
+| `options`  | `array`  | yes      | The choices. Each has a stable `id` (identity — never reused or repurposed), a `label`, and optionally `startsAt`/`endsAt` when the option is a time slot (the when-to-meet case). |
+| `method`   | `string` | no       | How ballots are counted: `"plurality"` (default when absent), `"approval"`, `"instant-runoff"`, `"borda"` or `"score"`. See [Counting methods](#counting-methods).                 |
+| `scoreMax` | `number` | no       | The top of a `"score"` poll's range, an integer; the bottom is always 0. Absent means 5. Other methods ignore it.                                                                  |
+| `closesAt` | `date`   | no       | Voting deadline. Absent means open; closing a poll is setting it.                                                                                                                  |
+| `details`  | `text`   | no       | Context for the decision. Markdown by convention.                                                                                                                                  |
 
 ## Field semantics — `vote@1`
 
-| Field     | Kind         | Required | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| --------- | ------------ | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `pollId`  | `record-ref` | yes      | The poll this ballot answers. A top-level scalar, so "all ballots for poll X" is one exact-match content query.                                                                                                                                                                                                                                                                                                                  |
-| `choices` | `array`      | yes      | The endorsed options, **most-preferred first** (ordering is significant now so ranked methods can arrive without a version bump). Each entry names an `optionId` and optionally a `response`: well-known values `"yes"` (default when absent, and the reading of an unknown value) and `"maybe"` (the when-to-meet "if need be"). An option absent from `choices` is a no, and an entry naming no option of the poll is ignored. |
+| Field     | Kind         | Required | Meaning                                                                                                                                                                                                                                                                                                                                            |
+| --------- | ------------ | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pollId`  | `record-ref` | yes      | The poll this ballot answers. A top-level scalar, so "all ballots for poll X" is one exact-match content query.                                                                                                                                                                                                                                    |
+| `choices` | `array`      | yes      | The endorsed options, **most-preferred first**. Each entry names an `optionId`, optionally a `response`, and under `"score"` a `score`. `response` has two well-known values: `"yes"`, the default when absent, and `"maybe"`, the when-to-meet "if need be". A reader treats any other value as `"yes"`. An option absent from `choices` is a no. |
+
+## Counting methods
+
+`method` names the rule that turns ballots into a result, and every method reads the
+same ballot: `choices`, most-preferred first. A reader treats an unknown method as
+`"plurality"`, which every ballot supports because `choices` is ordered.
+
+| `method`                            | How a result is counted                                                                                                                                                                                                                                                             |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `"plurality"` (default when absent) | Each ballot's first choice gets one vote. Most votes wins.                                                                                                                                                                                                                          |
+| `"approval"`                        | Every choice on a ballot gets one vote. Most votes wins.                                                                                                                                                                                                                            |
+| `"instant-runoff"`                  | In rounds. Each ballot counts for its highest-ranked option still standing. An option holding more than half of the ballots still counting wins; otherwise every option tied for fewest is eliminated and the next round counts again. A ballot with no option left stops counting. |
+| `"borda"`                           | With _n_ options in the poll, a ballot's first choice scores _n_ − 1 points, its second _n_ − 2, and so on; options it doesn't list score 0. Highest total wins.                                                                                                                    |
+| `"score"`                           | Each choice adds its `score`, an integer from 0 to the poll's `scoreMax`, to its option; options a ballot doesn't list add 0. Highest total wins.                                                                                                                                   |
+
+Every method shares these rules:
+
+- **An entry counts once, for an option the poll has.** An entry naming no option of the
+  poll is ignored, and so is a repeat of an option already on the ballot.
+- **`response` never changes a count.** A `"maybe"` counts as an endorsement under
+  every method; a tally may report how many of an option's endorsements were maybes.
+- **A tie is a result.** No method breaks one. Under `"instant-runoff"`, a round in
+  which every remaining option is tied for fewest ends in a tie among them.
+- **A `score` outside the poll's range counts as 0**, as does an absent or non-integer
+  one: it is an unlisted option. Writers order a `"score"` ballot by descending score,
+  so its `"plurality"` reading is its top-scored option.
 
 ## Conventions
 
@@ -119,7 +149,7 @@ await stack.defineType({
   owner, and whoever is granted it — can tally and post results. True secret ballots
   (nobody, including the owner, learns individual votes) are cryptographic territory
   the commons does not pretend to cover.
-- **When-to-meet, end to end**: poll with `method: "multiple"` and time-slot options;
+- **When-to-meet, end to end**: poll with `method: "approval"` and time-slot options;
   members respond with `"yes"`/`"maybe"` per slot; the organizer promotes the winning
   slot to an [`event`](./event.md) and links it to the poll with the
   [`decided-by`](./README.md#cross-type-conventions) cross-type label.
