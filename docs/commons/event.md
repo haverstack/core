@@ -45,12 +45,12 @@ await stack.defineType({
 - **Recurrence is excluded from @1, and the @1 answer is materialization.** Writers
   create the actual occurrence records ("every 2nd Tuesday" → the next N Tuesdays),
   which keeps every consumer trivially correct — a calendar app that has never heard of
-  recurrence still renders the schedule. The generating rule (RRULE-shaped) lives in
-  the writing app's sidecar on its own anchor record; occurrences link to that anchor
-  with `{ kind: 'relationship', label: 'series', target: { kind: 'record', recordId } }` (a reserved cross-type
-  label) so any app can group them. A commons recurrence proposal (RRULE prior art) is
-  expected eventually; it must land as an additive companion, not a reinterpretation of
-  occurrence records.
+  recurrence still renders the schedule. The generating rule (RRULE-shaped) lives in the
+  writing app's sidecar on its own anchor record; occurrences link to that anchor with
+  `{ kind: 'relationship', label: 'series', target: { kind: 'record', recordId } }` (a
+  reserved cross-type label) so any app can group them. A commons recurrence proposal
+  (RRULE prior art) is expected eventually; it must land as an additive companion, not a
+  reinterpretation of occurrence records.
 - **Querying a date range**: content filters are exact-match only, so "events in May"
   is not a content query. At group scale, consumers fetch events (or filter by
   `createdAt` coarsely) and range-filter app-side — same honest trade as `article`

@@ -41,16 +41,16 @@ await stack.defineType({
 
 - **Locating any record — the `location` relationship.** The check-in, the geotagged
   photo, the note written at a café are all the same move:
-  `{ kind: 'relationship', label: 'location', target: { kind: 'record', recordId: <place record id> } }` on the
-  located record. This is a cross-type convention (see README): a check-in app is just
-  place records plus (possibly caption-less) records pointing at them, and every other
-  app's records get geotagging for free. **A check-in's type follows its contract**
-  (see [Choosing a text type](./text-types.md)): the private location-diary entry —
-  "I was here," addressed to no one — is a (possibly empty-text) `note` with a
-  `location` association, its `createdAt` the check-in time; "I'm at the café, come
-  join me" sent to a group is a `message` with one; the Foursquare-style public
-  check-in is the future broadcast `post` with one. The `location` association
-  is the invariant; the contract varies with the act.
+  `{ kind: 'relationship', label: 'location', target: { kind: 'record', recordId: <place> } }`
+  on the located record. This is a cross-type convention (see README): a check-in app is
+  just place records plus (possibly caption-less) records pointing at them, and every
+  other app's records get geotagging for free. **A check-in's type follows its
+  contract** (see [Choosing a text type](./text-types.md)): the private location-diary
+  entry — "I was here," addressed to no one — is a (possibly empty-text) `note` with a
+  `location` association, its `createdAt` the check-in time; "I'm at the café, come join
+  me" sent to a group is a `message` with one; the Foursquare-style public check-in is
+  the future broadcast `post` with one. The `location` association is the invariant; the
+  contract varies with the act.
 - **Deduplication** is app-side: two records with the same coordinates are two records.
   An app importing venues should query by exact coordinates before creating.
 - **No geo queries.** The query engine has no spatial capability and content filters
