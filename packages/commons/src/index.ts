@@ -152,6 +152,49 @@ export const SITE = typeHandle({
   },
 });
 
+export const POLL = typeHandle({
+  id: 'org.haverstack/poll@1',
+  name: 'Poll',
+  schema: {
+    question: { kind: 'string', required: true },
+    options: {
+      kind: 'array',
+      required: true,
+      items: {
+        kind: 'object',
+        properties: {
+          id: { kind: 'string', required: true },
+          label: { kind: 'string', required: true },
+          startsAt: { kind: 'date' },
+          endsAt: { kind: 'date' },
+        },
+      },
+    },
+    method: { kind: 'string' },
+    closesAt: { kind: 'date' },
+    details: { kind: 'text' },
+  },
+});
+
+export const VOTE = typeHandle({
+  id: 'org.haverstack/vote@1',
+  name: 'Vote',
+  schema: {
+    pollId: { kind: 'record-ref', required: true },
+    choices: {
+      kind: 'array',
+      required: true,
+      items: {
+        kind: 'object',
+        properties: {
+          optionId: { kind: 'string', required: true },
+          response: { kind: 'string' },
+        },
+      },
+    },
+  },
+});
+
 /**
  * Registers each given commons type on `stack` via `defineType()`, exactly
  * as written here. Sequential, matching `Stack`'s own system-type seeding —

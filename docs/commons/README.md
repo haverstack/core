@@ -35,10 +35,10 @@ org.haverstack/page@1
 org.haverstack/image@1
 org.haverstack/post@1
 org.haverstack/site@1
+org.haverstack/poll@1
+org.haverstack/vote@1
 org.haverstack/message@1 (proposed — see below)
 org.haverstack/event@1   (proposed)
-org.haverstack/poll@1    (proposed)
-org.haverstack/vote@1    (proposed)
 org.haverstack/folder@1  (proposed)
 ```
 
@@ -193,6 +193,11 @@ sense for it.
   publication. A collection root (`page.collection`) scoped under a `site` ancestor
   composes this into its query rather than storing site membership on the collection
   itself — see `page.md` and `site.md`.
+- **`decided-by`** —
+  `{ kind: 'relationship', label: 'decided-by', target: { kind: 'record', recordId: <poll> } }`
+  means a [`poll`](./poll.md) is what settled this record: the event a scheduling poll
+  picked, the task a group voted to take on. Provenance only — like the poll itself, it
+  confers nothing and gates no write.
 
 Cross-type conventions are governed like fields: proposing one is proposing it for
 every record in every stack, so the bar is correspondingly higher.
@@ -263,20 +268,20 @@ examples (comments on a blog post are messages; private marginalia are notes).
 | `org.haverstack/image@1`    | [`image.md`](./image.md)       | Draft    | `{ file }`                |
 | `org.haverstack/post@1`     | [`post.md`](./post.md)         | Draft    | `{ text }`                |
 | `org.haverstack/site@1`     | [`site.md`](./site.md)         | Draft    | `{ title, baseUrl }`      |
+| `org.haverstack/poll@1`     | [`poll.md`](./poll.md)         | Draft    | `{ question, options }`   |
+| `org.haverstack/vote@1`     | [`poll.md`](./poll.md)         | Draft    | `{ pollId, choices }`     |
 | `org.haverstack/message@1`  | [`message.md`](./message.md)   | Proposed | `{ text }`                |
 | `org.haverstack/event@1`    | [`event.md`](./event.md)       | Proposed | `{ title, startsAt }`     |
-| `org.haverstack/poll@1`     | [`poll.md`](./poll.md)         | Proposed | `{ question, options }`   |
-| `org.haverstack/vote@1`     | [`poll.md`](./poll.md)         | Proposed | `{ pollId, choices }`     |
 | `org.haverstack/folder@1`   | [`folder.md`](./folder.md)     | Proposed | `{ name }`                |
 
-**Statuses.** _Draft_: settled enough to build against (still subject to in-place
-change until there's an install base). _Staged_: design recorded, registration blocked
-on a named implementation dependency, so a required field is schema-enforced rather
-than convention-only from day one. No type currently holds this status. _Proposed_:
-design recorded to fix intent, but per the governance rule it stays parked until a
-concrete intended writer exists — the group cluster graduates when a group-tools app
-or demo is real, building on the grant/group primitives (`_group`, type-level grants)
-documented in the identity and access-control specs.
+**Statuses.** _Draft_: settled enough to build against (still subject to in-place change
+until there's an install base). _Staged_: design recorded, registration blocked on a
+named implementation dependency, so a required field is schema-enforced rather than
+convention-only from day one. No type currently holds this status. _Proposed_: design
+recorded to fix intent, but per the governance rule it stays parked until a concrete
+intended writer exists — each group-cluster type graduates when a group-tools app or
+demo writing it is real, building on the grant/group primitives (`_group`, type-level
+grants) documented in the identity and access-control specs.
 
 Deliberately absent from the initial set: recurrence rules (see `event`: occurrences are
 materialized in @1), `file`/`document` (a first-class `file` type is expected to follow
