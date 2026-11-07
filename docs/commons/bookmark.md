@@ -59,4 +59,4 @@ can be surfaced by a bookmark consumer.
 - `siteName`, `author`, `publishedAt` page metadata — that is [`article`](./article.md)
   territory (the read-later apps' richer shape). An app that captures full articles
   keeps a paired bookmark record for bookmark-consumer reach and links it to the
-  article with `{ kind: 'relationship', label: 'capture', recordId }`.
+  article with `{ kind: 'relationship', label: 'capture', target: { kind: 'record', recordId } }`.

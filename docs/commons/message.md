@@ -58,7 +58,7 @@ write, which is the whole reason this type needs no author field.
   (`typeId = message@1, parentId = null`, which finds exactly the threads that _are_
   board threads). Basecamp-style flat threads are the model.
 - **Replying to a specific earlier message** (quoting) adds
-  `{ kind: 'relationship', label: 'reply-to', recordId }` on top of `parentId` — the
+  `{ kind: 'relationship', label: 'reply-to', target: { kind: 'record', recordId } }` on top of `parentId` — the
   spec's own example association, used here for precision, not structure.
 - **Attachments**: attachment associations, any label; `embed` for files referenced
   from the body, per the cross-type convention.

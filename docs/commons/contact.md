@@ -72,7 +72,7 @@ worth bounding on a server (see
   [Cross-type conventions](./README.md#cross-type-conventions).
 - **Contact ↔ entity linkage**: when a contact _is_ a known principal (they appear in
   grants, groups, or authorship), link the records with
-  `{ kind: 'relationship', label: 'entity', recordId: <_entity record id> }` on the
+  `{ kind: 'relationship', label: 'entity', target: { kind: 'record', recordId: <_entity record id> } }` on the
   contact. This keeps the directory entry (mutable, user-owned petname territory) apart
   from the identity record, in line with the properties-vs-perspectives principle and
   the DID identity model: your name for someone is your perspective; their key is a

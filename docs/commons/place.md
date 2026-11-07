@@ -41,7 +41,7 @@ await stack.defineType({
 
 - **Locating any record — the `location` relationship.** The check-in, the geotagged
   photo, the note written at a café are all the same move:
-  `{ kind: 'relationship', label: 'location', recordId: <place record id> }` on the
+  `{ kind: 'relationship', label: 'location', target: { kind: 'record', recordId: <place record id> } }` on the
   located record. This is a cross-type convention (see README): a check-in app is just
   place records plus (possibly caption-less) records pointing at them, and every other
   app's records get geotagging for free. **A check-in's type follows its contract**

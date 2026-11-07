@@ -47,7 +47,7 @@ await stack.defineType({
   which keeps every consumer trivially correct — a calendar app that has never heard of
   recurrence still renders the schedule. The generating rule (RRULE-shaped) lives in
   the writing app's sidecar on its own anchor record; occurrences link to that anchor
-  with `{ kind: 'relationship', label: 'series', recordId }` (a reserved cross-type
+  with `{ kind: 'relationship', label: 'series', target: { kind: 'record', recordId } }` (a reserved cross-type
   label) so any app can group them. A commons recurrence proposal (RRULE prior art) is
   expected eventually; it must land as an additive companion, not a reinterpretation of
   occurrence records.
