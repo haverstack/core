@@ -58,5 +58,5 @@ can be surfaced by a bookmark consumer.
 - `unread`, `archived`, `favorite` — perspectives.
 - `siteName`, `author`, `publishedAt` page metadata — that is [`article`](./article.md)
   territory (the read-later apps' richer shape). An app that captures full articles
-  keeps a paired bookmark record for bookmark-consumer reach and links it to the
-  article with `{ kind: 'relationship', label: 'capture', recordId }`.
+  keeps a paired bookmark record for bookmark-consumer reach, linked to the article by
+  `{ kind: 'relationship', label: 'capture', target: { kind: 'record', recordId } }`.

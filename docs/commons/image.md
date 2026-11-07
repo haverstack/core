@@ -45,9 +45,9 @@ await stack.defineType({
   record — not raw coordinates in content.
 - **Albums**: `parentId` to an app's album/container record — same posture as task
   lists and site containers; the images interop, the album doesn't.
-- **Variants** (thumbnails, resizes, edited versions): derived data, not commons
-  content — apps regenerate them. A destructive edit is a new image record; link it
-  `{ kind: 'relationship', label: 'derived-from', recordId }`.
+- **Variants** (thumbnails, resizes, edited versions): derived data, not commons content
+  — apps regenerate them. A destructive edit is a new image record; link it
+  `{ kind: 'relationship', label: 'derived-from', target: { kind: 'record', recordId } }`.
 - **EXIF beyond `capturedAt`** (camera, lens, exposure): excluded from @1; a future
   additive optional `object` field or sidecar, decided when a real writer needs it.
 - **Artwork metadata** (when a painting was made, medium, dimensions): not image

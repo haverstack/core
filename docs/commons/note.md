@@ -45,7 +45,8 @@ await stack.defineType({
   image reference) is app territory in @1; a commons convention here is an expected
   follow-up proposal.
 - **Cross-references**: a note that is _about_ another record (annotating a bookmark, a
-  contact) uses `{ kind: 'relationship', label: 'about', recordId }`.
+  contact) uses
+  `{ kind: 'relationship', label: 'about', target: { kind: 'record', recordId } }`.
 
 ## Read-compat core
 

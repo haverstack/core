@@ -55,8 +55,9 @@ Apps never need to extend a commons schema in place:
   optional fields land in place, so accepted proposals reach every app without a bump.
 - **Need something app-specific?** Keep it out of the commons record. Put app-private
   data in the app's own sidecar type and link it with a
-  `{ kind: 'relationship', label: '...' }` association to the commons record. The
-  commons record stays cleanly interoperable; the sidecar travels with it.
+  `{ kind: 'relationship', label: '...', target: { kind: 'record', recordId } }`
+  association to the commons record. The commons record stays cleanly interoperable; the
+  sidecar travels with it.
 
 ---
 
@@ -140,18 +141,20 @@ target arm they ride on: a label says what the reference _means_, a target says 
 identifier space it lives in, and every label below works with any arm that makes
 sense for it.
 
-- **`location`** — `{ kind: 'relationship', label: 'location', target: { kind: 'record', recordId: <place> } }`
+- **`location`** —
+  `{ kind: 'relationship', label: 'location', target: { kind: 'record', recordId: <place> } }`
   points at a [`place`](./place.md) record: the geotagged photo, the note written at a
   café, the check-in. Apps that understand places understand every located record for
   free, whatever its type.
-- **`embed`** — `{ kind: 'attachment', label: 'embed', fileId }` marks a file
-  referenced from a record's body text (`note`, `article`, `page`, `message`). How the
-  body refers to the embed is app territory in v1; a commons syntax is an expected
-  follow-up proposal.
-- **`series`** — `{ kind: 'relationship', label: 'series', target: { kind: 'record', recordId } }` groups records
-  that are occurrences of one recurring thing (materialized [`event`](./event.md)
-  occurrences are the motivating case). Reserved now so recurrence proposals build on
-  it rather than around it.
+- **`embed`** — `{ kind: 'attachment', label: 'embed', fileId }` marks a file referenced
+  from a record's body text (`note`, `article`, `page`, `message`). How the body refers
+  to the embed is app territory in v1; a commons syntax is an expected follow-up
+  proposal.
+- **`series`** —
+  `{ kind: 'relationship', label: 'series', target: { kind: 'record', recordId } }`
+  groups records that are occurrences of one recurring thing (materialized
+  [`event`](./event.md) occurrences are the motivating case). Reserved now so recurrence
+  proposals build on it rather than around it.
 - **`author`** — attributes any record to a person the stack knows. Two forms, and the
   target arm is what distinguishes them: an `entity` target
   (`{ kind: 'entity', entityId: <DID> }`) names the identity itself, while a `record`
@@ -161,23 +164,27 @@ sense for it.
   to the work as published); the association is what _you_ know about the world.
   Multiple `author` associations express co-authorship. Prior art: ActivityStreams
   `attributedTo`.
-- **`alias`** — `{ kind: 'relationship', label: 'alias', target: { kind: 'external', ns, id } }`
-  on an `_entity` record records that this identity is also known by that identifier
-  elsewhere: `{ ns: 'atproto', id: 'did:plc:…' }`, `{ ns: 'activitypub', id: <actor URL> }`,
-  `{ ns: 'email', id: 'alice@example.com' }`. It is the resolution primitive — an
-  inbound record whose author arrives as a foreign identifier is matched back to a
-  known entity with one indexed `relatedTo` query — which is why it is an association
-  and not a content field: a nested content path is an unindexed walk, so the same
-  list inside `_entity.content` would scan every entity record. Machine
-  identifiers only; a person's own words about someone belong on a `contact`.
-- **`syndicated-to`** — `{ kind: 'relationship', label: 'syndicated-to', target: { kind: 'external', ns, id } }`
+- **`alias`** —
+  `{ kind: 'relationship', label: 'alias', target: { kind: 'external', ns, id } }` on an
+  `_entity` record records that this identity is also known by that identifier
+  elsewhere: `{ ns: 'atproto', id: 'did:plc:…' }`,
+  `{ ns: 'activitypub', id: <actor URL> }`, `{ ns: 'email', id: 'alice@example.com' }`.
+  It is the resolution primitive — an inbound record whose author arrives as a foreign
+  identifier is matched back to a known entity with one indexed `relatedTo` query —
+  which is why it is an association and not a content field: a nested content path is an
+  unindexed walk, so the same list inside `_entity.content` would scan every entity
+  record. Machine identifiers only; a person's own words about someone belong on a
+  `contact`.
+- **`syndicated-to`** —
+  `{ kind: 'relationship', label: 'syndicated-to', target: { kind: 'external', ns, id } }`
   records that a copy of this record was published elsewhere. The canonical copy stays
   in the stack; a bridge publishes and stamps the copy's address here. Asking a
   namespace without an id ("everything already on ATProto") is the inventory query a
   syndication tool runs. Where a copy has a lifecycle of its own — retraction state, a
   remote content address, which account it went out from — that is a record of the
   bridge's own type, related back to this one; the label alone carries only the link.
-- **`site`** — `{ kind: 'relationship', label: 'site', target: { kind: 'record', recordId: <site> } }`
+- **`site`** —
+  `{ kind: 'relationship', label: 'site', target: { kind: 'record', recordId: <site> } }`
   on an `article`, `image`, `bookmark`, or `post` means that record is published on the
   named [`site`](./site.md). Multi-valued: two associations means the record is
   cross-posted to both sites. Structurally the same shape as `location` — a label

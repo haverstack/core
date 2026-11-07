@@ -114,7 +114,7 @@ await stack.defineType({
 - **When-to-meet, end to end**: poll with `method: "multiple"` and time-slot options;
   members respond with `"yes"`/`"maybe"` per slot; the organizer promotes the winning
   slot to an `event@1` and links it
-  `{ kind: 'relationship', label: 'decided-by', recordId: <poll> }`.
+  `{ kind: 'relationship', label: 'decided-by', target: { kind: 'record', recordId: <poll> } }`.
 
 ## Read-compat cores
 
