@@ -129,18 +129,14 @@ these.
    `snapshot`), the label is specified in the type file with the same authority as a
    schema field.
 7. **String vocabularies over booleans-in-waiting.** Where a field has a small open set
-   of values (`note.format`), the type file specifies the well-known values and two
-   readings: what absence means, and what an unknown value falls back to. Readers apply
-   the fallback rather than reject the record, so the vocabulary can grow additively.
-   **The fallback is the value that claims least** — `note.format` falls back to
-   `"plain"`, never a richer format than declared — and where no value claims less
-   than another, it is the absence reading.
-8. **An invalid value reads as absent.** Where a type file states a range or form for a
-   field (`place.latitude`, a ballot's `score`), a value outside it is a writer's bug,
-   not vocabulary growth, and reads as if the field were absent. A required field has
-   no absence to read, so the entry or record holding the invalid value is dropped: a
-   place with out-of-range coordinates is no place, and a ballot entry with a bad score
-   counts for nothing.
+   of values a reader interprets (`note.format`), the type file specifies the
+   well-known values and two readings: what absence means, and what an unknown value
+   falls back to. Readers apply the fallback rather than reject the record, so the
+   vocabulary can grow additively. **The fallback is the value that claims least** —
+   `note.format` falls back to `"plain"`, never a richer format than declared — and
+   where no value claims less than another, it is the absence reading. Words a reader
+   only displays, such as a contact's labels, need no fallback: an unknown one is shown
+   as written.
 
 ---
 
