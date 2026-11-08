@@ -77,8 +77,8 @@ await stack.defineType({
 | ---------- | -------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `question` | `string` | yes      | What's being decided.                                                                                                                                                                                                                                             |
 | `options`  | `array`  | yes      | The choices. Each has a stable `id` (identity — unique within the poll, never reused or repurposed; a repeated `id` is ignored after its first occurrence), a `label`, and optionally `startsAt`/`endsAt` when the option is a time slot (the when-to-meet case). |
-| `method`   | `string` | no       | How ballots are counted: `"plurality"`, `"approval"`, `"instant-runoff"`, `"borda"` or `"score"`. See [Counting methods](#counting-methods) for each rule and for absent and unknown values.                                                                      |
-| `scoreMax` | `number` | no       | The top of the range every ballot's scores are read on, a positive integer; the bottom is always 0. Absent means 1: plain yes or no.                                                                                                                              |
+| `method`   | `string` | no       | How ballots are counted: `"plurality"` (default when absent), `"approval"`, `"instant-runoff"`, `"borda"` or `"score"`. See [Counting methods](#counting-methods) for each rule and for an unknown value.                                                         |
+| `scoreMax` | `number` | no       | The top of the range every ballot's scores are read on, a positive integer; the bottom is always 0. Absent means 1: plain yes or no. See [Counting methods](#counting-methods) for an invalid value.                                                              |
 | `closesAt` | `date`   | no       | Voting deadline: a ballot updated after it does not count. Absent means open. While the poll is open it may be set, moved or cleared; see conventions.                                                                                                            |
 | `details`  | `text`   | no       | Context for the decision. Markdown by convention.                                                                                                                                                                                                                 |
 
@@ -101,17 +101,21 @@ ballot, prepared in two steps:
    and a ballot's **ranking** is its options on the ballot by score, highest first,
    with entry order breaking ties.
 
-Methods that rank read the ranking; methods that add read the scores. Absent means
-`"plurality"`, and so does an unknown method: plurality is the method that claims least
-of a ballot, reading only its top-ranked option.
+Methods that rank read the ranking; methods that add read the scores.
 
-| `method`           | How a result is counted                                                                                                                                                                                                                                                             |
-| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `"plurality"`      | Each ballot's top-ranked option gets one vote. Most votes wins.                                                                                                                                                                                                                     |
-| `"approval"`       | Every option on a ballot gets one vote, whatever its score. Most votes wins.                                                                                                                                                                                                        |
-| `"instant-runoff"` | In rounds. Each ballot counts for its highest-ranked option still standing. An option holding more than half of the ballots still counting wins; otherwise every option tied for fewest is eliminated and the next round counts again. A ballot with no option left stops counting. |
-| `"borda"`          | With _k_ options on a ballot, its top-ranked option gets _k_ points, its second _k_ − 1, and so on down to 1; options not on it get 0. Highest total wins. Points depend only on what a ballot lists, so appending options to a poll changes no existing ballot's points.           |
-| `"score"`          | Every entry adds its score to its option. Options not on a ballot add 0. Highest total wins.                                                                                                                                                                                        |
+**A poll a reader cannot fully read has no result.** An unknown `method`, or a
+`scoreMax` that is not a positive integer, leaves the reader showing the poll and its
+ballots and computing nothing. That is the reading that claims least, per
+[design rule 7](./README.md#design-rules-for-commons-types): any computed winner would
+be a claim the poll never made.
+
+| `method`           | How a result is counted                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `"plurality"`      | Each ballot's top-ranked option gets one vote. Most votes wins.                                                                                                                                                                                                                                                                                                                                                                                    |
+| `"approval"`       | Every option on a ballot gets one vote, whatever its score. Most votes wins.                                                                                                                                                                                                                                                                                                                                                                       |
+| `"instant-runoff"` | In rounds. Each ballot counts for its highest-ranked option still standing. An option holding more than half of the ballots still counting wins; otherwise every option tied for fewest is eliminated and the next round counts again. A ballot with no option left stops counting.                                                                                                                                                                |
+| `"borda"`          | With _k_ options on a ballot, its top-ranked option gets _k_ points, its second _k_ − 1, and so on down to 1; options not on it get 0. Highest total wins. Points depend only on what a ballot lists, so appending options to a poll changes no existing ballot's points. The trade: a ballot listing more options gives its favourite more points, which rewards complete rankings; points stay integers, so every reader's totals agree exactly. |
+| `"score"`          | Every entry adds its score to its option. Options not on a ballot add 0. Highest total wins.                                                                                                                                                                                                                                                                                                                                                       |
 
 Every method shares these rules:
 
@@ -133,29 +137,32 @@ Every method shares these rules:
   filtering is native on every adapter, while `content: { pollId }` needs a
   `filter.content` reach — on adapters without one, tallying is a scan of `vote@1`
   records, which is fine at the scale of a small group.
-- **One ballot per member per poll.** Revoting is updating your existing `vote` record,
-  not creating a second — a writer obligation (query `pollId` + own
-  `createdBy.subjectId` before creating), with version history preserving every
-  revision. Duplicate ballots from a buggy writer: the latest `updatedAt` wins and
-  consumers warn. The deadline applies to that ballot alone, so a late duplicate costs
-  the voter their vote, not only the duplicate.
+- **A member's ballot is their latest `vote@1` record for the poll.** Revoting is
+  updating that record, not creating a second — a writer obligation (query `pollId` +
+  own `createdBy.subjectId` before creating), with version history preserving every
+  revision. Duplicates from a buggy writer change nothing about whose ballot is which:
+  the record with the latest `updatedAt` is the member's ballot, consumers warn, and
+  every rule below applies to it.
 - **Results are computed, never stored.** Any member's app tallies by reading ballots;
   a stored result would go stale and would have an author.
-- **Once a poll has ballots, it changes only by appending options or, while it is open,
-  by changing `closesAt`; a closed poll takes no writes.** Every other field — the
-  question, an option's label or slot, `method`, `scoreMax` — is what existing ballots
-  were cast against, so changing one is the poll author starting over with a new poll.
-  Appended options take new `id`s.
+- **A poll's content changes only by appending options or, while the poll is open, by
+  changing `closesAt`; a closed poll's content takes no writes.** Every other field —
+  the question, an option's label or slot, `method`, `scoreMax` — is what ballots are
+  cast against, so changing one is the poll author starting over with a new poll. The
+  rule holds whether or not ballots exist, since a writer may not be able to see them.
+  Appended options take new `id`s. Soft-deleting, tagging and sharing a poll are not
+  content writes, so a closed poll can still be withdrawn.
 - **The deadline is `closesAt`, applied by readers to current state.** A ballot whose
   `updatedAt` is after it does not count, and writers refuse ballot edits past it.
   Closing a poll early is setting `closesAt` to the moment of closing, never to an
   earlier time. The stack cannot fence one poll's ballots against writes, since a
   grant covers a whole type, so the deadline is a reading rule.
-- **A reading rule trusts whoever can write the record it reads.** A ballot's timing is
-  its writers' — the voter, a holder of write over others' ballots, the owner
+- **Whose honesty the count rests on**, per
+  [design rule 8](./README.md#design-rules-for-commons-types). A ballot's timing rests
+  on its writers — the voter, a holder of write over others' ballots, the owner
   committing a migration — and each of them could rewrite the vote instead. A poll's
-  deadline is its writers': to a reader a backdated `closesAt` looks like an honest
-  one, so whoever may write a poll decides which of its ballots count.
+  deadline rests on its writers: to a reader a backdated `closesAt` looks like an
+  honest one, so whoever may write a poll decides which of its ballots count.
 - **Ballot visibility is the grant system, and @1 is honest about it: polls are open
   ballot by default.** Members with read access to the group's records see who voted
   for what — right for when-to-meet and most small-group decisions. A semi-secret

@@ -137,6 +137,11 @@ these.
    where no value claims less than another, it is the absence reading. Words a reader
    only displays, such as a contact's labels, need no fallback: an unknown one is shown
    as written.
+8. **A reading rule trusts whoever can write the record it reads.** A rule a reader
+   applies to content can be no stronger than the record's writers are honest, since a
+   reader sees only what they wrote. A type file whose readers decide something — which
+   of a poll's ballots count — names the writers that decision rests on, so the trust is
+   stated rather than discovered. See [`poll`](./poll.md) for the worked case.
 
 ---
 

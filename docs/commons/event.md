@@ -39,6 +39,8 @@ await stack.defineType({
 
 ## Conventions
 
+- **The poll that picked it**: an event a scheduling [`poll`](./poll.md) settled
+  carries the cross-type `decided-by` relationship to that poll.
 - **Physical location** is the cross-type `location` relationship to a
   [`place`](./place.md) record — which is what makes "map of everywhere our group
   meets" a query, not a feature.
