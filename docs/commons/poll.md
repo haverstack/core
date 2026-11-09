@@ -73,14 +73,14 @@ await stack.defineType({
 
 ## Field semantics — `poll@1`
 
-| Field      | Kind     | Required | Meaning                                                                                                                                                                                                                                                           |
-| ---------- | -------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `question` | `string` | yes      | What's being decided.                                                                                                                                                                                                                                             |
-| `options`  | `array`  | yes      | The choices. Each has a stable `id` (identity — unique within the poll, never reused or repurposed; a repeated `id` is ignored after its first occurrence), a `label`, and optionally `startsAt`/`endsAt` when the option is a time slot (the when-to-meet case). |
-| `method`   | `string` | no       | How ballots are counted: `"plurality"` (default when absent), `"approval"`, `"instant-runoff"`, `"borda"` or `"score"`. See [Counting methods](#counting-methods) for each rule and for an unknown value.                                                         |
-| `scoreMax` | `number` | no       | The top of the range every ballot's scores are read on, a positive integer; the bottom is always 0. Absent means 1: plain yes or no. See [Counting methods](#counting-methods) for an invalid value.                                                              |
-| `closesAt` | `date`   | no       | Voting deadline: a ballot updated after it does not count. Absent means open. While the poll is open it may be set, moved or cleared; see conventions.                                                                                                            |
-| `details`  | `text`   | no       | Context for the decision. Markdown by convention.                                                                                                                                                                                                                 |
+| Field      | Kind     | Required | Meaning                                                                                                                                                                                                                                                                                                   |
+| ---------- | -------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `question` | `string` | yes      | What's being decided.                                                                                                                                                                                                                                                                                     |
+| `options`  | `array`  | yes      | The choices. Each has a stable `id` (identity — unique within the poll, never reused or repurposed), a `label`, and optionally `startsAt`/`endsAt` when the option is a time slot (the when-to-meet case), read exactly as [`event`](./event.md)'s are, so a winning slot promotes to an event unchanged. |
+| `method`   | `string` | no       | How ballots are counted: `"plurality"` (default when absent), `"approval"`, `"instant-runoff"`, `"borda"` or `"score"`. See [Counting methods](#counting-methods) for each rule and for an unknown value.                                                                                                 |
+| `scoreMax` | `number` | no       | The top of the range every ballot's scores are read on, a positive integer; the bottom is always 0. Absent means 1: plain yes or no. See [Counting methods](#counting-methods) for an invalid value.                                                                                                      |
+| `closesAt` | `date`   | no       | When writers stop accepting ballots. Absent means open. See conventions.                                                                                                                                                                                                                                  |
+| `details`  | `text`   | no       | Context for the decision. Markdown by convention.                                                                                                                                                                                                                                                         |
 
 ## Field semantics — `vote@1`
 
@@ -91,23 +91,23 @@ await stack.defineType({
 
 ## Counting methods
 
-`method` names the rule that turns ballots into a result. Every method reads the same
-ballot, prepared in two steps:
+`method` names the rule that turns ballots into a result. One principle prepares
+everything a tally reads: **what a reader cannot read counts for nothing, and of
+repeats the first stands.** It applies at each level:
 
-1. **Drop the entries that count for nothing**, in order: first every entry naming no
-   option of the poll or carrying a score that is not an integer from 0 to `scoreMax`,
-   then every repeat of an option earlier on the ballot.
-2. **Rank what remains.** An option is **on the ballot** when its score is above 0,
-   and a ballot's **ranking** is its options on the ballot by score, highest first,
-   with entry order breaking ties.
+- **A poll** with an unknown `method`, or a `scoreMax` that is not a positive integer,
+  has no result: the reader shows the poll and its ballots and computes nothing. That
+  is the least interpretation, per
+  [design rule 7](./README.md#design-rules-for-commons-types).
+- **An option** repeating an earlier option's `id` is ignored.
+- **A ballot entry** naming no option of the poll, or carrying a score that is not an
+  integer from 0 to `scoreMax`, is dropped; then an entry repeating an option earlier
+  on the ballot is dropped.
 
-Methods that rank read the ranking; methods that add read the scores.
-
-**A poll a reader cannot fully read has no result.** An unknown `method`, or a
-`scoreMax` that is not a positive integer, leaves the reader showing the poll and its
-ballots and computing nothing. That is the reading that claims least, per
-[design rule 7](./README.md#design-rules-for-commons-types): any computed winner would
-be a claim the poll never made.
+What remains is ranked. An option is **on the ballot** when its score is above 0, and
+a ballot's **ranking** is its options on the ballot by score, highest first, with entry
+order breaking ties. Methods that rank read the ranking; methods that add read the
+scores.
 
 | `method`           | How a result is counted                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -137,32 +137,29 @@ Every method shares these rules:
   filtering is native on every adapter, while `content: { pollId }` needs a
   `filter.content` reach — on adapters without one, tallying is a scan of `vote@1`
   records, which is fine at the scale of a small group.
-- **A member's ballot is their latest `vote@1` record for the poll.** Revoting is
+- **A member's ballot is their latest record in the `vote` family for the poll**, by
+  `baseId` rather than version, so a migrated ballot is still the member's. Revoting is
   updating that record, not creating a second — a writer obligation (query `pollId` +
   own `createdBy.subjectId` before creating), with version history preserving every
   revision. Duplicates from a buggy writer change nothing about whose ballot is which:
-  the record with the latest `updatedAt` is the member's ballot, consumers warn, and
-  every rule below applies to it.
+  the record with the latest `updatedAt` is the member's ballot, and consumers warn. A
+  soft-deleted ballot is withdrawn: the member has not voted.
 - **Results are computed, never stored.** Any member's app tallies by reading ballots;
   a stored result would go stale and would have an author.
-- **A poll's content changes only by appending options or, while the poll is open, by
-  changing `closesAt`; a closed poll's content takes no writes.** Every other field —
-  the question, an option's label or slot, `method`, `scoreMax` — is what ballots are
-  cast against, so changing one is the poll author starting over with a new poll. The
-  rule holds whether or not ballots exist, since a writer may not be able to see them.
-  Appended options take new `id`s. Soft-deleting, tagging and sharing a poll are not
-  content writes, so a closed poll can still be withdrawn.
-- **The deadline is `closesAt`, applied by readers to current state.** A ballot whose
-  `updatedAt` is after it does not count, and writers refuse ballot edits past it.
-  Closing a poll early is setting `closesAt` to the moment of closing, never to an
-  earlier time. The stack cannot fence one poll's ballots against writes, since a
-  grant covers a whole type, so the deadline is a reading rule.
-- **Whose honesty the count rests on**, per
-  [design rule 8](./README.md#design-rules-for-commons-types). A ballot's timing rests
-  on its writers — the voter, a holder of write over others' ballots, the owner
-  committing a migration — and each of them could rewrite the vote instead. A poll's
-  deadline rests on its writers: to a reader a backdated `closesAt` looks like an
-  honest one, so whoever may write a poll decides which of its ballots count.
+- **A poll's meaning changes only by appending options or changing `closesAt`.** Every
+  other field — the question, an option's label or slot, `method`, `scoreMax` — is
+  what ballots are cast against, so changing one is the poll author starting over with
+  a new poll. The rule holds whether or not ballots exist, since a writer may not be
+  able to see them. Appended options take new `id`s. A migration carries a poll to a
+  new version with its meaning intact, and soft-deleting, tagging or sharing one
+  changes no meaning, so none of them is restricted.
+- **The deadline is for writers.** At `closesAt`, writers stop accepting new ballots
+  and ballot edits; closing early is setting it to now. Readers count ballots as they
+  stand and never test a ballot's timestamps against it. No timestamp a reader sees
+  moves only when a voter changes their vote — deletes, restores and migrations move
+  `updatedAt` too — and a poll binds nothing, so it needs no deadline enforced against
+  the stack's clocks. An app that ignores `closesAt` can still change a ballot after
+  it, and readers cannot tell.
 - **Ballot visibility is the grant system, and @1 is honest about it: polls are open
   ballot by default.** Members with read access to the group's records see who voted
   for what — right for when-to-meet and most small-group decisions. A semi-secret

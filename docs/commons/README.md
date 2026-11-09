@@ -129,19 +129,13 @@ these.
    `snapshot`), the label is specified in the type file with the same authority as a
    schema field.
 7. **String vocabularies over booleans-in-waiting.** Where a field has a small open set
-   of values a reader interprets (`note.format`), the type file specifies the
-   well-known values and two readings: what absence means, and what an unknown value
-   falls back to. Readers apply the fallback rather than reject the record, so the
-   vocabulary can grow additively. **The fallback is the value that claims least** —
-   `note.format` falls back to `"plain"`, never a richer format than declared — and
-   where no value claims less than another, it is the absence reading. Words a reader
-   only displays, such as a contact's labels, need no fallback: an unknown one is shown
-   as written.
-8. **A reading rule trusts whoever can write the record it reads.** A rule a reader
-   applies to content can be no stronger than the record's writers are honest, since a
-   reader sees only what they wrote. A type file whose readers decide something — which
-   of a poll's ballots count — names the writers that decision rests on, so the trust is
-   stated rather than discovered. See [`poll`](./poll.md) for the worked case.
+   of values (`note.format`), the type file specifies the well-known values, what
+   absence means, and how an unknown value is read. Readers read the record rather
+   than reject it, so the vocabulary can grow additively. **An unknown value is read
+   with the least interpretation**: an unknown `note.format` shows the text as written
+   (`"plain"`), an unknown `page.collection.order` asks for no particular order, an
+   unknown `poll.method` computes no result, and an unknown contact label is shown as
+   written.
 
 ---
 
