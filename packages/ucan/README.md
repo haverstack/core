@@ -59,6 +59,24 @@ authorizes(chain, '/haverstack/read', { baseId: 'commons/note' }); // true
 
 `authorizes()` then asks whether every link's command proves the one invoked and every link's policy accepts the arguments.
 
+## Acting for a subject in a stack
+
+`signedDelegation()` turns a validated chain into what `Stack.asActor()` takes, so a server can let an app act for the person who delegated to it:
+
+```ts
+import { signedDelegation, validateChain } from '@haverstack/ucan';
+
+const chain = await validateChain(delegations);
+const scoped = stack.asActor(
+  { subjectId: chain.subject, principalId: chain.audience },
+  { delegation: signedDelegation(chain) },
+);
+```
+
+Haverstack's commands mirror its grant actions: `/haverstack/create`, `/haverstack/read`, `/haverstack/update` and `/haverstack/delete`, each with `{ baseId }` as the arguments a policy constrains. `/haverstack` covers all four. The delegation counts on the app's side of the stack's permission check, beside grants naming the app, and never reaches further than the subject's own grants. See [Access control § Signed delegations](../../docs/spec/access-control.md#signed-delegations).
+
+`signedDelegation()` answers from the chain as it was validated. A server holding a session across requests validates the chain again on each, so expiry and revocation take effect.
+
 ## Readings of the spec
 
 Where the UCAN specs are ambiguous or leave a choice, this package takes the following, pinned by its tests:

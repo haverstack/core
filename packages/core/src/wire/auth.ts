@@ -17,7 +17,13 @@
  * single-use enforcement and token issuance are the server's.
  */
 
-import { isValidDid, signWithDid, verifyDidSignature, type DidKeypair } from '../did/did.js';
+import {
+  isValidDid,
+  isValidDidKey,
+  signWithDid,
+  verifyDidSignature,
+  type DidKeypair,
+} from '../did/did.js';
 
 // -------------------------------------------------------
 // Errors
@@ -117,17 +123,34 @@ export const signAuthChallenge = async (
 ): Promise<Uint8Array> => signWithDid(privateKey, buildAuthChallengePayload(challenge));
 
 /**
+ * Verifies a signature by a DID core cannot decode itself: one whose keys
+ * live in a DID document or log rather than in the DID string. Whatever
+ * implements it resolves the DID's current keys and checks the signature
+ * against them. See docs/spec/identity.md § Authentication: challenge–response.
+ */
+export type DidSignatureVerifier = (
+  did: string,
+  signature: Uint8Array,
+  payload: Uint8Array,
+) => Promise<boolean>;
+
+/**
  * Verify a challenge signature. Answers only "this signature was made by
  * the key behind this DID, for this origin and nonce" — whether the nonce
  * was ever issued, is unexpired, and has not already been spent is the
- * server's to track, and all three matter.
+ * server's to track, and all three matter. A did:key is verified here; any
+ * other DID only through `verifyDid`, and is otherwise refused.
  */
 export const verifyAuthChallenge = async (
   challenge: AuthChallenge,
   signature: Uint8Array,
+  opts: { verifyDid?: DidSignatureVerifier } = {},
 ): Promise<boolean> => {
   const payload = buildAuthChallengePayload(challenge);
   try {
+    if (!isValidDidKey(challenge.did)) {
+      return opts.verifyDid ? await opts.verifyDid(challenge.did, signature, payload) : false;
+    }
     return await verifyDidSignature(challenge.did, signature, payload);
   } catch {
     // A DID whose key can't be decoded verifies nothing — a false answer,

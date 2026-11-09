@@ -156,6 +156,36 @@ describe('signAuthChallenge / verifyAuthChallenge', () => {
     ).toBe(false);
   });
 
+  // A DID method core can't decode is verified by whatever the caller plugs
+  // in, against the same payload; a did:key never consults it.
+  test('a DID core cannot decode verifies only through verifyDid', async () => {
+    const kp = await getKeypair();
+    const challenge = { origin: ORIGIN, did: 'did:example:alice', nonce: NONCE };
+    const signature = await signAuthChallenge(kp.privateKey, { ...challenge, did: kp.did });
+    const seen: { did: string; payload: string }[] = [];
+    const verifyDid = async (did: string, _sig: Uint8Array, payload: Uint8Array) => {
+      seen.push({ did, payload: decode(payload) });
+      return did === 'did:example:alice';
+    };
+    expect(await verifyAuthChallenge(challenge, signature, { verifyDid })).toBe(true);
+    expect(seen).toEqual([
+      { did: 'did:example:alice', payload: decode(buildAuthChallengePayload(challenge)) },
+    ]);
+
+    const rejecting = async () => false;
+    expect(await verifyAuthChallenge(challenge, signature, { verifyDid: rejecting })).toBe(false);
+    const throwing = async (): Promise<boolean> => {
+      throw new Error('unresolvable');
+    };
+    expect(await verifyAuthChallenge(challenge, signature, { verifyDid: throwing })).toBe(false);
+
+    const keyChallenge = { origin: ORIGIN, did: kp.did, nonce: NONCE };
+    const keySignature = await signAuthChallenge(kp.privateKey, keyChallenge);
+    expect(await verifyAuthChallenge(keyChallenge, keySignature, { verifyDid: rejecting })).toBe(
+      true,
+    );
+  });
+
   test('signs the payload the builder produces, not the bare nonce', async () => {
     const kp = await getKeypair();
     const challenge = { origin: ORIGIN, did: kp.did, nonce: NONCE };

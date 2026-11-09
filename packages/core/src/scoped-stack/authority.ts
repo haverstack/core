@@ -47,6 +47,7 @@ import type {
   InstallContent,
   QueryResult,
   Reach,
+  SignedDelegation,
   StackRecord,
   TypeId,
 } from '../types/index.js';
@@ -86,6 +87,8 @@ export class ScopeAuthority {
     readonly principalId: EntityId | null,
     /** Whom this request acts for and attributes writes to — see ScopedStack.subjectId. */
     readonly subjectId: EntityId | null,
+    /** The subject's verified delegation to the principal, read on the principal's side. */
+    private readonly delegation: SignedDelegation | null,
     /** Stack.query() within a reach — see ScopedStack.query(). */
     private readonly queryReadable: (split: SplitQuery, reach: Reach) => Promise<QueryResult>,
   ) {}
@@ -201,6 +204,21 @@ export class ScopeAuthority {
   }
 
   /**
+   * The families the subject's signed delegation lets the principal `verb`,
+   * among those the stack defines. Never an ungrantable family: a signature
+   * reaches no further than a grant naming the principal could.
+   * See docs/spec/access-control.md § Signed delegations.
+   */
+  private async familiesDelegated(verb: ReachVerb): Promise<BaseId[]> {
+    const delegation = this.delegation;
+    if (!delegation) return [];
+    const families = new Set((await this.stack.listTypes()).map((t) => baseIdOf(t.id)));
+    return [...families].filter(
+      (family) => !UNGRANTABLE_SYSTEM_TYPES.has(family) && delegation.allows(verb, family),
+    );
+  }
+
+  /**
    * What this request may do with `verb` — that verb's rules, built whole
    * even where a Record's own permissions would settle it, since every gate
    * asks one value at a flat cost. The principal's grants fence it; within,
@@ -212,12 +230,17 @@ export class ScopeAuthority {
     const reach: Reach = this.principalUnbounded
       ? {}
       : {
-          fence: await this.familiesConveying(
-            this.principalId,
-            PRINCIPAL_SIDE,
-            own ? [any, own] : [any],
-            snapshot,
-          ),
+          fence: [
+            ...new Set([
+              ...(await this.familiesConveying(
+                this.principalId,
+                PRINCIPAL_SIDE,
+                own ? [any, own] : [any],
+                snapshot,
+              )),
+              ...(await this.familiesDelegated(verb)),
+            ]),
+          ],
         };
     const subject = this.subjectId;
     if (subject === this.stack.ownerEntityId) return reach;

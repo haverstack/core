@@ -33,3 +33,4 @@ export {
 } from './delegation.js';
 export { validateChain, authorizes, type ChainOptions, type ValidChain } from './chain.js';
 export { issueDelegation, type DelegationOptions, type DelegationSigner } from './issue.js';
+export { HAVERSTACK_COMMAND, haverstackCommand, signedDelegation } from './haverstack.js';

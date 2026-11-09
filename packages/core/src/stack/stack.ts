@@ -73,6 +73,7 @@ import type {
   InstallContent,
   RecordId,
   Actor,
+  SignedDelegation,
   ActorOptions,
   ChangeActor,
   RecordChange,
@@ -383,12 +384,26 @@ export class Stack implements StackClient {
   /**
    * Scope to an Actor — a delegated app acting for its user, or a
    * TokenSession as StackTokenStore.lookupToken() returns it, which is what
-   * a server should pass at its request boundary.
-   * See docs/spec/access-control.md § Delegation: principal and subject.
+   * a server should pass at its request boundary. A delegation the caller
+   * verified widens what the principal's side admits, and must name this
+   * very pair. See docs/spec/access-control.md § Signed delegations.
    */
-  asActor(actor: Actor): ScopedStack {
+  asActor(actor: Actor, opts: { delegation?: SignedDelegation } = {}): ScopedStack {
     const { subjectId, principalId = subjectId } = normalizeActor(actor)!;
-    return this.scope(principalId, subjectId);
+    const { delegation } = opts;
+    if (delegation) {
+      if (principalId === subjectId) {
+        throw new StackBadRequestError(
+          'A signed delegation applies only to a principal acting for someone else.',
+        );
+      }
+      if (delegation.subjectId !== subjectId || delegation.principalId !== principalId) {
+        throw new StackBadRequestError(
+          'The signed delegation names a different subject or principal than the actor.',
+        );
+      }
+    }
+    return this.scope(principalId, subjectId, delegation ?? null);
   }
 
   /**
@@ -397,7 +412,11 @@ export class Stack implements StackClient {
    * stack is scoped by the session that opened it instead.
    * See docs/spec/access-control.md § Enforcement: Stack.asEntity().
    */
-  private scope(principalId: EntityId | null, subjectId: EntityId | null): ScopedStack {
+  private scope(
+    principalId: EntityId | null,
+    subjectId: EntityId | null,
+    delegation: SignedDelegation | null = null,
+  ): ScopedStack {
     this.assertOpen();
     const queryReadable = this.adapter.queryReadable?.bind(this.adapter);
     if (!queryReadable) {
@@ -418,6 +437,7 @@ export class Stack implements StackClient {
       stack: this,
       principalId,
       subjectId,
+      delegation,
       idTimestampSkewMs: this.idTimestampSkewMsValue,
       adapter: this.adapter,
       changes: this.changes,

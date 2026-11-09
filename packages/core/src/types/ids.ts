@@ -47,3 +47,19 @@ export type Actor = {
   subjectId: EntityId;
   principalId?: EntityId;
 };
+
+/** A record verb a signed delegation can authorize: the grant actions, without `-own`/`-any`. */
+export type DelegatedVerb = 'create' | 'read' | 'update' | 'delete';
+
+/**
+ * What a subject's signed delegation lets one principal do. Whoever
+ * accepted the delegation verified it; core takes the result as data and
+ * reads it on the principal's side only.
+ * See docs/spec/access-control.md § Signed delegations.
+ */
+export type SignedDelegation = {
+  subjectId: EntityId;
+  principalId: EntityId;
+  /** Whether the principal may `verb` Records of the family `baseId` for its subject. */
+  allows: (verb: DelegatedVerb, baseId: BaseId) => boolean;
+};

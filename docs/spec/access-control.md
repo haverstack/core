@@ -349,12 +349,26 @@ Neither party can lend the other reach it lacks. This matters because the princi
 
 On the principal's side of the intersection, **`-own` and `-any` mean the same thing**: the question asked of the app is only whether it may perform this verb on this type at all, since which Records are reachable is settled by the subject. The suffix keeps its ordinary meaning for every undelegated principal.
 
-**Only a grant naming the principal directly counts on its side.** Neither a default grant nor a group-targeted one satisfies the principal half — both would let an app be named by someone other than the owner (by nobody at all, or by any admin of a granted group), and containment rests on the owner having named it. Both still count on the **subject's** side, where they mean what they ordinarily do. See [Type-level grants](#type-level-grants).
+**Only a grant naming the principal directly, or its subject's [signed delegation](#signed-delegations), counts on its side.** Neither a default grant nor a group-targeted one satisfies the principal half — both would let an app be named by someone other than the owner or the person it acts for (by nobody at all, or by any admin of a granted group), and containment rests on one of those two having named it. Both still count on the **subject's** side, where they mean what they ordinarily do. See [Type-level grants](#type-level-grants).
 
 Two consequences worth stating plainly rather than leaving to be discovered:
 
 - **Per-app isolation on a shared type is not offered.** Two apps both granted `commons/note@1` for the same person see the same notes. Containment is per type — an app reaches only the types the owner granted it — which is what keeps shared commons types interoperable by default.
 - **In a personal stack, a delegated `-own` grant is close to `-any`.** Nearly every Record is owner-authored, so `-own` covers nearly all of them. The precision of `-own` pays off in multi-person stacks, not single-owner ones. An owner reaching for `read-own` to _contain_ an app should know it buys almost nothing there — containment comes from which types the app is granted, not from the suffix.
+
+### Signed delegations
+
+A subject can name the software acting for it by signing a delegation, rather than leaving the binding to the owner. `asActor(actor, { delegation })` takes one as data: a `SignedDelegation` naming the actor's subject and principal, whose `allows(verb, baseId)` answers which record verbs it lets the principal perform on which families. Core verifies no signature. Whoever accepted the delegation did, which is what `@haverstack/ucan` does for UCAN Delegation 1.0, and `asActor()` refuses one naming a different pair, or given for an undelegated actor, with `StackBadRequestError`.
+
+**It counts on the principal's side, beside grants naming the principal.** For each verb, the families a delegation allows join those the principal's direct grants convey, in the fence a [reach](#reach) carries. It is the standing a direct grant gives, conferred by the person the app acts for instead of by the owner, and it changes nothing else:
+
+- **The subject's side is untouched,** so the intersection holds: a delegation lends the principal no reach its subject lacks, the bound an app riding its user's identity already has.
+- **Ungrantable families stay out.** A delegation never admits `_grant`, `_config`, `_app` or `_install`, whatever it allows, since a signature reaches no further than a grant could.
+- **No privileged verb rides on it.** Resharing, `_group` management and the verbs in the table above ask for standing, not a grant, and a delegation is neither.
+
+**Its verbs are the grant actions without the suffix:** `create`, `read`, `update` and `delete`, since `-own` and `-any` mean the same on the principal's side. As UCAN commands they are `/haverstack/create`, `/haverstack/read`, `/haverstack/update` and `/haverstack/delete`, each invoked with `{ baseId }` for a delegation's policy to constrain, and `/haverstack` proves all four.
+
+**Time bounds and revocation stay with the delegation.** Core reads `allows()` as it is handed; a caller holding a delegation across requests revalidates it on each, so an expired or revoked one is never passed in.
 
 ### Reach
 
