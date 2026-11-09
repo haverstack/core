@@ -154,13 +154,14 @@ stack.editAssociations(bookId, [
 
 **Some system fields never change once they hold a value.** One rule covers every one of them:
 
-| Family        | Fields                       | Why                                                                     |
-| ------------- | ---------------------------- | ----------------------------------------------------------------------- |
-| `_config`     | `ownerEntityId`              | [it defines whose stack it is](../spec.md#the-_config-record)           |
-| `_entity`     | `did`                        | [a binding](./identity.md#did-bindings)                                 |
-| `_app`        | `did`, `appId`               | [bindings](./identity.md#did-bindings)                                  |
-| `_install`    | `appId`                      | [a binding](./apps.md#the-_install-record)                              |
-| `_attachment` | `fileId`, `mimeType`, `size` | [they describe the bytes](./attachments.md#the-_attachment-record-type) |
+| Family        | Fields                       | Why                                                                              |
+| ------------- | ---------------------------- | -------------------------------------------------------------------------------- |
+| `_config`     | `ownerEntityId`              | [it defines whose stack it is](../spec.md#the-_config-record)                    |
+| `_entity`     | `did`                        | [a binding](./identity.md#did-bindings)                                          |
+| `_app`        | `did`, `appId`               | [bindings](./identity.md#did-bindings)                                           |
+| `_install`    | `appId`                      | [a binding](./apps.md#the-_install-record)                                       |
+| `_attachment` | `fileId`, `mimeType`, `size` | [they describe the bytes](./attachments.md#the-_attachment-record-type)          |
+| `_revocation` | `cid`                        | [it names the one delegation refused](./access-control.md#revoking-a-delegation) |
 
 - **Once set.** A field is unset while it is absent or the empty string — the empty string being how a required string field holds no value yet, as an `_entity` card does before it adopts a `did`. A write may give an unset field its first value. After that, a write that would change or clear it is refused with `StackConflictError` (`409 conflict`): the request is well-formed, and what it contradicts is stored state, not a schema.
 - **Every content write is asked.** `patchContent()`, `restoreVersion()` and `commitMigration()` each compare the content they would write against the content the Record holds. Rolling content back and migrating it are routes to a write, not exemptions from what that write may be.
@@ -387,7 +388,7 @@ Apps that care about semantics filter by exact `typeId`; apps that want flexibil
 
 ### System types
 
-Reserved, library-defined types: `_config@1` ([Stack initialization](../spec.md#stack-initialization)), `_entity@1`, `_app@1`, `_group@1` ([Identity](./identity.md)), `_grant@1` ([Access control](./access-control.md#type-level-grants)), `_attachment@1` ([Attachments](./attachments.md)), and `_install@1` ([App installs](./apps.md#the-_install-record)). System types follow the same versioned ID format as user-defined types and can evolve using the same migration mechanism. All seven are pre-seeded when a Stack is opened with `Stack.open()` — always available without any setup by the caller.
+Reserved, library-defined types: `_config@1` ([Stack initialization](../spec.md#stack-initialization)), `_entity@1`, `_app@1`, `_group@1` ([Identity](./identity.md)), `_grant@1` ([Access control](./access-control.md#type-level-grants)), `_attachment@1` ([Attachments](./attachments.md)), `_install@1` ([App installs](./apps.md#the-_install-record)) and `_revocation@1` ([Access control § Revoking a delegation](./access-control.md#revoking-a-delegation)). System types follow the same versioned ID format as user-defined types and can evolve using the same migration mechanism. All eight are pre-seeded when a Stack is opened with `Stack.open()` — always available without any setup by the caller.
 
 ### Type migrations
 

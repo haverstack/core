@@ -131,7 +131,7 @@ import {
   validateIdTimestampSkew,
   DEFAULT_ID_TIMESTAMP_SKEW_MS,
 } from './record-id.js';
-import { queryAllPages, lookupEntityByDid } from './reads.js';
+import { queryAllPages, lookupEntityByDid, isRevokedCid } from './reads.js';
 import { contentEqual } from '../record-changes.js';
 import {
   assertAssociationSet,
@@ -364,6 +364,17 @@ export class Stack implements StackClient {
 
   async getOwnerEntity(): Promise<StackRecord | null> {
     return this.getEntityByDid(this.ownerEntityId);
+  }
+
+  /**
+   * Whether the owner has revoked the signed delegation `cid` names: a live
+   * `_revocation` Record holds it. A server passes this as a chain
+   * validator's revocation check. See docs/spec/access-control.md
+   * § Revoking a delegation.
+   */
+  async isDelegationRevoked(cid: string): Promise<boolean> {
+    this.assertOpen();
+    return isRevokedCid(this, cid);
   }
 
   get capabilities(): StackCapabilities {

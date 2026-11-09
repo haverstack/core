@@ -87,3 +87,35 @@ describe('acceptDelegation', () => {
     });
   });
 });
+
+describe('revoking through the stack', () => {
+  it('a _revocation naming any link refuses the chain until it is deleted', async () => {
+    const owner = makeSigner();
+    const member = makeSigner();
+    const app = makeSigner();
+    const device = makeSigner();
+    const stack = await Stack.open(await MemoryAdapter.open({ ownerEntityId: owner.did }));
+    const root = await issue(member, { audience: app.did, cmd: '/haverstack/record' });
+    const leaf = await issue(app, {
+      audience: device.did,
+      subject: member.did,
+      cmd: '/haverstack/record',
+    });
+    const chain = [root.bytes, leaf.bytes];
+    const isRevoked = (cid: string) => stack.isDelegationRevoked(cid);
+
+    await expect(
+      acceptDelegation(chain, device.did, { now: NOW, isRevoked }),
+    ).resolves.toBeDefined();
+    const revocation = await stack.create('_revocation@1', { cid: root.cid });
+    await expect(
+      acceptDelegation(chain, device.did, { now: NOW, isRevoked }),
+    ).rejects.toMatchObject({
+      code: 'revoked',
+    });
+    await stack.delete(revocation.id);
+    await expect(
+      acceptDelegation(chain, device.did, { now: NOW, isRevoked }),
+    ).resolves.toBeDefined();
+  });
+});

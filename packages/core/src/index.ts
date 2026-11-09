@@ -172,6 +172,7 @@ export type {
   GrantGrantee,
   InstallContent,
   InstallRequest,
+  RevocationContent,
   TypeGrant,
   PutAttachmentOptions,
   ConfigContent,

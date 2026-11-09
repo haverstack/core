@@ -38,7 +38,7 @@ type InstallContent = {
 
 `_install@1` is a system type, pre-seeded with the others ([Data model § System types](./data-model.md#system-types)). It is integrity-bearing in the way `_grant` is — it decides which grants exist and who may commit migrations — and is protected the same way:
 
-- **It cannot be granted.** `grantType()` refuses `_install` beside `_grant`, `_config` and `_app` (see [Access control § What a grant covers](./access-control.md#what-a-grant-covers)), and a `request` naming any of the four is refused at the write.
+- **It cannot be granted.** `grantType()` refuses `_install` beside `_grant`, `_config`, `_app` and `_revocation` (see [Access control § What a grant covers](./access-control.md#what-a-grant-covers)), and a `request` naming any of the five is refused at the write.
 - **Its `requests` are held to a manifest's rules.** Every write checks them as `planInstall()` checks a manifest's: each a grant `grantType()` would accept, and each family requested once. A `defines` entry listed twice is refused with them, as a type listed twice in a manifest is.
 - **Only the owner acting alone writes one.** `ScopedStack` refuses every write to an `_install` Record on the same terms as a `_grant` Record, whatever the Record's own `permissions` say.
 - **`appId` is a binding**, immutable and unique on the terms [Identity § DID bindings](./identity.md#did-bindings) sets out: one install answers for each app, and an existing install cannot be relabelled to answer for another.

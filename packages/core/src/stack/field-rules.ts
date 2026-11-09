@@ -53,6 +53,8 @@ export const bindingFieldsOf = (family: string): readonly ('did' | 'appId')[] =>
 const FIXED_FIELDS: ReadonlyMap<string, readonly string[]> = new Map([
   [SYSTEM_TYPES.CONFIG, ['ownerEntityId']],
   [SYSTEM_TYPES.ATTACHMENT, ['fileId', 'mimeType', 'size']],
+  // A refusal names one delegation; refusing another is a new Record.
+  [SYSTEM_TYPES.REVOCATION, ['cid']],
 ]);
 
 /** See docs/spec/data-model.md § Immutable fields. */

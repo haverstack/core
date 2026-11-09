@@ -86,12 +86,15 @@ const credential = {
 A server checks the chain on every request and passes it on, so Bob's grants still bound what the app reaches:
 
 ```ts
+const isRevoked = (cid: string) => stack.isDelegationRevoked(cid);
 const session = await tokens.lookupToken(bearer);
 const accepted = session.delegationChain
   ? await acceptDelegation(session.delegationChain, session.principalId, { isRevoked })
   : undefined;
 const scoped = stack.asActor(session, { delegation: accepted?.delegation });
 ```
+
+To revoke a delegation, write a `_revocation` Record naming its CID; deleting the Record lifts it again. See [Access control § Revoking a delegation](./docs/spec/access-control.md#revoking-a-delegation).
 
 **You don't do this for software you didn't choose.** An app someone else uses to reach your stack — a visitor's own client posting a comment — authenticates as _them_, and is bounded by what you granted people, typically a default grant. You grant types to people, never to every client they might be running. See [Identity § App](./docs/spec/identity.md#app) for both postures and [Access control § Delegation](./docs/spec/access-control.md#delegation-principal-and-subject) for what each identity governs; the handshake itself is [Wire format § Authentication](./docs/spec/wire-format.md#authentication).
 

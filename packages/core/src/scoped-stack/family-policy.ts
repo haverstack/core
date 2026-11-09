@@ -55,6 +55,7 @@ const POLICIES: ReadonlyMap<string, FamilyPolicy> = new Map<string, FamilyPolicy
   // Authority itself: see docs/spec/access-control.md § What a grant covers.
   [SYSTEM_TYPES.GRANT, { writers: 'owner-alone' }],
   [SYSTEM_TYPES.INSTALL, { writers: 'owner-alone' }],
+  [SYSTEM_TYPES.REVOCATION, { writers: 'owner-alone' }],
   // Managed, not merely written: see docs/spec/identity.md § Group.
   [SYSTEM_TYPES.GROUP, { writers: 'group-managers', rosterAssociations: true }],
   // See docs/spec/identity.md § DID bindings.

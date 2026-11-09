@@ -108,4 +108,11 @@ export const systemTypeDefinitions = (): DefineTypeOptions[] => [
       },
     },
   },
+  {
+    id: `${SYSTEM_TYPES.REVOCATION}@1`,
+    name: 'Revocation',
+    schema: {
+      cid: { kind: 'string', required: true },
+    },
+  },
 ];

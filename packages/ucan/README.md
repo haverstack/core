@@ -84,6 +84,9 @@ Haverstack's commands mirror its grant actions: `/haverstack/record/create`, `/h
 ```ts
 import { acceptDelegation } from '@haverstack/ucan';
 
+// The owner revokes a delegation by writing a `_revocation` Record naming its CID.
+const isRevoked = (cid: string) => stack.isDelegationRevoked(cid);
+
 // At /auth/token, after the handshake signature verified for `did`:
 const accepted = await acceptDelegation(chain, did, { isRevoked });
 await tokens.createToken(

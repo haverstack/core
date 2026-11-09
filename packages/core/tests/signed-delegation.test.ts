@@ -1,7 +1,12 @@
 import { describe, test, expect, beforeEach } from 'vitest';
 import { Stack } from '../src/stack/stack.js';
-import { StackBadRequestError, StackPermissionError } from '../src/errors.js';
-import { MemoryAdapter } from '../src/testing.js';
+import {
+  StackBadRequestError,
+  StackConflictError,
+  StackPermissionError,
+  StackValidationError,
+} from '../src/errors.js';
+import { IncapableMemoryAdapter, MemoryAdapter } from '../src/testing.js';
 import type { DelegatedVerb, SignedDelegation } from '../src/types/index.js';
 
 const OWNER = 'did:key:z6MkOwner';
@@ -143,5 +148,67 @@ describe('Signed delegations — naming the pair', () => {
         { delegation: delegation(MEMBER, [['read', fam(COMMENT)]], MEMBER) },
       ),
     ).toThrow(StackBadRequestError);
+  });
+});
+
+// A revocation is the owner's own refusal of one delegation, by CID: a
+// Record like any other, recoverable like a grant, writable by nobody else.
+describe('_revocation — the owner refuses a delegation', () => {
+  const CID = 'zdpuAxubXwgEpicLJWrbT37gWJJ4wBpEbbzfQAY8ADo2qy1jJ';
+  const REVOCATION = '_revocation@1';
+
+  test('a live revocation refuses the delegation it names, and only that one', async () => {
+    expect(await stack.isDelegationRevoked(CID)).toBe(false);
+    await stack.create(REVOCATION, { cid: CID });
+    expect(await stack.isDelegationRevoked(CID)).toBe(true);
+    expect(await stack.isDelegationRevoked('zdpuOther')).toBe(false);
+  });
+
+  test('deleting it lifts the refusal, and undeleting restores it', async () => {
+    const record = await stack.create(REVOCATION, { cid: CID });
+    await stack.delete(record.id);
+    expect(await stack.isDelegationRevoked(CID)).toBe(false);
+    await stack.undelete(record.id);
+    expect(await stack.isDelegationRevoked(CID)).toBe(true);
+  });
+
+  test('an unlisted revocation still refuses', async () => {
+    const record = await stack.create(REVOCATION, { cid: CID });
+    await stack.setUnlisted(record.id, true);
+    expect(await stack.isDelegationRevoked(CID)).toBe(true);
+  });
+
+  test('the same answer on an adapter that cannot filter by content', async () => {
+    const plain = await Stack.open(await IncapableMemoryAdapter.open({ ownerEntityId: OWNER }));
+    await plain.create(REVOCATION, { cid: 'zdpuFirst' });
+    await plain.create(REVOCATION, { cid: CID });
+    expect(await plain.isDelegationRevoked(CID)).toBe(true);
+    expect(await plain.isDelegationRevoked('zdpuAbsent')).toBe(false);
+  });
+
+  test('its cid is required and never moves', async () => {
+    await expect(stack.create(REVOCATION, {})).rejects.toThrow(StackValidationError);
+    const record = await stack.create(REVOCATION, { cid: CID });
+    await expect(stack.patchContent(record.id, { cid: 'zdpuOther' })).rejects.toThrow(
+      StackConflictError,
+    );
+  });
+
+  test('only the owner acting alone writes one, and no grant reaches the family', async () => {
+    await expect(
+      stack.grantType('_revocation', {
+        actions: ['create'],
+        grantee: { kind: 'entity', entityId: MEMBER },
+      }),
+    ).rejects.toThrow(StackValidationError);
+    await expect(stack.asEntity(MEMBER).create(REVOCATION, { cid: CID })).rejects.toThrow(
+      StackPermissionError,
+    );
+    const ownersApp = stack.asActor(
+      { subjectId: OWNER, principalId: APP },
+      { delegation: { subjectId: OWNER, principalId: APP, allows: EVERYTHING } },
+    );
+    await expect(ownersApp.create(REVOCATION, { cid: CID })).rejects.toThrow(StackPermissionError);
+    await expect(stack.asEntity(OWNER).create(REVOCATION, { cid: CID })).resolves.toBeDefined();
   });
 });
