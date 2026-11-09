@@ -14,8 +14,8 @@
 import { StackBadRequestError, StackMigrationError } from './errors.js';
 import { lineageProblem, parseTypeId } from './schema.js';
 import type { BaseId, ScalarFieldKind, TypeId } from './types/index.js';
-import { applySteps, fieldOrigins, recordOrigins } from './migration-steps.js';
-import type { MigrationStep } from './migration-steps.js';
+import { applySteps, fieldOrigins, recordOrigins, stepBuilder } from './migration-steps.js';
+import type { MigrationStep, Steps } from './migration-steps.js';
 
 // -------------------------------------------------------
 // Schema literal types
@@ -194,15 +194,16 @@ export type Migration<From = Record<string, unknown>, To = Record<string, unknow
 };
 
 /**
- * Build the migration from `from` to `to` out of declared steps, checked
- * against both schemas here so a step the target would refuse fails before
- * any record is written. Within a family, `to` must name `from` as its
- * `migratesFrom`. See docs/spec/data-model.md § Migration steps.
+ * Build the migration from `from` to `to` out of the steps `steps` returns
+ * from a builder typed by both handles. The list is checked against both
+ * schemas here, so a step the target would refuse fails before any record
+ * is written. Within a family, `to` must name `from` as its `migratesFrom`.
+ * See docs/spec/data-model.md § Migration steps.
  */
 export const migration = <F extends ReadonlyTypeSchema, T extends ReadonlyTypeSchema>(
   from: TypeHandle<F>,
   to: TypeHandle<T>,
-  steps: readonly MigrationStep<NoInfer<StoredContentOf<F>>>[],
+  steps: (s: Steps<StoredContentOf<F>, ContentOf<T>>) => readonly MigrationStep[],
 ): Migration<StoredContentOf<F>, StoredContentOf<T>> => {
   const refuse = (problem: string) =>
     new StackMigrationError(`Cannot migrate "${from.id}" to "${to.id}": ${problem}.`);
@@ -211,7 +212,9 @@ export const migration = <F extends ReadonlyTypeSchema, T extends ReadonlyTypeSc
       `"${to.id}" migrates from ${to.migratesFrom ? `"${to.migratesFrom}"` : 'nothing'}`,
     );
   }
-  const frozen = Object.freeze([...steps]) as readonly MigrationStep[];
+  const frozen = Object.freeze([
+    ...steps(stepBuilder as unknown as Steps<StoredContentOf<F>, ContentOf<T>>),
+  ]);
   const origins = fieldOrigins(frozen, from.schema, to.schema);
   if (typeof origins === 'string') throw refuse(origins);
   const built = Object.freeze({

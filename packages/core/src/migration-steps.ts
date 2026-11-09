@@ -47,32 +47,45 @@ export type MigrationStep<F = Record<string, unknown>> =
   | DropStep
   | DeriveStep<F>;
 
-/** Move a field's value to a new name. */
-export const rename = (from: string, to: string): RenameStep =>
-  Object.freeze({ op: 'rename', from, to });
-
 /**
- * Replace each value `values` lists with its mapping, keeping any other,
- * element-wise through an array. A stored enum may hold a value no handle
- * lists, and it is carried through rather than lost.
+ * The steps `migration()` hands its `steps` function, typed by both handles:
+ * `F` is the content stored at `from`, `T` the content written at `to`.
+ * `add` and `derive` produce a target field, so each takes one of `T`'s
+ * fields and that field's write type; `rename`, `map` and `drop` name a
+ * field at a point in the list, which `migration()` checks when it runs.
+ * See docs/spec/data-model.md § Migration steps.
  */
-export const map = (field: string, values: Readonly<Record<string, string>>): MapStep =>
-  Object.freeze({ op: 'map', field, values: Object.freeze({ ...values }) });
+export type Steps<F, T> = {
+  /** Move a field's value to a new name. */
+  readonly rename: (from: string, to: string) => RenameStep;
+  /**
+   * Replace each value `values` lists with its mapping, keeping any other,
+   * element-wise through an array. A stored enum may hold a value no handle
+   * lists, and it is carried through rather than lost.
+   */
+  readonly map: (field: string, values: Readonly<Record<string, string>>) => MapStep;
+  /** Remove a field. */
+  readonly drop: (field: string) => DropStep;
+  /** Set a target field to a constant. */
+  readonly add: <K extends keyof T & string>(field: K, value: T[K]) => AddStep;
+  /**
+   * Set a target field to what `fn` computes from the record as stored at
+   * `from`; `undefined` leaves it absent. The one opaque step: a field it
+   * produces does not translate across versions.
+   */
+  readonly derive: <K extends keyof T & string>(field: K, fn: (content: F) => T[K]) => DeriveStep;
+};
 
-/** Set a field to a constant. */
-export const add = (field: string, value: unknown): AddStep =>
-  Object.freeze({ op: 'add', field, value });
-
-/** Remove a field. */
-export const drop = (field: string): DropStep => Object.freeze({ op: 'drop', field });
-
-/**
- * Set a field to what `fn` computes from the record as stored at the
- * migration's `from`; `undefined` leaves it absent. The one opaque step: a
- * field it produces does not translate across versions.
- */
-export const derive = <F>(field: string, fn: (content: F) => unknown): DeriveStep<F> =>
-  Object.freeze({ op: 'derive', field, derive: fn });
+/** The one builder, untyped; `migration()` passes it typed by its handles. */
+export const stepBuilder: Steps<Record<string, unknown>, Record<string, unknown>> = Object.freeze({
+  rename: (from: string, to: string): RenameStep => Object.freeze({ op: 'rename', from, to }),
+  map: (field: string, values: Readonly<Record<string, string>>): MapStep =>
+    Object.freeze({ op: 'map', field, values: Object.freeze({ ...values }) }),
+  drop: (field: string): DropStep => Object.freeze({ op: 'drop', field }),
+  add: (field: string, value: unknown): AddStep => Object.freeze({ op: 'add', field, value }),
+  derive: (field: string, fn: (content: Record<string, unknown>) => unknown): DeriveStep =>
+    Object.freeze({ op: 'derive', field, derive: fn }),
+});
 
 const describe = (step: MigrationStep<never>): string => {
   switch (step.op) {
@@ -280,11 +293,19 @@ export const fieldOrigins = (
     Object.keys(from).map((field) => [field, { kind: 'field', field }]),
   );
   const removed = new Set<string>();
+  // A step that produces a field is typed by the target's declaration of
+  // it, which only holds if no later step reshapes what it produced.
+  const producedBy = new Map<string, string>();
   for (const step of steps) {
     const at = describe(step);
     const named = step.op === 'rename' ? step.from : step.field;
-    if (step.op !== 'add' && step.op !== 'derive' && !current.has(named)) {
-      return `${at}: "${named}" is not a field at this point`;
+    if (step.op === 'add' || step.op === 'derive') {
+      producedBy.set(step.field, at);
+    } else {
+      if (!current.has(named)) return `${at}: "${named}" is not a field at this point`;
+      const producer = producedBy.get(named);
+      if (producer)
+        return `${at}: "${named}" is produced by ${producer}, which sets its final value`;
     }
     switch (step.op) {
       case 'rename':
@@ -294,18 +315,12 @@ export const fieldOrigins = (
         removed.add(step.from);
         break;
       case 'map': {
-        const origin = current.get(step.field)!;
-        if (origin.kind === 'field') {
-          if (!isMappable(from[origin.field] as FieldDef | undefined)) {
-            return `${at}: only an enum, string or text field, or an array of one, can be mapped`;
-          }
-          current.set(step.field, {
-            ...origin,
-            values: composeValues(origin.values, step.values),
-          });
-        } else if (origin.kind === 'constant') {
-          current.set(step.field, { kind: 'constant', value: remap(origin.value, step.values) });
+        // A name no step produced is a source field, under its own name or another.
+        const origin = current.get(step.field) as Extract<FieldOrigin, { kind: 'field' }>;
+        if (!isMappable(from[origin.field] as FieldDef | undefined)) {
+          return `${at}: only an enum, string or text field, or an array of one, can be mapped`;
         }
+        current.set(step.field, { ...origin, values: composeValues(origin.values, step.values) });
         break;
       }
       case 'add':

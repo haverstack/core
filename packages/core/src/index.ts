@@ -46,8 +46,8 @@ export { isPlanEmpty } from './install.js';
 
 // Type handles
 export { typeHandle, migration } from './type-handle.js';
-export { rename, map, add, drop, derive } from './migration-steps.js';
 export type {
+  Steps,
   MigrationStep,
   RenameStep,
   MapStep,

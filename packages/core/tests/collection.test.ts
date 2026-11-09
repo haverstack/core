@@ -2,7 +2,6 @@ import { describe, test, expect, expectTypeOf, beforeEach, vi } from 'vitest';
 import { Stack } from '../src/stack/stack.js';
 import { MemoryAdapter } from '../src/testing.js';
 import { migration, typeHandle } from '../src/type-handle.js';
-import { add, derive, drop, map, rename } from '../src/migration-steps.js';
 import type { ContentOf, ReadonlyTypeSchema, UnlistedValue } from '../src/type-handle.js';
 import { MisfitError } from '../src/collection.js';
 import type {
@@ -65,7 +64,7 @@ const Shelf = typeHandle({
   schema: { name: { kind: 'string', required: true } },
 });
 
-const bookV1ToV2 = migration(BookV1, Book, [map('status', { done: 'finished' })]);
+const bookV1ToV2 = migration(BookV1, Book, ({ map }) => [map('status', { done: 'finished' })]);
 
 // The naming an app does: an interface keeps its name where a type alias would not.
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
@@ -413,7 +412,7 @@ describe.each([
 
   test('a read of an older record with no migration to bridge the gap throws', async () => {
     const reopened = await Stack.open(adapter, {
-      migrations: [migration(Book, BookV3, [])],
+      migrations: [migration(Book, BookV3, () => [])],
     });
     const old = await createV1();
     const v3 = view(reopened).collection(BookV3);
@@ -602,7 +601,10 @@ describe.each([
     stack = await Stack.open(adapter, {
       migrations: [
         bookV1ToV2,
-        migration(Shelf, Book, [rename('name', 'title'), add('status', 'want')]),
+        migration(Shelf, Book, ({ rename, add }) => [
+          rename('name', 'title'),
+          add('status', 'want'),
+        ]),
       ],
     });
     await stack.defineType(BookV1);
@@ -675,14 +677,14 @@ const Task = typeHandle({
 });
 
 const TASK_MIGRATIONS = [
-  migration(TaskV1, TaskV2, [
+  migration(TaskV1, TaskV2, ({ rename, map, drop, add, derive }) => [
     rename('author', 'by'),
     map('status', { done: 'finished' }),
     add('priority', 'normal'),
     drop('archived'),
     derive('slug', (c) => c.author.toLowerCase()),
   ]),
-  migration(TaskV2, Task, [rename('by', 'owner')]),
+  migration(TaskV2, Task, ({ rename }) => [rename('by', 'owner')]),
 ];
 
 describe.each([
@@ -836,7 +838,7 @@ describe('a collection whose migration throws', () => {
   test('subscribe() still delivers the change, without its record', async () => {
     const stack = await Stack.open(await MemoryAdapter.open({ ownerEntityId: OWNER }), {
       migrations: [
-        migration(BookV1, Book, [
+        migration(BookV1, Book, ({ map, derive }) => [
           map('status', { done: 'finished' }),
           derive('title', () => {
             throw new TypeError('broken migration');

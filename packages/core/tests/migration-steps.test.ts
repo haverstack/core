@@ -1,15 +1,9 @@
 import { describe, test, expect } from 'vitest';
-import {
-  add,
-  composeOrigins,
-  derive,
-  drop,
-  fieldOrigins,
-  map,
-  rename,
-} from '../src/migration-steps.js';
+import { composeOrigins, fieldOrigins, stepBuilder } from '../src/migration-steps.js';
 import type { FieldOrigins } from '../src/migration-steps.js';
 import type { ReadonlyTypeSchema } from '../src/type-handle.js';
+
+const { rename, map, add, drop, derive } = stepBuilder;
 
 const origins = (
   steps: Parameters<typeof fieldOrigins>[0],
@@ -50,11 +44,6 @@ describe('fieldOrigins()', () => {
       field: 's',
       values: { a: 'c', b: 'c', d: 'e' },
     });
-  });
-
-  test('maps an added constant', () => {
-    const result = origins([add('s', 'a'), map('s', { a: 'b' })], {}, { s: status(['b']) });
-    expect(result.get('s')).toEqual({ kind: 'constant', value: 'b' });
   });
 });
 

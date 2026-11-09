@@ -2,7 +2,6 @@ import { describe, test, expect, expectTypeOf } from 'vitest';
 import { Stack } from '../src/stack/stack.js';
 import { MemoryAdapter } from '../src/testing.js';
 import { migration, typeHandle } from '../src/type-handle.js';
-import { add, derive, drop, map, rename } from '../src/migration-steps.js';
 import type {
   ContentOf,
   ReadonlyTypeSchema,
@@ -10,6 +9,7 @@ import type {
   UnlistedValue,
 } from '../src/type-handle.js';
 import { StackBadRequestError, StackMigrationError } from '../src/errors.js';
+import type { MigrationStep, Steps } from '../src/migration-steps.js';
 import type { TypeId, TypeSchema } from '../src/types/index.js';
 
 const OWNER = 'owner-123';
@@ -215,7 +215,7 @@ const handle = <const S extends ReadonlyTypeSchema>(
 
 describe('migration()', () => {
   test('builds migrate() from its steps, carrying every field no step names', () => {
-    const m = migration(BookV1, Book, [map('status', { done: 'finished' })]);
+    const m = migration(BookV1, Book, ({ map }) => [map('status', { done: 'finished' })]);
     expect(m.from).toBe(BookV1.id);
     expect(m.to).toBe(Book.id);
     expect(m.steps).toHaveLength(1);
@@ -226,7 +226,7 @@ describe('migration()', () => {
   });
 
   test('carries a value the source handle does not list through map()', () => {
-    const m = migration(BookV1, Book, [map('status', { done: 'finished' })]);
+    const m = migration(BookV1, Book, ({ map }) => [map('status', { done: 'finished' })]);
     expect(m.migrate({ title: 'Dune', status: 'paused' })).toEqual({
       title: 'Dune',
       status: 'paused',
@@ -249,7 +249,7 @@ describe('migration()', () => {
       },
       V1.id,
     );
-    const m = migration(V1, V2, [
+    const m = migration(V1, V2, ({ rename, map, drop, add, derive }) => [
       rename('author', 'by'),
       map('tags', { a: 'x' }),
       add('priority', 'normal'),
@@ -266,16 +266,12 @@ describe('migration()', () => {
   });
 
   test('types derive() on the source content as stored', () => {
-    migration(BookV1, Book, [
+    migration(BookV1, Book, ({ derive }) => [
       derive('status', (c) => {
         expectTypeOf(c).toEqualTypeOf<StoredContentOf<typeof BookV1.schema>>();
-        return c.status === 'done' ? 'finished' : c.status;
+        return c.status === 'done' ? 'finished' : 'want';
       }),
     ]);
-    // Never run: the check is the compiler's.
-    void (() =>
-      // @ts-expect-error the source declares no `isbn`
-      migration(BookV1, Book, [derive('pages', (c) => c.isbn)]));
   });
 
   test('refuses a target in the same family that does not migrate from the source', () => {
@@ -285,14 +281,17 @@ describe('migration()', () => {
       schema: Book.schema,
       migratesFrom: Book,
     });
-    expect(() => migration(BookV1, BookV3, [])).toThrow(
+    expect(() => migration(BookV1, BookV3, () => [])).toThrow(
       `Cannot migrate "${BookV1.id}" to "${BookV3.id}": "${BookV3.id}" migrates from "${Book.id}".`,
     );
-    expect(() => migration(Book, BookV1, [])).toThrow(StackMigrationError);
+    expect(() => migration(Book, BookV1, () => [])).toThrow(StackMigrationError);
   });
 
   test('builds a step into another family without lineage', () => {
-    const m = migration(Shelf, Book, [rename('name', 'title'), add('status', 'want')]);
+    const m = migration(Shelf, Book, ({ rename, add }) => [
+      rename('name', 'title'),
+      add('status', 'want'),
+    ]);
     expect(m.migrate({ name: 'Fiction' })).toEqual({ title: 'Fiction', status: 'want' });
   });
 
@@ -304,12 +303,14 @@ describe('migration()', () => {
       meta: { kind: 'object', properties: { a: { kind: 'string' } } },
     });
     const at = (schema: ReadonlyTypeSchema) => handle(2, schema, V1.id);
+    // Untyped steps, as a caller the compiler cannot see would write them:
+    // these pin the checks migration() makes at runtime.
     const refused = (
       to: ReturnType<typeof at>,
-      steps: Parameters<typeof migration<typeof V1.schema, ReadonlyTypeSchema>>[2],
+      steps: (s: Steps<Record<string, unknown>, Record<string, unknown>>) => MigrationStep[],
       message: string,
     ) =>
-      expect(() => migration(V1, to, steps)).toThrow(
+      expect(() => migration(V1, to, steps as never)).toThrow(
         `Cannot migrate "${V1.id}" to "${to.id}": ${message}.`,
       );
     const same = at(V1.schema);
@@ -317,27 +318,49 @@ describe('migration()', () => {
     test('a step naming a field that is not there', () => {
       refused(
         same,
-        [rename('nope', 'title')],
+        ({ rename }) => [rename('nope', 'title')],
         'rename("nope", "title"): "nope" is not a field at this point',
       );
       refused(
         same,
-        [drop('title'), drop('title')],
+        ({ drop }) => [drop('title'), drop('title')],
         'drop("title"): "title" is not a field at this point',
       );
-      refused(same, [map('nope', {})], 'map("nope", …): "nope" is not a field at this point');
+      refused(
+        same,
+        ({ map }) => [map('nope', {})],
+        'map("nope", …): "nope" is not a field at this point',
+      );
     });
 
     test('a step onto a field that is already there', () => {
       refused(
         same,
-        [rename('title', 'count')],
+        ({ rename }) => [rename('title', 'count')],
         'rename("title", "count"): "count" is already a field at this point',
       );
       refused(
         same,
-        [add('title', 'x')],
+        ({ add }) => [add('title', 'x')],
         'add("title", …): "title" is already a field at this point',
+      );
+    });
+
+    test('a step reshaping a field an add() or derive() produced', () => {
+      refused(
+        same,
+        ({ derive, rename }) => [derive('title', () => 'x'), rename('title', 'name')],
+        'rename("title", "name"): "title" is produced by derive("title", …), which sets its final value',
+      );
+      refused(
+        at({ ...V1.schema, kind: { kind: 'enum', values: ['a', 'b'] } }),
+        ({ add, map }) => [add('kind', 'a'), map('kind', { a: 'b' })],
+        'map("kind", …): "kind" is produced by add("kind", …), which sets its final value',
+      );
+      refused(
+        same,
+        ({ derive, drop }) => [derive('count', () => 1), drop('count')],
+        'drop("count"): "count" is produced by derive("count", …), which sets its final value',
       );
     });
 
@@ -345,12 +368,12 @@ describe('migration()', () => {
       const { count: _count, ...rest } = V1.schema;
       refused(
         at(rest),
-        [],
+        () => [],
         '"count" is carried to a Type that does not declare it; drop or rename it',
       );
       refused(
         at(V1.schema),
-        [derive('extra', () => 1)],
+        ({ derive }) => [derive('extra', () => 1)],
         '"extra" is carried to a Type that does not declare it; drop or rename it',
       );
     });
@@ -358,7 +381,7 @@ describe('migration()', () => {
     test('a required field nothing produces', () => {
       refused(
         at({ ...V1.schema, due: { kind: 'date', required: true } }),
-        [],
+        () => [],
         '"due" is required at the target, and no step produces it',
       );
     });
@@ -366,27 +389,27 @@ describe('migration()', () => {
     test('a carried field the target would refuse', () => {
       refused(
         at({ ...V1.schema, count: { kind: 'string' } }),
-        [],
+        () => [],
         '"count" changes kind from number to string',
       );
       refused(
         at({ ...V1.schema, count: { kind: 'number', required: true } }),
-        [],
+        () => [],
         '"count" is optional at the source and required at the target',
       );
       refused(
         at({ ...V1.schema, status: { kind: 'enum', values: ['open', 'finished'] } }),
-        [],
+        () => [],
         '"status" holds "done", which the target\'s enum does not list',
       );
       refused(
         at({ ...V1.schema, status: { kind: 'enum', values: ['open'] } }),
-        [map('status', { done: 'closed' })],
+        ({ map }) => [map('status', { done: 'closed' })],
         '"status" holds "done" (mapped to "closed"), which the target\'s enum does not list',
       );
       refused(
         at({ ...V1.schema, meta: { kind: 'object', properties: {} } }),
-        [],
+        () => [],
         '"meta.a" is not declared at the target',
       );
     });
@@ -394,7 +417,7 @@ describe('migration()', () => {
     test('a map of a field that holds no strings', () => {
       refused(
         same,
-        [map('count', { a: 'b' })],
+        ({ map }) => [map('count', { a: 'b' })],
         'map("count", …): only an enum, string or text field, or an array of one, can be mapped',
       );
     });
@@ -402,7 +425,7 @@ describe('migration()', () => {
     test('an added value the target refuses', () => {
       refused(
         at({ ...V1.schema, priority: { kind: 'number' } }),
-        [add('priority', 'high')],
+        ({ add }) => [add('priority', 'high')],
         '"priority" is set to a value the target refuses: Expected number, got string',
       );
     });
@@ -412,13 +435,15 @@ describe('migration()', () => {
         migration(
           V1,
           at({ ...V1.schema, status: { kind: 'string' }, title: { kind: 'text', required: true } }),
-          [],
+          () => [],
         ),
       ).not.toThrow();
       expect(() =>
-        migration(V1, at({ ...V1.schema, status: { kind: 'enum', values: ['open', 'closed'] } }), [
-          map('status', { done: 'closed' }),
-        ]),
+        migration(
+          V1,
+          at({ ...V1.schema, status: { kind: 'enum', values: ['open', 'closed'] } }),
+          ({ map }) => [map('status', { done: 'closed' })],
+        ),
       ).not.toThrow();
     });
   });
