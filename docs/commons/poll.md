@@ -79,7 +79,7 @@ await stack.defineType({
 | `options`  | `array`  | yes      | The choices. Each has a stable `id` (identity — unique within the poll, never reused or repurposed), a `label`, and optionally `startsAt`/`endsAt` when the option is a time slot (the when-to-meet case), read exactly as [`event`](./event.md)'s are, so a winning slot promotes to an event unchanged. |
 | `method`   | `string` | no       | How ballots are counted: `"plurality"` (default when absent), `"approval"`, `"instant-runoff"`, `"borda"` or `"score"`. See [Counting methods](#counting-methods) for each rule and for an unknown value.                                                                                                 |
 | `scoreMax` | `number` | no       | The top of the range every ballot's scores are read on, a positive integer; the bottom is always 0. Absent means 1: plain yes or no. See [Counting methods](#counting-methods) for an invalid value.                                                                                                      |
-| `closesAt` | `date`   | no       | When writers stop accepting ballots. Absent means open. See conventions.                                                                                                                                                                                                                                  |
+| `closesAt` | `date`   | no       | When writers stop accepting ballots. Absent means open. See [the deadline](#conventions) under conventions.                                                                                                                                                                                               |
 | `details`  | `text`   | no       | Context for the decision. Markdown by convention.                                                                                                                                                                                                                                                         |
 
 ## Field semantics — `vote@1`
@@ -93,13 +93,16 @@ await stack.defineType({
 
 `method` names the rule that turns ballots into a result. One principle prepares
 everything a tally reads: **what a reader cannot read counts for nothing, and of
-repeats the first stands.** It applies at each level:
+repeats the first stands.** It is the poll's own rule, the same least interpretation
+[design rule 7](./README.md#design-rules-for-commons-types) gives an unknown word,
+applied to the poll's numbers and records as well. It applies at each level:
 
 - **A poll** with an unknown `method`, or a `scoreMax` that is not a positive integer,
-  has no result: the reader shows the poll and its ballots and computes nothing. That
-  is the least interpretation, per
-  [design rule 7](./README.md#design-rules-for-commons-types).
+  has no result: the reader shows the poll and its ballots and computes nothing.
 - **An option** repeating an earlier option's `id` is ignored.
+- **A ballot** that is soft-deleted counts for nothing. Of a member's remaining
+  ballots for the poll, the first stands: earliest `createdAt`, with `id` breaking
+  ties. Both are fixed when a record is created, so no later write moves them.
 - **A ballot entry** naming no option of the poll, or carrying a score that is not an
   integer from 0 to `scoreMax`, is dropped; then an entry repeating an option earlier
   on the ballot is dropped.
@@ -117,13 +120,9 @@ scores.
 | `"borda"`          | With _k_ options on a ballot, its top-ranked option gets _k_ points, its second _k_ − 1, and so on down to 1; options not on it get 0. Highest total wins. Points depend only on what a ballot lists, so appending options to a poll changes no existing ballot's points. The trade: a ballot listing more options gives its favourite more points, which rewards complete rankings; points stay integers, so every reader's totals agree exactly. |
 | `"score"`          | Every entry adds its score to its option. Options not on a ballot add 0. Highest total wins.                                                                                                                                                                                                                                                                                                                                                       |
 
-Every method shares these rules:
-
-- **A tie is a result.** No method breaks one. Under `"instant-runoff"`, a round in
-  which every remaining option is tied for fewest ends in a tie among them.
-- **Scores are stored, words are shown.** A UI labels the values between 0 and
-  `scoreMax`; the conventional labels for `scoreMax: 2` are no, if need be, and yes.
-  The number is what every reader agrees on, so no stored word can be misread.
+Every method shares one more rule: **a tie is a result.** No method breaks one. Under
+`"instant-runoff"`, a round in which every remaining option is tied for fewest ends in
+a tie among them.
 
 ## Conventions
 
@@ -137,13 +136,16 @@ Every method shares these rules:
   filtering is native on every adapter, while `content: { pollId }` needs a
   `filter.content` reach — on adapters without one, tallying is a scan of `vote@1`
   records, which is fine at the scale of a small group.
-- **A member's ballot is their latest record in the `vote` family for the poll**, by
+- **A member's ballot is a record in the `vote` family for the poll**, matched by
   `baseId` rather than version, so a migrated ballot is still the member's. Revoting is
   updating that record, not creating a second — a writer obligation (query `pollId` +
   own `createdBy.subjectId` before creating), with version history preserving every
-  revision. Duplicates from a buggy writer change nothing about whose ballot is which:
-  the record with the latest `updatedAt` is the member's ballot, and consumers warn. A
-  soft-deleted ballot is withdrawn: the member has not voted.
+  revision. A writer that creates a second ballot instead is broken: the first stands
+  (see [Counting methods](#counting-methods)), so the revote is lost, and consumers
+  warn. Soft-deleting a ballot withdraws it.
+- **Scores are stored, words are shown.** A UI labels the values between 0 and
+  `scoreMax`; the conventional labels for `scoreMax: 2` are no, if need be, and yes.
+  The number is what every reader agrees on, so no stored word can be misread.
 - **Results are computed, never stored.** Any member's app tallies by reading ballots;
   a stored result would go stale and would have an author.
 - **A poll's meaning changes only by appending options or changing `closesAt`.** Every
