@@ -42,7 +42,7 @@ await stack.defineType({
 | --------- | -------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------- |
 | `text`    | `text`   | yes      | The body.                                                                                                                              |
 | `subject` | `string` | no       | Thread subject. Conventionally present on thread starters, absent on replies (a reply that sets one is a subject change, as in email). |
-| `format`  | `string` | no       | Same vocabulary and defaults as `note`: `"markdown"` (default), `"plain"`.                                                             |
+| `format`  | `string` | no       | Same vocabulary, default and fallback as `note`: `"markdown"` when absent, `"plain"` for an unknown value.                             |
 
 The author is `createdBy` — set natively by `ScopedStack.create()` for every member
 write, which is the whole reason this type needs no author field.

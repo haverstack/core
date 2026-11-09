@@ -38,7 +38,7 @@ await stack.defineType({
 | Field    | Kind     | Required | Meaning                                                                                                                                                                                                       |
 | -------- | -------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `text`   | `text`   | yes      | The utterance. What the post _is_.                                                                                                                                                                            |
-| `format` | `string` | no       | Same vocabulary and defaults as `note`: `"markdown"` (default when absent), `"plain"`; unknown values render as plain.                                                                                        |
+| `format` | `string` | no       | Same vocabulary, default and fallback as `note`: `"markdown"` when absent, `"plain"` for an unknown value.                                                                                                    |
 | `url`    | `string` | no       | Canonical location. POSSE's premise is that the canonical copy lives on your own site; the publishing app stamps it at first publish, same convention as `article.url`. Syndicated copies never overwrite it. |
 
 The author is `createdBy` — set natively by `Stack.create()`/`ScopedStack.create()`. No

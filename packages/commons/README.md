@@ -37,7 +37,7 @@ const tasks = await stack.collection(TASK).query(); // records: { content: { tit
 ```
 
 Each export (`NOTE`, `BOOKMARK`, `TASK`, `CONTACT`, `ARTICLE`, `PLACE`, `PAGE`, `IMAGE`,
-`POST`, `SITE`) is a [type handle](https://github.com/haverstack/core/blob/main/docs/spec/data-model.md#type-handles)
+`POST`, `SITE`, `POLL`, `VOTE`) is a [type handle](https://github.com/haverstack/core/blob/main/docs/spec/data-model.md#type-handles)
 — `{ id, baseId, name, schema }` — mirroring its type's `stack.defineType(...)` block in
 [`docs/commons/`](https://github.com/haverstack/core/tree/main/docs/commons) exactly. Pass it to `stack.collection()` for typed access to its family; use `NOTE.baseId` for
 untyped calls about the whole family.
