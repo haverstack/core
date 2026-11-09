@@ -7,9 +7,9 @@ export default defineConfig({
   resolve: {
     alias: {
       '@haverstack/core/testing': pkg('core/src/testing.ts'),
-      '@haverstack/core/adapter': pkg('core/src/adapter-entry.ts'),
-      '@haverstack/core/wire': pkg('core/src/wire-entry.ts'),
-      '@haverstack/core/did': pkg('core/src/did-entry.ts'),
+      '@haverstack/core/adapter': pkg('core/src/adapter/index.ts'),
+      '@haverstack/core/wire': pkg('core/src/wire/index.ts'),
+      '@haverstack/core/did': pkg('core/src/did/index.ts'),
       '@haverstack/core': pkg('core/src/index.ts'),
       '@haverstack/commons': pkg('commons/src/index.ts'),
       '@haverstack/adapter-local': pkg('adapter-local/src/index.ts'),

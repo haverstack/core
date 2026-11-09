@@ -11,14 +11,8 @@ import { join } from 'node:path';
 import { Stack, StackError, typeHandle } from '@haverstack/core';
 import { generateDidKeypair } from '@haverstack/core/did';
 import { LocalAdapter } from '@haverstack/adapter-local';
-import { Book, BookV1 } from './schema.ts';
-import {
-  ReadingList,
-  installReadingList,
-  letEdit,
-  registerReadingListMigrations,
-  shareLibraryWith,
-} from './reading-list.ts';
+import { Book, BookV1, migrations } from './schema.ts';
+import { ReadingList, installReadingList, letEdit, shareLibraryWith } from './reading-list.ts';
 
 const step = (title: string) => console.log(`\n── ${title}`);
 const show = (label: string, value: unknown) =>
@@ -34,15 +28,15 @@ try {
   {
     const adapter = await LocalAdapter.open({ path, create: 'exclusive', ownerEntityId: me.did });
     const stack = await Stack.open(adapter, { ownerProfile: { name: 'Jen' } });
-    await stack.defineType({ ...BookV1, name: 'Book' });
-    await stack.create(BookV1, { title: 'Dune', author: 'Frank Herbert', status: 'done' });
-    await stack.create(BookV1, { title: 'Piranesi', author: 'Susanna Clarke', status: 'want' });
+    await stack.defineType(BookV1);
+    const books = stack.collection(BookV1);
+    await books.create({ title: 'Dune', author: 'Frank Herbert', status: 'done' });
+    await books.create({ title: 'Piranesi', author: 'Susanna Clarke', status: 'want' });
     await stack.close();
   }
 
   step('The current build opens the same file and migrates');
-  const stack = await Stack.open(await LocalAdapter.open({ path }));
-  registerReadingListMigrations(stack);
+  const stack = await Stack.open(await LocalAdapter.open({ path }), { migrations });
   await installReadingList(stack);
   const app = new ReadingList(stack);
   show('owner', (await stack.getOwnerEntity())?.content.name);
@@ -146,15 +140,36 @@ try {
   show('events', seen);
 
   step('A newer build adds a status this build does not know');
-  const BookWithPaused = typeHandle(Book.id, {
-    ...Book.schema,
-    status: { ...Book.schema.status, enum: [...Book.schema.status.enum, 'paused'] },
+  const BookWithPaused = typeHandle({
+    ...Book,
+    schema: {
+      ...Book.schema,
+      status: { ...Book.schema.status, values: [...Book.schema.status.values, 'paused'] },
+    },
   });
-  await stack.defineType({ ...BookWithPaused, name: 'Book' });
-  await stack.create(BookWithPaused, {
+  await stack.defineType(BookWithPaused);
+  await stack.collection(BookWithPaused).create({
     title: 'Middlemarch',
     author: 'George Eliot',
     status: 'paused',
+  });
+  const middlemarch = (await app.listBooks({ search: 'Middlemarch' })).books[0];
+  show('read by this build, status typed as an unlisted string', middlemarch?.content.status);
+
+  step('A newer build adds book@3');
+  const BookV3 = typeHandle({
+    id: 'com.example.reading/book@3',
+    name: 'Book',
+    migratesFrom: BookWithPaused,
+    schema: { ...BookWithPaused.schema, subtitle: { kind: 'string' } },
+  });
+  await stack.defineType(BookV3);
+  // Untyped: this build has no @2→@3 migration, so it can't open a collection on @3.
+  await stack.create(BookV3.id, {
+    title: 'Wolf Hall',
+    author: 'Hilary Mantel',
+    status: 'want',
+    subtitle: 'A Novel',
   });
   const { books, misfits } = await app.listBooks();
   show('books this build can read', books.length);

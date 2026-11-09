@@ -5,37 +5,39 @@
  * generic record API in domain verbs, and never touches an adapter
  * directly. It exists to exercise the Stack API the way an app author
  * meets it, so the places where it still has to work around the library
- * are left visible and cross-referenced to FINDINGS-2.md.
+ * are left visible and cross-referenced to FINDINGS-3.md.
  *
- * Three layers, as the root README's "Writing an app" lays out: an install
- * function (owner, once per schema change), a startup function (every
- * open), and a data layer over `StackClient`, so the same class serves the
- * owner and a friend reading through `stack.asEntity()`.
+ * Layered as the root README's "Writing an app" lays out: migrations passed
+ * to every `Stack.open()`, an install the owner runs, and a data layer of
+ * collections over `StackClient`, so the same class serves the owner and a
+ * friend reading through `stack.asEntity()`.
  */
 
+import { StackVersionConflictError } from '@haverstack/core';
 import type {
-  ContentOf,
+  AppManifest,
+  Collection,
+  CollectionChange,
+  CollectionQuery,
+  CollectionRecord,
   EntityId,
-  Migration,
+  InstallRequest,
+  Misfit,
   RecordId,
   RecordJournalEntry,
   RecordVersion,
   Stack,
   StackClient,
-  TypedRecord,
   Unsubscribe,
 } from '@haverstack/core';
-import { StackVersionConflictError } from '@haverstack/core';
-import { collection } from './collection.ts';
-import type { Collection, CollectionChange, CollectionQuery, Misfit } from './collection.ts';
 import { Book, BookV1, Review, Shelf } from './schema.ts';
-import type { BookContent, BookStatus } from './schema.ts';
+import type { BookContent, BookStatus, ReviewContent, ShelfContent } from './schema.ts';
 
 export const APP_ID = 'com.example.reading';
 
-export type BookRecord = TypedRecord<typeof Book.schema>;
-export type ShelfRecord = TypedRecord<typeof Shelf.schema>;
-export type ReviewRecord = TypedRecord<typeof Review.schema>;
+export type BookRecord = CollectionRecord<BookContent>;
+export type ShelfRecord = CollectionRecord<ShelfContent>;
+export type ReviewRecord = CollectionRecord<ReviewContent>;
 
 export type BookFilter = {
   status?: BookStatus;
@@ -46,39 +48,46 @@ export type BookFilter = {
   pageSize?: number;
 };
 
-export const migrations: Migration[] = [
-  {
-    from: BookV1.id,
-    to: Book.id,
-    migrate: (c) => ({ ...c, status: c.status === 'done' ? 'finished' : c.status }),
-  },
-];
-
-/** Every startup, right after Stack.open(): the registry lives in memory. */
-export function registerReadingListMigrations(stack: Stack): void {
-  for (const m of migrations) stack.registerMigration(m);
-}
+export type BookList = {
+  books: BookRecord[];
+  misfits: Misfit[];
+  skipped: { older: boolean; newer: boolean };
+};
 
 /** Owner-only, once per stack and again after a schema change. */
 export async function installReadingList(stack: Stack): Promise<void> {
-  await stack.defineType({ ...Shelf, name: 'Shelf' });
-  await stack.defineType({ ...BookV1, name: 'Book' });
-  await stack.defineType({ ...Book, name: 'Book', migratesFrom: BookV1.id });
-  await stack.defineType({ ...Review, name: 'Review' });
+  for (const handle of [Shelf, BookV1, Book, Review]) await stack.defineType(handle);
   await stack.migrateAll(Book.baseId);
 }
+
+/** The same install, as a request from an app the owner doesn't run. */
+export const manifest: AppManifest = {
+  appId: APP_ID,
+  name: 'Reading List',
+  types: [Shelf, BookV1, Book, Review],
+  requests: [
+    ...[Shelf, Book, Review].map(
+      (handle): InstallRequest => ({
+        baseId: handle.baseId,
+        actions: ['create', 'read-own', 'update-own', 'delete-own'],
+      }),
+    ),
+    // Covers are uploads, and an upload is an `_attachment` record.
+    { baseId: '_attachment', actions: ['create', 'read-own'] },
+  ],
+};
 
 export class ReadingList {
   private readonly client: StackClient;
   readonly #books: Collection<BookContent>;
-  readonly #shelves: Collection<ContentOf<typeof Shelf.schema>>;
-  readonly #reviews: Collection<ContentOf<typeof Review.schema>>;
+  readonly #shelves: Collection<ShelfContent>;
+  readonly #reviews: Collection<ReviewContent>;
 
   constructor(client: StackClient) {
     this.client = client;
-    this.#books = collection(client, Book, { migrations });
-    this.#shelves = collection(client, Shelf);
-    this.#reviews = collection(client, Review);
+    this.#books = client.collection(Book);
+    this.#shelves = client.collection(Shelf);
+    this.#reviews = client.collection(Review);
   }
 
   // -------------------------------------------------------
@@ -139,23 +148,28 @@ export class ReadingList {
   }
 
   async moveToShelf(id: RecordId, shelf: RecordId | null): Promise<BookRecord> {
-    return this.#books.mutate(id, { parentId: shelf });
+    return this.#books.setParent(id, shelf);
   }
 
   async tag(id: RecordId, label: string): Promise<BookRecord> {
-    return this.#books.associate(id, [{ kind: 'tag', label }]);
+    return this.#books.editAssociations(id, [{ op: 'add', association: { kind: 'tag', label } }]);
   }
 
   async untag(id: RecordId, label: string): Promise<BookRecord> {
-    return this.#books.dissociate(id, [{ kind: 'tag', label }]);
+    return this.#books.editAssociations(id, [
+      { op: 'remove', association: { kind: 'tag', label } },
+    ]);
   }
 
   async linkIsbn(id: RecordId, isbn: string): Promise<BookRecord> {
-    return this.#books.associate(id, [
+    return this.#books.editAssociations(id, [
       {
-        kind: 'relationship',
-        label: 'same-as',
-        target: { kind: 'external', ns: 'isbn', id: isbn },
+        op: 'add',
+        association: {
+          kind: 'relationship',
+          label: 'same-as',
+          target: { kind: 'external', ns: 'isbn', id: isbn },
+        },
       },
     ]);
   }
@@ -172,10 +186,11 @@ export class ReadingList {
 
   /**
    * Every matching book, following cursors until the last page. Books this
-   * build can't read (a status or schema version from a newer build) come
-   * back as misfits rather than failing the list.
+   * build can't read come back as misfits on an unfiltered list. A content
+   * filter or sort leaves out versions it can't translate and says so in
+   * `skipped` instead.
    */
-  async listBooks(filter: BookFilter = {}): Promise<{ books: BookRecord[]; misfits: Misfit[] }> {
+  async listBooks(filter: BookFilter = {}): Promise<BookList> {
     const query: CollectionQuery<BookContent> = {
       filter: {
         ...(filter.status && { content: { status: filter.status } }),
@@ -186,12 +201,13 @@ export class ReadingList {
       sort: filter.sortBy === 'title' ? { contentField: 'title' } : { field: 'createdAt' },
       limit: filter.pageSize ?? 50,
     };
-    const out = { books: [] as BookRecord[], misfits: [] as Misfit[] };
+    const out: BookList = { books: [], misfits: [], skipped: { older: false, newer: false } };
     let cursor: string | undefined;
     do {
       const page = await this.#books.query({ ...query, cursor });
       out.books.push(...page.records);
       out.misfits.push(...page.misfits);
+      if (page.skipped) out.skipped = page.skipped;
       cursor = page.cursor ?? undefined;
     } while (cursor);
     return out;
@@ -226,11 +242,11 @@ export class ReadingList {
 
   async setCover(bookId: RecordId, bytes: Uint8Array, mimeType: string): Promise<BookRecord> {
     const upload = await this.client.putAttachment(bytes, { mimeType, appId: APP_ID });
-    const book = await this.client.get(bookId);
+    const book = await this.#books.get(bookId);
     const previous = book?.associations?.find(
       (a) => a.kind === 'attachment' && a.label === 'cover',
     );
-    return this.#books.amendAssociations(bookId, [
+    return this.#books.editAssociations(bookId, [
       ...(previous ? [{ op: 'remove' as const, association: previous }] : []),
       {
         op: 'add',
@@ -245,7 +261,7 @@ export class ReadingList {
   }
 
   async getCover(bookId: RecordId): Promise<Uint8Array | null> {
-    const book = await this.client.get(bookId);
+    const book = await this.#books.get(bookId);
     const cover = book?.associations?.find((a) => a.kind === 'attachment' && a.label === 'cover');
     if (!cover || cover.kind !== 'attachment') return null;
     return this.client.getAttachment(cover.fileId);
@@ -299,8 +315,8 @@ export async function shareLibraryWith(stack: Stack, friend: EntityId): Promise<
 /** Lets `friend` edit one book. `write` never implies `read`, so both are named. */
 export async function letEdit(stack: Stack, bookId: RecordId, friend: EntityId): Promise<void> {
   const grantee = { kind: 'entity', entityId: friend } as const;
-  await stack.grantAccess(bookId, [
-    { kind: 'permission', label: 'read', grantee },
-    { kind: 'permission', label: 'write', grantee },
+  await stack.editAccess(bookId, [
+    { op: 'add', association: { kind: 'permission', label: 'read', grantee } },
+    { op: 'add', association: { kind: 'permission', label: 'write', grantee } },
   ]);
 }
