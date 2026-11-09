@@ -42,7 +42,7 @@ await stack.defineType({
 | --------- | -------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------- |
 | `text`    | `text`   | yes      | The body.                                                                                                                              |
 | `subject` | `string` | no       | Thread subject. Conventionally present on thread starters, absent on replies (a reply that sets one is a subject change, as in email). |
-| `format`  | `string` | no       | Same vocabulary and defaults as `note`: `"markdown"` (default), `"plain"`.                                                             |
+| `format`  | `string` | no       | Same vocabulary, default and fallback as `note`: `"markdown"` when absent, `"plain"` for an unknown value.                             |
 
 The author is `createdBy` — set natively by `ScopedStack.create()` for every member
 write, which is the whole reason this type needs no author field.
@@ -58,8 +58,9 @@ write, which is the whole reason this type needs no author field.
   (`typeId = message@1, parentId = null`, which finds exactly the threads that _are_
   board threads). Basecamp-style flat threads are the model.
 - **Replying to a specific earlier message** (quoting) adds
-  `{ kind: 'relationship', label: 'reply-to', recordId }` on top of `parentId` — the
-  spec's own example association, used here for precision, not structure.
+  `{ kind: 'relationship', label: 'reply-to', target: { kind: 'record', recordId } }` on
+  top of `parentId` — the spec's own example association, used here for precision, not
+  structure.
 - **Attachments**: attachment associations, any label; `embed` for files referenced
   from the body, per the cross-type convention.
 - **Edits** are ordinary updates — version history is the edit trail, for free.

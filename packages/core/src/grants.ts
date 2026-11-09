@@ -11,22 +11,19 @@
 
 import { baseIdOf, familyIdProblem } from './schema.js';
 import { StackBadRequestError } from './errors.js';
-import { assertKnownKeys, GRANTEE_KEYS, unknownKeys } from './query-validation.js';
-import { SYSTEM_TYPES, GRANT_ACTIONS } from './types.js';
-import { carriesRoster, groupRoleFromAssociations } from './access.js';
+import { granteeErrors } from './associations/validation.js';
+import { SYSTEM_TYPES, GRANT_ACTIONS } from './types/index.js';
+import { granteeReaches } from './access.js';
+import type { RosterRoles } from './access.js';
 import type {
   EntityId,
   GrantAction,
   GrantContent,
   GrantGrantee,
   GroupRole,
-  QueryResult,
   RecordId,
-  StackQuery,
-  StackRecord,
   TypeId,
-} from './types.js';
-import { queryAllPages } from './stack-reads.js';
+} from './types/index.js';
 import type { ValidationError } from './validate.js';
 
 /**
@@ -37,14 +34,12 @@ import type { ValidationError } from './validate.js';
 export const GRANT_ACTION_SET: ReadonlySet<GrantAction> = new Set(GRANT_ACTIONS);
 
 /**
- * The read actions that make a mutate action coherent, scope for scope: a
- * `-any` verb needs read over the same reach it can mutate, a `-own` verb
- * needs read over its author's own. A grant carrying neither conveys the
- * verb to nobody. `create` has no companion — writing a Record you then
- * cannot read is the drop-box, and it discloses nothing.
+ * The read actions that make a mutate action coherent, scope for scope. A
+ * grant carrying none conveys the verb to nobody. `create` has none:
+ * writing a Record you cannot read is the drop-box, and discloses nothing.
  * See docs/spec/access-control.md § Write implies read.
  */
-export const READ_COMPANIONS: ReadonlyMap<GrantAction, readonly GrantAction[]> = new Map([
+const READ_COMPANIONS: ReadonlyMap<GrantAction, readonly GrantAction[]> = new Map([
   ['update-own', ['read-own', 'read-any']],
   ['delete-own', ['read-own', 'read-any']],
   ['update-any', ['read-any']],
@@ -52,14 +47,10 @@ export const READ_COMPANIONS: ReadonlyMap<GrantAction, readonly GrantAction[]> =
 ]);
 
 /**
- * Whether one grant's action list conveys `action`. The companion has to
- * sit in the same `_grant` Record: a grant is revoked whole, so a rule
- * satisfied across two records would let revoking the read one leave a
- * mutate-without-read grant standing.
- *
- * Takes the list grantReach() produced, never a stored field: `includes()`
- * over a string is substring matching, so one would answer for every verb
- * spelled inside it.
+ * Whether one grant's action list conveys `action`. The companion must sit
+ * in the same `_grant`: a grant is revoked whole, so a rule met across two
+ * records could leave mutate-without-read standing. Takes grantReach()'s
+ * list, never a stored field, whose `includes()` would match substrings.
  */
 export function grantConveys(actions: readonly GrantAction[], action: GrantAction): boolean {
   if (!actions.includes(action)) return false;
@@ -69,12 +60,10 @@ export function grantConveys(actions: readonly GrantAction[], action: GrantActio
 
 /**
  * What a stored `_grant` reaches, or null where it names nothing the
- * evaluator recognizes. Read as data, like the grantee beside it: a grant
- * Record can arrive from an import, a direct adapter write or a foreign
- * server, where no schema saw it, so both fields are asked for their shape
- * rather than taken from the type. An unknown action is dropped from the
- * list, on the same terms an unknown grantee `kind` confers nothing.
- * See docs/spec/access-control.md § Refused at the write, and again at evaluation.
+ * evaluator recognizes. Read as data — a grant can arrive from an import or
+ * a foreign server no schema saw — so an unknown action is dropped, as an
+ * unknown grantee confers nothing. See docs/spec/access-control.md
+ * § Refused at the write, and again at evaluation.
  */
 export function grantReach(content: unknown): { familyId: string; actions: GrantAction[] } | null {
   const c = content as { baseId?: unknown; actions?: unknown } | null;
@@ -97,6 +86,13 @@ export type GrantQuery =
   | Exclude<GrantGrantee, { kind: 'group' }>
   | { kind: 'group'; groupId: RecordId; role: GroupRole | 'any' };
 
+/** Whether two action lists name the same verbs, order and repeats aside. */
+export function sameActions(a: readonly GrantAction[], b: readonly GrantAction[]): boolean {
+  const as = new Set(a);
+  const bs = new Set(b);
+  return as.size === bs.size && [...bs].every((x) => as.has(x));
+}
+
 /**
  * Direct (non-roster) match between a stored _grant's content and a target:
  * the whole grantee, `role` included. A target is the identity grantType()
@@ -115,44 +111,23 @@ export function matchesGrantTarget(content: GrantContent, target: GrantQuery): b
 }
 
 /**
- * Reject a grant target that names no tier, or whose tier names nobody. An
- * empty groupId or entityId reaches no one, so storing it would leave a
- * grant that can only ever deny while looking like a share that worked.
- * Read as data, not as the type: a target reaching Stack from a request
- * body or an import has whatever shape it arrived with, so a key its tier
- * does not define is refused too. `allowAny` admits
- * the listing-only `role: 'any'`, which grantType() and revokeType() refuse.
+ * Reject a grant target that names no tier, or whose tier names nobody: it
+ * would store a grant that can only deny while looking like a share that
+ * worked. Read as data, so a key its tier does not define is refused too.
+ * `allowAny` admits the listing-only `role: 'any'`.
  */
 export function validateGrantTarget(target: GrantQuery, allowAny = false): void {
-  const t = target as Partial<Record<'kind' | 'entityId' | 'groupId' | 'role', unknown>> | null;
-  if (t?.kind === 'authenticated' || t?.kind === 'entity' || t?.kind === 'group')
-    assertKnownKeys(t, GRANTEE_KEYS[t.kind], 'grant target');
-  switch (t?.kind) {
-    case 'authenticated':
-      return;
-    case 'entity':
-      if (typeof t.entityId !== 'string' || t.entityId.length === 0) {
-        throw new StackBadRequestError('An entity grant target requires a non-empty entityId.');
-      }
-      return;
-    case 'group':
-      if (typeof t.groupId !== 'string' || t.groupId.length === 0) {
-        throw new StackBadRequestError('A group grant target requires a non-empty groupId.');
-      }
-      if (t.role !== 'member' && t.role !== 'admin' && !(allowAny && t.role === 'any')) {
-        throw new StackBadRequestError(
-          allowAny
-            ? "A group grant target requires role 'member', 'admin' or 'any'."
-            : "A group grant target requires role 'member' or 'admin'.",
-        );
-      }
-      // No format check: groupId is a reference, like parentId or an
-      // association's recordId. One that resolves to nothing simply denies.
-      return;
-    default:
-      throw new StackBadRequestError(
-        "A grant target must name its tier: { kind: 'entity' }, { kind: 'group' } or { kind: 'authenticated' }.",
-      );
+  // No format check on a groupId: it is a reference, like parentId or an
+  // association's recordId. One that resolves to nothing simply denies.
+  const errors = granteeErrors(target, 'grant target', {
+    unknownKeys: 'throw',
+    authenticated: true,
+    anyRole: allowAny,
+  });
+  if (errors.length > 0) {
+    throw new StackBadRequestError(
+      `Invalid grant target: ${errors.map((e) => e.message).join(' ')}`,
+    );
   }
 }
 
@@ -164,54 +139,10 @@ export function validateGrantTarget(target: GrantQuery, allowAny = false): void 
  */
 export function validateGrantee(typeId: TypeId, content: unknown): ValidationError[] {
   if (baseIdOf(typeId) !== SYSTEM_TYPES.GRANT) return [];
-  const c = content as { grantee?: unknown } | null;
-  const g = c?.grantee as Partial<Record<'kind' | 'entityId' | 'groupId' | 'role', unknown>> | null;
+  const g = (content as { grantee?: unknown } | null)?.grantee;
   // An absent or non-object grantee is the schema's to refuse, and it does.
   if (!g || typeof g !== 'object') return [];
-  if (g.kind === 'authenticated' || g.kind === 'entity' || g.kind === 'group') {
-    const unknown = unknownKeys(g, GRANTEE_KEYS[g.kind]);
-    if (unknown.length > 0)
-      return unknown.map((key) => ({
-        path: `grantee.${key}`,
-        message: `A ${String(g.kind)} grantee does not carry ${key}`,
-      }));
-  }
-  switch (g.kind) {
-    case 'authenticated':
-      return [];
-    case 'entity':
-      return typeof g.entityId === 'string' && g.entityId.length > 0
-        ? []
-        : [
-            {
-              path: 'grantee.entityId',
-              message: 'An entity grantee requires a non-empty entityId',
-            },
-          ];
-    case 'group': {
-      const errors: ValidationError[] = [];
-      if (typeof g.groupId !== 'string' || g.groupId.length === 0) {
-        errors.push({
-          path: 'grantee.groupId',
-          message: 'A group grantee requires a non-empty groupId',
-        });
-      }
-      if (g.role !== 'member' && g.role !== 'admin') {
-        errors.push({
-          path: 'grantee.role',
-          message: "A group grantee requires role 'member' or 'admin'",
-        });
-      }
-      return errors;
-    }
-    default:
-      return [
-        {
-          path: 'grantee.kind',
-          message: "A grantee must name its tier: 'entity', 'group' or 'authenticated'",
-        },
-      ];
-  }
+  return granteeErrors(g, 'grantee', { unknownKeys: 'collect', authenticated: true });
 }
 
 /**
@@ -249,57 +180,11 @@ export function validateGrantBaseId(typeId: TypeId, content: unknown): Validatio
 export async function grantCoversGrantee(
   c: GrantContent,
   grantee: EntityId,
-  opts: {
-    allowDefault: boolean;
-    allowGroup: boolean;
-    groupRoles: Map<string, GroupRole | null>;
-    resolveRecord: (id: RecordId) => Promise<StackRecord | null>;
-  },
+  opts: { allowDefault: boolean; allowGroup: boolean; roles: RosterRoles },
 ): Promise<boolean> {
   const g = c.grantee;
-  if (!g || typeof g !== 'object') return false;
-  switch (g.kind) {
-    case 'authenticated':
-      return opts.allowDefault;
-    case 'entity':
-      return !!g.entityId && g.entityId === grantee;
-    case 'group': {
-      if (!opts.allowGroup) return false;
-      if (!g.groupId) return false;
-      if (g.role !== 'member' && g.role !== 'admin') return false;
-      const role = await resolveGroupRoleMemoized(
-        g.groupId,
-        grantee,
-        opts.groupRoles,
-        opts.resolveRecord,
-      );
-      return g.role === 'admin' ? role === 'admin' : role !== null;
-    }
-    default:
-      return false;
-  }
-}
-
-/**
- * An entity's role on a `_group` roster, memoized in the caller's
- * `groupRoles` map. That map is built per operation, so no resolved role
- * outlives the operation that resolved it — removal from a group must never
- * go stale.
- */
-async function resolveGroupRoleMemoized(
-  groupId: RecordId,
-  entityId: EntityId,
-  groupRoles: Map<string, GroupRole | null>,
-  resolveRecord: (id: RecordId) => Promise<StackRecord | null>,
-): Promise<GroupRole | null> {
-  const key = `${groupId}:${entityId}`;
-  const cached = groupRoles.get(key);
-  if (cached !== undefined) return cached;
-  const group = await resolveRecord(groupId);
-  const role =
-    group && carriesRoster(group) ? groupRoleFromAssociations(group.associations, entityId) : null;
-  groupRoles.set(key, role);
-  return role;
+  if (g?.kind === 'authenticated') return opts.allowDefault;
+  return granteeReaches(g, grantee, opts);
 }
 
 /**
@@ -317,20 +202,65 @@ export const UNGRANTABLE_SYSTEM_TYPES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Every `_grant` Record, cursor-walked. Read through an unscoped query at
- * every call site: a grant is what decides who may read, so it can never
- * itself sit behind a read check.
- *
- * `includeUnlisted`, because withholding a Record from enumeration decides
- * nothing about what it confers. Deleted grants are excluded on the
- * opposite grounds — a soft delete is how revokeType() withdraws one.
- * See docs/spec/unlisted.md.
+ * An action list as every write of one holds it: known GrantAction values,
+ * each named once. Actions are a set, and a set is written without repeats,
+ * as a type list or an enum's values are. Shared by grantType(), a
+ * manifest's requests, and the `_grant` and `_install` Records they write.
  */
-export async function loadGrantRecords(
-  query: (q: StackQuery) => Promise<QueryResult>,
-): Promise<(StackRecord & { content: GrantContent })[]> {
-  const records = await queryAllPages(query, {
-    filter: { typeId: `${SYSTEM_TYPES.GRANT}@1`, includeUnlisted: true },
+export function validateActionList(actions: readonly unknown[], path: string): ValidationError[] {
+  const errors: ValidationError[] = [];
+  const seen = new Set<unknown>();
+  actions.forEach((action, j) => {
+    if (!GRANT_ACTION_SET.has(action as GrantAction)) {
+      errors.push({ path: `${path}[${j}]`, message: `Unknown grant action "${String(action)}"` });
+    } else if (seen.has(action)) {
+      errors.push({
+        path: `${path}[${j}]`,
+        message: `"${String(action)}" is listed more than once`,
+      });
+    }
+    seen.add(action);
   });
-  return records as (StackRecord & { content: GrantContent })[];
+  return errors;
+}
+
+/** A `_grant`'s actions, asked of its content on every write. See validateActionList(). */
+export function validateGrantActions(typeId: TypeId, content: unknown): ValidationError[] {
+  if (baseIdOf(typeId) !== SYSTEM_TYPES.GRANT) return [];
+  const actions = (content as { actions?: unknown } | null)?.actions;
+  // A missing or non-array list is the schema's to refuse.
+  return Array.isArray(actions) ? validateActionList(actions, 'actions') : [];
+}
+
+/**
+ * A grant as every write of one holds it: a family a grant may target, the
+ * same rule every `_grant` write meets (see validateGrantBaseId()), and an
+ * action list held to validateActionList() whose mutate verbs carry their
+ * read companions. `path` prefixes each error, so a request inside a
+ * manifest or an `_install` reports where it sits.
+ */
+export function validateGrant(
+  baseId: unknown,
+  actions: readonly unknown[],
+  path = '',
+): ValidationError[] {
+  const errors: ValidationError[] = validateActionList(actions, `${path}actions`);
+  const problem = familyIdProblem(baseId, `${path}baseId`);
+  if (problem) {
+    errors.push({ path: `${path}baseId`, message: problem });
+  } else {
+    for (const e of validateGrantBaseId(`${SYSTEM_TYPES.GRANT}@1`, { baseId })) {
+      errors.push({ ...e, path: `${path}${e.path}` });
+    }
+  }
+  const known = actions.filter((a): a is GrantAction => GRANT_ACTION_SET.has(a as GrantAction));
+  actions.forEach((action, j) => {
+    const companions = READ_COMPANIONS.get(action as GrantAction);
+    if (!companions || grantConveys(known, action as GrantAction)) return;
+    errors.push({
+      path: `${path}actions[${j}]`,
+      message: `"${String(action)}" requires ${companions.map((c) => `"${c}"`).join(' or ')} in the same grant: a mutate verb reaches the record and its history, so it conveys nothing without read. Name both in one grant: actions: [${companions.map((c) => `'${c}'`).join(' | ')}, '${String(action)}']`,
+    });
+  });
+  return errors;
 }

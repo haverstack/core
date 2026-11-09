@@ -25,17 +25,10 @@ import {
   NotFound,
   type S3ClientConfig,
 } from '@aws-sdk/client-s3';
-import { StackNotFoundError, StackBadRequestError } from '@haverstack/core';
+import { StackNotFoundError } from '@haverstack/core';
 import type { FileId } from '@haverstack/core';
-import type { StackBlobAdapter, BlobInfo } from '@haverstack/core/adapter';
-
-const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
-
-const assertFileId = (fileId: string): void => {
-  if (!SHA256_HEX_RE.test(fileId)) {
-    throw new StackBadRequestError(`Invalid fileId: expected 64-character lowercase hex string`);
-  }
-};
+import { FILE_ID_RE, trackWrites, assertFileId } from '@haverstack/core/adapter';
+import type { StackBlobAdapter, BlobInfo, BlobsQuery } from '@haverstack/core/adapter';
 
 export type S3BlobAdapterOptions = {
   /** Bucket to store blobs in. */
@@ -61,6 +54,8 @@ export type S3BlobAdapterOptions = {
 };
 
 export class S3BlobAdapter implements StackBlobAdapter {
+  /** Moved by putBlob() and deleteBlob(); see head(). */
+  private readonly written = trackWrites(this);
   private readonly client: S3Client;
   private readonly bucket: string;
 
@@ -119,20 +114,33 @@ export class S3BlobAdapter implements StackBlobAdapter {
     await this.client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: fileId }));
   }
 
-  async listBlobs(): Promise<BlobInfo[]> {
+  /**
+   * S3 lists keys in UTF-8 byte order, which for lowercase hex is `fileId`
+   * order, so `afterFileId` is S3's own `StartAfter`.
+   */
+  async listBlobs(query: BlobsQuery = {}): Promise<BlobInfo[]> {
+    const { afterFileId, limit } = query;
     const files: BlobInfo[] = [];
     let continuationToken: string | undefined;
     do {
       const response = await this.client.send(
-        new ListObjectsV2Command({ Bucket: this.bucket, ContinuationToken: continuationToken }),
+        new ListObjectsV2Command({
+          Bucket: this.bucket,
+          ContinuationToken: continuationToken,
+          StartAfter: afterFileId,
+        }),
       );
       for (const obj of response.Contents ?? []) {
-        if (obj.Key && SHA256_HEX_RE.test(obj.Key) && obj.Size !== undefined && obj.LastModified) {
+        if (obj.Key && FILE_ID_RE.test(obj.Key) && obj.Size !== undefined && obj.LastModified) {
           files.push({ fileId: obj.Key, size: obj.Size, modifiedAt: obj.LastModified });
         }
       }
       continuationToken = response.IsTruncated ? response.NextContinuationToken : undefined;
-    } while (continuationToken);
-    return files;
+    } while (continuationToken && (limit === undefined || files.length < limit));
+    return limit === undefined ? files : files.slice(0, limit);
+  }
+
+  async head(): Promise<string> {
+    return this.written.read();
   }
 }

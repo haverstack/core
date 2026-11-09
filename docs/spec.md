@@ -21,16 +21,17 @@ The spec is split into focused documents:
 | [Attachments](./spec/attachments.md)          | Content-addressed binary storage, metadata records, garbage collection       |
 | [Change events](./spec/events.md)             | Subscribing to record changes, event shape, permission scoping, delivery     |
 | [Adapters](./spec/adapters.md)                | Adapter contract, backends, capabilities, concurrency & storage ownership    |
+| [Portability](./spec/portability.md)          | Copying a stack whole, history included, and the portable export format      |
 | [Wire format](./spec/wire-format.md)          | The HTTP API stack servers implement and `adapter-api` consumes              |
 | [Change feed](./spec/change-feed.md)          | The wire encoding of the change events above — `GET /changes` over SSE       |
 
 ## Stack initialization
 
-A Stack is opened with the async factory `Stack.open(adapter, opts)`, which reads identity (and, optionally, timezone) from the adapter.
+A Stack is opened with the async factory `Stack.open(adapter, opts)`, which reads the owner's identity from the adapter.
 
 ```ts
 // First run — generate an identity keypair and create a new database.
-// `did` is a "did:key:z6Mk..." string — that's the owner entityId.
+// `did` is a "did:key:z6Mk..." string — that's the owner's ownerEntityId.
 // Persist `privateKey` yourself (OS keychain, encrypted file, ...); the
 // stack never stores it. See Identity.
 const { did, privateKey } = await generateDidKeypair();
@@ -38,18 +39,16 @@ const adapter = await LocalAdapter.open({
   path: './my-stack.db',
   create: 'exclusive', // create it; fail if it already exists
   ownerEntityId: did, // required whenever open() may create — owner entity ID (a DID)
-  timezone: 'America/New_York', // optional — IANA timezone string, passthrough metadata
 });
 
 // Subsequent runs — open an existing database (`create` defaults to 'never')
 const adapter = await LocalAdapter.open({ path: './my-stack.db' });
 
-// Always the same — reads identity and timezone from the adapter.
+// Always the same — reads the owner's identity from the adapter.
 // ownerProfile creates the owner's own _entity profile record on first
 // run; a no-op on every later call once that record exists.
 const stack = await Stack.open(adapter, { ownerProfile: { name: 'Jane Smith' } });
 stack.ownerEntityId; // from adapter.ownerEntityId
-stack.timezone; // from adapter.timezone — string | undefined
 ```
 
 `Stack.open()` throws `InvalidAdapterError` when the adapter has no `ownerEntityId`. Like `UseAfterCloseError`, it sits outside the `StackError` taxonomy (see [Wire format § The taxonomy root](./spec/wire-format.md#the-taxonomy-root)): it reports a local setup mistake, not something a request can run into.
@@ -60,7 +59,6 @@ stack.timezone; // from adapter.timezone — string | undefined
 const adapter = await LocalAdapter.open({
   path: './my-stack.db',
   create: 'ifMissing',
-  timezone: 'America/New_York',
   ownerEntityId: async () => {
     const { did, privateKey } = await generateDidKeypair();
     await persistSomewhereSafe(privateKey); // see Identity § Key custody
@@ -71,18 +69,35 @@ const adapter = await LocalAdapter.open({
 
 A plain-string `ownerEntityId` is also checked against the owner of an existing database: a mismatch releases the file and throws `OwnerMismatchError` (see [Wire format § Identity is trusted on transport](./spec/wire-format.md#identity-is-trusted-on-transport)). A function is never invoked just to compare. Every adapter that holds a stack's identity is opened the same way; see [Adapters § Construction](./spec/adapters.md#construction).
 
-**`StackClient` is the passable interface.** Plugin and extension code that doesn't need to know the underlying backend should accept `StackClient` rather than the concrete `Stack` or `ScopedStack`. It covers the full record API (`create`, `get`, `query`, `getEntityByDid`, `getOwnerEntity`, `mutate`, `patchContent`, `delete`, `deleteAndReturn`, `undelete`, `associate`, `dissociate`, `amendAssociations`, `grantAccess`, `revokeAccess`, `amendAccess`, `commitMigration`, `getVersions`, `getVersion`, `restoreVersion`, `getJournal`, `getAttachment`, `putAttachment`, `deleteAttachment`, `collectAttachmentGarbage`), `subscribe()` for [change events](./spec/events.md#subscribing), and a `capabilities` getter. Both `Stack` and `ScopedStack` implement it. Every mutating method on it answers with the Record it produced, `delete()` excepted (it answers with a `DeleteResult`) — see [Versioning § Version history](./spec/versioning.md#version-history).
+**`StackClient` is the passable interface.** Plugin and extension code that doesn't need to know the underlying backend should accept `StackClient` rather than the concrete `Stack` or `ScopedStack`. Both implement it. Every write has exactly one spelling, and every write on it answers with the Record it produced — `delete()` answers with that Record beside the files a purge stranded (see [Versioning § Version history](./spec/versioning.md#version-history)).
+
+| Group       | Method                                                                           | Purpose                                              | Defined in                                                                                     |
+| ----------- | -------------------------------------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| Read        | `get`, `query`                                                                   | Read records the caller may see                      | [Data model § Queries](./spec/data-model.md#queries)                                           |
+|             | `getEntityByDid`, `getOwnerEntity`                                               | Resolve a DID to its `_entity` card                  | [Identity § DID bindings](./spec/identity.md#did-bindings)                                     |
+| Content     | `create`                                                                         | Write a new record                                   | [Data model § Records](./spec/data-model.md#records)                                           |
+|             | `patchContent`                                                                   | Merge a patch into a record's content                | [Data model § Mutations](./spec/data-model.md#mutations)                                       |
+|             | `commitMigration`                                                                | Move a record to another type with new content       | [Data model § Type migrations](./spec/data-model.md#type-migrations)                           |
+| Containment | `setParent`                                                                      | Move a record under another, or to the root          | [Data model § Reparenting](./spec/data-model.md#reparenting)                                   |
+| Listing     | `setUnlisted`                                                                    | Withhold a record from enumeration, or restore it    | [Unlisted records](./spec/unlisted.md)                                                         |
+| Assoc.      | `editAssociations`, `setAssociations`                                            | Add and remove, or replace, a record's associations  | [Data model § Mutations](./spec/data-model.md#mutations)                                       |
+| Access      | `editAccess`, `setAccess`                                                        | Add and remove, or replace, who reaches a record     | [Access control § Record-level permissions](./spec/access-control.md#record-level-permissions) |
+| Lifecycle   | `delete`, `undelete`                                                             | Soft-delete or purge a record; reverse a soft delete | [Versioning § Deletion](./spec/versioning.md#deletion)                                         |
+| Versions    | `getVersions`, `getVersion`, `restoreVersion`                                    | Read and restore content snapshots                   | [Versioning § Version history](./spec/versioning.md#version-history)                           |
+| Journal     | `getJournal`                                                                     | Read what each change moved                          | [Change journal](./spec/journal.md)                                                            |
+| Attachments | `getAttachment`, `putAttachment`, `deleteAttachment`, `collectAttachmentGarbage` | Store, read and reclaim file bytes                   | [Attachments](./spec/attachments.md)                                                           |
+| Other       | `subscribe`, `capabilities`, `collection`                                        | Change events, adapter capabilities, typed access    | [Change events](./spec/events.md#subscribing)                                                  |
 
 ### The `_config` record
 
-**Stack identity** (`ownerEntityId`, `timezone`) is stored as a singleton `_config@1` record in the records table. Adapters expose these values as typed readonly properties (`adapter.ownerEntityId`, `adapter.timezone`) rather than as a generic key/value store. For the API adapter, they are sourced from the discovery endpoint (`GET /.well-known/stack`) when the adapter is opened and cached for the session.
+**`_config` says whose stack it is, and nothing else.** Its content is `{ ownerEntityId }`, stored as a singleton `_config@1` record in the records table and written by `open()` when the store is created (see [Adapters § Construction](./spec/adapters.md#construction)). `ownerEntityId` is immutable and every permission check consults it, so each adapter reads it once at open and exposes it as `adapter.ownerEntityId` (and `stack.ownerEntityId`); the API adapter reads it from the discovery endpoint (`GET /.well-known/stack`).
 
-**`timezone` is optional, passthrough app metadata — nothing in core reads it for behavior.** It's a presentation concern that lives at the data layer because `_config` is the natural place to store one fact per stack. There is no default: an absent `timezone` stays `undefined` end to end (`ConfigContent.timezone`, `adapter.timezone`, discovery's `timezone` field) rather than being defaulted to `'UTC'` — a default would assert knowledge the stack was never actually given. Apps that want a display default apply it themselves, explicitly, at the point they format something.
+**A field is `ownerEntityId` when it can only hold the owner, and `entityId` when it may hold any entity.** So `_config`'s content, the discovery response, every adapter, `Stack` and every `open()` say `ownerEntityId`, and a relationship target or a grantee says `entityId`. The owner has one name wherever it is the owner.
 
 **`_config` is protected**, by `Stack` itself rather than any one adapter — the same layering as schema validation, so every adapter and `ScopedStack` (which delegates to `Stack`) inherit it automatically:
 
 - **Addressable only by ID.** `get('_config')` works; a generic `query()` never returns it, regardless of filter — matching every other reserved-ID system record, but load-bearing here since `_config` is read at open and consulted by every permission check.
-- **`entityId` is immutable.** `patchContent('_config', { entityId: '...' })` throws `StackConflictError` — changing it would silently re-anchor stack ownership out from under a running system, and identity is a DID: the field isn't a label, it's the key the whole stack answers to. Other fields (`timezone` today) update normally. `restoreVersion('_config', ...)` inherits the same rule: a snapshot whose `entityId` disagrees with the live record's cannot be restored. Ownership transfer, if ever added, is a deliberate future API with key-custody semantics — not a field write.
+- **`ownerEntityId` is [immutable](./spec/data-model.md#immutable-fields).** Changing it would silently re-anchor stack ownership out from under a running system, and identity is a DID: the field isn't a label, it's the key the whole stack answers to. Ownership transfer, if ever added, is a deliberate future API with key-custody semantics — not a field write.
 - **Never deletable**, soft or purged. `delete('_config')` always throws `StackConflictError`: a soft-deleted config is unreadable through normal paths, and a purged one leaves nothing to reopen the stack against.
 
 ## Open questions

@@ -9,7 +9,7 @@ type AppManifest = {
   appId: AppId; // reverse-DNS, as on an _app card
   name: string;
   version?: string;
-  types: DefineTypeOptions[]; // the types the app defines
+  types: DefineTypeOptions[]; // the types the app defines; a type handle is one
   requests: InstallRequest[]; // the grants its keys hold
 };
 
@@ -17,12 +17,12 @@ type InstallRequest = { baseId: BaseId; actions: GrantAction[] };
 
 const plan = await stack.planInstall(manifest, { did: appDid });
 // …show the plan to the owner…
-await stack.installApp(plan);
+await stack.installApp(manifest, { did: appDid, fingerprint: plan.fingerprint });
 ```
 
-Migration functions are not part of a manifest. They are app code, registered at every startup with `registerMigration()` (see [Data model § Type migrations](./data-model.md#type-migrations)), and the app runs them itself — see [Migrating an installed app's types](#migrating-an-installed-apps-types).
+Migrations are not part of a manifest. They are app code, passed to `Stack.open()` on every startup (see [Data model § Type migrations](./data-model.md#type-migrations)), and the app runs them itself — see [Migrating an installed app's types](#migrating-an-installed-apps-types).
 
-`planInstall()`, `installApp()` and `uninstallApp()` live on `Stack` and are absent from `StackClient`, like `grantType()` and `defineType()`: everything they write is the owner's to write. An app reaches them only through the request it can make over the wire — see [Over the wire](#over-the-wire).
+`planInstall()`, `installApp()` and `uninstallApp()` live on `Stack` and are absent from `StackClient`, like `grantType()`: they are the owner's half of an install, which no session asks (see [Access control § Serving requests](./access-control.md#serving-requests)). An app reaches them only through the request it can make over the wire — see [Over the wire](#over-the-wire).
 
 ## The `_install` record
 
@@ -39,6 +39,7 @@ type InstallContent = {
 `_install@1` is a system type, pre-seeded with the others ([Data model § System types](./data-model.md#system-types)). It is integrity-bearing in the way `_grant` is — it decides which grants exist and who may commit migrations — and is protected the same way:
 
 - **It cannot be granted.** `grantType()` refuses `_install` beside `_grant`, `_config` and `_app` (see [Access control § What a grant covers](./access-control.md#what-a-grant-covers)), and a `request` naming any of the four is refused at the write.
+- **Its `requests` are held to a manifest's rules.** Every write checks them as `planInstall()` checks a manifest's: each a grant `grantType()` would accept, and each family requested once. A `defines` entry listed twice is refused with them, as a type listed twice in a manifest is.
 - **Only the owner acting alone writes one.** `ScopedStack` refuses every write to an `_install` Record on the same terms as a `_grant` Record, whatever the Record's own `permissions` say.
 - **`appId` is a binding**, immutable and unique on the terms [Identity § DID bindings](./identity.md#did-bindings) sets out: one install answers for each app, and an existing install cannot be relabelled to answer for another.
 - **It claims only its own families.** Every `defines` entry must be a versioned TypeId in the install's own namespace (see [Who owns a family](#who-owns-a-family)); anything else is refused with `StackValidationError` on create, patch, migration and restore alike. `appId` being unique is what makes each family's owner single.
@@ -78,6 +79,7 @@ type InstallPlan = {
   typeChanges: { id: TypeId; change: 'new' | 'schema' | 'name' }[]; // types installApp() would write
   newKey: boolean; // whether `did` is not yet linked, or linked through a soft-deleted `_app` card
   linkedKeys: EntityId[]; // keys already linked, whose grants the plan also sets
+  fingerprint: string; // names this plan, for installApp() to apply only while it still holds
 };
 ```
 
@@ -89,20 +91,28 @@ A key whose `_app` card the owner soft-deleted counts as new: `installApp()` und
 
 `foreignRequests` are the requests on families outside the app's own namespace, each naming the family's [owner](#who-owns-a-family): another app's `appId`, `'commons'`, `'system'`, or `null` for a family with no namespace. They are the requests an approval most needs to show — an app asking to read another app's records, or `_entity`, is asking for reach beyond its own data.
 
-It refuses what no approval could make valid: a type outside the app's own namespace and the commons (`StackValidationError` — use a request instead), a type whose schema [`defineType()` would refuse](./data-model.md#types) or that is listed twice (`StackValidationError`), a type already defined whose new schema is not [additive](./data-model.md#schema-drift-detection) (`StackSchemaDriftError`), a request [`grantType()` would refuse](./access-control.md#type-level-grants) (`StackValidationError`), and a `did` whose `_app` card names a different `appId` (`StackConflictError`).
+It refuses what no approval could make valid: a type outside the app's own namespace and the commons (`StackValidationError` — use a request instead), a type whose schema [`defineType()` would refuse](./data-model.md#types) or that is listed twice (`StackValidationError`), a type already defined whose new schema is not [additive](./data-model.md#schema-drift-detection) (`StackSchemaDriftError`), a request [`grantType()` would refuse](./access-control.md#type-level-grants) or a family requested twice (`StackValidationError`), and a `did` whose `_app` card names a different `appId` (`StackConflictError`).
 
-`installApp(plan)` applies the plan:
+`installApp(manifest, { did, fingerprint })` applies the manifest:
 
 1. Defines each of the manifest's types. The plan has already refused a schema `defineType()` would, so a manifest's types are written all or none.
 2. Registers the key on an `_app` card when it has none, undeleting a soft-deleted one. An existing card's `name` is left alone: it is the owner's label.
 3. Creates the install, or patches it — undeleting it first if it was uninstalled. `defines` gains the manifest's versions and never loses any, since a Type once defined stays defined; `requests` becomes the manifest's.
 4. Brings the grants of **every** key linked to the install to exactly `requests`: a grant no longer requested is revoked, a missing one is written, and the links follow.
 
-**Nothing is applied that was not approved.** `installApp()` plans the same manifest again and refuses with `StackConflictError` when the result differs from the plan it was handed — the install changing, a type being defined, or a key being linked, since it was planned. The remedy is to plan again and show the owner the new plan. A plan holds a frozen copy of the manifest it was made from, so changing the caller's object afterwards changes nothing that is applied. Re-applying a manifest whose plan is empty changes nothing. A plan is empty only when the manifest's `name` and `version` are also the install's, so an upgrade that changes only those still reaches the owner.
+**Nothing is applied that was not approved.** Every apply names the plan it approves: `installApp()` plans the manifest again for `did` and refuses with `StackConflictError` unless the result is the plan whose `fingerprint` it was given — the install changing, a type being defined, or a key being linked since the owner saw it. A caller applying in the same breath passes the plan's own `fingerprint`; a server that shows the owner a plan in one request and applies it in another carries the fingerprint between them, holding only the manifest and the key. Either way the remedy is the same: plan again and show the owner the new plan.
+
+**A fingerprint names the plan the owner saw, in canonical form.** It is a SHA-256 over the plan as `planInstall()` reports it — the manifest, the key, the change lists, `newKey`, `linkedKeys`, and the existing install's `name`, `version` and deleted state — in the canonical form core's other hashes use, as a [`schemaHash`](./data-model.md#schema-drift-detection) names a schema: each type taken by its `id`, `name`, `migratesFrom` and `schemaHash`, every list as a set, and keys in one fixed order. No Record's `version` is in it: an edit no plan shows — the owner relabelling an `_app` card, say — leaves a pending approval standing, and one that changes what applying would do changes the plan. Two plans share a fingerprint only when they show the owner the same thing as core compares it, so an approval of one manifest never applies another, and a manifest whose keys or lists a store has reordered is the same plan. What is applied is the manifest as given, as a schema is stored as written.
+
+**A stale approval is a conflict.** [Versioning](./versioning.md#optimistic-concurrency-ifversion) separates the two refusals by recovery: `StackConflictError` when the caller must fix its input, `StackVersionConflictError` when it may retry after re-reading. A stale approval is the first: the approval itself is the input, and retrying with the re-planned manifest would apply what the owner never saw. The fix is a new approval of the new plan.
+
+`installApp()` applies the frozen copy of the manifest its own planning made, so changing the caller's object afterwards changes nothing that is applied. Re-applying a manifest whose plan is empty changes nothing. A plan is empty only when the manifest's `name` and `version` are also the install's, so an upgrade that changes only those still reaches the owner.
+
+**Residual, stated rather than fixed:** the check plans and then applies, so a write landing between the two — a type defined, a key linked — is applied over rather than refused. [`ifVersion`](./versioning.md#optimistic-concurrency-ifversion) closes the same window for a Record by checking inside the write; an install spans many writes, and nothing holds the stack still across them. The window is the length of one `installApp()` call, and everything a plan reads — Types, `_app` cards, `_install` and `_grant` Records — only the owner writes.
 
 ## Migrating an installed app's types
 
-[Migration is owner-acting-alone](./access-control.md#what-a-grant-covers), and an installed app's migration functions are its own code, which the owner should not have to run with owner authority. An install closes the gap: a contained app may commit migrations within its own families. `ScopedStack.commitMigration()` — and so `migrateAll()` run by the app over `APIAdapter`, which commits through `POST /records/:id/migrate` — admits a request that is not the owner acting alone when **all** of these hold:
+[Migration is owner-acting-alone](./access-control.md#what-a-grant-covers), and an installed app's migrations are its own code, which the owner should not have to run with owner authority. An install closes the gap: a contained app may commit migrations within its own families. `ScopedStack.commitMigration()` — and so `migrateAll()` run by the app over `APIAdapter`, which commits through `POST /records/:id/migrate` — admits a request that is not the owner acting alone when **all** of these hold:
 
 1. The source and target families are both in the namespace of one live install, and both in its `defines`.
 2. The target TypeId is in that install's `defines` — a version the owner approved.
@@ -133,9 +143,11 @@ Installing the same `appId` again undeletes the install and grants its requests 
 
 ## Over the wire
 
-Install has two halves, and only one of them is the same on every server. **The app's half** — present a manifest, learn whether it was approved — is pinned by [`POST /installs`](./wire-format.md#installs), so an app installs itself the same way on any stack. **The owner's half** — review the plan, approve it — is a person deciding, through whatever the server offers (an admin page, a notification); it is not on the wire, and underneath it is `planInstall()` then `installApp()`.
+Install has two halves, and only one of them is the same on every server. **The app's half** — present a manifest, learn whether it was approved — is pinned by [`POST /installs`](./wire-format.md#installs), so an app installs itself the same way on any stack. **The owner's half** — review the plan, approve it — is a person deciding, through whatever the server offers (an admin page, a notification); it is not on the wire, and underneath it is `planInstall()` then `installApp()`. The app sends its half through `APIAdapter.requestInstall()`, the connection it authenticated on, and the server answers it with `ScopedStack.answerInstall()`, for the session's own key.
 
 ```ts
+// Present only when the server advertises install requests.
+if (!adapter.requestInstall) throw new Error('This stack takes no install requests');
 const result = await adapter.requestInstall(manifest);
 // { status: 'pending' } until the owner approves this manifest for this key,
 // then { status: 'installed', install } once applying it would change nothing

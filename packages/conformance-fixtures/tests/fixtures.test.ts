@@ -33,6 +33,50 @@ const exportedArrays: [string, readonly unknown[]][] = Object.entries(
  */
 const NESTING_KEYS = ['steps', 'precedingMutations', 'activity', 'mutation'] as const;
 
+/**
+ * The fields a tombstone keeps: what identifies the Record and what governs
+ * reaching it. See docs/spec/versioning.md § The tombstone is literal.
+ */
+const TOMBSTONE_KEYS = new Set([
+  'id',
+  'typeId',
+  'createdAt',
+  'updatedAt',
+  'version',
+  'deletedAt',
+  'unlistedAt',
+  'permissions',
+  'content',
+]);
+
+/**
+ * Every object a fixture shows a server sending that carries `deletedAt` —
+ * response bodies and feed frames alike, at any depth — keyed by the name
+ * of the innermost fixture serving it. A request body is what a client
+ * sends, so it is the one payload left out.
+ */
+function servedDeleted(value: unknown, path: string, into: [string, object][]): [string, object][] {
+  if (typeof value !== 'object' || value === null) return into;
+  const named = isNamed(value) ? value.name : path;
+  if (!Array.isArray(value) && 'deletedAt' in value) into.push([named, value]);
+  for (const [key, child] of Object.entries(value)) {
+    if (key !== 'requestBody') servedDeleted(child, named, into);
+  }
+  return into;
+}
+
+/**
+ * The fixtures whose requester is the owner acting alone, who reads a
+ * soft-deleted record whole; everyone else reads its tombstone. See
+ * docs/spec/versioning.md § The tombstone is literal.
+ */
+const OWNER_READS = new Set([
+  'delete-record-soft',
+  'get-record-after-soft-delete-owner-delete',
+  'get-record-after-soft-delete-owner-include-deleted',
+  'change-feed-deleted-frame-mutation',
+]);
+
 /** Every named fixture reachable from a group, including sequence steps and the mutations nested inside a change-feed connection. */
 function collect(value: unknown, into: Named[]): Named[] {
   if (Array.isArray(value)) {
@@ -67,6 +111,33 @@ describe('every fixture group', () => {
     // A sequence step repeats an earlier fixture byte for byte — that is
     // what makes a replay a replay — so it carries its own name too.
     expect([...counts].filter(([, n]) => n > 1).map(([name]) => name)).toEqual([]);
+  });
+
+  // Every channel serves a soft-deleted record the same way, so the rule is
+  // asserted over everything a server sends rather than fixture by fixture.
+  const served = () =>
+    exportedArrays
+      .filter(([name]) => name !== 'allConformanceFixtures')
+      .flatMap(([name, group]) => servedDeleted(group, name, []));
+
+  it('serves every soft-deleted record as the tombstone projection, but to the owner', () => {
+    const tombstones = served().filter(([name]) => !OWNER_READS.has(name));
+    for (const [path, record] of tombstones) {
+      expect((record as { content?: unknown }).content, path).toEqual({});
+      expect(
+        Object.keys(record).filter((key) => !TOMBSTONE_KEYS.has(key)),
+        path,
+      ).toEqual([]);
+    }
+    expect(tombstones.length).toBeGreaterThan(0);
+  });
+
+  it('serves a soft-deleted record whole to the owner acting alone', () => {
+    const whole = served().filter(([name]) => OWNER_READS.has(name));
+    for (const [name, record] of whole) {
+      expect((record as { content?: unknown }).content, name).not.toEqual({});
+    }
+    expect(new Set(whole.map(([name]) => name))).toEqual(OWNER_READS);
   });
 
   it('describes what each fixture pins', () => {

@@ -1,11 +1,11 @@
 /**
  * Stack — Permission Resolution
  * -------------------------------------------------------
- * Implements the Permissions model from the spec: a pure predicate over a
- * Record's `permissions` field, with no dependency on a transport layer or
- * storage backend. Used by ScopedStack (see scoped-stack.ts) to enforce
- * access control; exported standalone for callers that want the raw
- * predicate.
+ * The record-level permission rules, with no dependency on a transport
+ * layer or storage backend: how a grantee reaches an entity, the
+ * write-implies-read invariant, and the `_group` roster rules both layers
+ * resolve against, plus the owner-acting-alone tier. What a requester may
+ * do is a reach per verb, which scoped-stack/authority.ts builds from these.
  *
  * A permission set is read as data throughout, never as the type: it can
  * arrive from an import or a foreign server, where no compiler has seen
@@ -13,113 +13,78 @@
  * or carrying no kind at all — confers nothing.
  */
 
-import { SYSTEM_TYPES } from './types.js';
+import { SYSTEM_TYPES } from './types/index.js';
 import type {
+  Actor,
   Association,
   AuthorityAssociation,
   DataAssociation,
   EntityId,
+  EntityTarget,
   GroupRole,
   Grantee,
   RecordId,
+  RelationshipAssociation,
   StackRecord,
-} from './types.js';
-import { granteeEqual } from './record-changes.js';
+  TypeId,
+} from './types/index.js';
+import { associationKey } from './associations/identity.js';
 import { baseIdOf } from './schema.js';
 import type { ValidationError } from './validate.js';
 
-export type AccessMode = 'read' | 'write';
-
-/**
- * Resolves a Record by ID. Used to walk a `_group` Record's associations for
- * membership checks without requiring a full StackAdapter.
- */
+/** Resolves a Record by ID, for walks that need no full adapter. */
 export type RecordResolver = (id: RecordId) => Promise<StackRecord | null>;
 
 /**
- * Whether an entity has read or write access to a Record.
- *
- * The entity here is the **subject** — record-level permissions are written
- * about who data is for, never about the software that carried the request.
- * A delegated app's own authority is a separate question, asked of the
- * principal. See docs/spec/access-control.md § Record-level permissions and
- * § Delegation: principal and subject.
+ * The roles one entity holds on live `_group` rosters, keyed by group id,
+ * loaded on first use and at most once per operation, so no resolved role
+ * outlives the operation that read it — removal from a group must never go
+ * stale. See loadRosterRoles().
  */
-export async function checkAccess(
-  record: StackRecord,
-  subjectEntityId: EntityId | null,
-  ownerEntityId: EntityId | null,
-  mode: AccessMode,
-  resolveRecord: RecordResolver,
-): Promise<boolean> {
-  if (subjectEntityId && subjectEntityId === ownerEntityId) return true;
-
-  const perms = record.permissions;
-
-  // No permissions = private.
-  if (!perms || perms.length === 0) return false;
-
-  for (const p of perms) {
-    if (p?.kind === 'anyone') {
-      if (mode === 'read' && isWorldRead(p)) return true;
-      continue;
-    }
-    if (p?.kind !== 'permission' || !p.grantee) continue;
-    if (p.label !== mode) continue;
-    // The write bit is inert without read alongside it: the mutate surface
-    // hands back the record it wrote and opens its whole history, so a
-    // write element standing alone would withhold nothing. Refused at the
-    // write by validatePermissions() and again here.
-    // See docs/spec/access-control.md § Write implies read.
-    if (mode === 'write' && !holdsRead(perms, p.grantee)) continue;
-    if (await granteeCovers(p.grantee, subjectEntityId, resolveRecord)) return true;
-  }
-
-  return false;
-}
+export type RosterRoles = () => Promise<ReadonlyMap<RecordId, GroupRole>>;
 
 /**
- * Whether the set conveys read to this grantee — a `read` of its own, or
- * an `anyone` that already reaches everyone. Demanding a second, redundant
- * `read` beside the write would refuse a set that withholds nothing;
- * revoking the `anyone` is what the invariant catches instead.
+ * The elements beside which a `write` naming `grantee` carries its bit: its
+ * own `read`, or an `anyone`, which reaches the grantee already. The one
+ * statement of write-implies-read — validation and every reach ask it.
  * See docs/spec/access-control.md § Write implies read.
  */
-function holdsRead(permissions: AuthorityAssociation[], grantee: Grantee): boolean {
-  return permissions.some((p) =>
-    p?.kind === 'anyone'
-      ? isWorldRead(p)
-      : p?.kind === 'permission' && p.label === 'read' && granteeEqual(p.grantee, grantee),
-  );
+export function readCompanions(grantee: Grantee): AuthorityAssociation[] {
+  return [
+    { kind: 'permission', label: 'read', grantee },
+    { kind: 'anyone', label: 'read' },
+  ];
 }
 
 /**
- * Whether an `anyone` element reaches the world. `read` is the only bit it
- * can carry, so one labelled otherwise names no reach — refused at the
- * write by validateAssociation() and read as nothing here.
+ * Whether a grantee reaches `entityId`, for both layers alike. Read as data,
+ * so an arm the write would refuse confers nothing; `member` is the wider
+ * role. See docs/spec/access-control.md § Refused at the write, and again at evaluation.
  */
-function isWorldRead(association: AuthorityAssociation): boolean {
-  return association.label === 'read';
-}
-
-/**
- * Whether a grantee reaches this subject. `role: 'member'` is the wider
- * set — an admin satisfies it — and `role: 'admin'` the narrower.
- */
-async function granteeCovers(
-  grantee: Grantee,
-  subjectEntityId: EntityId | null,
-  resolveRecord: RecordResolver,
+export async function granteeReaches(
+  grantee: unknown,
+  entityId: EntityId,
+  opts: { roles: RosterRoles; allowGroup?: boolean },
 ): Promise<boolean> {
-  if (!subjectEntityId) return false;
-  if (grantee.kind === 'entity') return grantee.entityId === subjectEntityId;
-  const role = await resolveGroupRole(grantee.groupId, subjectEntityId, resolveRecord);
-  return grantee.role === 'admin' ? role === 'admin' : role !== null;
+  if (!grantee || typeof grantee !== 'object') return false;
+  const g = grantee as Partial<{ kind: string; entityId: string; groupId: string; role: string }>;
+  switch (g.kind) {
+    case 'entity':
+      return !!g.entityId && g.entityId === entityId;
+    case 'group': {
+      if (opts.allowGroup === false || !g.groupId) return false;
+      if (g.role !== 'member' && g.role !== 'admin') return false;
+      const held = (await opts.roles()).get(g.groupId) ?? null;
+      return roleSatisfies(held, g.role);
+    }
+    default:
+      return false;
+  }
 }
 
 /**
- * Rejects a permission set where some grantee holds `write` with no `read`
- * beside it — the shape checkAccess() refuses to honor. A cross-element
+ * Rejects a permission set where some `write` stands without a
+ * readCompanions() element, which no reach would honor. A cross-element
  * invariant, so it is asked of the set the write would *produce*, the same
  * way hasGroupAdmin() reads its post-state below.
  * See docs/spec/access-control.md § Write implies read.
@@ -129,49 +94,37 @@ export function validatePermissions(
   path = 'permissions',
 ): ValidationError[] {
   const list = permissions ?? [];
+  const held = new Set(list.map(associationKey));
   const errors: ValidationError[] = [];
   list.forEach((p, i) => {
     if (p?.kind !== 'permission' || p.label !== 'write') return;
-    if (holdsRead(list, p.grantee)) return;
+    if (readCompanions(p.grantee).some((c) => held.has(associationKey(c)))) return;
     errors.push({
       path: `${path}[${i}]`,
       message:
-        'write requires read: a write-holder reaches the record and its history through the mutate surface, so a `write` element with no `read` for the same grantee withholds nothing. Grant `read` and `write` together: grantAccess(id, [read, write])',
+        'write requires read: a write-holder reaches the record and its history through the mutate surface, so a `write` element with no `read` for the same grantee withholds nothing. Grant `read` and `write` together in one editAccess() or setAccess() call',
     });
   });
   return errors;
 }
 
-/** Resolve a role from the `_group` Record a permission's `groupId` names. */
-async function resolveGroupRole(
-  groupRecordId: RecordId,
-  entityId: EntityId,
-  resolveRecord: RecordResolver,
-): Promise<GroupRole | null> {
-  const group = await resolveRecord(groupRecordId);
-  if (!group || !carriesRoster(group)) return null;
-  return groupRoleFromAssociations(group.associations, entityId);
+/** Whether a held role meets a grantee's: an admin is also a member. */
+export function roleSatisfies(held: GroupRole | null, required: GroupRole): boolean {
+  return required === 'admin' ? held === 'admin' : held !== null;
 }
 
 /**
- * Whether a Record is a roster anything may resolve against, on two counts.
- * The family check: without it an app modelling its own `member` links
- * would turn every record it points a permission at into an ACL. The
- * tombstone check: deleting a Group is how a Group is withdrawn. Shared
- * with the grant path, so the two layers cannot disagree about which Groups
- * still reach anyone. See docs/spec/identity.md § Group.
+ * Whether a Record is a `_group`, in any of its type versions — the family
+ * whose roster rules apply.
  */
-export function carriesRoster(record: StackRecord): boolean {
-  return baseIdOf(record.typeId) === SYSTEM_TYPES.GROUP && !record.deletedAt;
+export function isGroupRecord(record: StackRecord): boolean {
+  return baseIdOf(record.typeId) === SYSTEM_TYPES.GROUP;
 }
 
 /**
- * An entity's role within a `_group` Record's roster. `admin`
- * short-circuits, so a matching admin association wins regardless of order.
- *
- * Reads associations alone and cannot tell whose they are: callers pass
- * carriesRoster() first, or an app's own `member` relationships become a
- * roster.
+ * An entity's role on a `_group` roster; a matching `admin` wins regardless
+ * of order. Reads associations alone and cannot tell whose they are, so
+ * callers ask it of a live `_group` only — see loadRosterRoles().
  */
 export function groupRoleFromAssociations(
   associations: DataAssociation[] | undefined,
@@ -188,13 +141,10 @@ export function groupRoleFromAssociations(
 }
 
 /**
- * Whether a roster carries at least one `admin` — the invariant every write
- * to a `_group` Record must leave standing. Asked of the roster a write
- * would *produce*, never the one it started from: that is what lets an
- * admin remove themselves while another remains, and refuses the same
- * removal when they are the last, without either case naming who is going.
- * Reads associations alone, on the same terms as
- * groupRoleFromAssociations() above.
+ * Whether a roster carries at least one `admin` — the invariant every
+ * `_group` write must leave standing. Asked of the roster the write would
+ * *produce*, which lets an admin leave while another remains and refuses
+ * the last. Reads associations alone, like groupRoleFromAssociations().
  */
 export function hasGroupAdmin(associations: DataAssociation[] | undefined): boolean {
   return (associations ?? []).some(isGroupAdminAssociation);
@@ -206,7 +156,9 @@ export function hasGroupAdmin(associations: DataAssociation[] | undefined): bool
  * nothing, so it must not count toward the invariant either.
  * See docs/spec/data-model.md § Relationship targets.
  */
-export function isGroupAdminAssociation(association: Association): boolean {
+function isGroupAdminAssociation(
+  association: Association,
+): association is RelationshipAssociation & { target: EntityTarget } {
   return (
     association.kind === 'relationship' &&
     association.label === 'admin' &&
@@ -215,15 +167,31 @@ export function isGroupAdminAssociation(association: Association): boolean {
 }
 
 /**
- * Whether a request is the stack owner acting alone — the tier behind every
- * unconditional owner authority. Being the owner is never sufficient on its
- * own, whichever side of a delegation the owner is on.
- * See docs/spec/access-control.md § Delegation: principal and subject.
+ * The associations a create stores: as given, plus a `_group`'s creator —
+ * the owner when none is named — stamped as its first admin.
+ * See docs/spec/identity.md § Group.
  */
-export function isOwnerActingAlone(
-  actor: { subjectId: EntityId | null; principalId?: EntityId | null },
+export function createAssociations(
+  typeId: TypeId,
+  associations: DataAssociation[] | undefined,
+  createdBy: Actor | undefined,
   ownerEntityId: EntityId,
-): boolean {
-  const principalId = actor.principalId === undefined ? actor.subjectId : actor.principalId;
-  return principalId === ownerEntityId && actor.subjectId === ownerEntityId;
+): DataAssociation[] | undefined {
+  if (baseIdOf(typeId) !== SYSTEM_TYPES.GROUP) return associations;
+  return stampGroupAdmin(associations, createdBy?.subjectId ?? ownerEntityId);
+}
+
+function stampGroupAdmin(
+  associations: DataAssociation[] | undefined,
+  creator: EntityId,
+): DataAssociation[] {
+  const list = associations ?? [];
+  const alreadyAdmin = list.some(
+    (a) => isGroupAdminAssociation(a) && a.target.entityId === creator,
+  );
+  if (alreadyAdmin) return list;
+  return [
+    ...list,
+    { kind: 'relationship', label: 'admin', target: { kind: 'entity', entityId: creator } },
+  ];
 }

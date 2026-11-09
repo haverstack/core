@@ -1,5 +1,148 @@
 # @haverstack/conformance-fixtures
 
+## 0.41.0
+
+### Minor Changes
+
+- Released for a breaking change in `@haverstack/wire-types`.
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @haverstack/wire-types@0.46.0
+
+## 0.40.0
+
+### Minor Changes
+
+- [#484](https://github.com/haverstack/core/pull/484) [`eeeaf69`](https://github.com/haverstack/core/commit/eeeaf694bac965db1756952919de1f2cbbf77f0a) Thanks [@cuibonobo](https://github.com/cuibonobo)! - The owner acting alone reads a soft-deleted Record whole under `ScopedStack`, on every channel: `get()`, `query()`, a soft delete's answer and the change feed. They hold the unscoped `Stack`'s standing, which projects nothing, so a hosted stack read over the wire is read as it is stored. Everyone else, a delegated owner included, still reads the tombstone. Deletion stays visible: a soft-deleted Record is excluded until a read passes `includeDeleted`, and carries `deletedAt` when it does.
+  - A copy out of a hosted stack carries soft-deleted Records whole, and `Stack` over `APIAdapter` opened as the owner reads them as it does over a local adapter. Collection there no longer misses what a soft-deleted Record references.
+  - `getEntityByDid()` finds a soft-deleted card for every reader who may read it, as `identity.md` says it should: the tombstone to anyone else, the card whole to the owner acting alone. `ScopedStack` matches the card as stored, then gates and presents it as `get()` does; it matched after presenting, against a tombstone's emptied `did`, and so found none.
+  - Fixtures: `delete-record-soft` and the change feed's delete mutation are answered whole to the owner; `get-record-after-soft-delete` names a non-owner requester and keeps the tombstone; `get-record-after-soft-delete-owner` is new.
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @haverstack/wire-types@0.45.0
+
+## 0.39.0
+
+### Minor Changes
+
+- [#482](https://github.com/haverstack/core/pull/482) [`fae64b4`](https://github.com/haverstack/core/commit/fae64b480a193eb71fbf7ebb56d3da11d56f9f2f) Thanks [@cuibonobo](https://github.com/cuibonobo)! - A hosted stack's owner can copy it out over the wire with `copyStack(host, create)`.
+  - `head()`, an optional adapter method, says where a store's writes stand: the same string until anything is written, a different one after. A head read while a write is in flight matches no other. Every local adapter has one, counted by `trackWrites()` in `@haverstack/core/adapter`, which wraps each write method listed by the new `StoreWriteMethod` type; `combineAdapters()` and `LocalAdapter` combine both halves'.
+  - `copyStack()` reads the source's head before and after, and refuses with `StackConflictError` if they differ. A source or target without `head()` is refused with `InvalidAdapterError`.
+  - `listBlobs({ afterFileId?, limit? })` pages in `fileId` order on every blob adapter. `blobWindow()`, `FILE_ID_RE` and `assertFileId()` in `@haverstack/core/adapter` are shared by the blob adapters.
+  - `GET /blobs` and `GET /head` serve the owner acting alone, advertised in discovery as `blobs: { list: true }` and `head: { read: true }`. `APIAdapter.listBlobs()` and `APIAdapter.head()` are present only when advertised. `@haverstack/wire-types` adds `WireBlobsResponse`, `WireHeadResponse`, `serializeBlobInfo()`, `supportsBlobListing()` and `supportsHead()`; `@haverstack/core/wire` adds `parseBlobsParams()`.
+  - Every record adapter states `writers: 'owner' | 'shared'`, who writes its store. `Stack` reads it, not the presence of `subscribeChanges()`, to refuse scoping a shared stack, and refuses `subscribe()` with `StackBadRequestError` on a shared stack with no relay. `APIAdapter` is `'shared'`, and its `subscribeChanges()` is present only when discovery advertises a feed; `requestInstall()` likewise only when discovery advertises install requests. `APIAdapterCapabilityError` is removed.
+  - Conformance fixtures for both endpoints and their discovery keys; the adapter conformance suites check that `head()`, where an adapter has one, moves on every write method and stands still across reads.
+
+### Patch Changes
+
+- Updated dependencies [[`fae64b4`](https://github.com/haverstack/core/commit/fae64b480a193eb71fbf7ebb56d3da11d56f9f2f)]:
+  - @haverstack/wire-types@0.44.0
+
+## 0.38.0
+
+### Minor Changes
+
+- [#481](https://github.com/haverstack/core/pull/481) [`c4ed857`](https://github.com/haverstack/core/commit/c4ed857a27ee0faea99b425afded4e4bae70e389) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Every immutable field follows one rule. `_config.ownerEntityId`, the `did`/`appId` bindings and `_attachment`'s `fileId`, `mimeType` and `size` are declared in one table and checked on `patchContent()`, `restoreVersion()` and `commitMigration()` alike; a migration is asked over the family the record leaves.
+  - Changing or clearing an immutable field throws `StackConflictError` (`409 conflict`) with the message `Cannot change <family>.<field>: it is immutable once set.` Bindings and attachment fields previously threw `StackValidationError` (422).
+  - A new `_attachment` record whose `mimeType` conflicts with the one established for its `fileId` throws `StackConflictError` (`409 conflict`) instead of `StackValidationError` (422), like a second claim on a DID binding.
+  - Restating a stored value is no change: a patch that sends an `_attachment` record's current `mimeType` is accepted.
+  - Every content write — create, patch, restore and migrate — asks the same claim checks: binding uniqueness, and `mimeType` establishment for a record entering the `_attachment` family. `restoreVersion()` previously skipped attachment fields, binding uniqueness and `mimeType` establishment.
+  - A write that would change several immutable fields is refused naming the first.
+  - Fixtures: `error-validation-attachment-mimetype-conflict-on-create` is renamed `error-conflict-attachment-mimetype-on-create` and answers 409; `error-validation-attachment-mimetype-immutable-on-update` is replaced by `error-conflict-attachment-mimetype-change`; `error-conflict-config-owner-change` carries the shared message.
+
+- [#470](https://github.com/haverstack/core/pull/470) [`e0475d2`](https://github.com/haverstack/core/commit/e0475d2fdd09581310d819d3d2b5effe4191603c) Thanks [@cuibonobo](https://github.com/cuibonobo)! - The stack owner has one name wherever a field can only hold the owner: `ownerEntityId`.
+  - `_config`'s content is `{ ownerEntityId, timezone }`, and `ConfigContent.entityId` is `ConfigContent.ownerEntityId`.
+  - The discovery response (`GET /.well-known/stack`) carries `ownerEntityId` in place of `entityId`, in `DiscoveryResponse` and the discovery fixtures. The `_config` ownership-conflict fixture is `error-conflict-config-owner-change`.
+  - Fields that may hold any entity, such as a relationship target or a grantee, keep `entityId`.
+
+- [#480](https://github.com/haverstack/core/pull/480) [`35224ae`](https://github.com/haverstack/core/commit/35224aef6c30c7a8d19425082b385b610f7ac453) Thanks [@cuibonobo](https://github.com/cuibonobo)! - The soft `DELETE` responses in `delete-record-soft` and `change-feed-deleted-frame-is-not-terminal` now carry the tombstone projection — `content: {}`, no authorship fields — as `docs/spec/versioning.md § The tombstone is literal` requires. A server built to the old bodies leaked the content a soft delete removes.
+
+- [#477](https://github.com/haverstack/core/pull/477) [`2169cff`](https://github.com/haverstack/core/commit/2169cff10f9c30bc44966c8ce90f5394cf50620d) Thanks [@cuibonobo](https://github.com/cuibonobo)! - A time value carries what it means: a `date`'s form says whether it is a moment, a calendar day or a wall-clock reading (see docs/spec/data-model.md § Types). Nothing reads a stack-wide timezone, so `_config` holds only `{ ownerEntityId }`.
+  - `timezone` is removed from `ConfigContent` and the `_config@1` schema, from every adapter's `open()` options, from `stack.timezone` and `StackRecordAdapter` and every adapter that exposed it, and from the discovery response (`DiscoveryResponse` and the discovery fixtures; `discovery-omits-absent-timezone` is removed).
+  - `StackIdentity` and `identityOf()` are removed: `ConfigContent` is what an adapter holds, and `newStoreSeed()` stores the one it is given whole.
+
+### Patch Changes
+
+- Updated dependencies [[`e0475d2`](https://github.com/haverstack/core/commit/e0475d2fdd09581310d819d3d2b5effe4191603c), [`2169cff`](https://github.com/haverstack/core/commit/2169cff10f9c30bc44966c8ce90f5394cf50620d)]:
+  - @haverstack/wire-types@0.43.0
+
+## 0.37.0
+
+### Minor Changes
+
+- [#467](https://github.com/haverstack/core/pull/467) [`b263486`](https://github.com/haverstack/core/commit/b263486c238257dac15be43e7bae68d4f110d062) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `filter.baseId` is a condition every adapter matches, like `typeId`: a record matches when its `typeId` with the `@version` suffix stripped equals one of the values. `Stack` no longer resolves it to a `typeId` set against registered Types before the adapter call, so `queryRecords()` and `queryReadable()` receive it as given, and `AdapterFilter` is removed — `AdapterQuery` takes a plain `RecordFilter`. `MemoryAdapter` and the SQLite adapters match it; the SQLite ones as a `type_id` range, so the index still serves it. The conformance suite holds every adapter to it, including that a family never matches one that only shares its prefix.
+
+  It travels on the wire like any other key: `?baseId=` on `GET /records` (repeatable, as on `GET /changes`) and `filter.baseId` in a `POST /records/query` body. The parsers decode it instead of refusing it, `APIAdapter` sends it, and `assertQueryTravels()` refuses only `presentAt`. A new fixture, `query-by-type-family`, pins the encoding.
+
+  Every other family an adapter is handed is matched the same way:
+  - A `Reach` is over families: `fence`, `within.baseIds` and `within.authored.baseIds` (renamed from `types`) hold `BaseId`s, and `queryReadable()` receives the reach as `ScopedStack` built it. `Reach` no longer takes a type parameter, and `inReach(record, reach)` matches by the record's family.
+  - `deleteUnreferencedAttachmentRecords(fileId, metadataBaseId)` takes the `_attachment` family rather than its registered versions.
+
+  `includeUnlisted` moves from `SubscribeOptions` into `ChangeFilter`, so a subscription writes `subscribe(handler, { filter: { includeUnlisted: true } })` as a query writes `filter.includeUnlisted`. `?includeUnlisted=` on `GET /changes` is unchanged; `parseChangeParams()` returns it as `filter.includeUnlisted`, and `ParsedChangeParams` no longer has an `includeUnlisted` field.
+
+- [#464](https://github.com/haverstack/core/pull/464) [`18608e5`](https://github.com/haverstack/core/commit/18608e50a8c77288f6c235f006de87193b9bea52) Thanks [@cuibonobo](https://github.com/cuibonobo)! - A SQLite statement's text and bound parameters no longer grow with a query's size. Every caller-sized part of a query binds as one table of rows: lists, permission sets, `sort.contentFieldByType`'s entries, and the content conditions — every `filter.content` and `filter.contentPresent` key and every `filter.contentByType` arm — whose paths one recursive walk per condition resolves. Durable Object SQLite no longer fails a query with `too many SQL variables` or `statement too long`, however many per-Type keys or content conditions it carries.
+
+  `filter.contentByType` and `sort.contentFieldByType` are now booleans, like `filter.contentPresent`: a per-Type shape holds any number of keys, as every other part of a query does, and a server bounds what one costs it by its query deadline. A collection facing `false` queries its handle's version alone and reports the rest as `skipped`, as it did at a cap of `0`; partial narrowing to the newest versions that fit is gone. `normalizeCapabilities()` reads both as `true` only when stated, and now reads `filter.contentPresent` as `false` beside `filter.content: 'none'`, as it reads both per-Type flags.
+
+  A content filter value now matches only a value of its own JSON type in the SQLite adapters, as `===` does: `true` no longer matches `1`. A content filter path may be 33 segments, the depth that reaches the deepest value a write accepts. The conformance suite holds every adapter to both, and to a multi-valued path satisfying both `contentPresent` and a `null` filter.
+
+- [#451](https://github.com/haverstack/core/pull/451) [`f810209`](https://github.com/haverstack/core/commit/f8102090ae6ccf2cc971c901c6258a83c0c51afe) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Every aspect of a record has one narrow write verb, so no call can change more than its caller means to. `mutate()` and its change set are removed: content is written with `patchContent()`, containment with `setParent(id, parentId | null)`, listing with `setUnlisted(id, boolean)`, associations with `editAssociations()` or `setAssociations()`, and permissions with `editAccess()` or `setAccess()`. `edit*` applies a list of `add`/`remove` edits; `set*` replaces the whole set. `associate()`, `dissociate()`, `grantAccess()` and `revokeAccess()` are removed in favour of the `edit*` verbs, and `amendAssociations()`/`amendAccess()` are renamed to them. `deleteAndReturn()` is removed: `delete()` always returns `{ record, referencedFileIds }`.
+
+  Every write accepts `ifVersion` and always checks it, including the writes that never bump `version`, so a publish can fence `setAccess()` and `setUnlisted()` to the content it reviewed.
+
+  `StackRecordAdapter` narrows to match: `mutateRecord()` and `amendAssociations()` are replaced by `patchContent()`, `setParent()`, `setUnlisted()`, `editAssociations()`, `setAssociations()`, `editAccess()` and `setAccess()`, each taking `ifVersion`. `BumpVersionOptions`, `RecordChangeSet`, `assertOneSurface()`, `partitionAssociations()` and `AUTHORITY_ASSOCIATION_KINDS` are removed. SQLite adapters store permissions in a `permissions` table of their own.
+
+  On the wire, `PATCH /records/:id` is replaced by `PATCH /records/:id/content` (a bare patch body), `PUT /records/:id/parent` and `PUT /records/:id/unlisted`; `PUT /records/:id/associations` and `PUT /records/:id/permissions` replace a set; `PATCH /entity` becomes `PATCH /entity/content`. Every write endpoint reads and checks `If-Match`. `changesFromWireBody()` and `parseEntityPatchBody()` are replaced by `parseContentPatchBody()`, `parseParentBody()`, `parseUnlistedBody()`, `parseAssociationsBody()` and `parsePermissionsBody()`.
+
+### Patch Changes
+
+- [#461](https://github.com/haverstack/core/pull/461) [`e707ca6`](https://github.com/haverstack/core/commit/e707ca6d3d68c34a26015f507228c7549d5844e7) Thanks [@cuibonobo](https://github.com/cuibonobo)! - State what a scoped requester may do as a `Reach` per verb — `create`, `read`, `update`, `delete` — and answer every grant- and permission-based gate from it: a type fence for a delegated principal, and within it the types reached whole, the types reached where the subject authored, and the permission-element sets that carry the verb, a `write` beside its grantee's `read` or `anyone`. `get()`, refusals and the change feed ask the read reach of one record, write gates ask the update or delete reach, `create()` asks the create reach of the record it would make, and `query()` hands the read reach to the adapter's new `queryReadable(query, reach)`, which matches it as one more condition — so pages, cursors and whether a cursor comes back are decided among readable records alone, and a cursor never names a record the requester cannot read. A requester's grants, rosters and reaches are each read at most once per operation, and a subscription holds them until a `_grant` or `_group` event clears them. `asEntity()`/`asActor()` refuse with `ScopeUnavailableError` — replacing `RelayScopeError` — over a stack whose adapter lacks `queryReadable()` or relays changes. `MemoryAdapter`, the SQLite adapters and `LocalAdapter` implement it; `inReach()` in `@haverstack/core/adapter` is the reference predicate, and the conformance suite holds adapters to it. The SQLite adapters bind every list a query carries — a filter's type, app and author lists, its tags, and every list in a reach — as one JSON parameter, so neither a reach nor a filter list of any length runs into Durable Object SQLite's 100-parameter cap. `MemoryAdapter`'s cursor names the last record a page held rather than an offset, so a page resumes after it however the matched set moved, as the SQL adapters' cursors do.
+- Updated dependencies [[`18608e5`](https://github.com/haverstack/core/commit/18608e50a8c77288f6c235f006de87193b9bea52), [`ffc1b1a`](https://github.com/haverstack/core/commit/ffc1b1a17d3cae8878a44a61603480e5fd4568f7)]:
+  - @haverstack/wire-types@0.42.0
+
+## 0.36.0
+
+### Minor Changes
+
+- [#439](https://github.com/haverstack/core/pull/439) [`7d30040`](https://github.com/haverstack/core/commit/7d30040c4b61b8e5881604d0c042fec9c7e45122) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Grantees are checked by one validator, whether they arrive as a permission element, in a `_grant` record, or as a `grantType()`/`listTypeGrants()`/`revokeType()` target:
+  - A permission element's grantee errors carry the failing field's path (`permissions[0].grantee.entityId` rather than `permissions[0].grantee`).
+  - A group grantee missing both `groupId` and `role` reports both problems, on every surface.
+  - A grant target's refusal is still a 400, now naming every problem after `Invalid grant target:`.
+  - Every grantee message ends with a period, like the other association messages. The `_grant` fixtures that pin these messages are updated to match.
+
+  `revokeType()` now matches a stored grant's actions as a set, so the order they were named in, or an action named twice, no longer stops a revoke from matching.
+
+- [#449](https://github.com/haverstack/core/pull/449) [`a40cee0`](https://github.com/haverstack/core/commit/a40cee01aaaf37baf95be802f266ff1ee6ce320d) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Migrations are declared steps. `migration(from, to, steps)` takes a list built from `rename`, `map`, `add`, `drop` and `derive`, replacing the function form, and checks the list against both handles' schemas when it runs: a step naming a field that is not there, a carried field the target would refuse, or a required field nothing produces throws `StackMigrationError`. `Migration` carries its `steps`.
+
+  A collection's content filter or sort now spans the older versions its migrations translate it to, rather than only the handle's version. A key across a `rename` or `add` translates; one across a `derive`, or a sort across a `map`, narrows that version and sets `skipped.older` as before. Two query shapes carry it, each gated by a new capability that is a cap on keys: `filter.contentByType` (a content predicate per `typeId`, never beside `content` or `contentPresent`) and `sort.contentFieldByType` (a sort field or a reduced constant per `typeId`). `StackCapabilities` gains `filter.contentByType` and `sort.contentFieldByType`; local adapters declare 64, and `normalizeCapabilities()` reads an absent or malformed cap as 0. `parseQueryBody()` accepts both shapes. Conformance fixtures pin both shapes and their 400s, and the adapter conformance suite checks them.
+
+- [#433](https://github.com/haverstack/core/pull/433) [`fdca4ca`](https://github.com/haverstack/core/commit/fdca4ca25760b19a79bc660404ebf95cf9c9048b) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `enum` is a field kind: `{ kind: 'enum', values: [...] }` replaces `{ kind: 'string', enum: [...] }`. `defineType()` refuses the `enum` key on any field. `isCompatible()` now checks enums: a required enum accepts only an enum candidate whose values it lists all of, and a required `string` or `text` accepts an enum. An enum becoming a plain `string` is additive; a `string` becoming an enum needs a version bump. A typed read types an enum field as its listed values or any other string (`StoredContentOf`, `UnlistedValue`) and no longer throws on an unlisted value, since an enum can widen in place; typed writes still take only the listed values (`ContentOf`, `PatchOf`). `migration()` types both sides as `StoredContentOf`, so a step carries an unlisted value through. A typed `subscribe()` delivers a record that `migrateAll()` moves off the handle's version without its `record`, instead of throwing in the dispatcher. Conformance fixtures pin a 422 for a value outside the list and a 409 for removing values. The adapter conformance suite checks that an enum field sorts by value.
+
+- [#439](https://github.com/haverstack/core/pull/439) [`7d30040`](https://github.com/haverstack/core/commit/7d30040c4b61b8e5881604d0c042fec9c7e45122) Thanks [@cuibonobo](https://github.com/cuibonobo)! - A record `id` using the reserved `_` prefix is now refused as `Invalid ID "<id>": uses the reserved "_" prefix.`, the same `Invalid <field> "<value>": <reason>.` shape every other record-ID refusal uses. The `error-bad-request-id-reserved-prefix` fixture pins the new wording.
+
+- [#413](https://github.com/haverstack/core/pull/413) [`9b4adef`](https://github.com/haverstack/core/commit/9b4adef9bbb205ef27c161724dd2fe863254ffd2) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `StackValidationError`'s message header names what was validated: record content keeps "Content validation failed", a type schema reads "Schema validation failed", and argument checks read "Invalid arguments". `associate()`/`dissociate()` and `grantAccess()`/`revokeAccess()` report list errors under `associations`/`permissions`, the parameter the caller passed, rather than `changes`. `deserializeError()` keeps the header a server sent.
+
+- [#441](https://github.com/haverstack/core/pull/441) [`6d6ab03`](https://github.com/haverstack/core/commit/6d6ab0304d3323a889c0ce740b632f79217627f6) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Replace `getVersionsAfterMutateFixtures` with `getVersionsSequenceFixtures`: one sequence that reads the version history before and after a restore, a migration and an association, so the order those reads depend on is part of the data. The history now includes the version 2 snapshot a record at version 3 holds.
+
+### Patch Changes
+
+- [#439](https://github.com/haverstack/core/pull/439) [`d0b7369`](https://github.com/haverstack/core/commit/d0b7369750c40c0d5686c31ba20f95b335b6d529) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Correct the stated reason in the `error-reserved-content-key` fixture's description. The refusal and its response are unchanged.
+
+- [#440](https://github.com/haverstack/core/pull/440) [`07f1fbd`](https://github.com/haverstack/core/commit/07f1fbd9d40907700083dd535416ec2133775c44) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Split the fixtures into one module per endpoint group. The package exports are unchanged.
+
+- [#442](https://github.com/haverstack/core/pull/442) [`59f34ce`](https://github.com/haverstack/core/commit/59f34ce3cf777c39db3fa08bacb645f8001f9ae2) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `@haverstack/wire-types` no longer restates shapes `@haverstack/core` already defines, and its auth handshake types share one prefix:
+  - `AuthChallengeRequest` and `AuthTokenRequest` are removed. Use `WireAuthChallengeRequest` and `WireAuthTokenRequest`, re-exported from `@haverstack/core/wire`, where the parsers that return them live.
+  - `AuthChallengeResponse` and `AuthTokenResponse` are renamed `WireAuthChallengeResponse` and `WireAuthTokenResponse` to match. Their shape is unchanged.
+  - `WireActor` and `WireChangeActor` are now aliases of core's `Actor` and `ChangeActor`. Their shape is unchanged.
+  - `WireAssociationEditsRequest` is removed; nothing referenced it.
+
+- Updated dependencies [[`a40cee0`](https://github.com/haverstack/core/commit/a40cee01aaaf37baf95be802f266ff1ee6ce320d), [`9b4adef`](https://github.com/haverstack/core/commit/9b4adef9bbb205ef27c161724dd2fe863254ffd2), [`59f34ce`](https://github.com/haverstack/core/commit/59f34ce3cf777c39db3fa08bacb645f8001f9ae2)]:
+  - @haverstack/wire-types@0.41.0
+
 ## 0.35.0
 
 ### Minor Changes

@@ -19,8 +19,8 @@
  */
 
 // Core class and client interface
-export { Stack } from './stack.js';
-export { ScopedStack } from './scoped-stack.js';
+export { Stack } from './stack/stack.js';
+export { ScopedStack } from './scoped-stack/scoped-stack.js';
 export type {
   StackClient,
   CreateRecordOptions,
@@ -30,28 +30,56 @@ export type {
   GetRecordOptions,
   DeleteRecordOptions,
   DeleteResult,
-  DeleteAndReturnResult,
   CollectAttachmentGarbageOptions,
   CollectAttachmentGarbageResult,
   MigrateAllOptions,
-} from './stack.js';
-export type { AppManifest, InstallPlan, ForeignRequest, TypeChange } from './install.js';
+} from './stack/client.js';
+export type {
+  AppManifest,
+  InstallAppOptions,
+  InstallPlan,
+  InstallRequestResult,
+  ForeignRequest,
+  TypeChange,
+} from './install.js';
 export { isPlanEmpty } from './install.js';
 
 // Type handles
-export { typeHandle } from './type-handle.js';
+export { typeHandle, migration } from './type-handle.js';
+export { rename, map, add, drop, derive } from './migration-steps.js';
+export type {
+  MigrationStep,
+  RenameStep,
+  MapStep,
+  AddStep,
+  DropStep,
+  DeriveStep,
+} from './migration-steps.js';
 export type {
   TypeHandle,
+  Migration,
   ContentOf,
-  PatchOf,
-  TypedRecord,
-  TypedQuery,
-  TypedChange,
-  TypedChangeSet,
-  TypedSubscribeOptions,
+  StoredContentOf,
+  UnlistedValue,
   ReadonlyFieldDef,
   ReadonlyTypeSchema,
 } from './type-handle.js';
+
+// Collections
+export { MisfitError } from './collection.js';
+export type {
+  Collection,
+  CollectionRecord,
+  CollectionPage,
+  CollectionQuery,
+  CollectionChange,
+  CollectionSubscribeOptions,
+  ContentPatch,
+  ContentPathOf,
+  Misfit,
+  SortableFieldOf,
+  StoredContent,
+} from './collection.js';
 
 // The error taxonomy
 export {
@@ -69,7 +97,7 @@ export {
 } from './errors.js';
 // Local errors outside the taxonomy — no wire representation, and no
 // `Stack` prefix. See docs/spec/wire-format.md § The taxonomy root.
-export { UseAfterCloseError, InvalidAdapterError, RelayScopeError } from './errors.js';
+export { UseAfterCloseError, InvalidAdapterError, ScopeUnavailableError } from './errors.js';
 export type { StackErrorCode } from './errors.js';
 
 // Types
@@ -82,7 +110,6 @@ export type {
   AppId,
   AttachmentContent,
   StackRecord,
-  RecordChangeSet,
   RecordVersion,
   RecordJournalEntry,
   JournalQuery,
@@ -100,6 +127,7 @@ export type {
   TypeSchema,
   FieldDef,
   ScalarFieldDef,
+  EnumFieldDef,
   ArrayFieldDef,
   ObjectFieldDef,
   ScalarFieldKind,
@@ -125,11 +153,11 @@ export type {
   AttachmentFilter,
   RelationshipTargetPattern,
   QuerySort,
+  ContentArm,
+  ContentSortKey,
   NativeSortField,
   QueryResult,
   DateRange,
-  Migration,
-  MigrationFn,
   StackCapabilities,
   ContentFilterReach,
   MissingCapability,
@@ -145,11 +173,11 @@ export type {
   TypeGrant,
   PutAttachmentOptions,
   ConfigContent,
-} from './types.js';
+} from './types/index.js';
 
 export type { GrantQuery } from './grants.js';
 
-export { SYSTEM_TYPES, NATIVE_SORT_FIELDS } from './types.js';
+export { SYSTEM_TYPES, NATIVE_SORT_FIELDS } from './types/index.js';
 
 // Utilities
 
@@ -160,4 +188,4 @@ export { hashSchema, isCompatible } from './schema.js';
 export type { SchemaDriftViolation } from './schema.js';
 export type { ValidationError } from './validate.js';
 export { applyMergePatch } from './merge.js';
-export { assertOneSurface } from './record-changes.js';
+export { isAuthorityAssociation } from './associations/identity.js';

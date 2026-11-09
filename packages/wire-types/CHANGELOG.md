@@ -1,5 +1,108 @@
 # @haverstack/wire-types
 
+## 0.46.0
+
+### Minor Changes
+
+- Released for a breaking change in `@haverstack/core`.
+
+### Patch Changes
+
+- Updated dependencies [[`e75fd78`](https://github.com/haverstack/core/commit/e75fd787d653e0ef9257832121d3d5c7e90fdd35)]:
+  - @haverstack/core@0.47.0
+
+## 0.45.0
+
+### Minor Changes
+
+- Released for a breaking change in `@haverstack/core`.
+
+### Patch Changes
+
+- Updated dependencies [[`eeeaf69`](https://github.com/haverstack/core/commit/eeeaf694bac965db1756952919de1f2cbbf77f0a)]:
+  - @haverstack/core@0.46.0
+
+## 0.44.0
+
+### Minor Changes
+
+- [#482](https://github.com/haverstack/core/pull/482) [`fae64b4`](https://github.com/haverstack/core/commit/fae64b480a193eb71fbf7ebb56d3da11d56f9f2f) Thanks [@cuibonobo](https://github.com/cuibonobo)! - A hosted stack's owner can copy it out over the wire with `copyStack(host, create)`.
+  - `head()`, an optional adapter method, says where a store's writes stand: the same string until anything is written, a different one after. A head read while a write is in flight matches no other. Every local adapter has one, counted by `trackWrites()` in `@haverstack/core/adapter`, which wraps each write method listed by the new `StoreWriteMethod` type; `combineAdapters()` and `LocalAdapter` combine both halves'.
+  - `copyStack()` reads the source's head before and after, and refuses with `StackConflictError` if they differ. A source or target without `head()` is refused with `InvalidAdapterError`.
+  - `listBlobs({ afterFileId?, limit? })` pages in `fileId` order on every blob adapter. `blobWindow()`, `FILE_ID_RE` and `assertFileId()` in `@haverstack/core/adapter` are shared by the blob adapters.
+  - `GET /blobs` and `GET /head` serve the owner acting alone, advertised in discovery as `blobs: { list: true }` and `head: { read: true }`. `APIAdapter.listBlobs()` and `APIAdapter.head()` are present only when advertised. `@haverstack/wire-types` adds `WireBlobsResponse`, `WireHeadResponse`, `serializeBlobInfo()`, `supportsBlobListing()` and `supportsHead()`; `@haverstack/core/wire` adds `parseBlobsParams()`.
+  - Every record adapter states `writers: 'owner' | 'shared'`, who writes its store. `Stack` reads it, not the presence of `subscribeChanges()`, to refuse scoping a shared stack, and refuses `subscribe()` with `StackBadRequestError` on a shared stack with no relay. `APIAdapter` is `'shared'`, and its `subscribeChanges()` is present only when discovery advertises a feed; `requestInstall()` likewise only when discovery advertises install requests. `APIAdapterCapabilityError` is removed.
+  - Conformance fixtures for both endpoints and their discovery keys; the adapter conformance suites check that `head()`, where an adapter has one, moves on every write method and stands still across reads.
+
+### Patch Changes
+
+- Updated dependencies [[`fae64b4`](https://github.com/haverstack/core/commit/fae64b480a193eb71fbf7ebb56d3da11d56f9f2f)]:
+  - @haverstack/core@0.45.0
+
+## 0.43.0
+
+### Minor Changes
+
+- [#470](https://github.com/haverstack/core/pull/470) [`e0475d2`](https://github.com/haverstack/core/commit/e0475d2fdd09581310d819d3d2b5effe4191603c) Thanks [@cuibonobo](https://github.com/cuibonobo)! - The stack owner has one name wherever a field can only hold the owner: `ownerEntityId`.
+  - `_config`'s content is `{ ownerEntityId, timezone }`, and `ConfigContent.entityId` is `ConfigContent.ownerEntityId`.
+  - The discovery response (`GET /.well-known/stack`) carries `ownerEntityId` in place of `entityId`, in `DiscoveryResponse` and the discovery fixtures. The `_config` ownership-conflict fixture is `error-conflict-config-owner-change`.
+  - Fields that may hold any entity, such as a relationship target or a grantee, keep `entityId`.
+
+- [#477](https://github.com/haverstack/core/pull/477) [`2169cff`](https://github.com/haverstack/core/commit/2169cff10f9c30bc44966c8ce90f5394cf50620d) Thanks [@cuibonobo](https://github.com/cuibonobo)! - A time value carries what it means: a `date`'s form says whether it is a moment, a calendar day or a wall-clock reading (see docs/spec/data-model.md § Types). Nothing reads a stack-wide timezone, so `_config` holds only `{ ownerEntityId }`.
+  - `timezone` is removed from `ConfigContent` and the `_config@1` schema, from every adapter's `open()` options, from `stack.timezone` and `StackRecordAdapter` and every adapter that exposed it, and from the discovery response (`DiscoveryResponse` and the discovery fixtures; `discovery-omits-absent-timezone` is removed).
+  - `StackIdentity` and `identityOf()` are removed: `ConfigContent` is what an adapter holds, and `newStoreSeed()` stores the one it is given whole.
+
+### Patch Changes
+
+- Updated dependencies [[`f1985fd`](https://github.com/haverstack/core/commit/f1985fdf6af7308c8f6f49e44ae5d06e911177df), [`c4ed857`](https://github.com/haverstack/core/commit/c4ed857a27ee0faea99b425afded4e4bae70e389), [`e0475d2`](https://github.com/haverstack/core/commit/e0475d2fdd09581310d819d3d2b5effe4191603c), [`b02e69c`](https://github.com/haverstack/core/commit/b02e69c4675e7397d2fca76c314261a9744053bf), [`7f3d108`](https://github.com/haverstack/core/commit/7f3d108100dbb7a358fdc8d1bb6e3edb2455ec45), [`2169cff`](https://github.com/haverstack/core/commit/2169cff10f9c30bc44966c8ce90f5394cf50620d)]:
+  - @haverstack/core@0.44.0
+
+## 0.42.0
+
+### Minor Changes
+
+- [#464](https://github.com/haverstack/core/pull/464) [`18608e5`](https://github.com/haverstack/core/commit/18608e50a8c77288f6c235f006de87193b9bea52) Thanks [@cuibonobo](https://github.com/cuibonobo)! - A SQLite statement's text and bound parameters no longer grow with a query's size. Every caller-sized part of a query binds as one table of rows: lists, permission sets, `sort.contentFieldByType`'s entries, and the content conditions — every `filter.content` and `filter.contentPresent` key and every `filter.contentByType` arm — whose paths one recursive walk per condition resolves. Durable Object SQLite no longer fails a query with `too many SQL variables` or `statement too long`, however many per-Type keys or content conditions it carries.
+
+  `filter.contentByType` and `sort.contentFieldByType` are now booleans, like `filter.contentPresent`: a per-Type shape holds any number of keys, as every other part of a query does, and a server bounds what one costs it by its query deadline. A collection facing `false` queries its handle's version alone and reports the rest as `skipped`, as it did at a cap of `0`; partial narrowing to the newest versions that fit is gone. `normalizeCapabilities()` reads both as `true` only when stated, and now reads `filter.contentPresent` as `false` beside `filter.content: 'none'`, as it reads both per-Type flags.
+
+  A content filter value now matches only a value of its own JSON type in the SQLite adapters, as `===` does: `true` no longer matches `1`. A content filter path may be 33 segments, the depth that reaches the deepest value a write accepts. The conformance suite holds every adapter to both, and to a multi-valued path satisfying both `contentPresent` and a `null` filter.
+
+- [#465](https://github.com/haverstack/core/pull/465) [`ffc1b1a`](https://github.com/haverstack/core/commit/ffc1b1a17d3cae8878a44a61603480e5fd4568f7) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `Stack` resolves every query default before an adapter sees the query: the sort (`createdAt`, newest first, when none is named), its direction, and the page size (50, capped at 1000). `queryRecords()` and `queryReadable()` take an `AdapterQuery` whose `sort` and `limit` are always present, built by `resolveQuery()`, which `@haverstack/core/adapter` exports beside `AdapterQuery` and `AdapterSort`. No adapter carries a default of its own, and `APIAdapter` always sends the sort, direction and limit.
+
+  `createdAt` is the floor of `sort.fields`: every adapter orders by it, and `normalizeCapabilities()` reads it into any list a server declares. The conformance suite checks that an adapter declares it.
+
+  Every query entry point runs two checks, both exported from `@haverstack/core/adapter`: `resolveQuery()` for the query's shape, and `assertQueryCapabilities(query, capabilities)` for its filter and sort together. `assertSortCapability` is no longer exported. A sort must name exactly one of `field`, `contentField` or `contentFieldByType`, so a `direction` alone, in process or as `?direction=` on the wire, is refused.
+
+  Every `limit` — on `query()`, `getVersions()` and `getJournal()` — is a positive integer, and anything else is refused with `StackBadRequestError` by `Stack`. A journal `limit` of 0 is now refused. The wire parsers decode shape only and leave the range to `Stack`: `parseQueryBody()` decodes a numeric `limit` as given, and `parsePositiveInt` is renamed `parseUnsignedInt`, since it always accepted 0.
+
+  `APIAdapter.queryRecords()` trusts the query it is given. `Stack` has already checked it against `APIAdapter`'s capabilities, so a query the server cannot answer is refused with the same `StackBadRequestError`, naming the capability, that any adapter's would get, and still before a request is sent. `APIAdapterCapabilityError` now covers only the endpoints discovery advertises beside `capabilities` (`'changes'` and `'installs'`), and `@haverstack/adapter-api` no longer re-exports `MissingCapability`. `AdapterQuery` carries no `presentAt`, which `Stack` applies itself. `resolveQuery()` takes a `PlainQuery`, the same shape `parseQueryParams()` and `parseQueryBody()` now return.
+
+### Patch Changes
+
+- Updated dependencies [[`29041aa`](https://github.com/haverstack/core/commit/29041aad7002ab5dc5b89ee306aaf6b39c102d55), [`73ed256`](https://github.com/haverstack/core/commit/73ed2566ebff1c32b32b6d24fef8d76344890dca), [`b263486`](https://github.com/haverstack/core/commit/b263486c238257dac15be43e7bae68d4f110d062), [`52f9486`](https://github.com/haverstack/core/commit/52f9486d9e5a0a7c6a6c6235e4336223e4c90cfa), [`18608e5`](https://github.com/haverstack/core/commit/18608e50a8c77288f6c235f006de87193b9bea52), [`f810209`](https://github.com/haverstack/core/commit/f8102090ae6ccf2cc971c901c6258a83c0c51afe), [`70e8c6a`](https://github.com/haverstack/core/commit/70e8c6a4886f84f57498100df28eb8a7b6e91b99), [`ffc1b1a`](https://github.com/haverstack/core/commit/ffc1b1a17d3cae8878a44a61603480e5fd4568f7), [`03a6199`](https://github.com/haverstack/core/commit/03a619915d042753a6cd5c2e1801e75677f99595), [`e707ca6`](https://github.com/haverstack/core/commit/e707ca6d3d68c34a26015f507228c7549d5844e7)]:
+  - @haverstack/core@0.43.0
+
+## 0.41.0
+
+### Minor Changes
+
+- [#449](https://github.com/haverstack/core/pull/449) [`a40cee0`](https://github.com/haverstack/core/commit/a40cee01aaaf37baf95be802f266ff1ee6ce320d) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Migrations are declared steps. `migration(from, to, steps)` takes a list built from `rename`, `map`, `add`, `drop` and `derive`, replacing the function form, and checks the list against both handles' schemas when it runs: a step naming a field that is not there, a carried field the target would refuse, or a required field nothing produces throws `StackMigrationError`. `Migration` carries its `steps`.
+
+  A collection's content filter or sort now spans the older versions its migrations translate it to, rather than only the handle's version. A key across a `rename` or `add` translates; one across a `derive`, or a sort across a `map`, narrows that version and sets `skipped.older` as before. Two query shapes carry it, each gated by a new capability that is a cap on keys: `filter.contentByType` (a content predicate per `typeId`, never beside `content` or `contentPresent`) and `sort.contentFieldByType` (a sort field or a reduced constant per `typeId`). `StackCapabilities` gains `filter.contentByType` and `sort.contentFieldByType`; local adapters declare 64, and `normalizeCapabilities()` reads an absent or malformed cap as 0. `parseQueryBody()` accepts both shapes. Conformance fixtures pin both shapes and their 400s, and the adapter conformance suite checks them.
+
+- [#413](https://github.com/haverstack/core/pull/413) [`9b4adef`](https://github.com/haverstack/core/commit/9b4adef9bbb205ef27c161724dd2fe863254ffd2) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `StackValidationError`'s message header names what was validated: record content keeps "Content validation failed", a type schema reads "Schema validation failed", and argument checks read "Invalid arguments". `associate()`/`dissociate()` and `grantAccess()`/`revokeAccess()` report list errors under `associations`/`permissions`, the parameter the caller passed, rather than `changes`. `deserializeError()` keeps the header a server sent.
+
+- [#442](https://github.com/haverstack/core/pull/442) [`59f34ce`](https://github.com/haverstack/core/commit/59f34ce3cf777c39db3fa08bacb645f8001f9ae2) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `@haverstack/wire-types` no longer restates shapes `@haverstack/core` already defines, and its auth handshake types share one prefix:
+  - `AuthChallengeRequest` and `AuthTokenRequest` are removed. Use `WireAuthChallengeRequest` and `WireAuthTokenRequest`, re-exported from `@haverstack/core/wire`, where the parsers that return them live.
+  - `AuthChallengeResponse` and `AuthTokenResponse` are renamed `WireAuthChallengeResponse` and `WireAuthTokenResponse` to match. Their shape is unchanged.
+  - `WireActor` and `WireChangeActor` are now aliases of core's `Actor` and `ChangeActor`. Their shape is unchanged.
+  - `WireAssociationEditsRequest` is removed; nothing referenced it.
+
+### Patch Changes
+
+- Updated dependencies [[`7d30040`](https://github.com/haverstack/core/commit/7d30040c4b61b8e5881604d0c042fec9c7e45122), [`98401c0`](https://github.com/haverstack/core/commit/98401c0a1a8b86fd2bfec74072ca3c3504320b66), [`a40cee0`](https://github.com/haverstack/core/commit/a40cee01aaaf37baf95be802f266ff1ee6ce320d), [`fdca4ca`](https://github.com/haverstack/core/commit/fdca4ca25760b19a79bc660404ebf95cf9c9048b), [`c427f43`](https://github.com/haverstack/core/commit/c427f435620c5766121723a54516f5a68df63561), [`90d800a`](https://github.com/haverstack/core/commit/90d800a8e86c079855a17627582f015186ffe081), [`7d30040`](https://github.com/haverstack/core/commit/7d30040c4b61b8e5881604d0c042fec9c7e45122), [`da5148b`](https://github.com/haverstack/core/commit/da5148bdb3e25e770e947df0c4c2af5b2a6f0f44), [`44fc3f6`](https://github.com/haverstack/core/commit/44fc3f645839c3a5a5eef3463826dcc0098bf089), [`d0b7950`](https://github.com/haverstack/core/commit/d0b795047ec9f8920a717a075f091cfa2462dc66), [`f616aaa`](https://github.com/haverstack/core/commit/f616aaa741c97fe1de1cfb262081e1f378082051), [`9b4adef`](https://github.com/haverstack/core/commit/9b4adef9bbb205ef27c161724dd2fe863254ffd2), [`89e0a07`](https://github.com/haverstack/core/commit/89e0a07b03ade71449cd20b7ad0333761c39a41f), [`55c33ba`](https://github.com/haverstack/core/commit/55c33ba3c0a55ec01796bce8b633fbad4a79cf76)]:
+  - @haverstack/core@0.42.0
+
 ## 0.40.0
 
 ### Minor Changes

@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'vitest';
-import { contentSortKey, contentSortEntry, compareSortEntries } from '../src/sort.js';
-import type { SortEntry } from '../src/sort.js';
+import { contentSortKey, contentSortEntry, compareSortEntries } from '../src/adapter/sort.js';
+import type { SortEntry } from '../src/adapter/sort.js';
 
 describe('contentSortKey', () => {
   test('folds case and combining marks away', () => {
@@ -71,6 +71,10 @@ describe('contentSortEntry', () => {
   test('reads a boolean as 0/1, so false precedes true', () => {
     expect(contentSortEntry('boolean', false)).toEqual({ kind: 'num', num: 0 });
     expect(contentSortEntry('boolean', true)).toEqual({ kind: 'num', num: 1 });
+  });
+
+  test('reads an enum as text, ordered by value rather than declaration', () => {
+    expect(contentSortEntry('enum', 'Émile')).toEqual(contentSortEntry('string', 'Émile'));
   });
 
   test('carries both the text and the key it orders by', () => {

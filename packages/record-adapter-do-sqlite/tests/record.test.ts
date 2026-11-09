@@ -15,13 +15,16 @@ import { env } from 'cloudflare:test';
 import { describe, test, expect } from 'vitest';
 import type {
   StackRecord,
-  StackQuery,
   QueryResult,
   AssociationEdit,
+  DataAssociation,
   RecordVersion,
+  RecordJournalEntry,
   StackType,
   StackCapabilities,
 } from '@haverstack/core';
+import type { AdapterQuery, Reach, RecordHistory } from '@haverstack/core/adapter';
+import { resolveQuery } from '@haverstack/core/adapter';
 
 /**
  * A Durable Object is a separate JS realm from the test file's own — even
@@ -31,7 +34,7 @@ import type {
  * class's prototype chain. `instanceof StackConflictError` fails on the
  * far side of that boundary even though the error is genuinely a
  * StackConflictError inside the DO; `.code` (StackError's discriminant,
- * see packages/core/src/stack.ts) is what survives and what these tests
+ * see packages/core/src/stack/stack.ts) is what survives and what these tests
  * assert on instead. record-adapter-sqlite's tests never hit this because
  * everything there runs in one process.
  */
@@ -63,13 +66,22 @@ type TestStub = {
     id: string,
     opts?: { purge?: boolean } & Record<string, unknown>,
   ): Promise<StackRecord | null>;
-  queryRecords(query: StackQuery): Promise<QueryResult>;
+  queryRecords(query: AdapterQuery): Promise<QueryResult>;
+  queryReadable(query: AdapterQuery, reach: Reach): Promise<QueryResult>;
   getVersions(id: string): Promise<RecordVersion[]>;
-  amendAssociations(
-    recordId: string,
-    changes: AssociationEdit[],
+  getJournal(id: string): Promise<RecordJournalEntry[]>;
+  importRecord(record: StackRecord, history: RecordHistory): Promise<StackRecord>;
+  editAssociations(
+    id: string,
+    edits: AssociationEdit[],
     opts?: Record<string, unknown>,
   ): Promise<StackRecord>;
+  setAssociations(
+    id: string,
+    associations: DataAssociation[],
+    opts?: Record<string, unknown>,
+  ): Promise<StackRecord>;
+  setUnlisted(id: string, unlisted: boolean, opts?: Record<string, unknown>): Promise<StackRecord>;
   commitMigration(
     id: string,
     toTypeId: string,
@@ -104,11 +116,13 @@ describe('construction', () => {
       filter: {
         content: 'path',
         contentPresent: true,
+        contentByType: true,
         search: true,
       },
       sort: {
         fields: ['createdAt', 'updatedAt', 'version'],
         contentField: true,
+        contentFieldByType: true,
       },
       limits: {
         attachmentBytes: null,
@@ -227,14 +241,14 @@ describe('ifVersion / transactional rollback', () => {
    * before the first write and proves nothing about atomicity.
    *
    * deleteRecord({ snapshot, ifVersion }) is the shape that does
-   * reach it: unlike patchContent/mutateRecord, a soft delete has no
+   * reach it: unlike patchContent, a soft delete has no
    * pre-transaction ifVersion check of its own — it goes straight
    * into exec.transaction(), where snapshotBeforeMutation() writes a real
    * row into `versions` and versionedUpdate()'s CAS then fails on the
    * stale ifVersion and throws — both inside the same transaction
-   * callback. (amendAssociations() cannot stand in for this: they
-   * never bump and never snapshot, so they touch neither `versions` nor the
-   * CAS path — see docs/spec/versioning.md § Version history.) If transactionSync() did not roll back, that orphan version
+   * callback. (An association write cannot stand in for this: it never
+   * snapshots, so it touches no `versions` row — see
+   * docs/spec/versioning.md § Version history.) If transactionSync() did not roll back, that orphan version
    * row would survive a mutation that reported failure.
    */
   test('a mid-transaction failure rolls back writes already made in the same transaction', async () => {
@@ -273,9 +287,13 @@ describe('ifVersion / transactional rollback', () => {
       .patchContent(record.id, { text: 'rejected update' }, { ifVersion: 999 })
       .catch(() => {});
 
-    const stillFindsOriginal = await stub.queryRecords({ filter: { search: 'original' } });
+    const stillFindsOriginal = await stub.queryRecords(
+      resolveQuery({ filter: { search: 'original' } }),
+    );
     expect(stillFindsOriginal.records.map((r) => r.id)).toEqual([record.id]);
-    const doesNotFindRejected = await stub.queryRecords({ filter: { search: 'rejected' } });
+    const doesNotFindRejected = await stub.queryRecords(
+      resolveQuery({ filter: { search: 'rejected' } }),
+    );
     expect(doesNotFindRejected.records).toEqual([]);
   });
 });
@@ -285,7 +303,7 @@ describe('records — queries', () => {
     const stub = getStub();
     await stub.createRecord(makeRecord({ id: 'r1', content: { text: 'alpha', priority: 1 } }));
     await stub.createRecord(makeRecord({ id: 'r2', content: { text: 'beta', priority: 2 } }));
-    const result = await stub.queryRecords({ filter: { content: { priority: 1 } } });
+    const result = await stub.queryRecords(resolveQuery({ filter: { content: { priority: 1 } } }));
     expect(result.records.map((r) => r.id)).toEqual(['r1']);
   });
 
@@ -306,9 +324,11 @@ describe('records — queries', () => {
         content: { text: 'grace', emails: [{ value: 'grace@example.com', label: 'home' }] },
       }),
     );
-    const result = await stub.queryRecords({
-      filter: { content: { 'emails.value': 'grace@example.com' } },
-    });
+    const result = await stub.queryRecords(
+      resolveQuery({
+        filter: { content: { 'emails.value': 'grace@example.com' } },
+      }),
+    );
     expect(result.records.map((r) => r.id)).toEqual(['r2']);
   });
 
@@ -318,24 +338,27 @@ describe('records — queries', () => {
     await stub.createRecord(
       makeRecord({ id: 'r2', content: { text: 'has one', address: { city: 'Porto' } } }),
     );
-    const result = await stub.queryRecords({ filter: { content: { 'address.city': null } } });
+    const result = await stub.queryRecords(
+      resolveQuery({ filter: { content: { 'address.city': null } } }),
+    );
     expect(result.records.map((r) => r.id)).toEqual(['r1']);
   });
 
-  // The segment cap is sized against SQLite's join limit, and this build
-  // is where a difference in that limit would surface. The longest legal
-  // path has to execute, not merely be accepted.
+  // This build is where a difference in SQLite's limits would surface. The
+  // longest legal path has to execute, not merely be accepted.
   test('a path at the segment cap executes; one past it is refused', async () => {
     const stub = getStub();
     await stub.createRecord(makeRecord({ id: 'r1', content: { text: 'shallow' } }));
-    const deepest = Array.from({ length: 32 }, (_, i) => `s${i}`).join('.');
+    const deepest = Array.from({ length: 33 }, (_, i) => `s${i}`).join('.');
 
-    const miss = await stub.queryRecords({ filter: { content: { [deepest]: 'x' } } });
+    const miss = await stub.queryRecords(resolveQuery({ filter: { content: { [deepest]: 'x' } } }));
     expect(miss.records).toEqual([]);
-    const absent = await stub.queryRecords({ filter: { content: { [deepest]: null } } });
+    const absent = await stub.queryRecords(
+      resolveQuery({ filter: { content: { [deepest]: null } } }),
+    );
     expect(absent.records.map((r) => r.id)).toEqual(['r1']);
     const err = await stub
-      .queryRecords({ filter: { content: { [`${deepest}.s32`]: 'x' } } })
+      .queryRecords(resolveQuery({ filter: { content: { [`${deepest}.s33`]: 'x' } } }))
       .catch((e: unknown) => e);
     expect((err as { code?: string }).code).toBe('bad_request');
   });
@@ -344,7 +367,9 @@ describe('records — queries', () => {
     const stub = getStub();
     await stub.createRecord(makeRecord({ id: 'r1', content: { text: 'a', a: { b: { k: 'v' } } } }));
 
-    const result = await stub.queryRecords({ filter: { content: { 'a.b': '{"k":"v"}' } } });
+    const result = await stub.queryRecords(
+      resolveQuery({ filter: { content: { 'a.b': '{"k":"v"}' } } }),
+    );
     expect(result.records).toEqual([]);
   });
 
@@ -352,7 +377,7 @@ describe('records — queries', () => {
     const stub = getStub();
     await stub.createRecord(makeRecord({ id: 'r1', content: { text: 'SQLite is great' } }));
     await stub.createRecord(makeRecord({ id: 'r2', content: { text: 'Postgres is also great' } }));
-    const result = await stub.queryRecords({ filter: { search: 'SQLite' } });
+    const result = await stub.queryRecords(resolveQuery({ filter: { search: 'SQLite' } }));
     expect(result.records.map((r) => r.id)).toEqual(['r1']);
   });
 
@@ -363,18 +388,22 @@ describe('records — queries', () => {
         makeRecord({ id: `r${i}`, createdAt: new Date(Date.now() + i * 1000) }),
       );
     }
-    const page1 = await stub.queryRecords({
-      sort: { field: 'createdAt', direction: 'asc' },
-      limit: 3,
-    });
+    const page1 = await stub.queryRecords(
+      resolveQuery({
+        sort: { field: 'createdAt', direction: 'asc' },
+        limit: 3,
+      }),
+    );
     expect(page1.records.length).toBe(3);
     expect(page1.cursor).not.toBeNull();
 
-    const page2 = await stub.queryRecords({
-      sort: { field: 'createdAt', direction: 'asc' },
-      limit: 3,
-      cursor: page1.cursor!,
-    });
+    const page2 = await stub.queryRecords(
+      resolveQuery({
+        sort: { field: 'createdAt', direction: 'asc' },
+        limit: 3,
+        cursor: page1.cursor!,
+      }),
+    );
     expect(page2.records.length).toBe(2);
     expect(page2.cursor).toBeNull();
   });
@@ -382,7 +411,9 @@ describe('records — queries', () => {
   test('malformed cursor throws StackBadRequestError', async () => {
     const stub = getStub();
     await stub.createRecord(makeRecord({ id: 'r1' }));
-    const err = await stub.queryRecords({ cursor: '!!!not-a-cursor!!!' }).catch((e: unknown) => e);
+    const err = await stub
+      .queryRecords(resolveQuery({ cursor: '!!!not-a-cursor!!!' }))
+      .catch((e: unknown) => e);
     expect((err as { code?: string }).code).toBe('bad_request');
   });
 });
@@ -418,9 +449,13 @@ describe('records — sorting by a content field', () => {
       makeRecord({ id: 'r3', typeId: SORTED_TYPE, content: { title: 'none' } }),
     );
 
-    const asc = await stub.queryRecords({ sort: { contentField: 'priority', direction: 'asc' } });
+    const asc = await stub.queryRecords(
+      resolveQuery({ sort: { contentField: 'priority', direction: 'asc' } }),
+    );
     expect(asc.records.map((r) => r.id)).toEqual(['r2', 'r1', 'r3']);
-    const desc = await stub.queryRecords({ sort: { contentField: 'priority', direction: 'desc' } });
+    const desc = await stub.queryRecords(
+      resolveQuery({ sort: { contentField: 'priority', direction: 'desc' } }),
+    );
     expect(desc.records.map((r) => r.id)).toEqual(['r1', 'r2', 'r3']);
   });
 
@@ -438,11 +473,13 @@ describe('records — sorting by a content field', () => {
     const ids: string[] = [];
     let cursor: string | undefined;
     do {
-      const page: QueryResult = await stub.queryRecords({
-        sort: { contentField: 'title', direction: 'asc' },
-        limit: 1,
-        ...(cursor && { cursor }),
-      });
+      const page: QueryResult = await stub.queryRecords(
+        resolveQuery({
+          sort: { contentField: 'title', direction: 'asc' },
+          limit: 1,
+          ...(cursor && { cursor }),
+        }),
+      );
       ids.push(...page.records.map((r) => r.id));
       cursor = page.cursor ?? undefined;
     } while (cursor);
@@ -456,7 +493,7 @@ describe('associations', () => {
     const stub = getStub();
     const record = makeRecord();
     await stub.createRecord(record);
-    await stub.amendAssociations(record.id, [
+    await stub.editAssociations(record.id, [
       { op: 'add', association: { kind: 'tag', label: 'starred' } },
     ]);
     const withTag = await stub.getRecord(record.id);
@@ -465,7 +502,7 @@ describe('associations', () => {
     );
     expect(withTag?.version).toBe(1);
 
-    await stub.amendAssociations(record.id, [
+    await stub.editAssociations(record.id, [
       { op: 'remove', association: { kind: 'tag', label: 'starred' } },
     ]);
     const withoutTag = await stub.getRecord(record.id);
@@ -473,14 +510,53 @@ describe('associations', () => {
     expect(withoutTag?.version).toBe(1);
   });
 
-  test('amending a nonexistent record throws StackNotFoundError (FK constraint mapping) instead of creating an orphan row', async () => {
+  test('editing a nonexistent record throws StackNotFoundError (FK constraint mapping) instead of creating an orphan row', async () => {
     const stub = getStub();
     const err = await stub
-      .amendAssociations('nonexistent', [
+      .editAssociations('nonexistent', [
         { op: 'add', association: { kind: 'tag', label: 'starred' } },
       ])
       .catch((e: unknown) => e);
     expect((err as { code?: string }).code).toBe('not_found');
+  });
+
+  // The transaction must roll back here, or Stack's retry re-checks a set
+  // that half of a refused write already moved.
+  test('a stale expectSet is refused inside the transaction and changes nothing', async () => {
+    const stub = getStub();
+    const record = makeRecord();
+    await stub.createRecord(record);
+    const a = { kind: 'tag' as const, label: 'a' };
+    const b = { kind: 'tag' as const, label: 'b' };
+    await stub.setAssociations(record.id, [a]);
+
+    const err = await stub
+      .setAssociations(record.id, [b], { expectSet: [b] })
+      .catch((e: unknown) => e);
+    expect((err as Error).message).toMatch(/changed since it was read/);
+    expect((await stub.getRecord(record.id))?.associations).toEqual([a]);
+
+    const held = await stub.setAssociations(record.id, [b], { expectSet: [a] });
+    expect(held.associations).toEqual([b]);
+  });
+
+  // Both write paths: a records-column UPDATE and an element-table write.
+  test('an aspect write refuses a soft-deleted record as a conflict and changes nothing', async () => {
+    const stub = getStub();
+    const record = makeRecord();
+    await stub.createRecord(record);
+    await stub.deleteRecord(record.id);
+    const before = await stub.getRecord(record.id);
+
+    for (const write of [
+      () => stub.setUnlisted(record.id, true),
+      () => stub.setAssociations(record.id, [{ kind: 'tag', label: 'a' }]),
+    ]) {
+      const err = await write().catch((e: unknown) => e);
+      expect((err as { code?: string }).code).toBe('conflict');
+      expect((err as Error).message).toMatch(/soft-deleted/);
+    }
+    expect(await stub.getRecord(record.id)).toEqual(before);
   });
 });
 
@@ -497,5 +573,185 @@ describe('commitMigration', () => {
     expect(migrated.typeId).toBe('com.example.test/note@2');
     expect(migrated.content).toEqual({ text: 'Hello world', pinned: false });
     expect(migrated.version).toBe(2);
+  });
+});
+
+// A reach is sized by the requester's grants and rosters, and this engine
+// caps a statement at 100 bound parameters, so a reach binds each of its
+// lists as one. See docs/spec/adapters.md § Statement size.
+test('queryReadable answers a reach far past the parameter cap', async () => {
+  const stub = getStub();
+  const shared = makeRecord({
+    permissions: [
+      {
+        kind: 'permission',
+        label: 'read',
+        grantee: { kind: 'group', groupId: 'g42', role: 'member' },
+      },
+    ],
+  });
+  await stub.createRecord(shared);
+  await stub.createRecord(makeRecord());
+
+  const groups = Array.from({ length: 60 }, (_, i) => `g${i}`);
+  const result = await stub.queryReadable(resolveQuery({}), {
+    fence: Array.from({ length: 150 }, (_, i) =>
+      i === 0 ? 'com.example.test/note' : `com.example/t${i}`,
+    ),
+    within: {
+      baseIds: [],
+      permissions: groups.map((groupId) => [
+        {
+          kind: 'permission',
+          label: 'read',
+          grantee: { kind: 'group', groupId, role: 'member' },
+        },
+      ]),
+    },
+  });
+  expect(result.records.map((r) => r.id)).toEqual([shared.id]);
+});
+
+test('a family filter far past the parameter cap', async () => {
+  const stub = getStub();
+  const note = makeRecord();
+  await stub.createRecord(note);
+  await stub.createRecord(makeRecord({ typeId: 'com.example.test/notes@1' }));
+  const baseId = Array.from({ length: 150 }, (_, i) =>
+    i === 0 ? 'com.example.test/note' : `com.example/t${i}`,
+  );
+  const result = await stub.queryRecords(resolveQuery({ filter: { baseId } }));
+  expect(result.records.map((r) => r.id)).toEqual([note.id]);
+});
+
+test('a tag filter far past the parameter cap', async () => {
+  const stub = getStub();
+  const labels = Array.from({ length: 120 }, (_, i) => `tag-${i}`);
+  const tagged = makeRecord({ associations: labels.map((label) => ({ kind: 'tag', label })) });
+  await stub.createRecord(tagged);
+  await stub.createRecord(makeRecord({ associations: [{ kind: 'tag', label: 'tag-0' }] }));
+  const result = await stub.queryRecords(resolveQuery({ filter: { tags: labels } }));
+  expect(result.records.map((r) => r.id)).toEqual([tagged.id]);
+});
+
+// A per-Type shape carries no count, so it has to hold on the engine with
+// the tightest statement limits, far past any count a statement could have
+// afforded. See docs/spec/adapters.md § Statement size.
+describe('per-Type keys far past the statement limits', () => {
+  const KEYS = 200;
+  const typeIds = (count: number) =>
+    Array.from({ length: count }, (_, i) => (i === 0 ? NOTE_TYPE_V1 : `com.example/t${i}@1`));
+
+  test('filter.contentByType', async () => {
+    const stub = getStub();
+    await stub.createRecord(makeRecord({ id: 'r1', content: { text: 'a', meta: { n: 1 } } }));
+    await stub.createRecord(makeRecord({ id: 'r2', content: { text: 'b', meta: { n: 2 } } }));
+    const contentByType = Object.fromEntries(
+      typeIds(KEYS).map((typeId) => [
+        typeId,
+        { content: { 'meta.n': 1, 'meta.missing': null }, contentPresent: ['text'] },
+      ]),
+    );
+    const result = await stub.queryRecords(resolveQuery({ filter: { contentByType } }));
+    expect(result.records.map((r) => r.id)).toEqual(['r1']);
+  });
+
+  test('sort.contentFieldByType', async () => {
+    const stub = getStub();
+    const other = 'com.example/t1@1';
+    await stub.saveType({
+      id: NOTE_TYPE_V1,
+      baseId: 'com.example.test/note',
+      version: 1,
+      name: 'Note',
+      schema: { text: { kind: 'string' }, n: { kind: 'number' } },
+      schemaHash: 'note-hash',
+      createdAt: new Date(),
+    });
+    await stub.createRecord(makeRecord({ id: 'r1', content: { text: 'a', n: 3 } }));
+    await stub.createRecord(makeRecord({ id: 'r2', content: { text: 'b', n: 1 } }));
+    await stub.createRecord(makeRecord({ id: 'r3', typeId: other, content: { text: 'c' } }));
+    await stub.createRecord(makeRecord({ id: 'r4', content: { text: 'd' } }));
+    const contentFieldByType = Object.fromEntries(
+      typeIds(KEYS).map((typeId, i) => [typeId, i % 2 === 0 ? { field: 'n' } : { value: 2 }]),
+    );
+    const result = await stub.queryRecords(
+      resolveQuery({
+        sort: { contentFieldByType, direction: 'asc' },
+        limit: 2,
+      }),
+    );
+    expect(result.records.map((r) => r.id)).toEqual(['r2', 'r3']);
+    const rest = await stub.queryRecords(
+      resolveQuery({
+        sort: { contentFieldByType, direction: 'asc' },
+        cursor: result.cursor!,
+      }),
+    );
+    expect(rest.records.map((r) => r.id)).toEqual(['r1', 'r4']);
+  });
+});
+
+// Nothing caps how many keys filter.content holds, so neither they nor their
+// paths can cost statement text or a parameter each. See
+// docs/spec/adapters.md § Statement size.
+test('content conditions far past the statement limits execute', async () => {
+  const stub = getStub();
+  await stub.createRecord(makeRecord({ id: 'r1', content: { text: 'a', n: 1 } }));
+  await stub.createRecord(makeRecord({ id: 'r2', content: { text: 'b', n: 2 } }));
+  const prefix = Array.from({ length: 32 }, (_, i) => `s${i}`).join('.');
+  const content = Object.fromEntries(
+    Array.from({ length: 8 }, (_, i) => [`${prefix}.k${i}`, null] as [string, unknown]),
+  );
+  content.n = 1;
+  const result = await stub.queryRecords(resolveQuery({ filter: { content } }));
+  expect(result.records.map((r) => r.id)).toEqual(['r1']);
+});
+
+// importRecord() runs inside transactionSync() like every other write here,
+// so a refused import leaves nothing behind. See docs/spec/portability.md
+// § Writing history.
+describe('importRecord', () => {
+  test('writes the record and its history as recorded', async () => {
+    const stub = getStub();
+    const record = makeRecord({ version: 2, createdBy: { subjectId: 'did:key:author' } });
+    const versions = [
+      { version: 1, typeId: record.typeId, content: { text: 'v1' }, updatedAt: new Date(0) },
+    ];
+    const journal: RecordJournalEntry[] = [
+      {
+        seq: 1,
+        at: new Date(0),
+        kind: 'created',
+        ops: ['create'],
+        version: 1,
+        typeId: record.typeId,
+      },
+      {
+        seq: 2,
+        at: new Date(1),
+        kind: 'changed',
+        ops: ['patch'],
+        version: 2,
+        typeId: record.typeId,
+      },
+    ];
+    await stub.importRecord(record, { versions, journal });
+    expect(await stub.getRecord(record.id)).toEqual(record);
+    expect(await stub.getVersions(record.id)).toEqual(versions);
+    expect(await stub.getJournal(record.id)).toEqual(journal);
+  });
+
+  // Two snapshots at one version are outside the contract; they are here
+  // only to make the engine fail after the record row is written.
+  test('an import that fails part-way leaves no row behind', async () => {
+    const stub = getStub();
+    const record = makeRecord({ version: 2 });
+    const v = { version: 1, typeId: record.typeId, content: {}, updatedAt: new Date(0) };
+    const err = await stub
+      .importRecord(record, { versions: [v, v], journal: [] })
+      .catch((e: unknown) => e);
+    expect((err as { code?: string }).code).toBe('conflict');
+    expect(await stub.getRecord(record.id)).toBeNull();
   });
 });

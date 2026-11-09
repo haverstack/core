@@ -4,16 +4,18 @@ import {
   parseQueryBody,
   parseChangeParams,
   parseJournalParams,
+  parseVersionsParams,
+  parseBlobsParams,
   parseGetRecordParams,
   parseDeleteParams,
   parseDownloadParams,
   parseAssociationParams,
   parseIfMatch,
   parseUploadFilename,
-  parsePositiveInt,
+  parseUnsignedInt,
   parseDate,
   assertQueryTravels,
-} from '../src/wire-entry.js';
+} from '../src/wire/index.js';
 import { StackBadRequestError } from '../src/errors.js';
 
 const url = (qs: string): URL => new URL(`https://stack.example.com/records${qs}`);
@@ -31,6 +33,11 @@ describe('parseQueryParams', () => {
   test('a repeated param collapses to a scalar at one value and an array beyond', () => {
     expect(parseQueryParams(url('?typeId=a')).filter?.typeId).toBe('a');
     expect(parseQueryParams(url('?typeId=a&typeId=b')).filter?.typeId).toEqual(['a', 'b']);
+  });
+
+  test('baseId reads as typeId does, one family or many', () => {
+    expect(parseQueryParams(url('?baseId=a')).filter?.baseId).toBe('a');
+    expect(parseQueryParams(url('?baseId=a&baseId=b')).filter?.baseId).toEqual(['a', 'b']);
   });
 
   test('parentId="null" is the top-level sentinel, distinct from an unset parentId', () => {
@@ -64,6 +71,10 @@ describe('parseQueryParams', () => {
 
   test('a malformed date bound is refused rather than dropped', () => {
     expect(() => parseQueryParams(url('?createdBefore=not-a-date'))).toThrow(StackBadRequestError);
+  });
+
+  test('a direction naming no sort is refused, not dropped', () => {
+    expect(() => parseQueryParams(url('?direction=asc'))).toThrow(StackBadRequestError);
   });
 
   test('an unrecognized sort field or direction is refused', () => {
@@ -165,6 +176,11 @@ describe('parseQueryParams', () => {
 // -------------------------------------------------------
 
 describe('parseQueryBody', () => {
+  test('filter.baseId reads as filter.typeId does', () => {
+    expect(parseQueryBody({ filter: { baseId: ['a', 'b'] } }).filter?.baseId).toEqual(['a', 'b']);
+    expect(() => parseQueryBody({ filter: { baseId: 1 } })).toThrow(StackBadRequestError);
+  });
+
   test('an absent body is an empty query, and a non-object body is refused', () => {
     expect(parseQueryBody(undefined)).toEqual({});
     expect(() => parseQueryBody(null)).toThrow(StackBadRequestError);
@@ -208,10 +224,14 @@ describe('parseQueryBody', () => {
     expect(() => parseQueryBody({ filter: [] })).toThrow(StackBadRequestError);
   });
 
-  test('a non-integer limit is refused rather than coerced', () => {
-    expect(() => parseQueryBody({ limit: 2.7 })).toThrow(StackBadRequestError);
-    expect(() => parseQueryBody({ limit: 0 })).toThrow(StackBadRequestError);
+  test('a limit that is not a number is refused rather than coerced', () => {
     expect(() => parseQueryBody({ limit: '10' })).toThrow(StackBadRequestError);
+  });
+
+  // Range is Stack's to judge, so the wire and in-process callers get one answer.
+  test('a numeric limit is decoded as asked, whatever its range', () => {
+    expect(parseQueryBody({ limit: 2.7 }).limit).toBe(2.7);
+    expect(parseQueryBody({ limit: 0 }).limit).toBe(0);
   });
 
   test('a large limit is reported as requested, not clamped', () => {
@@ -251,6 +271,41 @@ describe('parseQueryBody', () => {
     expect(() => parseQueryBody({ sort: { contentField: 7 } })).toThrow(StackBadRequestError);
   });
 
+  test('filter.contentByType travels as one flat arm per typeId', () => {
+    const arms = {
+      'com.example/note@1': { content: { 'a.b': 1 }, contentPresent: ['c'] },
+      'com.example/note@2': {},
+    };
+    expect(parseQueryBody({ filter: { contentByType: arms } })).toEqual({
+      filter: { contentByType: arms },
+    });
+    for (const contentByType of [
+      [],
+      { 'com.example/note@1': { typeId: 'x' } },
+      { 'com.example/note@1': { content: [] } },
+      { 'com.example/note@1': { contentPresent: 'c' } },
+    ]) {
+      expect(() => parseQueryBody({ filter: { contentByType } })).toThrow(StackBadRequestError);
+    }
+  });
+
+  test('sort.contentFieldByType travels as one key per typeId, never beside another member', () => {
+    const contentFieldByType = {
+      'com.example/note@1': { field: 'a' },
+      'com.example/note@2': { value: 3 },
+    };
+    expect(parseQueryBody({ sort: { contentFieldByType, direction: 'desc' } }).sort).toEqual({
+      contentFieldByType,
+      direction: 'desc',
+    });
+    expect(() => parseQueryBody({ sort: { contentField: 'a', contentFieldByType } })).toThrow(
+      StackBadRequestError,
+    );
+    expect(() =>
+      parseQueryBody({ sort: { contentFieldByType: { 'com.example/note@1': { rank: 1 } } } }),
+    ).toThrow(/Unknown key/);
+  });
+
   test('filter.content carries multi-segment keys through untouched', () => {
     expect(parseQueryBody({ filter: { content: { 'emails.value': 'a@example.com' } } })).toEqual({
       filter: { content: { 'emails.value': 'a@example.com' } },
@@ -259,21 +314,14 @@ describe('parseQueryBody', () => {
 });
 
 // -------------------------------------------------------
-// Fields with no wire encoding
+// The field with no wire encoding
 // -------------------------------------------------------
 
-// Dropping either would answer with a result set the caller believes is
-// narrower (baseId) or migrated (presentAt) than what it holds — the
-// silent degradation a capability-gated filter is already refused for.
-describe('fields that never travel', () => {
-  test('baseId is refused on both query surfaces', () => {
-    expect(() => parseQueryParams(url('?baseId=com.example/note'))).toThrow(StackBadRequestError);
-    expect(() => parseQueryBody({ filter: { baseId: 'com.example/note' } })).toThrow(
-      StackBadRequestError,
-    );
-  });
-
-  test('presentAt is refused on both query surfaces', () => {
+// Dropping it would answer with records as stored to a caller who believes
+// they were migrated — the silent degradation a capability-gated filter is
+// already refused for.
+describe('presentAt never travels', () => {
+  test('is refused on both query surfaces', () => {
     expect(() => parseQueryParams(url('?presentAt=latest'))).toThrow(StackBadRequestError);
     expect(() => parseQueryBody({ presentAt: 'latest' })).toThrow(StackBadRequestError);
   });
@@ -281,13 +329,12 @@ describe('fields that never travel', () => {
   // Judged by key, not by value: "stored" is presentAt's default and asks
   // for nothing, but a client sending it still believes the field means
   // something over the wire, and it does not.
-  test('presentAt is refused by presence, whatever its value', () => {
+  test('is refused by presence, whatever its value', () => {
     expect(() => parseQueryBody({ presentAt: 'stored' })).toThrow(StackBadRequestError);
-    expect(() => parseQueryBody({ filter: { baseId: undefined } })).toThrow(StackBadRequestError);
+    expect(() => parseQueryBody({ presentAt: undefined })).toThrow(StackBadRequestError);
   });
 
-  test('the refusal names what to send instead', () => {
-    expect(() => parseQueryBody({ filter: { baseId: 'x' } })).toThrow(/typeId/);
+  test('the refusal names what to do instead', () => {
     expect(() => parseQueryBody({ presentAt: 'latest' })).toThrow(/client-side/);
   });
 
@@ -295,27 +342,23 @@ describe('fields that never travel', () => {
   // encoding — so a query body that would be refused and search params
   // that would silently drop the field give one answer, not two.
   describe('assertQueryTravels', () => {
-    test('refuses the same two fields, with the same messages', () => {
-      expect(() => assertQueryTravels({ filter: { baseId: 'com.example/note' } })).toThrow(
-        /typeId/,
-      );
+    test('refuses presentAt, with the same message', () => {
       expect(() => assertQueryTravels({ presentAt: 'latest' })).toThrow(/client-side/);
       expect(() => assertQueryTravels({ presentAt: 'stored' })).toThrow(StackBadRequestError);
     });
 
     // Where it parts company with the parsers above, and deliberately: a
     // request body is written key by key, but a StackQuery is spread and
-    // destructured, and Stack.query() already reads an undefined baseId as
-    // no baseId. Refusing it here would refuse queries core builds itself.
-    test('reads an explicitly undefined field as absent', () => {
-      expect(() => assertQueryTravels({ filter: { baseId: undefined } })).not.toThrow();
+    // destructured. Refusing an undefined field would refuse queries core
+    // builds itself.
+    test('reads an explicitly undefined presentAt as absent', () => {
       expect(() => assertQueryTravels({ presentAt: undefined })).not.toThrow();
     });
 
-    test('passes a query carrying neither', () => {
+    test('passes a query without it', () => {
       expect(() => assertQueryTravels({})).not.toThrow();
       expect(() =>
-        assertQueryTravels({ filter: { typeId: 'com.example/note@1' }, limit: 10 }),
+        assertQueryTravels({ filter: { baseId: 'com.example/note' }, limit: 10 }),
       ).not.toThrow();
     });
   });
@@ -326,11 +369,10 @@ describe('fields that never travel', () => {
 // -------------------------------------------------------
 
 describe('parseChangeParams', () => {
-  test('no params yields an empty filter with both flags off', () => {
+  test('no params yields an empty filter and no records', () => {
     expect(parseChangeParams(changes(''))).toEqual({
       filter: {},
       includeRecords: false,
-      includeUnlisted: false,
     });
   });
 
@@ -361,9 +403,11 @@ describe('parseChangeParams', () => {
     expect(() => parseChangeParams(changes('?include=everything'))).toThrow(StackBadRequestError);
   });
 
-  test('includeUnlisted takes only "true" or "false"', () => {
-    expect(parseChangeParams(changes('?includeUnlisted=true')).includeUnlisted).toBe(true);
-    expect(parseChangeParams(changes('?includeUnlisted=false')).includeUnlisted).toBe(false);
+  test('includeUnlisted takes only "true" or "false", as on GET /records', () => {
+    expect(parseChangeParams(changes('?includeUnlisted=true')).filter.includeUnlisted).toBe(true);
+    expect(
+      parseChangeParams(changes('?includeUnlisted=false')).filter.includeUnlisted,
+    ).toBeUndefined();
     expect(() => parseChangeParams(changes('?includeUnlisted=1'))).toThrow(StackBadRequestError);
   });
 
@@ -442,12 +486,12 @@ describe('parseUploadFilename', () => {
 // Shared primitives
 // -------------------------------------------------------
 
-describe('parsePositiveInt', () => {
-  test('accepts a bare positive integer and refuses anything else', () => {
-    expect(parsePositiveInt('7', 'version')).toBe(7);
-    expect(parsePositiveInt('0', 'version')).toBe(0);
+describe('parseUnsignedInt', () => {
+  test('accepts digits alone and refuses anything else', () => {
+    expect(parseUnsignedInt('7', 'version')).toBe(7);
+    expect(parseUnsignedInt('0', 'version')).toBe(0);
     for (const bad of ['-1', '1.5', '1abc', '', ' 1', '1e3']) {
-      expect(() => parsePositiveInt(bad, 'version')).toThrow(StackBadRequestError);
+      expect(() => parseUnsignedInt(bad, 'version')).toThrow(StackBadRequestError);
     }
   });
 });
@@ -478,7 +522,7 @@ describe('parseJournalParams', () => {
     });
   });
 
-  test('accepts zero for either, which assertValidJournalQuery also allows', () => {
+  test('accepts zero for either, leaving the window to assertValidJournalQuery', () => {
     expect(parseJournalParams(journal('/records/r1/journal?afterSeq=0&limit=0'))).toEqual({
       afterSeq: 0,
       limit: 0,
@@ -490,6 +534,74 @@ describe('parseJournalParams', () => {
       expect(() => parseJournalParams(journal(`/records/r1/journal${qs}`))).toThrow(
         StackBadRequestError,
       );
+    }
+  });
+});
+
+describe('parseBlobsParams', () => {
+  const blobs = (qs: string) => new URL(`https://s.example/blobs${qs}`);
+  const fileId = 'a'.repeat(64);
+
+  test('reads an empty query as every blob, imposing no default page size', () => {
+    expect(parseBlobsParams(blobs(''))).toEqual({});
+  });
+
+  test('round-trips a window', () => {
+    expect(parseBlobsParams(blobs(`?afterFileId=${fileId}&limit=10`))).toEqual({
+      afterFileId: fileId,
+      limit: 10,
+    });
+  });
+
+  test('an unrecognized param is refused rather than ignored', () => {
+    expect(() => parseBlobsParams(blobs('?cursor=x'))).toThrow(/Unknown query param/);
+  });
+
+  test('refuses an afterFileId no blob could be named', () => {
+    for (const qs of ['?afterFileId=abc', `?afterFileId=${'A'.repeat(64)}`, '?afterFileId=']) {
+      expect(() => parseBlobsParams(blobs(qs))).toThrow(StackBadRequestError);
+    }
+  });
+
+  test('refuses a limit that is not a bare non-negative integer', () => {
+    expect(() => parseBlobsParams(blobs('?limit=-1'))).toThrow(StackBadRequestError);
+  });
+});
+
+describe('parseVersionsParams', () => {
+  const versions = (qs: string) => new URL(`https://s.example/records/r1/versions${qs}`);
+
+  test('reads an empty query as every version, imposing no default page size', () => {
+    expect(parseVersionsParams(versions(''))).toEqual({});
+  });
+
+  test('round-trips a window', () => {
+    expect(parseVersionsParams(versions('?beforeVersion=4&limit=10'))).toEqual({
+      beforeVersion: 4,
+      limit: 10,
+    });
+  });
+
+  test('an unrecognized param is refused rather than ignored', () => {
+    expect(() => parseVersionsParams(versions('?afterVersion=4'))).toThrow(/Unknown query param/);
+  });
+
+  test('a repeated param is refused', () => {
+    expect(() => parseVersionsParams(versions('?beforeVersion=4&beforeVersion=9'))).toThrow(
+      /Repeated query param/,
+    );
+  });
+
+  test('accepts zero for either, leaving the window to assertValidVersionsQuery', () => {
+    expect(parseVersionsParams(versions('?beforeVersion=0&limit=0'))).toEqual({
+      beforeVersion: 0,
+      limit: 0,
+    });
+  });
+
+  test('refuses a value that is not a bare non-negative integer', () => {
+    for (const qs of ['?limit=-1', '?limit=1.5', '?beforeVersion=-1', '?beforeVersion=1e3']) {
+      expect(() => parseVersionsParams(versions(qs))).toThrow(StackBadRequestError);
     }
   });
 });

@@ -35,10 +35,10 @@ org.haverstack/page@1
 org.haverstack/image@1
 org.haverstack/post@1
 org.haverstack/site@1
+org.haverstack/poll@1
+org.haverstack/vote@1
 org.haverstack/message@1 (proposed — see below)
 org.haverstack/event@1   (proposed)
-org.haverstack/poll@1    (proposed)
-org.haverstack/vote@1    (proposed)
 org.haverstack/folder@1  (proposed)
 ```
 
@@ -55,8 +55,9 @@ Apps never need to extend a commons schema in place:
   optional fields land in place, so accepted proposals reach every app without a bump.
 - **Need something app-specific?** Keep it out of the commons record. Put app-private
   data in the app's own sidecar type and link it with a
-  `{ kind: 'relationship', label: '...' }` association to the commons record. The
-  commons record stays cleanly interoperable; the sidecar travels with it.
+  `{ kind: 'relationship', label: '...', target: { kind: 'record', recordId } }`
+  association to the commons record. The commons record stays cleanly interoperable; the
+  sidecar travels with it.
 
 ---
 
@@ -73,10 +74,12 @@ Three postures, in order of preference:
    required fields with matching kinds. Other apps that consume via `isCompatible()`
    can then read your records even though they've never heard of your type. Each type
    file documents its **read-compat core** — the minimal shape consumers should code
-   against.
-3. **Migrate in later.** An existing app with its own type can register a migration
-   into the commons type when ready and commit it with `migrateAll()` — a migration
-   path may cross type families (see
+   against. A core declares its arrays' element fields too, since `isCompatible()`
+   reads an array through its `items`: a compatible type promises every field a
+   consumer reads, at any depth.
+3. **Migrate in later.** An existing app with its own type can pass `Stack.open()` a
+   migration into the commons type when ready and commit it with `migrateAll()` — a
+   migration path may cross type families (see
    [Type migrations](../spec/data-model.md#type-migrations)). It is a one-time cost paid
    by the app author, not a per-user export ritual.
 
@@ -126,9 +129,13 @@ these.
    `snapshot`), the label is specified in the type file with the same authority as a
    schema field.
 7. **String vocabularies over booleans-in-waiting.** Where a field has a small open set
-   of values (`note.format`), the type file specifies the well-known values and the
-   default meaning of absence; unknown values must be tolerated by readers
-   (treat-as-default), so the vocabulary can grow additively.
+   of values (`note.format`), the type file specifies the well-known values, what
+   absence means, and how an unknown value is read. Readers read the record rather
+   than reject it, so the vocabulary can grow additively. **An unknown value is read
+   with the least interpretation**: an unknown `note.format` shows the text as written
+   (`"plain"`), an unknown `page.collection.order` asks for no particular order, an
+   unknown `poll.method` computes no result, and an unknown contact label is shown as
+   written.
 
 ---
 
@@ -140,18 +147,20 @@ target arm they ride on: a label says what the reference _means_, a target says 
 identifier space it lives in, and every label below works with any arm that makes
 sense for it.
 
-- **`location`** — `{ kind: 'relationship', label: 'location', target: { kind: 'record', recordId: <place> } }`
+- **`location`** —
+  `{ kind: 'relationship', label: 'location', target: { kind: 'record', recordId: <place> } }`
   points at a [`place`](./place.md) record: the geotagged photo, the note written at a
   café, the check-in. Apps that understand places understand every located record for
   free, whatever its type.
-- **`embed`** — `{ kind: 'attachment', label: 'embed', fileId }` marks a file
-  referenced from a record's body text (`note`, `article`, `page`, `message`). How the
-  body refers to the embed is app territory in v1; a commons syntax is an expected
-  follow-up proposal.
-- **`series`** — `{ kind: 'relationship', label: 'series', target: { kind: 'record', recordId } }` groups records
-  that are occurrences of one recurring thing (materialized [`event`](./event.md)
-  occurrences are the motivating case). Reserved now so recurrence proposals build on
-  it rather than around it.
+- **`embed`** — `{ kind: 'attachment', label: 'embed', fileId }` marks a file referenced
+  from a record's body text (`note`, `article`, `page`, `message`). How the body refers
+  to the embed is app territory in v1; a commons syntax is an expected follow-up
+  proposal.
+- **`series`** —
+  `{ kind: 'relationship', label: 'series', target: { kind: 'record', recordId } }`
+  groups records that are occurrences of one recurring thing (materialized
+  [`event`](./event.md) occurrences are the motivating case). Reserved now so recurrence
+  proposals build on it rather than around it.
 - **`author`** — attributes any record to a person the stack knows. Two forms, and the
   target arm is what distinguishes them: an `entity` target
   (`{ kind: 'entity', entityId: <DID> }`) names the identity itself, while a `record`
@@ -161,23 +170,27 @@ sense for it.
   to the work as published); the association is what _you_ know about the world.
   Multiple `author` associations express co-authorship. Prior art: ActivityStreams
   `attributedTo`.
-- **`alias`** — `{ kind: 'relationship', label: 'alias', target: { kind: 'external', ns, id } }`
-  on an `_entity` record records that this identity is also known by that identifier
-  elsewhere: `{ ns: 'atproto', id: 'did:plc:…' }`, `{ ns: 'activitypub', id: <actor URL> }`,
-  `{ ns: 'email', id: 'alice@example.com' }`. It is the resolution primitive — an
-  inbound record whose author arrives as a foreign identifier is matched back to a
-  known entity with one indexed `relatedTo` query — which is why it is an association
-  and not a content field: a nested content path is an unindexed walk, so the same
-  list inside `_entity.content` would scan every entity record. Machine
-  identifiers only; a person's own words about someone belong on a `contact`.
-- **`syndicated-to`** — `{ kind: 'relationship', label: 'syndicated-to', target: { kind: 'external', ns, id } }`
+- **`alias`** —
+  `{ kind: 'relationship', label: 'alias', target: { kind: 'external', ns, id } }` on an
+  `_entity` record records that this identity is also known by that identifier
+  elsewhere: `{ ns: 'atproto', id: 'did:plc:…' }`,
+  `{ ns: 'activitypub', id: <actor URL> }`, `{ ns: 'email', id: 'alice@example.com' }`.
+  It is the resolution primitive — an inbound record whose author arrives as a foreign
+  identifier is matched back to a known entity with one indexed `relatedTo` query —
+  which is why it is an association and not a content field: a nested content path is an
+  unindexed walk, so the same list inside `_entity.content` would scan every entity
+  record. Machine identifiers only; a person's own words about someone belong on a
+  `contact`.
+- **`syndicated-to`** —
+  `{ kind: 'relationship', label: 'syndicated-to', target: { kind: 'external', ns, id } }`
   records that a copy of this record was published elsewhere. The canonical copy stays
   in the stack; a bridge publishes and stamps the copy's address here. Asking a
   namespace without an id ("everything already on ATProto") is the inventory query a
   syndication tool runs. Where a copy has a lifecycle of its own — retraction state, a
   remote content address, which account it went out from — that is a record of the
   bridge's own type, related back to this one; the label alone carries only the link.
-- **`site`** — `{ kind: 'relationship', label: 'site', target: { kind: 'record', recordId: <site> } }`
+- **`site`** —
+  `{ kind: 'relationship', label: 'site', target: { kind: 'record', recordId: <site> } }`
   on an `article`, `image`, `bookmark`, or `post` means that record is published on the
   named [`site`](./site.md). Multi-valued: two associations means the record is
   cross-posted to both sites. Structurally the same shape as `location` — a label
@@ -186,6 +199,11 @@ sense for it.
   publication. A collection root (`page.collection`) scoped under a `site` ancestor
   composes this into its query rather than storing site membership on the collection
   itself — see `page.md` and `site.md`.
+- **`decided-by`** —
+  `{ kind: 'relationship', label: 'decided-by', target: { kind: 'record', recordId: <poll> } }`
+  means a [`poll`](./poll.md) is what settled this record: the event a scheduling poll
+  picked, the task a group voted to take on. Provenance only — like the poll itself, it
+  confers nothing and gates no write.
 
 Cross-type conventions are governed like fields: proposing one is proposing it for
 every record in every stack, so the bar is correspondingly higher.
@@ -256,20 +274,20 @@ examples (comments on a blog post are messages; private marginalia are notes).
 | `org.haverstack/image@1`    | [`image.md`](./image.md)       | Draft    | `{ file }`                |
 | `org.haverstack/post@1`     | [`post.md`](./post.md)         | Draft    | `{ text }`                |
 | `org.haverstack/site@1`     | [`site.md`](./site.md)         | Draft    | `{ title, baseUrl }`      |
+| `org.haverstack/poll@1`     | [`poll.md`](./poll.md)         | Draft    | `{ question, options }`   |
+| `org.haverstack/vote@1`     | [`poll.md`](./poll.md)         | Draft    | `{ pollId, choices }`     |
 | `org.haverstack/message@1`  | [`message.md`](./message.md)   | Proposed | `{ text }`                |
 | `org.haverstack/event@1`    | [`event.md`](./event.md)       | Proposed | `{ title, startsAt }`     |
-| `org.haverstack/poll@1`     | [`poll.md`](./poll.md)         | Proposed | `{ question, options }`   |
-| `org.haverstack/vote@1`     | [`poll.md`](./poll.md)         | Proposed | `{ pollId, choices }`     |
 | `org.haverstack/folder@1`   | [`folder.md`](./folder.md)     | Proposed | `{ name }`                |
 
-**Statuses.** _Draft_: settled enough to build against (still subject to in-place
-change until there's an install base). _Staged_: design recorded, registration blocked
-on a named implementation dependency, so a required field is schema-enforced rather
-than convention-only from day one. No type currently holds this status. _Proposed_:
-design recorded to fix intent, but per the governance rule it stays parked until a
-concrete intended writer exists — the group cluster graduates when a group-tools app
-or demo is real, building on the grant/group primitives (`_group`, type-level grants)
-documented in the identity and access-control specs.
+**Statuses.** _Draft_: settled enough to build against (still subject to in-place change
+until there's an install base). _Staged_: design recorded, registration blocked on a
+named implementation dependency, so a required field is schema-enforced rather than
+convention-only from day one. No type currently holds this status. _Proposed_: design
+recorded to fix intent, but per the governance rule it stays parked until a concrete
+intended writer exists — each group-cluster type graduates when a group-tools app or
+demo intends to write it, building on the grant/group primitives (`_group`, type-level
+grants) documented in the identity and access-control specs.
 
 Deliberately absent from the initial set: recurrence rules (see `event`: occurrences are
 materialized in @1), `file`/`document` (a first-class `file` type is expected to follow

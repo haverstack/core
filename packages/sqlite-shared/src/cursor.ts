@@ -8,18 +8,14 @@
  */
 
 import { NATIVE_SORT_FIELDS, StackBadRequestError } from '@haverstack/core';
-import { contentSortEntry } from '@haverstack/core/adapter';
-import type { StackRecord, NativeSortField, QuerySort, ScalarFieldKind } from '@haverstack/core';
-
-export type SortField = NativeSortField;
-
-/**
- * Re-exported under this package's own name rather than re-spelled: the
- * set a cursor's `native` field is narrowed against is the same set core
- * narrows a wire request's sort field to, and a fourth column added there
- * must not need finding here too.
- */
-export const SORT_FIELDS: readonly SortField[] = NATIVE_SORT_FIELDS;
+import { constantSortEntry, contentSortEntry } from '@haverstack/core/adapter';
+import type { AdapterSort, SortEntry } from '@haverstack/core/adapter';
+import type {
+  ContentSortKey,
+  StackRecord,
+  NativeSortField,
+  ScalarFieldKind,
+} from '@haverstack/core';
 
 /**
  * Which partition of the ordering a cursor sits in: a native column or a
@@ -31,7 +27,7 @@ export const SORT_FIELDS: readonly SortField[] = NATIVE_SORT_FIELDS;
 export type CursorKind = 'native' | 'num' | 'text' | 'absent';
 
 export type DecodedCursor =
-  | { kind: 'native'; field: SortField; value: number; id: string }
+  | { kind: 'native'; field: NativeSortField; value: number; id: string }
   | { kind: 'num'; field: string; value: number; id: string }
   | { kind: 'text'; field: string; value: string; id: string }
   | { kind: 'absent'; field: string; id: string };
@@ -82,20 +78,25 @@ export const decodeCursor = (cursor: string): DecodedCursor => {
       throw new StackBadRequestError(`Invalid cursor: non-numeric sort value`);
     }
     if (k === 'native') {
-      if (!SORT_FIELDS.includes(f as SortField)) {
+      if (!NATIVE_SORT_FIELDS.includes(f as NativeSortField)) {
         throw new StackBadRequestError(`Invalid cursor: unknown sort field "${f}"`);
       }
-      return { kind: 'native', field: f as SortField, value: v, id: i };
+      return { kind: 'native', field: f as NativeSortField, value: v, id: i };
     }
     return { kind: 'num', field: f, value: v, id: i };
   }
   throw malformed();
 };
 
-export const getSortField = (query: { sort?: QuerySort }): SortField =>
-  query.sort?.field ?? 'createdAt';
+/**
+ * The name a cursor carries for a `contentFieldByType` sort: the map
+ * itself, keys in order, so a cursor resumes only the map it was minted
+ * under.
+ */
+export const byTypeDescriptor = (byType: Record<string, ContentSortKey>): string =>
+  JSON.stringify(Object.entries(byType).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
 
-export const getSortColumn = (field: SortField): string =>
+export const getSortColumn = (field: NativeSortField): string =>
   field === 'createdAt' ? 'created_at' : field === 'updatedAt' ? 'updated_at' : 'version';
 
 /**
@@ -107,12 +108,22 @@ export const getSortColumn = (field: SortField): string =>
  */
 export const makeCursor = (
   record: StackRecord,
-  sort: QuerySort | undefined,
+  sort: AdapterSort,
   kindOf?: (record: StackRecord, field: string) => ScalarFieldKind | undefined,
 ): string => {
-  const contentField = sort?.contentField;
-  if (contentField === undefined) {
-    const field = getSortField({ sort });
+  const byType = sort.contentFieldByType;
+  if (byType) {
+    const field = byTypeDescriptor(byType);
+    const key = Object.hasOwn(byType, record.typeId) ? byType[record.typeId] : undefined;
+    const kind = key?.field === undefined ? undefined : kindOf?.(record, key.field);
+    const entry =
+      key?.field !== undefined
+        ? kind && contentSortEntry(kind, record.content[key.field])
+        : key && constantSortEntry(key.value ?? null);
+    return encodeEntry(field, entry || null, record.id);
+  }
+  const { contentField, field } = sort;
+  if (field !== undefined) {
     const value =
       field === 'updatedAt'
         ? record.updatedAt.getTime()
@@ -124,8 +135,12 @@ export const makeCursor = (
 
   const kind = kindOf?.(record, contentField);
   const entry = kind ? contentSortEntry(kind, record.content[contentField]) : null;
-  if (!entry) return encodeCursor({ kind: 'absent', field: contentField, id: record.id });
+  return encodeEntry(contentField, entry, record.id);
+};
+
+const encodeEntry = (field: string, entry: SortEntry | null, id: string): string => {
+  if (!entry) return encodeCursor({ kind: 'absent', field, id });
   return entry.kind === 'num'
-    ? encodeCursor({ kind: 'num', field: contentField, value: entry.num, id: record.id })
-    : encodeCursor({ kind: 'text', field: contentField, value: entry.text, id: record.id });
+    ? encodeCursor({ kind: 'num', field, value: entry.num, id })
+    : encodeCursor({ kind: 'text', field, value: entry.text, id });
 };

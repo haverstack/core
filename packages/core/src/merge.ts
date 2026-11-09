@@ -3,7 +3,7 @@
  * -------------------------------------------------------
  * Shallow merge-patch semantics for record content: a field set to `null`
  * removes it, any other value replaces it, and omitted fields are retained.
- * Shared by Stack.mutate() (for client-side validation) and every
+ * Shared by Stack.patchContent() (for client-side validation) and every
  * StackRecordAdapter's patchContent() implementation, so a patch produces
  * the same merged content everywhere it's applied.
  */
@@ -17,17 +17,11 @@ export function applyMergePatch(
     if (value === null) {
       delete merged[key];
     } else {
-      // defineProperty, not `merged[key] = value`: assignment goes through
-      // [[Set]], so a patch key of `__proto__` would invoke the prototype
-      // setter and reassign the object's prototype instead of setting a
-      // field — silently losing the write. defineProperty creates an own
-      // data property for any key, which is also what JSON.parse does when
-      // the same key is read back, so both write paths agree. The spread
-      // above is already safe (it copies data properties directly).
-      //
-      // Stack.create()/Stack.mutate() reject the reserved keys outright (see
-      // validateReservedKeys); this is the backstop for adapters that call
-      // this directly, and for the day someone deepens the merge.
+      // defineProperty, not assignment: [[Set]] on `__proto__` would
+      // reassign the prototype and lose the write, while an own data
+      // property is what JSON.parse makes of the same key, so both write
+      // paths agree. A backstop for adapters calling this directly; Stack
+      // refuses the reserved keys outright (validateReservedKeys).
       Object.defineProperty(merged, key, {
         value,
         writable: true,

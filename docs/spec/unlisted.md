@@ -40,11 +40,11 @@ A consumer that has never heard of `unlistedAt` gets correct behavior by default
 
 ```ts
 await stack.create(typeId, content, { unlisted: true }); // created already unlisted — no window where it's briefly enumerable
-await stack.mutate(recordId, { unlisted: true }); // withhold an existing Record — answers with the Record
-await stack.mutate(recordId, { unlisted: false }); // relist it
+await stack.setUnlisted(recordId, true); // withhold an existing Record — answers with the Record
+await stack.setUnlisted(recordId, false); // relist it
 ```
 
-The `unlisted` key is gated exactly like [`permissions`](./access-control.md#the-write-bit-a-recoverability-trust-model) under `ScopedStack` — owner-or-creator, asked of both identities under delegation — because both decide who or what can _discover_ a Record rather than merely read one already found. `_group` Records follow the same admin-or-owner rule there too. Naming it beside other keys in one [change set](./data-model.md#mutations) relaxes neither gate. No-op if the Record is already in the requested state, which answers with the Record unchanged. A transition that does move it is a [no-bump write](./versioning.md#version-history): `version` and `updatedAt` stand still, and the journal's `unlist`/`list` op is the whole record of what happened, since its inverse is the op's own opposite.
+`setUnlisted()` is gated exactly like [`setAccess()`](./access-control.md#the-write-bit-a-recoverability-trust-model) under `ScopedStack` — owner-or-creator, asked of both identities under delegation — because both decide who or what can _discover_ a Record rather than merely read one already found. `_group` Records follow the same admin-or-owner rule there too. A [publish](./data-model.md#publishing-is-several-writes) relists last, after content and access. No-op if the Record is already in the requested state, which answers with the Record unchanged. A transition that does move it is a [no-bump write](./versioning.md#version-history): `version` and `updatedAt` stand still, and the journal's `unlist`/`list` op is the whole record of what happened, since its inverse is the op's own opposite.
 
 ## `includeUnlisted` is owner-only
 
@@ -59,7 +59,7 @@ Enumeration standing rests on nothing but ownership. A grant conveys reach over 
 
 ## The feed matches `query()`
 
-An unlisted Record that emits a change event to a default subscriber is not unlisted — so `subscribe()`'s default exclusion and `includeUnlisted` opt-in mirror `query()`'s exactly, including the owner-only gate on the opt-in. Which transitions still have to reach a default subscriber, and why, is [Change events § The unlisted transition](./events.md#the-unlisted-transition).
+An unlisted Record that emits a change event to a default subscriber is not unlisted — so `subscribe()`'s default exclusion and `filter.includeUnlisted` opt-in mirror `query()`'s exactly, in the same place, including the owner-only gate on the opt-in. Which transitions still have to reach a default subscriber, and why, is [Change events § The unlisted transition](./events.md#the-unlisted-transition).
 
 ## What this is not
 

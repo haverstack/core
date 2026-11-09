@@ -53,22 +53,29 @@ describe('isProtocolCompatible', () => {
 // -------------------------------------------------------
 
 const NONE: StackCapabilities = {
-  filter: { content: 'none', contentPresent: false, search: false },
-  sort: { fields: [], contentField: false },
+  filter: { content: 'none', contentPresent: false, contentByType: false, search: false },
+  sort: { fields: ['createdAt'], contentField: false, contentFieldByType: false },
   limits: { attachmentBytes: null, contentBytes: null },
 };
 
 describe('normalizeCapabilities', () => {
+  it('reads createdAt into sort.fields whatever is declared', () => {
+    expect(normalizeCapabilities({ sort: { fields: ['version'] } }).sort.fields).toEqual([
+      'createdAt',
+      'version',
+    ]);
+  });
+
   it('reads what a server declares', () => {
     expect(
       normalizeCapabilities({
-        filter: { content: 'path', contentPresent: true, search: true },
-        sort: { fields: ['createdAt', 'version'], contentField: true },
+        filter: { content: 'path', contentPresent: true, contentByType: true, search: true },
+        sort: { fields: ['createdAt', 'version'], contentField: true, contentFieldByType: true },
         limits: { attachmentBytes: 52428800, contentBytes: 1048576 },
       }),
     ).toEqual({
-      filter: { content: 'path', contentPresent: true, search: true },
-      sort: { fields: ['createdAt', 'version'], contentField: true },
+      filter: { content: 'path', contentPresent: true, contentByType: true, search: true },
+      sort: { fields: ['createdAt', 'version'], contentField: true, contentFieldByType: true },
       limits: { attachmentBytes: 52428800, contentBytes: 1048576 },
     });
   });
@@ -82,6 +89,30 @@ describe('normalizeCapabilities', () => {
     ).toEqual([...NATIVE_SORT_FIELDS]);
   });
 
+  it('reads a per-Type flag that is not true as false', () => {
+    for (const flag of [1, 'true', null, undefined]) {
+      const read = normalizeCapabilities({
+        filter: { content: 'path', contentByType: flag as unknown as boolean },
+        sort: { contentFieldByType: flag as unknown as boolean },
+      });
+      expect([read.filter.contentByType, read.sort.contentFieldByType]).toEqual([false, false]);
+    }
+  });
+
+  // These travel in the POST /records/query body, which a server reaching
+  // no content does not serve, so what it declares for them is unhonorable.
+  it('reads what needs the query body as false beside a reach of none', () => {
+    const read = normalizeCapabilities({
+      filter: { content: 'none', contentPresent: true, contentByType: true },
+      sort: { contentFieldByType: true },
+    });
+    expect([
+      read.filter.contentPresent,
+      read.filter.contentByType,
+      read.sort.contentFieldByType,
+    ]).toEqual([false, false, false]);
+  });
+
   it('reads an absent capabilities object as declaring nothing', () => {
     expect(normalizeCapabilities(undefined)).toEqual(NONE);
     expect(normalizeCapabilities({})).toEqual(NONE);
@@ -90,7 +121,7 @@ describe('normalizeCapabilities', () => {
   it('reads an absent group as declaring nothing, not as inheriting its siblings', () => {
     expect(normalizeCapabilities({ filter: { content: 'path' } })).toEqual({
       ...NONE,
-      filter: { content: 'path', contentPresent: false, search: false },
+      filter: { content: 'path', contentPresent: false, contentByType: false, search: false },
     });
   });
 

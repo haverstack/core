@@ -1,3 +1,14 @@
+/**
+ * @haverstack/core/testing
+ * -------------------------------------------------------
+ * In-memory adapters for tests: MemoryAdapter, which implements the whole
+ * StackAdapter contract — every filter, sort and capability a local
+ * adapter must declare — so code under test runs against real predicates;
+ * and IncapableMemoryAdapter, which declares none of the optional ones, for
+ * exercising the capability-gated fallbacks. Audience: tests in this repo
+ * and in apps built on it.
+ */
+
 import type {
   StackAdapter,
   StackRecord,
@@ -7,11 +18,14 @@ import type {
   RecordJournalEntry,
   JournalEntryInput,
   JournalOptions,
+  MutateOptions,
   JournalQuery,
   VersionsQuery,
-  RecordChangeSet,
+  AspectWriteOptions,
+  ElementWriteOptions,
   ActorOptions,
-  StackQuery,
+  AdapterQuery,
+  AdapterSort,
   QueryResult,
   RecordFilter,
   Association,
@@ -20,69 +34,47 @@ import type {
   DataAssociation,
   StackCapabilities,
   BlobInfo,
-  QuerySort,
-} from './types.js';
-import { SYSTEM_TYPES } from './types.js';
+  BlobsQuery,
+  StoreWriters,
+  Reach,
+  RecordHistory,
+  StoreSeed,
+  ConfigContent,
+} from './types/index.js';
+import { SYSTEM_TYPES } from './types/index.js';
 import { applyMergePatch } from './merge.js';
-import { compareSortEntries, contentSortEntry } from './sort.js';
-import type { SortEntry } from './sort.js';
+import { baseIdOf, fileRefFields } from './schema.js';
+import { compareSortEntries, constantSortEntry, contentSortEntry } from './adapter/sort.js';
+import type { SortEntry } from './adapter/sort.js';
+import { inReach } from './adapter/reach.js';
+import { newStoreSeed } from './adapter/seed.js';
+import { assertFileId, blobWindow } from './adapter/blobs.js';
+import { trackWrites } from './adapter/head.js';
 
 import {
+  ElementSetMovedError,
+  softDeletedRefusal,
   StackVersionConflictError,
   StackConflictError,
   StackNotFoundError,
   StackBadRequestError,
 } from './errors.js';
-import { parseContentFilterKey } from './query-validation.js';
-import { applyAssociationEdits, assertOneSurface, associationEqual } from './record-changes.js';
-
-/** Core resolves the default direction; an adapter only ever sees an explicit one. */
-const requireDirection = (sort: QuerySort): 'asc' | 'desc' => {
-  if (sort.direction === undefined) {
-    throw new StackBadRequestError('queryRecords() received a sort without a direction.');
-  }
-  return sort.direction;
-};
-/** An array stands for its elements; anything else stands for itself. */
-const spreadValue = (value: unknown): unknown[] => (Array.isArray(value) ? value : [value]);
-
-/** A FileId is the SHA-256 hex digest of its bytes — see docs/spec/attachments.md. */
-const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
-
-/**
- * Every value reachable by walking `segments`, spreading arrays
- * element-wise at each step — the same walk sqlite-shared's
- * contentPathExists() performs in SQL, and the reason a filter answers the
- * same question against either. An empty result means the path reaches
- * nothing, which is what a `null` filter value matches.
- * See docs/spec/data-model.md § Nested content paths.
- */
-const valuesAtContentPath = (content: Record<string, unknown>, segments: string[]): unknown[] => {
-  let current: unknown[] = [content];
-  for (const segment of segments) {
-    const next: unknown[] = [];
-    for (const value of current) {
-      for (const item of spreadValue(value)) {
-        if (typeof item !== 'object' || item === null || Array.isArray(item)) continue;
-        if (Object.hasOwn(item, segment)) next.push((item as Record<string, unknown>)[segment]);
-      }
-    }
-    current = next;
-  }
-  // The leaf spreads too, so a filter on `tags` matches a record whose
-  // `tags` array contains the value.
-  return current.flatMap(spreadValue);
-};
+import { matchesContent } from './content-match.js';
+import { sha256Hex } from './hash.js';
+import { applyAssociationEdits, sameAssociationSet } from './associations/identity.js';
 
 // An `undefined` field is a field the record does not have; storing the key
 // would make `'u' in content` differ from adapters that serialize to JSON.
 const withoutUndefined = (content: Record<string, unknown>): Record<string, unknown> =>
   Object.fromEntries(Object.entries(content).filter(([, v]) => v !== undefined));
 
-export type MemoryAdapterOpenOptions = { ownerEntityId: string; timezone?: string };
+/** A fresh store's `_config`, or the seed a copy creates it from — never both. */
+export type MemoryAdapterOpenOptions =
+  | { ownerEntityId: string; seed?: never }
+  | { seed: StoreSeed; ownerEntityId?: never };
 
 /**
- * In-memory StackAdapter with offset-based cursor pagination. Implements
+ * In-memory StackAdapter with keyed cursor pagination. Implements
  * the full RecordFilter shape (mirroring sqlite-shared's recordConditions)
  * so permission logic under test exercises real predicates. Declares
  * `filter.content: 'path'`, as every local adapter must; tests needing
@@ -93,11 +85,13 @@ export class MemoryAdapter implements StackAdapter {
     filter: {
       content: 'path',
       contentPresent: true,
+      contentByType: true,
       search: false,
     },
     sort: {
       fields: ['createdAt', 'updatedAt', 'version'],
       contentField: true,
+      contentFieldByType: true,
     },
     limits: {
       attachmentBytes: null,
@@ -106,7 +100,10 @@ export class MemoryAdapter implements StackAdapter {
   };
 
   readonly ownerEntityId: string;
-  readonly timezone: string | undefined;
+  readonly writers: StoreWriters = 'owner';
+
+  /** Moved by every write method; see head(). */
+  private readonly written = trackWrites(this);
 
   readonly records = new Map<string, StackRecord>();
   readonly order: string[] = [];
@@ -117,11 +114,15 @@ export class MemoryAdapter implements StackAdapter {
 
   // Protected only so IncapableMemoryAdapter can extend; callers go through open().
   protected constructor(opts: MemoryAdapterOpenOptions) {
-    this.ownerEntityId = opts.ownerEntityId;
-    this.timezone = opts.timezone;
+    const seed = opts.seed ?? newStoreSeed({ ownerEntityId: opts.ownerEntityId });
+    this.ownerEntityId = (seed.config.content as ConfigContent).ownerEntityId;
+    this.writeImported(seed.config, seed.history);
   }
 
-  /** Always a new, empty store; `ownerEntityId` is required so the mistake fails at compile time. */
+  /**
+   * Always a new store, holding only the `_config` record its seed carries;
+   * `ownerEntityId` or `seed` is required so the mistake fails at compile time.
+   */
   static async open(opts: MemoryAdapterOpenOptions): Promise<MemoryAdapter> {
     return new MemoryAdapter(opts);
   }
@@ -134,6 +135,30 @@ export class MemoryAdapter implements StackAdapter {
     this.records.set(record.id, stored);
     this.order.push(record.id);
     this.appendJournal(record.id, opts.journal, stored);
+    return stored;
+  }
+
+  async importRecord(record: StackRecord, history: RecordHistory) {
+    return this.writeImported(record, history);
+  }
+
+  /** importRecord()'s write, synchronous so the constructor writes a seed the same way. */
+  private writeImported(record: StackRecord, history: RecordHistory): StackRecord {
+    if (this.records.has(record.id)) {
+      throw new StackConflictError(`Record already exists: "${record.id}"`);
+    }
+    const stored = { ...record, content: withoutUndefined(record.content) };
+    this.records.set(record.id, stored);
+    this.order.push(record.id);
+    // Held oldest first, as the writes leave them, whatever order they came in.
+    this.versions.set(
+      record.id,
+      [...history.versions].sort((a, b) => a.version - b.version),
+    );
+    this.journals.set(
+      record.id,
+      [...history.journal].sort((a, b) => a.seq - b.seq),
+    );
     return stored;
   }
 
@@ -178,67 +203,103 @@ export class MemoryAdapter implements StackAdapter {
     const schema = this.types.get(record.typeId)?.schema;
     if (!schema) return false;
     const content = record.content as Record<string, unknown>;
-    return Object.entries(schema).some(
-      ([field, def]) => def.kind === 'file-ref' && content[field] === fileId,
-    );
+    return fileRefFields(schema).some((field) => content[field] === fileId);
   }
 
-  async mutateRecord(
-    id: string,
-    changes: RecordChangeSet,
-    opts: {
-      ifVersion?: number;
-      snapshot?: RecordVersion;
-      bumpsVersion?: boolean;
-    } & ActorOptions &
-      JournalOptions = {},
-  ) {
+  async patchContent(id: string, patch: Record<string, unknown | null>, opts: MutateOptions = {}) {
+    const existing = this.requireForWrite(id, opts.ifVersion);
+    if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
+    const content = withoutUndefined(applyMergePatch(existing.content, patch));
+    return this.store(id, this.bump({ ...existing, content }, opts), opts.journal);
+  }
+
+  /** The record a write addresses, past its `ifVersion` check. */
+  private requireForWrite(id: string, ifVersion: number | undefined): StackRecord {
     const existing = this.records.get(id);
     if (!existing) throw new StackNotFoundError(`Record not found: "${id}"`);
-    this.checkExpectedVersion(existing, opts.ifVersion);
-    if (opts.snapshot) this.snapshotBeforeMutation(id, opts.snapshot);
-
-    // Destructured out so each optional native field is re-added only when
-    // the change set leaves it set — assigning `undefined` would leave the
-    // key present, which is how a record grows a `parentId: undefined` that
-    // every `in` check then reads as a container.
-    const { parentId: _p, unlistedAt: _u, ...rest } = existing;
-    let next: StackRecord = rest as StackRecord;
-
-    if (changes.contentPatch) {
-      next = { ...next, content: applyMergePatch(next.content, changes.contentPatch) };
-    }
-    // Each key replaces only within its own half of the partition, which
-    // is what keeps a tag write from touching an ACL it was never shown.
-    if (changes.permissions) next = withPermissions(next, changes.permissions);
-    if (changes.associations) next = withAssociations(next, changes.associations);
-
-    const parentId =
-      changes.parentId !== undefined ? changes.parentId : (existing.parentId ?? null);
-    if (parentId !== null) next = { ...next, parentId };
-
-    const unlisted =
-      changes.unlisted !== undefined ? changes.unlisted : Boolean(existing.unlistedAt);
-    if (unlisted) next = { ...next, unlistedAt: existing.unlistedAt ?? new Date() };
-
-    // A change set touching only `associations` doesn't bump — see
-    // docs/spec/versioning.md § Version history. `next` already carries
-    // the prior version/updatedAt/updatedBy untouched.
-    const updated = opts.bumpsVersion === false ? next : this.bump(next, opts);
-    this.records.set(id, updated);
-    this.appendJournal(id, opts.journal, updated);
-    return updated;
+    this.checkExpectedVersion(existing, ifVersion);
+    return existing;
   }
 
-  async deleteRecord(
+  /** requireForWrite() for an aspect write, which refuses a tombstone first. */
+  private requireLiveForWrite(id: string, ifVersion: number | undefined): StackRecord {
+    const existing = this.records.get(id);
+    if (existing?.deletedAt) throw softDeletedRefusal(id);
+    return this.requireForWrite(id, ifVersion);
+  }
+
+  private store(id: string, record: StackRecord, journal: JournalEntryInput | undefined) {
+    this.records.set(id, record);
+    this.appendJournal(id, journal, record);
+    return record;
+  }
+
+  // An optional native field is destructured out and re-added only when
+  // set: assigning `undefined` would leave the key present, which is how a
+  // record grows a `parentId: undefined` every `in` check reads as a container.
+
+  async setParent(id: string, parentId: string | null, opts: AspectWriteOptions = {}) {
+    const { parentId: _p, ...rest } = this.requireLiveForWrite(id, opts.ifVersion);
+    return this.store(id, { ...rest, ...(parentId !== null && { parentId }) }, opts.journal);
+  }
+
+  async setUnlisted(id: string, unlisted: boolean, opts: AspectWriteOptions = {}) {
+    const { unlistedAt: _u, ...rest } = this.requireLiveForWrite(id, opts.ifVersion);
+    return this.store(id, { ...rest, ...(unlisted && { unlistedAt: new Date() }) }, opts.journal);
+  }
+
+  async editAssociations(
     id: string,
-    opts: {
-      purge?: boolean;
-      ifVersion?: number;
-      snapshot?: RecordVersion;
-    } & ActorOptions &
-      JournalOptions = {},
+    edits: AssociationEdit[],
+    opts: ElementWriteOptions<DataAssociation> = {},
   ) {
+    const existing = this.requireSetForWrite(id, 'associations', opts);
+    const next = applyAssociationEdits(existing.associations ?? [], edits);
+    return this.store(id, withHalf(existing, 'associations', next), opts.journal);
+  }
+
+  async setAssociations(
+    id: string,
+    associations: DataAssociation[],
+    opts: ElementWriteOptions<DataAssociation> = {},
+  ) {
+    const existing = this.requireSetForWrite(id, 'associations', opts);
+    return this.store(id, withHalf(existing, 'associations', associations), opts.journal);
+  }
+
+  async editAccess(
+    id: string,
+    edits: AssociationEdit[],
+    opts: ElementWriteOptions<AuthorityAssociation> = {},
+  ) {
+    const existing = this.requireSetForWrite(id, 'permissions', opts);
+    const next = applyAssociationEdits(existing.permissions ?? [], edits);
+    return this.store(id, withHalf(existing, 'permissions', next), opts.journal);
+  }
+
+  async setAccess(
+    id: string,
+    permissions: AuthorityAssociation[],
+    opts: ElementWriteOptions<AuthorityAssociation> = {},
+  ) {
+    const existing = this.requireSetForWrite(id, 'permissions', opts);
+    return this.store(id, withHalf(existing, 'permissions', permissions), opts.journal);
+  }
+
+  /** requireLiveForWrite(), past the `expectSet` check on the half it writes too. */
+  private requireSetForWrite(
+    id: string,
+    half: 'associations' | 'permissions',
+    opts: ElementWriteOptions<Association>,
+  ): StackRecord {
+    const existing = this.requireLiveForWrite(id, opts.ifVersion);
+    if (opts.expectSet && !sameAssociationSet(existing[half] ?? [], opts.expectSet)) {
+      throw new ElementSetMovedError(id);
+    }
+    return existing;
+  }
+
+  async deleteRecord(id: string, opts: { purge?: boolean } & MutateOptions = {}) {
     const record = this.records.get(id);
     if (!record) {
       // A purge with nothing to fence is the one case the SQL
@@ -266,10 +327,7 @@ export class MemoryAdapter implements StackAdapter {
     return deleted;
   }
 
-  async undeleteRecord(
-    id: string,
-    opts: { ifVersion?: number; snapshot?: RecordVersion } & ActorOptions & JournalOptions = {},
-  ) {
+  async undeleteRecord(id: string, opts: MutateOptions = {}) {
     const record = this.records.get(id);
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
     this.checkExpectedVersion(record, opts.ifVersion);
@@ -281,10 +339,19 @@ export class MemoryAdapter implements StackAdapter {
     return updated;
   }
 
-  /** Cursor is a stringified offset into insertion order. */
-  async queryRecords(query: StackQuery): Promise<QueryResult> {
+  /** The cursor names the last record a page held, by its place in the order. */
+  async queryRecords(query: AdapterQuery): Promise<QueryResult> {
+    return this.select(query);
+  }
+
+  async queryReadable(query: AdapterQuery, reach: Reach): Promise<QueryResult> {
+    return this.select(query, reach);
+  }
+
+  private select(query: AdapterQuery, reach?: Reach): QueryResult {
     const f = query.filter ?? {};
     let results = this.order.map((id) => this.records.get(id)!);
+    if (reach) results = results.filter((r) => inReach(r, reach));
     // _config is addressable only by ID (getRecord), never returned by a
     // generic query — mirroring the real SQL adapters' WHERE exclusion.
     results = results.filter((r) => r.id !== SYSTEM_TYPES.CONFIG);
@@ -293,6 +360,10 @@ export class MemoryAdapter implements StackAdapter {
     if (f.typeId) {
       const ids = Array.isArray(f.typeId) ? f.typeId : [f.typeId];
       results = results.filter((r) => ids.includes(r.typeId));
+    }
+    if (f.baseId) {
+      const families = Array.isArray(f.baseId) ? f.baseId : [f.baseId];
+      results = results.filter((r) => families.includes(baseIdOf(r.typeId)));
     }
     if (f.parentId !== undefined) {
       results =
@@ -348,64 +419,54 @@ export class MemoryAdapter implements StackAdapter {
       const relatedTo = f.relatedTo;
       results = results.filter((r) => matchesRelatedTo(r.associations, relatedTo));
     }
-    // A `null` filter value means "field absent or null" — not "match
-    // nothing". Plain `===` would miss an absent field; treat both as
-    // satisfying a null filter (docs/spec/data-model.md § Filter).
-    if (f.content) {
-      const entries = Object.entries(f.content).map(
-        ([key, value]) => [parseContentFilterKey(key), value] as const,
-      );
-      results = results.filter((r) =>
-        entries.every(([segments, value]) => {
-          const found = valuesAtContentPath(r.content as Record<string, unknown>, segments);
-          if (value === null || value === undefined) {
-            return found.length === 0 || found.some((v) => v === null || v === undefined);
-          }
-          return found.some((v) => v === value);
-        }),
+    if (f.content || f.contentPresent?.length) {
+      results = results.filter((r) => matchesContent(r.content as Record<string, unknown>, f));
+    }
+    if (f.contentByType) {
+      const arms = f.contentByType;
+      results = results.filter(
+        (r) =>
+          Object.hasOwn(arms, r.typeId) &&
+          matchesContent(r.content as Record<string, unknown>, arms[r.typeId]),
       );
     }
 
     results = this.sortRecords(results, query.sort);
 
-    // Element-wise like the content filter above: a path holds a value
-    // when at least one non-null value is reachable at it.
-    if (f.contentPresent?.length) {
-      const paths = f.contentPresent.map((key) => parseContentFilterKey(key));
-      results = results.filter((r) =>
-        paths.every((segments) =>
-          valuesAtContentPath(r.content as Record<string, unknown>, segments).some(
-            (v) => v !== null && v !== undefined,
-          ),
-        ),
-      );
-    }
-
-    const limit = query.limit ?? 50;
-    const start = query.cursor ? this.decodeCursor(query.cursor, query.sort) : 0;
+    const { limit } = query;
+    // Resume after the record the cursor names, wherever it now falls: a
+    // change between pages moves no boundary, as with the real adapters'
+    // keyed cursors.
+    const after = query.cursor ? this.decodeCursor(query.cursor, query.sort) : null;
+    const resume = after
+      ? results.findIndex(
+          (r) => this.compareKeys(this.orderKey(r, query.sort), after, query.sort) > 0,
+        )
+      : 0;
+    const start = resume === -1 ? results.length : resume;
     const page = results.slice(start, start + limit);
-    const nextStart = start + limit;
-    const cursor = nextStart < results.length ? this.encodeCursor(query.sort, nextStart) : null;
+    const last = page[page.length - 1];
+    const cursor =
+      last && start + limit < results.length
+        ? this.encodeCursor(query.sort, this.orderKey(last, query.sort))
+        : null;
 
     return { records: page, cursor };
   }
 
   /** The sort a cursor was minted under, as an opaque comparable descriptor. */
-  private sortDescriptor(sort: QuerySort | undefined): string {
-    return JSON.stringify([
-      sort?.contentField ?? null,
-      sort?.contentField === undefined ? (sort?.field ?? 'createdAt') : null,
-      sort ? requireDirection(sort) : 'desc',
-    ]);
+  private sortDescriptor(sort: AdapterSort): string {
+    const content = sort.contentField ?? sort.contentFieldByType;
+    return JSON.stringify([content ?? null, sort.field ?? null, sort.direction]);
   }
 
   /**
-   * Stringified offset into insertion order, paired with the sort it was
-   * minted under — mirroring the real adapters' cursor stability guarantee.
+   * The last record's place in the order, paired with the sort it was
+   * minted under — mirroring the real adapters' keyed cursors.
    * See docs/spec/data-model.md § Sorting and pagination.
    */
-  private encodeCursor(sort: QuerySort | undefined, offset: number): string {
-    const json = JSON.stringify({ d: this.sortDescriptor(sort), o: offset });
+  private encodeCursor(sort: AdapterSort, key: OrderKey): string {
+    const json = JSON.stringify({ d: this.sortDescriptor(sort), k: key });
     // Explicit UTF-8 step before btoa, matching sqlite-shared's codec: the
     // descriptor embeds `sort.contentField` verbatim, and a non-Latin-1
     // field name would otherwise make btoa throw an InvalidCharacterError
@@ -422,7 +483,7 @@ export class MemoryAdapter implements StackAdapter {
    * cursor replayed under a changed sort gets from the real adapters,
    * rather than silently paging through the wrong order.
    */
-  private decodeCursor(cursor: string, sort: QuerySort | undefined): number {
+  private decodeCursor(cursor: string, sort: AdapterSort): OrderKey {
     let parsed: unknown;
     try {
       const binary = atob(cursor);
@@ -432,21 +493,19 @@ export class MemoryAdapter implements StackAdapter {
     } catch {
       throw new StackBadRequestError(`Malformed cursor: "${cursor}"`);
     }
-    const { d, o } = (parsed ?? {}) as { d?: unknown; o?: unknown };
-    // `o >= 0` is part of being well-formed, not a nicety: a crafted
-    // negative offset would reach `results.slice(-3, ...)` and hand back
-    // the tail of the result set as "the next page". Cursors arrive from
-    // the wire uninspected (wire-request copies `?cursor=` verbatim), so
-    // this is the only place the offset is checked at all.
-    if (typeof d !== 'string' || typeof o !== 'number' || !Number.isInteger(o) || o < 0) {
-      throw new StackBadRequestError(`Malformed cursor: "${cursor}"`);
-    }
+    const { d, k } = (parsed ?? {}) as { d?: unknown; k?: unknown };
+    // Cursors arrive from the wire uninspected (wire/request.ts copies
+    // `?cursor=` verbatim), so this is the only place the key is checked.
+    if (typeof d !== 'string') throw new StackBadRequestError(`Malformed cursor: "${cursor}"`);
+    // The sort first: a key is only well-formed or not for the order it names.
     if (d !== this.sortDescriptor(sort)) {
       throw new StackBadRequestError(
         `Cursor was minted under a different sort than this query names.`,
       );
     }
-    return o;
+    const native = sort?.contentField === undefined && sort?.contentFieldByType === undefined;
+    if (!isOrderKey(k, native)) throw new StackBadRequestError(`Malformed cursor: "${cursor}"`);
+    return k;
   }
 
   /**
@@ -456,25 +515,32 @@ export class MemoryAdapter implements StackAdapter {
    * The comparison itself is core's, not this double's
    * (docs/spec/data-model.md § Sorting by a content field).
    */
-  private sortRecords(records: StackRecord[], sort: QuerySort | undefined): StackRecord[] {
-    const direction = sort ? requireDirection(sort) : 'desc';
-    const sign = direction === 'asc' ? 1 : -1;
-    const byId = (a: StackRecord, b: StackRecord) => (a.id < b.id ? -sign : a.id > b.id ? sign : 0);
+  private sortRecords(records: StackRecord[], sort: AdapterSort): StackRecord[] {
+    const keys = new Map(records.map((r) => [r.id, this.orderKey(r, sort)]));
+    return [...records].sort((a, b) => this.compareKeys(keys.get(a.id)!, keys.get(b.id)!, sort));
+  }
 
-    if (sort?.contentField === undefined) {
-      const field = sort?.field ?? 'createdAt';
-      const value = (r: StackRecord) =>
+  /** Where a record falls in the order `sort` names: its value there, then its id. */
+  private orderKey(record: StackRecord, sort: AdapterSort): OrderKey {
+    const { field } = sort;
+    if (field !== undefined) {
+      const value =
         field === 'version'
-          ? r.version
-          : (field === 'updatedAt' ? r.updatedAt : r.createdAt).getTime();
-      return [...records].sort((a, b) => sign * (value(a) - value(b)) || byId(a, b));
+          ? record.version
+          : (field === 'updatedAt' ? record.updatedAt : record.createdAt).getTime();
+      return { value, id: record.id };
     }
+    return { value: this.sortEntry(record, sort), id: record.id };
+  }
 
-    const field = sort.contentField;
-    const entries = new Map(records.map((r) => [r.id, this.sortEntry(r, field)]));
-    return [...records].sort(
-      (a, b) => compareSortEntries(entries.get(a.id)!, entries.get(b.id)!, direction) || byId(a, b),
-    );
+  private compareKeys(a: OrderKey, b: OrderKey, sort: AdapterSort): number {
+    const { direction } = sort;
+    const sign = direction === 'asc' ? 1 : -1;
+    const byValue =
+      typeof a.value === 'number' && typeof b.value === 'number'
+        ? sign * (a.value - b.value)
+        : compareSortEntries(a.value as SortEntry | null, b.value as SortEntry | null, direction);
+    return byValue || (a.id < b.id ? -sign : a.id > b.id ? sign : 0);
   }
 
   /**
@@ -483,24 +549,19 @@ export class MemoryAdapter implements StackAdapter {
    * its type says it is, and an undeclared or non-scalar field orders as
    * nothing at all.
    */
-  private sortEntry(record: StackRecord, field: string): SortEntry | null {
+  private sortEntry(record: StackRecord, sort: AdapterSort): SortEntry | null {
+    let field = sort.contentField;
+    if (sort.contentFieldByType) {
+      const key = Object.hasOwn(sort.contentFieldByType, record.typeId)
+        ? sort.contentFieldByType[record.typeId]
+        : { value: null };
+      if (key.field === undefined) return constantSortEntry(key.value ?? null);
+      field = key.field;
+    }
+    if (field === undefined) return null;
     const def = this.types.get(record.typeId)?.schema[field];
     if (!def || def.kind === 'array' || def.kind === 'object') return null;
     return contentSortEntry(def.kind, (record.content as Record<string, unknown>)[field]);
-  }
-
-  /** Never bumps `version`/`updatedAt` — see StackRecordAdapter.amendAssociations(). */
-  async amendAssociations(id: string, changes: AssociationEdit[], opts: JournalOptions = {}) {
-    assertOneSurface(changes);
-    const record = this.records.get(id);
-    if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
-    const updated = withAssociationSet(
-      record,
-      applyAssociationEdits(allAssociations(record), changes),
-    );
-    this.records.set(id, updated);
-    this.appendJournal(id, opts.journal, updated);
-    return updated;
   }
 
   async getVersions(id: string, query: VersionsQuery = {}) {
@@ -513,31 +574,6 @@ export class MemoryAdapter implements StackAdapter {
   }
   async getVersion(id: string, version: number) {
     return (this.versions.get(id) ?? []).find((v) => v.version === version) ?? null;
-  }
-
-  /**
-   * Loud on a (record, version) collision, mirroring the real adapters'
-   * UNIQUE constraint.
-   */
-  private insertVersionRow(id: string, version: RecordVersion): void {
-    const existing = this.versions.get(id) ?? [];
-    if (existing.some((v) => v.version === version.version)) {
-      throw new StackConflictError(
-        `Version ${version.version} already exists for record "${id}" — a concurrent ` +
-          `writer raced past this version. Use ifVersion to detect this before it happens.`,
-      );
-    }
-    this.versions.set(id, [...existing, version]);
-  }
-
-  /**
-   * Standalone snapshot write for tooling and tests — loud on any
-   * collision, since nothing here is about to bump the record's version.
-   * Mutating methods take a `snapshot` option instead; see
-   * snapshotBeforeMutation.
-   */
-  async saveVersion(id: string, version: RecordVersion) {
-    this.insertVersionRow(id, version);
   }
 
   /**
@@ -569,15 +605,7 @@ export class MemoryAdapter implements StackAdapter {
     );
   }
 
-  async restoreVersion(
-    id: string,
-    version: number,
-    opts: {
-      ifVersion?: number;
-      snapshot?: RecordVersion;
-    } & ActorOptions &
-      JournalOptions = {},
-  ) {
+  async restoreVersion(id: string, version: number, opts: MutateOptions = {}) {
     const record = this.records.get(id);
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
     this.checkExpectedVersion(record, opts.ifVersion);
@@ -597,7 +625,7 @@ export class MemoryAdapter implements StackAdapter {
     id: string,
     toTypeId: TypeId,
     content: Record<string, unknown>,
-    opts: { ifVersion?: number; snapshot?: RecordVersion } & ActorOptions & JournalOptions = {},
+    opts: MutateOptions = {},
   ) {
     const record = this.records.get(id);
     if (!record) throw new StackNotFoundError(`Record not found: "${id}"`);
@@ -627,7 +655,9 @@ export class MemoryAdapter implements StackAdapter {
     const log = this.journals.get(id) ?? [];
     log.push({
       ...entry,
-      seq: log.length + 1,
+      // From the log's maximum, as every adapter allocates it.
+      // See docs/spec/journal.md § Ordering.
+      seq: (log.at(-1)?.seq ?? 0) + 1,
       at: new Date(),
       version: record.version,
       typeId: record.typeId,
@@ -658,19 +688,14 @@ export class MemoryAdapter implements StackAdapter {
 
   /** Content-addressed, like the real adapters — needed so file-ref values (SHA-256 hex) validate. */
   async putBlob(data: Uint8Array): Promise<string> {
-    const hashBuffer = await crypto.subtle.digest('SHA-256', data as BufferSource);
-    const fileId = Array.from(new Uint8Array(hashBuffer))
-      .map((b) => b.toString(16).padStart(2, '0'))
-      .join('');
+    const fileId = await sha256Hex(data);
     if (!this.blobs.has(fileId)) {
       this.blobs.set(fileId, { data: new Uint8Array(data), modifiedAt: new Date() });
     }
     return fileId;
   }
   async getBlob(fileId: string): Promise<Uint8Array> {
-    if (!SHA256_HEX_RE.test(fileId)) {
-      throw new StackBadRequestError(`Invalid fileId: expected 64-character lowercase hex string`);
-    }
+    assertFileId(fileId);
     const blob = this.blobs.get(fileId);
     if (!blob) throw new StackNotFoundError(`Attachment not found: "${fileId}"`);
     return new Uint8Array(blob.data);
@@ -680,14 +705,16 @@ export class MemoryAdapter implements StackAdapter {
   }
   // Declared as an optional field (not a fixed method) so a test subclass
   // can override it to `undefined`, simulating an adapter that doesn't
-  // implement this capability (see stack.test.ts's NoListBlobsAdapter).
-  listBlobs?: () => Promise<BlobInfo[]> = async () => {
-    return [...this.blobs.entries()].map(([fileId, blob]) => ({
-      fileId,
-      size: blob.data.byteLength,
-      modifiedAt: blob.modifiedAt,
-    }));
+  // implement this capability.
+  listBlobs?: (query?: BlobsQuery) => Promise<BlobInfo[]> = async (query) => {
+    return blobWindow(this.blobs.keys(), query).map((fileId) => {
+      const blob = this.blobs.get(fileId)!;
+      return { fileId, size: blob.data.byteLength, modifiedAt: blob.modifiedAt };
+    });
   };
+
+  // An optional field for the same reason as listBlobs.
+  head?: () => Promise<string> = async () => this.written.read();
 
   flush?: () => Promise<void>;
   close?: () => Promise<void>;
@@ -705,11 +732,13 @@ export class IncapableMemoryAdapter extends MemoryAdapter {
     filter: {
       content: 'none',
       contentPresent: false,
+      contentByType: false,
       search: false,
     },
     sort: {
       fields: ['createdAt', 'updatedAt', 'version'],
       contentField: false,
+      contentFieldByType: false,
     },
     limits: {
       attachmentBytes: null,
@@ -722,54 +751,31 @@ export class IncapableMemoryAdapter extends MemoryAdapter {
   }
 }
 
-/** Whether an association carries authority — mirrors core's own predicate. */
-const isAuthority = (a: Association): a is AuthorityAssociation =>
-  a.kind === 'permission' || a.kind === 'anyone';
+/** A record's place in an order: a native column's value, or a content sort's entry. */
+type OrderKey = { value: number | SortEntry | null; id: string };
 
-/**
- * A record's whole association table, both projections rejoined — what
- * amendAssociations() acts on, since storage keys all kinds alike.
- */
-function allAssociations(record: StackRecord): Association[] {
-  return [...(record.associations ?? []), ...(record.permissions ?? [])];
-}
-
-/**
- * Sets a record's association set, keyed by identity as every adapter's
- * association table is: a list naming one identity twice collapses to one
- * entry, last wins. Core refuses such a list before an adapter sees it —
- * this is what keeps a direct caller from reaching a state a SQL store
- * cannot represent. Both projections are written, omitting either key when
- * empty — mirroring the SQL adapters' rowToRecord, so the same mutation
- * sequence produces identically-shaped records on the test double and real
- * storage. See docs/spec/adapters.md § Associations are keyed by identity.
- */
-function withAssociationSet(record: StackRecord, associations: Association[]): StackRecord {
-  const keyed = associations.reduce<Association[]>(
-    (acc, a) =>
-      acc.some((b) => associationEqual(a, b))
-        ? acc.map((b) => (associationEqual(a, b) ? a : b))
-        : [...acc, a],
-    [],
+/** Whether `k` is a key of the order a native (`native`) or content sort names. */
+function isOrderKey(k: unknown, native: boolean): k is OrderKey {
+  if (!k || typeof k !== 'object') return false;
+  const { value, id } = k as { value?: unknown; id?: unknown };
+  if (typeof id !== 'string') return false;
+  if (native) return typeof value === 'number' && Number.isFinite(value);
+  if (value === null) return true;
+  const e = value as Partial<{ kind: string; num: unknown; text: unknown; key: unknown }>;
+  return (
+    (e?.kind === 'num' && typeof e.num === 'number') ||
+    (e?.kind === 'text' && typeof e.text === 'string' && typeof e.key === 'string')
   );
-  const { associations: _dropA, permissions: _dropP, ...rest } = record;
-  const data = keyed.filter((a): a is DataAssociation => !isAuthority(a));
-  const authority = keyed.filter(isAuthority);
-  return {
-    ...(rest as StackRecord),
-    ...(data.length && { associations: data }),
-    ...(authority.length && { permissions: authority }),
-  };
 }
 
-/** withAssociationSet() over the data half alone — the `associations` key. */
-function withAssociations(record: StackRecord, associations: DataAssociation[]): StackRecord {
-  return withAssociationSet(record, [...associations, ...(record.permissions ?? [])]);
-}
-
-/** withAssociationSet() over the authority half alone — the `permissions` key. */
-function withPermissions(record: StackRecord, permissions: AuthorityAssociation[]): StackRecord {
-  return withAssociationSet(record, [...(record.associations ?? []), ...permissions]);
+/** One aspect's set replaced; an empty set is omitted, as the SQL adapters' rowToRecord does. */
+function withHalf(
+  record: StackRecord,
+  half: 'associations' | 'permissions',
+  elements: Association[],
+): StackRecord {
+  const { [half]: _dropped, ...rest } = record;
+  return { ...(rest as StackRecord), ...(elements.length && { [half]: elements }) };
 }
 
 /**

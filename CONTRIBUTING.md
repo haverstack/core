@@ -81,7 +81,7 @@ Every package is on `0.x`, where semver puts breaking changes in the **minor** s
 
 **Don't select `major`.** It cuts a 1.0 release, which is a decision about the install base (see [No backward compatibility yet](#no-backward-compatibility-yet)), not something a single PR makes.
 
-`@haverstack/sqlite-shared` is `private` and has no version to publish. Record a change to it against `@haverstack/record-adapter-sqlite`, which bundles it. Naming a private package beside a public one makes Changesets refuse the whole release plan, so `scripts/expand-changesets.mjs` drops the line first — changeset-bot's template is safe to commit unedited. A changeset naming _only_ private packages fails: it would release nowhere.
+`@haverstack/sqlite-shared` is `private` and has no version to publish. Record a change to it against both packages that bundle it, `@haverstack/record-adapter-sqlite` and `@haverstack/record-adapter-do-sqlite`: each inlines its own copy at build time, so a change to sqlite-shared ships in both and belongs in both changelogs. Naming a private package beside a public one makes Changesets refuse the whole release plan, so `scripts/expand-changesets.mjs` drops the line first — changeset-bot's template is safe to commit unedited. A changeset naming _only_ private packages fails: it would release nowhere.
 
 ### The ripple rule
 
@@ -173,7 +173,7 @@ The convention this codebase follows, in order of how often it comes up:
 
 ```ts
 // Don't:
-// The old two-call design could crash between saveVersion() and the
+// The old two-call design could crash between the snapshot write and the
 // mutation, leaving an orphan row that collided with every future snapshot.
 
 // Do:
@@ -231,7 +231,9 @@ Note that this is about _our_ history, not about inputs we genuinely receive. Ha
 
 ## Architecture conventions
 
-**`Stack` is the invariant layer; adapters are storage engines.** Validation, `_config` protection, ID rules, migration policy, and permission logic live in `packages/core` so every adapter inherits them. An adapter that reimplements an invariant is a bug waiting to diverge. The deliberate exception is documented in the spec: the `_config` query exclusion must live in each adapter's own query predicate, because post-filtering in `Stack` would under-fill a page.
+**`Stack` is the invariant layer; adapters are storage engines.** Validation, `_config` protection, ID rules, migration policy, and permission logic live in `packages/core` so every adapter inherits them. An adapter that reimplements an invariant is a bug waiting to diverge. What an adapter does apply is conditions: core resolves them and hands them over as data — a query's `filter`, and a scoped query's [reach](./docs/spec/adapters.md#querying-within-a-reach), which carries the outcome of every permission rule and none of the rules — and the adapter matches them in its own query predicate, because filtering a page after `limit` would under-fill it. The `_config` exclusion is the same thing with a constant value: a condition every query carries.
+
+**Validate where data enters; trust it inside.** Input is checked once, at the boundary it crosses: a public API call such as `defineType()` or `create()`, or a wire request a server decodes. Past that point the types are true, and code reads a stored Type or Record as its type says. Data an adapter returns is inside: a store that holds something core never wrote was edited by hand, and guarding for that in every reader costs more than it buys. Each guard for malformed stored data also forces a policy choice (does a missing list allow nothing? does an unknown kind sort as text?), and those choices drift apart between call sites. That holds for `adapter-api` too: the server behind it is held to the wire contract, which `@haverstack/conformance-fixtures` pins, the way a storage engine is held to the adapter contract.
 
 **Package naming declares the adapter contract**, per [`docs/spec/adapters.md`](./docs/spec/adapters.md):
 

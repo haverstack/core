@@ -1,6 +1,6 @@
 {
   "name": "@haverstack/adapter-local",
-  "version": "0.40.0",
+  "version": "0.46.0",
   "description": "Local (SQLite + disk) stack adapter for Haverstack",
   "type": "module",
   "engines": {
@@ -44,6 +44,7 @@
     "@haverstack/blob-adapter-disk": "workspace:^"
   },
   "devDependencies": {
+    "@haverstack/adapter-conformance": "workspace:*",
     "@types/node": "^22.0.0",
     "typescript": "^5.5.0",
     "vitest": "^4.1.11"

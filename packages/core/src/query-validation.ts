@@ -1,11 +1,10 @@
 /**
- * Query and association validation
+ * Query validation
  * -------------------------------------------------------
- * The sanitizers a query passes through before any adapter sees it, plus
- * the relationship-target rules an association is held to. Both sides of
- * the same job: a discriminated union and a `QuerySort` field are compile-
- * time promises, and a server mapping a request body onto either supplies
- * raw JSON that no compiler has seen.
+ * The sanitizers a query passes through before any adapter sees it. A
+ * `QuerySort` field or a filter's discriminated union is a compile-time
+ * promise, and a server mapping a request onto either supplies raw JSON
+ * that no compiler has seen.
  *
  * These live in the invariant layer for the reason validation and
  * `_config` protection do — so no adapter can forget one. `assertQueryCapabilities`
@@ -17,79 +16,153 @@
  * See docs/spec/data-model.md § Capability-gated filters.
  */
 
-import { StackBadRequestError, StackValidationError } from './errors.js';
-import { familyIdProblem } from './schema.js';
-import { associationEqual, isAuthorityAssociation } from './record-changes.js';
-import { CONTENT_SEGMENT_METACHARACTERS, SEGMENT_METACHARACTER_RE } from './validate.js';
-import type { ValidationError } from './validate.js';
-import { NATIVE_SORT_FIELDS } from './types.js';
+import { ARGUMENTS_INVALID, StackBadRequestError, StackValidationError } from './errors.js';
+import { familyIdProblem, parseTypeId } from './schema.js';
+import { targetErrors } from './associations/validation.js';
+import {
+  CONTENT_SEGMENT_METACHARACTERS,
+  MAX_VALIDATION_DEPTH,
+  SEGMENT_METACHARACTER_RE,
+  isPlainObject,
+} from './validate.js';
+import { NATIVE_SORT_FIELDS } from './types/index.js';
 import type {
-  AnyoneAssociation,
-  Association,
-  AssociationEdit,
-  AttachmentAssociation,
-  AuthorityAssociation,
-  DataAssociation,
-  EntityTarget,
-  ExternalTarget,
-  GrantGrantee,
+  AdapterQuery,
+  PlainQuery,
+  AdapterSort,
+  StackQuery,
   JournalQuery,
-  VersionsQuery,
-  Grantee,
-  PermissionAssociation,
-  RecordTarget,
-  RelationshipAssociation,
-  TagAssociation,
   QuerySort,
   RecordFilter,
-  RelationshipTarget,
-  RelationshipTargetPattern,
   StackCapabilities,
-} from './types.js';
+  VersionsQuery,
+} from './types/index.js';
 
 /**
- * Fail loud rather than silently widen: a filter the adapter can't honor
- * would otherwise be dropped, returning an unfiltered superset presented
- * as the filtered result. Shared by Stack.query() and
- * APIAdapter.queryRecords(). See docs/spec/data-model.md
- * § Capability-gated filters.
+ * Fail loud rather than silently widen or reorder: a filter or sort the
+ * adapter can't honor would otherwise be dropped, answering with some
+ * other result, which a caller reading one bounded page cannot detect.
+ * Every refusal names the capability. The companion to resolveQuery(),
+ * which refuses the query's own shape; every entry point runs both. See
+ * docs/spec/data-model.md § Capability-gated filters.
  */
 export function assertQueryCapabilities(
+  query: AdapterQuery,
+  capabilities: Pick<StackCapabilities, 'filter' | 'sort'>,
+): void {
+  assertFilterCapability(query.filter, capabilities);
+  assertSortCapability(query.sort, capabilities);
+}
+
+function assertFilterCapability(
   filter: RecordFilter | undefined,
   capabilities: Pick<StackCapabilities, 'filter'>,
 ): void {
-  const { content: reach, contentPresent, search } = capabilities.filter;
+  const { content: reach, contentPresent, contentByType, search } = capabilities.filter;
   if (filter?.search && !search) {
     throw new StackBadRequestError(
       'Query uses filter.search, but this adapter does not declare the filter.search capability.',
       'filter.search',
     );
   }
-  const present = filter?.contentPresent?.length ? filter.contentPresent : undefined;
-  if (!filter?.content && !present) return;
+  // An arm's keys are gated as the same keys at the top of the filter are.
+  const arms = Object.values(filter?.contentByType ?? {});
+  const parts = [filter ?? {}, ...arms];
+  const keys = parts.flatMap((part) => Object.keys(part.content ?? {}));
+  const present = parts.flatMap((part) => part.contentPresent ?? []);
+  if (!filter?.content && present.length === 0 && arms.length === 0) return;
   if (reach === 'none') {
     // Named as `filter.content` whichever key the query used: the reach
     // is what is absent, and it is the entry to look at in discovery.
+    const used =
+      arms.length > 0
+        ? 'filter.contentByType'
+        : present.length > 0 && !filter?.content
+          ? 'filter.contentPresent'
+          : 'filter.content';
     throw new StackBadRequestError(
-      `Query uses ${present && !filter?.content ? 'filter.contentPresent' : 'filter.content'}, ` +
-        'but this adapter declares filter.content: "none".',
+      `Query uses ${used}, but this adapter declares filter.content: "none".`,
       'filter.content',
     );
   }
-  if (present && !contentPresent) {
+  if (arms.length > 0 && !contentByType) {
+    throw new StackBadRequestError(
+      'Query uses filter.contentByType, but this adapter does not declare the ' +
+        'filter.contentByType capability.',
+      'filter.contentByType',
+    );
+  }
+  if (present.length > 0 && !contentPresent) {
     throw new StackBadRequestError(
       'Query uses filter.contentPresent, but this adapter does not declare the ' +
         'filter.contentPresent capability.',
       'filter.contentPresent',
     );
   }
-  for (const key of [...Object.keys(filter?.content ?? {}), ...(present ?? [])]) {
+  for (const key of [...keys, ...present]) {
     if (parseContentFilterKey(key).length > 1 && reach !== 'path') {
       throw new StackBadRequestError(
         `Query uses the nested content path "${key}", but this adapter declares ` +
           `filter.content: "${reach}".`,
         'filter.content',
       );
+    }
+  }
+}
+
+/**
+ * Hold `filter.contentByType` to a split along Types: at least one arm,
+ * each pinned to a TypeId and flat, and never beside a top-level content
+ * predicate, whose relation to the arms would be ambiguous. A map that
+ * could arrive empty would match everything once it crossed the wire. See
+ * docs/spec/data-model.md § Content by type.
+ */
+export function assertValidContentByType(filter: RecordFilter | undefined): void {
+  const arms: unknown = filter?.contentByType;
+  if (arms === undefined) return;
+  if (!isPlainObject(arms) || Object.keys(arms).length === 0) {
+    throw new StackBadRequestError('filter.contentByType must name at least one typeId.');
+  }
+  if (filter!.content !== undefined || filter!.contentPresent !== undefined) {
+    throw new StackBadRequestError(
+      'filter.contentByType cannot be combined with filter.content or filter.contentPresent.',
+    );
+  }
+  for (const [typeId, arm] of Object.entries(arms)) {
+    if (!parseTypeId(typeId)) {
+      throw new StackBadRequestError(
+        `filter.contentByType key "${typeId}" is not a versioned TypeId.`,
+      );
+    }
+    if (!isPlainObject(arm)) {
+      throw new StackBadRequestError(`filter.contentByType["${typeId}"] must be an object.`);
+    }
+    for (const key of Object.keys(arm)) {
+      if (key !== 'content' && key !== 'contentPresent') {
+        throw new StackBadRequestError(
+          `filter.contentByType["${typeId}"] takes content and contentPresent only, not "${key}".`,
+        );
+      }
+    }
+    if (arm.content !== undefined && !isPlainObject(arm.content)) {
+      throw new StackBadRequestError(
+        `filter.contentByType["${typeId}"].content must be an object.`,
+      );
+    }
+    if (
+      arm.contentPresent !== undefined &&
+      (!Array.isArray(arm.contentPresent) ||
+        !arm.contentPresent.every((path) => typeof path === 'string'))
+    ) {
+      throw new StackBadRequestError(
+        `filter.contentByType["${typeId}"].contentPresent must be an array of strings.`,
+      );
+    }
+    for (const key of [
+      ...Object.keys((arm.content as Record<string, unknown> | undefined) ?? {}),
+      ...((arm.contentPresent as string[] | undefined) ?? []),
+    ]) {
+      parseContentFilterKey(key);
     }
   }
 }
@@ -105,8 +178,13 @@ export function filtersContent(features: Pick<StackCapabilities, 'filter'>): boo
   return features.filter.content !== 'none';
 }
 
-/** The longest path both SQLite engines can execute — see the spec link below. */
-const MAX_CONTENT_PATH_SEGMENTS = 32;
+/**
+ * The longest path that can reach a stored value: a top-level field sits at
+ * depth 0 and each segment descends one level, so a path past this reaches
+ * nothing a write accepts. See docs/spec/data-model.md § Nested content
+ * paths.
+ */
+const MAX_CONTENT_PATH_SEGMENTS = MAX_VALIDATION_DEPTH + 1;
 
 /**
  * Split a content filter key into path segments. Write-time validation
@@ -116,9 +194,6 @@ const MAX_CONTENT_PATH_SEGMENTS = 32;
  */
 export function parseContentFilterKey(key: string): string[] {
   const segments = key.split('.');
-  // A SQLite adapter spends two json_each joins per segment against a
-  // 64-table join limit, so a path past the cap is one the engine could
-  // not execute. See docs/spec/data-model.md § Nested content paths.
   if (segments.length > MAX_CONTENT_PATH_SEGMENTS) {
     throw new StackBadRequestError(
       `Invalid content filter path "${key}": at most ${MAX_CONTENT_PATH_SEGMENTS} segments.`,
@@ -147,25 +222,24 @@ export function parseContentFilterKey(key: string): string[] {
  * can't be the copy that a fourth native column is missing from.
  */
 const VALID_SORT_FIELDS: ReadonlySet<string> = new Set(NATIVE_SORT_FIELDS);
+
 /** The only two sort directions; see assertValidSort. */
 const VALID_SORT_DIRECTIONS = new Set(['asc', 'desc']);
 
 /**
- * Reject a sort whose field or direction is outside the closed set the
- * types promise. `QuerySort` is typed `'asc' | 'desc'`, but a type is not a
- * runtime guard: a server mapping `?direction=` onto a query, or a
- * delegated app calling query(), supplies a raw string. A SQLite record
- * adapter interpolates the direction straight into `ORDER BY`, so an
- * unvalidated value there is a SQL-injection sink reachable from every
- * untrusted caller. Validating in the invariant layer — the same reason
- * emission and _config protection live here — means no adapter can forget
- * it. See docs/spec/data-model.md § Sorting and pagination.
+ * Reject a sort outside the closed set the types promise. A type is not a
+ * runtime guard, and a SQLite adapter interpolates the direction straight
+ * into `ORDER BY`, so an unvalidated one is an injection sink reachable by
+ * any untrusted caller. See docs/spec/data-model.md § Sorting and pagination.
  */
 export function assertValidSort(sort: QuerySort | undefined): void {
   if (!sort) return;
-  if (sort.field !== undefined && sort.contentField !== undefined) {
+  const named = [sort.field, sort.contentField, sort.contentFieldByType].filter(
+    (member) => member !== undefined,
+  );
+  if (named.length !== 1) {
     throw new StackBadRequestError(
-      'A sort names either a native field or a content field, never both.',
+      'A sort names exactly one of a native field, a content field or a content field per type.',
     );
   }
   if (sort.field !== undefined && !VALID_SORT_FIELDS.has(sort.field)) {
@@ -173,18 +247,8 @@ export function assertValidSort(sort: QuerySort | undefined): void {
       `Invalid sort field "${sort.field}": expected one of ${NATIVE_SORT_FIELDS.join(', ')}.`,
     );
   }
-  if (sort.contentField !== undefined) {
-    // Parsed by the same rule a filter key is, so a name a filter could
-    // never address is not one a sort can either — then held to one
-    // segment, because a value inside an array or object has no single
-    // position to order its record by (docs/spec/data-model.md
-    // § Sorting by a content field).
-    if (parseContentFilterKey(sort.contentField).length > 1) {
-      throw new StackBadRequestError(
-        `Invalid sort content field "${sort.contentField}": sorting reaches top-level fields only.`,
-      );
-    }
-  }
+  if (sort.contentField !== undefined) assertSortableField(sort.contentField);
+  if (sort.contentFieldByType !== undefined) assertValidSortByType(sort.contentFieldByType);
   if (sort.direction !== undefined && !VALID_SORT_DIRECTIONS.has(sort.direction)) {
     throw new StackBadRequestError(
       `Invalid sort direction "${sort.direction}": expected "asc" or "desc".`,
@@ -193,33 +257,136 @@ export function assertValidSort(sort: QuerySort | undefined): void {
 }
 
 /**
- * The sort every adapter receives: a named sort with no `direction` is
- * ascending, resolved here so no adapter carries its own default. No sort
- * stays absent — the adapter's unsorted order is `createdAt` newest first,
- * and an explicit sort would be re-checked against the server's declared
- * `sort.fields`. See docs/spec/data-model.md § Sorting and pagination.
+ * Parsed by the same rule a filter key is, so a name a filter could never
+ * address is not one a sort can either — then held to one segment, because
+ * a value inside an array or object has no single position to order its
+ * record by (docs/spec/data-model.md § Sorting by a content field).
  */
-export function normalizeSort(
-  sort: QuerySort | undefined,
-): (QuerySort & { direction: 'asc' | 'desc' }) | undefined {
-  if (!sort) return undefined;
-  return { ...sort, direction: sort.direction ?? 'asc' } as QuerySort & {
-    direction: 'asc' | 'desc';
+const assertSortableField = (field: unknown): void => {
+  if (typeof field !== 'string') {
+    throw new StackBadRequestError('Invalid sort content field: expected a string.');
+  }
+  if (parseContentFilterKey(field).length > 1) {
+    throw new StackBadRequestError(
+      `Invalid sort content field "${field}": sorting reaches top-level fields only.`,
+    );
+  }
+};
+
+/**
+ * Each key names a TypeId and orders by one field of it or one reduced
+ * constant. See docs/spec/data-model.md § Sorting by a content field.
+ */
+const assertValidSortByType = (byType: unknown): void => {
+  if (!isPlainObject(byType) || Object.keys(byType).length === 0) {
+    throw new StackBadRequestError('sort.contentFieldByType must name at least one typeId.');
+  }
+  for (const [typeId, key] of Object.entries(byType)) {
+    if (!parseTypeId(typeId)) {
+      throw new StackBadRequestError(
+        `sort.contentFieldByType key "${typeId}" is not a versioned TypeId.`,
+      );
+    }
+    const shape = isPlainObject(key) ? Object.keys(key) : [];
+    if (shape.length !== 1 || (shape[0] !== 'field' && shape[0] !== 'value')) {
+      throw new StackBadRequestError(
+        `sort.contentFieldByType["${typeId}"] must be { field } or { value }.`,
+      );
+    }
+    const { field, value } = key as { field?: unknown; value?: unknown };
+    if (shape[0] === 'field') {
+      assertSortableField(field);
+    } else if (
+      value !== null &&
+      typeof value !== 'string' &&
+      !(typeof value === 'number' && Number.isFinite(value))
+    ) {
+      throw new StackBadRequestError(
+        `sort.contentFieldByType["${typeId}"].value must be a string, a finite number or null.`,
+      );
+    }
+  }
+};
+
+/** The page a query reads when it names no `limit`. */
+export const DEFAULT_QUERY_LIMIT = 50;
+
+/** The largest page a query reads, whatever it asks for. */
+export const MAX_QUERY_LIMIT = 1000;
+
+/**
+ * The query an adapter receives: its shape checked, and every default
+ * resolved so no adapter carries one — a named sort runs ascending, no
+ * sort is `createdAt` newest first, and the page is DEFAULT_QUERY_LIMIT
+ * up to MAX_QUERY_LIMIT. Shape refusals name no capability; see
+ * assertQueryCapabilities() for those that do. See docs/spec/data-model.md
+ * § Sorting and pagination.
+ */
+export function resolveQuery(query: PlainQuery): AdapterQuery {
+  const { sort, limit, ...rest } = query;
+  assertValidBaseIdFilter(query.filter);
+  assertValidContentByType(query.filter);
+  assertValidSort(sort);
+  assertWindowInteger(limit, 'limit', 1);
+  assertValidAssociationFilters(query.filter);
+  return {
+    ...rest,
+    sort: sort
+      ? ({ ...sort, direction: sort.direction ?? 'asc' } as AdapterSort)
+      : { field: 'createdAt', direction: 'desc' },
+    limit: Math.min(limit ?? DEFAULT_QUERY_LIMIT, MAX_QUERY_LIMIT),
+  };
+}
+
+/** A query split where it enters `Stack`; see splitQuery(). */
+export type SplitQuery = {
+  query: AdapterQuery;
+  presentAt?: StackQuery['presentAt'];
+};
+
+/**
+ * Split a query at the door into what an adapter sees, resolved, and
+ * `presentAt`, which `Stack` applies to the results. Every check runs
+ * here, before the adapter is asked. See docs/spec/data-model.md
+ * § Sorting and pagination.
+ */
+export function splitQuery(query: StackQuery): SplitQuery {
+  const { presentAt, ...plain } = query;
+  return {
+    query: resolveQuery(plain),
+    ...(presentAt !== undefined && { presentAt }),
   };
 }
 
 /**
- * Fail loud rather than silently reorder: an adapter that can't honor the
- * requested sort would otherwise answer in some other order, which a
- * caller paging a bounded window has no way to notice. The companion to
- * assertQueryCapabilities(), split from it because a sort is not a filter
- * — see docs/spec/data-model.md § Capability-gated filters.
+ * Hold a window bound — a page size, a cursor position — to an integer
+ * at or above `min`, the one shape every adapter reads alike: a negative
+ * `limit` drops entries from a JS slice but empties or lifts a SQL
+ * `LIMIT`. See docs/spec/data-model.md § Sorting and pagination.
  */
-export function assertSortCapability(
-  sort: QuerySort | undefined,
+export function assertWindowInteger(value: number | undefined, label: string, min: 0 | 1): void {
+  if (value === undefined) return;
+  if (!Number.isInteger(value) || value < min) {
+    throw new StackBadRequestError(
+      `Invalid ${label} ${String(value)}: expected ${min === 0 ? 'a non-negative' : 'a positive'} integer.`,
+    );
+  }
+}
+
+function assertSortCapability(
+  sort: AdapterSort,
   capabilities: Pick<StackCapabilities, 'sort'>,
 ): void {
-  if (!sort) return;
+  if (sort.contentFieldByType !== undefined) {
+    if (!capabilities.sort.contentFieldByType) {
+      throw new StackBadRequestError(
+        'Query uses sort.contentFieldByType, but this adapter does not declare the ' +
+          'sort.contentFieldByType capability.',
+        'sort.contentFieldByType',
+      );
+    }
+    return;
+  }
   if (sort.contentField !== undefined) {
     if (!capabilities.sort.contentField) {
       throw new StackBadRequestError(
@@ -230,342 +397,13 @@ export function assertSortCapability(
     }
     return;
   }
-  const field = sort.field ?? 'createdAt';
+  const { field } = sort;
   if (!capabilities.sort.fields.includes(field)) {
     throw new StackBadRequestError(
       `Query sorts by "${field}", which this adapter does not declare in sort.fields.`,
       'sort.fields',
     );
   }
-}
-
-/** The identifier spaces a relationship target may name. */
-const TARGET_KINDS = new Set(['record', 'entity', 'external']);
-
-/**
- * The keys of one arm of a union, listed as an object so the compiler
- * holds the list to the type: a field added to the arm fails to compile
- * here until it is listed.
- */
-const keysOf = <T>(keys: Record<keyof T, true>): readonly string[] => Object.keys(keys);
-
-/** Every key each relationship target arm defines. */
-export const TARGET_KEYS: Record<RelationshipTarget['kind'], readonly string[]> = {
-  record: keysOf<RecordTarget>({ kind: true, recordId: true, stackUrl: true }),
-  entity: keysOf<EntityTarget>({ kind: true, entityId: true }),
-  external: keysOf<ExternalTarget>({ kind: true, ns: true, id: true }),
-};
-
-/** Every key each association kind defines. */
-const ASSOCIATION_KEYS: Record<Association['kind'], readonly string[]> = {
-  tag: keysOf<TagAssociation>({ kind: true, label: true }),
-  attachment: keysOf<AttachmentAssociation>({
-    kind: true,
-    label: true,
-    fileId: true,
-    attachmentRecordId: true,
-  }),
-  relationship: keysOf<RelationshipAssociation>({ kind: true, label: true, target: true }),
-  permission: keysOf<PermissionAssociation>({ kind: true, label: true, grantee: true }),
-  anyone: keysOf<AnyoneAssociation>({ kind: true, label: true }),
-};
-
-/** Every key each grantee arm defines, the default tier included. */
-export const GRANTEE_KEYS: Record<GrantGrantee['kind'], readonly string[]> = {
-  entity: keysOf<Extract<Grantee, { kind: 'entity' }>>({ kind: true, entityId: true }),
-  group: keysOf<Extract<Grantee, { kind: 'group' }>>({ kind: true, groupId: true, role: true }),
-  authenticated: keysOf<Extract<GrantGrantee, { kind: 'authenticated' }>>({ kind: true }),
-};
-
-/**
- * The keys of `value` its arm does not define. An element carrying one is
- * refused rather than stored: an adapter keeps only the keys it has
- * columns for, so the rest would answer 200 and then vanish.
- * See docs/spec/data-model.md § Associations.
- */
-export function unknownKeys(value: object, keys: readonly string[]): string[] {
-  return Object.keys(value).filter((key) => !keys.includes(key));
-}
-
-/** unknownKeys() as a refusal. 400, not 422: the key addresses nothing. */
-export function assertKnownKeys(value: object, keys: readonly string[], path: string): void {
-  const unknown = unknownKeys(value, keys);
-  if (unknown.length > 0)
-    throw new StackBadRequestError(
-      `Unknown key${unknown.length > 1 ? 's' : ''} in ${path}: ${unknown.join(', ')}`,
-    );
-}
-
-/**
- * Collect what makes a relationship target malformed. Absence is
- * meaningful on `stackUrl` and an external `id` — this stack, and the
- * whole namespace — so every part that names something must be non-empty:
- * an empty string stores and matches as though it were absent.
- * See docs/spec/data-model.md § Relationship targets.
- */
-function targetErrors(
-  target: RelationshipTarget | RelationshipTargetPattern,
-  path: string,
-  opts: { externalIdOptional?: boolean } = {},
-): ValidationError[] {
-  const fail = (message: string): ValidationError[] => [{ path, message }];
-  if (!target || typeof target !== 'object')
-    return fail('A relationship target must be an object.');
-  if (!TARGET_KINDS.has(target.kind)) {
-    return fail(
-      `Unknown relationship target kind "${target.kind}": expected "record", "entity" or "external".`,
-    );
-  }
-  assertKnownKeys(target, TARGET_KEYS[target.kind], path);
-  if (target.kind === 'record') {
-    if (!target.recordId) return fail('A record target requires a non-empty recordId.');
-    if (target.stackUrl !== undefined && !target.stackUrl) {
-      return fail("A record target's stackUrl must be non-empty; omit it to name this stack.");
-    }
-    return [];
-  }
-  if (target.kind === 'entity') {
-    return target.entityId ? [] : fail('An entity target requires a non-empty entityId.');
-  }
-  if (!target.ns) return fail('An external target requires a non-empty ns.');
-  if (target.id === undefined) {
-    return opts.externalIdOptional ? [] : fail('An external target requires an id.');
-  }
-  return target.id ? [] : fail("An external target's id must be non-empty when present.");
-}
-
-/**
- * Reject a relationship target outside the closed set the types promise.
- * A discriminated union is not a runtime guard — a server mapping a
- * request body onto an association supplies raw JSON — and an
- * unrecognized kind would otherwise be stored under the one arm that
- * names a Record in this stack. See docs/spec/data-model.md
- * § Relationship targets.
- *
- * A key the element's kind does not define is thrown as a 400 rather than
- * collected, at every depth: it addresses nothing, the way an unknown key
- * on a request body does. See docs/spec/data-model.md § Associations.
- */
-export function validateAssociation(
-  association: Association,
-  path = 'association',
-): ValidationError[] {
-  if (!namesKind(association)) {
-    return [
-      {
-        path: `${path}.kind`,
-        message: `Unknown association kind "${String((association as { kind?: unknown })?.kind)}": expected ${[...ASSOCIATION_KINDS].map((k) => `"${k}"`).join(', ')}.`,
-      },
-    ];
-  }
-  assertKnownKeys(association, ASSOCIATION_KEYS[association.kind], path);
-  if (association.kind === 'permission') {
-    return granteeErrors(association, `${path}.grantee`);
-  }
-  if (association.kind === 'anyone') {
-    return association.label === 'read'
-      ? []
-      : [{ path: `${path}.label`, message: 'An `anyone` association carries only `read`.' }];
-  }
-  if (association.kind !== 'relationship') return [];
-  return targetErrors(association.target, `${path}.target`);
-}
-
-/**
- * Who a duplicated permission names, since kind and label alone don't
- * distinguish two grants of the same bit to different grantees.
- */
-function granteeSuffix(association: Association): string {
-  if (association.kind !== 'permission') return '';
-  const g = association.grantee;
-  return g.kind === 'entity' ? ` for "${g.entityId}"` : ` for ${g.role}s of "${g.groupId}"`;
-}
-
-/** The kinds an association may name — the closed set every surface reads. */
-const ASSOCIATION_KINDS = new Set(['tag', 'attachment', 'relationship', 'permission', 'anyone']);
-
-/**
- * Whether a value is an association at all. Asked ahead of the partition
- * checks, so a malformed element is named as one rather than reported as
- * the wrong surface for a kind it never had — a request body supplies raw
- * JSON, and `null` or `{}` is neither half of the partition.
- */
-function namesKind(association: Association): boolean {
-  return (
-    !!association &&
-    typeof association === 'object' &&
-    ASSOCIATION_KINDS.has((association as { kind?: unknown }).kind as string)
-  );
-}
-
-/** The bits a permission element may name — the whole of its meaning. */
-const PERMISSION_LABELS = new Set(['read', 'write']);
-
-/**
- * Collect what makes a permission element malformed. `role` is required on
- * a group grantee: there is no "any member" default to fall back on, so an
- * absent one would otherwise widen or narrow silently depending on how the
- * reader broke the tie. See docs/spec/access-control.md
- * § Record-level permissions.
- */
-function granteeErrors(
-  association: { label: string; grantee: Grantee },
-  path: string,
-): ValidationError[] {
-  const fail = (message: string): ValidationError[] => [{ path, message }];
-  if (!PERMISSION_LABELS.has(association.label)) {
-    return [
-      {
-        path: `${path.slice(0, -'.grantee'.length)}.label`,
-        message: `Unknown permission label "${association.label}": expected "read" or "write".`,
-      },
-    ];
-  }
-  const grantee = association.grantee;
-  if (!grantee || typeof grantee !== 'object') return fail('A permission requires a grantee.');
-  if (grantee.kind === 'entity' || grantee.kind === 'group')
-    assertKnownKeys(grantee, GRANTEE_KEYS[grantee.kind], path);
-  if (grantee.kind === 'entity') {
-    return grantee.entityId ? [] : fail('An entity grantee requires a non-empty entityId.');
-  }
-  if (grantee.kind === 'group') {
-    if (!grantee.groupId) return fail('A group grantee requires a non-empty groupId.');
-    return grantee.role === 'member' || grantee.role === 'admin'
-      ? []
-      : fail('A group grantee requires a role of "member" or "admin".');
-  }
-  return fail(
-    `Unknown permission grantee kind "${String((grantee as { kind?: unknown }).kind)}": expected "entity" or "group".`,
-  );
-}
-
-/**
- * Refuse an authority element reaching the data half of the partition.
- * The two share a table, a delta shape and a durability tier; they never
- * share a call, because an app editing tags would otherwise be able to
- * replace an ACL it was never shown. Thrown rather than collected: the
- * caller named the wrong surface, not a malformed value, and the verb it
- * wanted is `grantAccess()`/`revokeAccess()`.
- *
- * Lives here, in the invariant layer, so an unscoped `Stack`, an import
- * and a server mapping a request body are all held to it.
- * See docs/spec/access-control.md § Record-level permissions.
- */
-export function assertDataAssociations(
-  associations: readonly Association[],
-  surface: string,
-): asserts associations is DataAssociation[] {
-  const authority = associations.find((a) => namesKind(a) && isAuthorityAssociation(a));
-  if (!authority) return;
-  throw new StackBadRequestError(
-    `${surface} does not carry authority: a "${authority.kind}" association belongs to the ` +
-      '`permissions` surface — use grantAccess()/revokeAccess(), or the `permissions` change-set key.',
-  );
-}
-
-/**
- * The mirror of assertDataAssociations(): the `permissions` surface takes
- * authority kinds alone, so a tag routed through it is refused rather than
- * quietly becoming an ACL entry the `associations` projection never shows.
- */
-export function assertAuthorityAssociations(
-  permissions: readonly Association[],
-  surface: string,
-): asserts permissions is AuthorityAssociation[] {
-  const data = permissions.find((a) => namesKind(a) && !isAuthorityAssociation(a));
-  if (!data) return;
-  throw new StackBadRequestError(
-    `${surface} carries authority alone: a "${data.kind}" association belongs to the ` +
-      '`associations` surface — use associate()/dissociate(), or the `associations` change-set key.',
-  );
-}
-
-/** validateAssociation() over a create's `associations` array. */
-/**
- * Every association in a list, plus the one rule a list has that a single
- * association does not: **identities are distinct**. A list naming one
- * identity twice describes a state no store can hold — an adapter keys
- * associations by identity, so the second entry displaces the first — and
- * which of the two the record ends up with is a question the caller did
- * not mean to ask. Refused rather than collapsed, for the reason an empty
- * change set is refused: every way of producing one is a caller bug.
- * See docs/spec/data-model.md § Associations.
- */
-export function validateAssociations(
-  associations: Association[] | undefined,
-  path = 'associations',
-): ValidationError[] {
-  const list = associations ?? [];
-  return [
-    ...list.flatMap((a, i) => validateAssociation(a, `${path}[${i}]`)),
-    ...list.flatMap((a, i) =>
-      list.slice(0, i).some((b) => associationEqual(a, b))
-        ? [
-            {
-              path: `${path}[${i}]`,
-              message: `Duplicate association identity: ${a.kind} "${a.label}"${granteeSuffix(a)} is named more than once.`,
-            },
-          ]
-        : [],
-    ),
-  ];
-}
-
-/**
- * Hold an association edit list to the rules every verb shares: non-empty,
- * every element a known `op` over a well-formed association, one surface,
- * and each identity named once — a list that both removes and adds one
- * identity is the same ambiguity as naming it twice. `repoint` is the
- * journal's word, never a request. Asked of the whole list before anything
- * is read or written. See docs/spec/data-model.md § Mutations.
- */
-export function assertAssociationEdits(
-  changes: unknown,
-  surface: string,
-  half: 'data' | 'authority',
-): asserts changes is AssociationEdit[] {
-  if (!Array.isArray(changes) || changes.length === 0) {
-    throw new StackValidationError([
-      { path: 'changes', message: `${surface} names at least one change.` },
-    ]);
-  }
-  const errors: ValidationError[] = [];
-  changes.forEach((raw: unknown, i) => {
-    const path = `changes[${i}]`;
-    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-      errors.push({ path, message: `${path} must be an object.` });
-      return;
-    }
-    const edit = raw as { op?: unknown; association?: unknown };
-    if (edit.op !== 'repoint') assertKnownKeys(edit, ['op', 'association'], path);
-    if (edit.op === 'repoint') {
-      errors.push({
-        path: `${path}.op`,
-        message:
-          'op: "repoint" is recorded by the journal, not requested. ' +
-          "Send { op: 'add', association }: an add naming an attachment the record already holds re-points it in place.",
-      });
-    } else if (edit.op !== 'add' && edit.op !== 'remove') {
-      errors.push({ path: `${path}.op`, message: 'op must be "add" or "remove".' });
-    }
-    errors.push(...validateAssociation(edit.association as Association, `${path}.association`));
-  });
-  if (errors.length > 0) throw new StackValidationError(errors);
-
-  const associations = (changes as AssociationEdit[]).map((c) => c.association);
-  if (half === 'data') assertDataAssociations(associations, surface);
-  else assertAuthorityAssociations(associations, surface);
-
-  const duplicates: ValidationError[] = [];
-  associations.forEach((a, i) => {
-    if (associations.slice(0, i).some((b) => associationEqual(a, b))) {
-      duplicates.push({
-        path: `changes[${i}]`,
-        message: `Duplicate association identity: ${a.kind} "${a.label}"${granteeSuffix(a)} is named more than once.`,
-      });
-    }
-  });
-  if (duplicates.length > 0) throw new StackValidationError(duplicates);
 }
 
 /**
@@ -597,6 +435,18 @@ export function assertValidAssociationFilters(filter: RecordFilter | undefined):
 }
 
 /**
+ * Refuse a `baseId` argument that cannot name a type family, as an
+ * argument error prefixed with the `surface` it was passed to. See
+ * familyIdProblem().
+ */
+export function assertFamilyId(baseId: unknown, surface: string): void {
+  const problem = familyIdProblem(baseId, surface);
+  if (problem) {
+    throw new StackValidationError([{ path: 'baseId', message: problem }], ARGUMENTS_INVALID);
+  }
+}
+
+/**
  * Refuse a `baseId` carrying an `@version` suffix. A family filter resolves
  * against registered families, so a TypeId there would match nothing and
  * say nothing. See docs/spec/data-model.md § Filter.
@@ -607,49 +457,24 @@ export function assertValidBaseIdFilter(filter: { baseId?: string | string[] } |
     .map((b) => familyIdProblem(b, 'filter.baseId'))
     .filter((m): m is string => m !== null)
     .map((message) => ({ path: 'filter.baseId', message }));
-  if (errors.length > 0) throw new StackValidationError(errors);
+  if (errors.length > 0) throw new StackValidationError(errors, ARGUMENTS_INVALID);
 }
 
 /**
- * Hold a journal window to the shape both adapters can honor identically.
- *
- * Unvalidated, a negative `limit` diverges rather than failing: a JS
- * `slice(0, -1)` drops the newest entry, while SQLite reads a negative
- * LIMIT as "no ceiling" and returns the whole log. Neither is what the
- * caller asked for, and the disagreement is invisible until a stack
- * changes adapters. Refuse at the surface so no adapter has to guess.
- *
- * No ceiling is imposed: unlike a query, omitting `limit` reads the whole
- * log by contract, so a clamp would silently truncate exactly the caller
- * reconstructing an association's full history.
+ * A journal window: `afterSeq` 0 is the start of the log. No ceiling is
+ * imposed — omitting `limit` reads the whole log by contract, which a
+ * clamp would silently truncate.
  */
 export function assertValidJournalQuery(query: JournalQuery | undefined): void {
-  if (!query) return;
-  for (const key of ['afterSeq', 'limit'] as const) {
-    const value = query[key];
-    if (value === undefined) continue;
-    if (!Number.isInteger(value) || value < 0) {
-      throw new StackBadRequestError(
-        `Invalid journal ${key} ${String(value)}: expected a non-negative integer.`,
-      );
-    }
-  }
+  assertWindowInteger(query?.afterSeq, 'journal afterSeq', 0);
+  assertWindowInteger(query?.limit, 'journal limit', 1);
 }
 
 /**
- * Refuse a `getVersions()` window the adapters would read differently, as
- * assertValidJournalQuery() does for the journal. No ceiling is imposed:
- * omitting `limit` reads every version by contract.
+ * A `getVersions()` window. No ceiling is imposed: omitting `limit` reads
+ * every version by contract.
  */
 export function assertValidVersionsQuery(query: VersionsQuery | undefined): void {
-  if (!query) return;
-  for (const key of ['beforeVersion', 'limit'] as const) {
-    const value = query[key];
-    if (value === undefined) continue;
-    if (!Number.isInteger(value) || value < 1) {
-      throw new StackBadRequestError(
-        `Invalid versions ${key} ${String(value)}: expected a positive integer.`,
-      );
-    }
-  }
+  assertWindowInteger(query?.beforeVersion, 'versions beforeVersion', 1);
+  assertWindowInteger(query?.limit, 'versions limit', 1);
 }

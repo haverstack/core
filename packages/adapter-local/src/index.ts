@@ -21,23 +21,32 @@ import type {
   StackRecord,
   StackType,
   TypeId,
+  BaseId,
   RecordVersion,
   Actor,
-  ActorOptions,
-  StackQuery,
   QueryResult,
   AssociationEdit,
   RecordId,
   FileId,
-  RecordChangeSet,
+  AuthorityAssociation,
+  DataAssociation,
   StackCapabilities,
 } from '@haverstack/core';
 import type {
+  AdapterQuery,
   StackAdapter,
   BlobInfo,
+  BlobsQuery,
   StackBlobAdapter,
+  AspectWriteOptions,
+  ElementWriteOptions,
   JournalOptions,
+  MutateOptions,
+  Reach,
+  RecordHistory,
+  StoreWriters,
 } from '@haverstack/core/adapter';
+import { combinedHead } from '@haverstack/core/adapter';
 import type { TokenSession, TokenInfo } from '@haverstack/core/wire';
 import {
   NativeSQLiteRecordAdapter,
@@ -122,61 +131,102 @@ export class LocalAdapter implements StackAdapter {
     return this.record.ownerEntityId;
   }
 
-  get timezone(): string | undefined {
-    return this.record.timezone;
+  get writers(): StoreWriters {
+    return this.record.writers;
   }
 
   async createRecord(record: StackRecord, opts?: JournalOptions): Promise<StackRecord> {
     return this.record.createRecord(record, opts);
   }
 
+  async importRecord(record: StackRecord, history: RecordHistory): Promise<StackRecord> {
+    return this.record.importRecord(record, history);
+  }
+
   async getRecord(id: RecordId): Promise<StackRecord | null> {
     return this.record.getRecord(id);
   }
 
-  async mutateRecord(
+  async patchContent(
     id: RecordId,
-    changes: RecordChangeSet,
-    opts?: {
-      ifVersion?: number;
-      snapshot?: RecordVersion;
-      bumpsVersion?: boolean;
-    } & ActorOptions,
+    patch: Record<string, unknown | null>,
+    opts?: MutateOptions,
   ): Promise<StackRecord> {
-    return this.record.mutateRecord(id, changes, opts);
+    return this.record.patchContent(id, patch, opts);
+  }
+
+  async setParent(
+    id: RecordId,
+    parentId: RecordId | null,
+    opts?: AspectWriteOptions,
+  ): Promise<StackRecord> {
+    return this.record.setParent(id, parentId, opts);
+  }
+
+  async setUnlisted(
+    id: RecordId,
+    unlisted: boolean,
+    opts?: AspectWriteOptions,
+  ): Promise<StackRecord> {
+    return this.record.setUnlisted(id, unlisted, opts);
   }
 
   async deleteRecord(
     id: RecordId,
-    opts?: { purge?: boolean; ifVersion?: number; snapshot?: RecordVersion } & ActorOptions,
+    opts?: { purge?: boolean } & MutateOptions,
   ): Promise<StackRecord | null> {
     return this.record.deleteRecord(id, opts);
   }
 
-  async undeleteRecord(
-    id: RecordId,
-    opts?: { ifVersion?: number; snapshot?: RecordVersion } & ActorOptions,
-  ): Promise<StackRecord> {
+  async undeleteRecord(id: RecordId, opts?: MutateOptions): Promise<StackRecord> {
     return this.record.undeleteRecord(id, opts);
   }
 
-  async queryRecords(query: StackQuery): Promise<QueryResult> {
+  async queryRecords(query: AdapterQuery): Promise<QueryResult> {
     return this.record.queryRecords(query);
+  }
+
+  async queryReadable(query: AdapterQuery, reach: Reach): Promise<QueryResult> {
+    return this.record.queryReadable(query, reach);
   }
 
   async deleteUnreferencedAttachmentRecords(
     fileId: FileId,
-    metadataTypeIds: TypeId[],
+    metadataBaseId: BaseId,
   ): Promise<StackRecord[]> {
-    return this.record.deleteUnreferencedAttachmentRecords(fileId, metadataTypeIds);
+    return this.record.deleteUnreferencedAttachmentRecords(fileId, metadataBaseId);
   }
 
-  async amendAssociations(
+  async editAssociations(
     id: RecordId,
-    changes: AssociationEdit[],
-    opts?: JournalOptions,
+    edits: AssociationEdit[],
+    opts?: ElementWriteOptions<DataAssociation>,
   ): Promise<StackRecord> {
-    return this.record.amendAssociations(id, changes, opts);
+    return this.record.editAssociations(id, edits, opts);
+  }
+
+  async setAssociations(
+    id: RecordId,
+    associations: DataAssociation[],
+    opts?: ElementWriteOptions<DataAssociation>,
+  ): Promise<StackRecord> {
+    return this.record.setAssociations(id, associations, opts);
+  }
+
+  async editAccess(
+    id: RecordId,
+    edits: AssociationEdit[],
+    opts?: ElementWriteOptions<AuthorityAssociation>,
+  ): Promise<StackRecord> {
+    return this.record.editAccess(id, edits, opts);
+  }
+
+  async setAccess(
+    id: RecordId,
+    permissions: AuthorityAssociation[],
+    opts?: ElementWriteOptions<AuthorityAssociation>,
+  ): Promise<StackRecord> {
+    return this.record.setAccess(id, permissions, opts);
   }
 
   async getJournal(id: RecordId, query?: JournalQuery): Promise<RecordJournalEntry[]> {
@@ -191,15 +241,7 @@ export class LocalAdapter implements StackAdapter {
     return this.record.getVersion(id, version);
   }
 
-  async saveVersion(id: RecordId, version: RecordVersion): Promise<void> {
-    return this.record.saveVersion(id, version);
-  }
-
-  async restoreVersion(
-    id: RecordId,
-    version: number,
-    opts?: { ifVersion?: number; snapshot?: RecordVersion } & ActorOptions,
-  ): Promise<StackRecord> {
+  async restoreVersion(id: RecordId, version: number, opts?: MutateOptions): Promise<StackRecord> {
     return this.record.restoreVersion(id, version, opts);
   }
 
@@ -207,7 +249,7 @@ export class LocalAdapter implements StackAdapter {
     id: RecordId,
     toTypeId: TypeId,
     content: Record<string, unknown>,
-    opts?: { ifVersion?: number; snapshot?: RecordVersion } & ActorOptions,
+    opts?: MutateOptions,
   ): Promise<StackRecord> {
     return this.record.commitMigration(id, toTypeId, content, opts);
   }
@@ -241,8 +283,13 @@ export class LocalAdapter implements StackAdapter {
   }
 
   /** DiskBlobAdapter always implements this — LocalAdapter always constructs one. */
-  async listBlobs(): Promise<BlobInfo[]> {
-    return this.blob.listBlobs!();
+  async listBlobs(query?: BlobsQuery): Promise<BlobInfo[]> {
+    return this.blob.listBlobs!(query);
+  }
+
+  /** One head for the database and the attachments beside it; DiskBlobAdapter has one too. */
+  async head(): Promise<string> {
+    return combinedHead(await this.record.head(), await this.blob.head!());
   }
 
   // -------------------------------------------------------

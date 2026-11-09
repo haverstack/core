@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, vi } from 'vitest';
-import { Stack } from '../src/stack.js';
+import { Stack } from '../src/stack/stack.js';
 import {
   StackError,
   StackValidationError,
@@ -8,6 +8,7 @@ import {
   StackNotFoundError,
   StackConflictError,
   StackVersionConflictError,
+  ElementSetMovedError,
   StackSchemaDriftError,
   StackBadRequestError,
   StackPayloadTooLargeError,
@@ -22,15 +23,19 @@ import {
   MAX_ID_TIMESTAMP,
   IdGenerationError,
 } from '../src/id.js';
-import type { TypeSchema } from '../src/types.js';
+import type { RecordVersion, TypeSchema } from '../src/types/index.js';
+import { baseIdOf } from '../src/schema.js';
+import { migration, typeHandle } from '../src/type-handle.js';
+import { add, derive, drop } from '../src/migration-steps.js';
+import type { Migration } from '../src/type-handle.js';
 import { RESERVED_CONTENT_KEYS, CONTENT_KEY_PATH_METACHARACTERS } from '../src/validate.js';
-import { InvalidDidError } from '../src/did.js';
+import { InvalidDidError } from '../src/did/did.js';
 import {
   MemoryAdapter,
   IncapableMemoryAdapter,
   type MemoryAdapterOpenOptions,
 } from '../src/testing.js';
-import { firstRecordedAttachment } from '../src/attachment-download.js';
+import { firstRecordedAttachment } from '../src/attachment-records.js';
 import type {
   DataAssociation,
   AttachmentContent,
@@ -45,7 +50,7 @@ import type {
   RelationshipTarget,
   StackAdapter,
   StackRecord,
-} from '../src/types.js';
+} from '../src/types/index.js';
 
 // -------------------------------------------------------
 // Test setup
@@ -61,11 +66,43 @@ const fam = (typeId: string): string => typeId.split('@')[0]!;
 const NOTE_V2 = 'com.example.test/note@2';
 const NOTE_V3 = 'com.example.test/note@3';
 
+const NoteV1 = typeHandle({
+  id: NOTE_V1,
+  name: 'Note',
+  schema: { text: { kind: 'text', required: true } },
+});
+const NoteV2 = typeHandle({
+  id: NOTE_V2,
+  name: 'Note',
+  schema: { text: { kind: 'text', required: true }, title: { kind: 'string' } },
+  migratesFrom: NoteV1,
+});
+const noteV1ToV2 = migration(NoteV1, NoteV2, [add('title', '')]);
+
+const EntityV1 = typeHandle({
+  id: '_entity@1',
+  name: 'Entity',
+  schema: { did: { kind: 'string', required: true }, name: { kind: 'string', required: true } },
+});
+
 let adapter: MemoryAdapter;
+
+/**
+ * A version row written behind Stack's back: the state an interrupted
+ * write or a hand-edited store leaves.
+ */
+const plantVersion = (id: string, version: RecordVersion) =>
+  adapter.versions.set(id, [...(adapter.versions.get(id) ?? []), version]);
 let stack: Stack;
 
+/** Replace `stack` with one over the same adapter that knows `migrations`. */
+const reopenWith = async (...migrations: Migration[]): Promise<Stack> => {
+  stack = await Stack.open(adapter, { migrations });
+  return stack;
+};
+
 beforeEach(async () => {
-  adapter = await MemoryAdapter.open({ ownerEntityId: 'owner-123', timezone: 'UTC' });
+  adapter = await MemoryAdapter.open({ ownerEntityId: 'owner-123' });
   stack = await Stack.open(adapter);
 
   await stack.defineType({
@@ -86,10 +123,6 @@ describe('Stack.open', () => {
     expect(stack.ownerEntityId).toBe('owner-123');
   });
 
-  test('reads timezone from adapter', async () => {
-    expect(stack.timezone).toBe('UTC');
-  });
-
   test('an adapter with no ownerEntityId is an InvalidAdapterError, outside StackError', async () => {
     const emptyAdapter = await MemoryAdapter.open({ ownerEntityId: '' });
     const err = await Stack.open(emptyAdapter).catch((e: unknown) => e);
@@ -99,13 +132,18 @@ describe('Stack.open', () => {
     expect((err as Error).message).toContain('adapter has no ownerEntityId');
   });
 
-  // timezone is optional passthrough metadata, nothing more — no
-  // default, since defaulting to a real timezone would claim knowledge the
-  // stack doesn't have.
-  test('timezone is undefined when not specified — no default', async () => {
-    const adapter = await MemoryAdapter.open({ ownerEntityId: 'entity-without-timezone' });
-    const s = await Stack.open(adapter);
-    expect(s.timezone).toBeUndefined();
+  test('each Stack holds its own system Type schema objects', async () => {
+    const a = await Stack.open(await MemoryAdapter.open({ ownerEntityId: 'did:key:a' }));
+    const b = await Stack.open(await MemoryAdapter.open({ ownerEntityId: 'did:key:b' }));
+    const schemaA = (await a.getType('_config@1'))!.schema;
+    const schemaB = (await b.getType('_config@1'))!.schema;
+    expect(schemaA).toEqual(schemaB);
+    expect(schemaA).not.toBe(schemaB);
+    expect(schemaA.ownerEntityId).not.toBe(schemaB.ownerEntityId);
+  });
+
+  test('_config holds the owner and nothing else', async () => {
+    expect((await stack.get('_config'))?.content).toEqual({ ownerEntityId: 'owner-123' });
   });
 
   describe('ownerProfile', () => {
@@ -182,8 +220,7 @@ describe('Stack.open', () => {
     // at `_entity@1` would mint a card the rules then refuse.
     test('treats an owner record migrated to a later type version as existing', async () => {
       const emptyAdapter = await MemoryAdapter.open({ ownerEntityId: 'did:key:owner' });
-      const s = await Stack.open(emptyAdapter, { ownerProfile: { name: 'Jane Smith' } });
-      await s.defineType({
+      const EntityV2 = typeHandle({
         id: '_entity@2',
         name: 'Entity',
         schema: {
@@ -192,8 +229,13 @@ describe('Stack.open', () => {
           handle: { kind: 'string' },
           pronouns: { kind: 'string' },
         },
+        migratesFrom: EntityV1,
       });
-      s.registerMigration({ from: '_entity@1', to: '_entity@2', migrate: (c) => ({ ...c }) });
+      const s = await Stack.open(emptyAdapter, {
+        ownerProfile: { name: 'Jane Smith' },
+        migrations: [migration(EntityV1, EntityV2, [])],
+      });
+      await s.defineType(EntityV2);
       await s.migrateAll('_entity');
 
       const reopened = await Stack.open(emptyAdapter, { ownerProfile: { name: 'Jane Smith' } });
@@ -253,7 +295,7 @@ describe('Stack.open', () => {
     // family, so the lookup must too: filtering by typeId '_entity@1' alone
     // would miss a card migrated to '_entity@2'.
     test('matches a card migrated to a later type version', async () => {
-      await stack.defineType({
+      const EntityV2 = typeHandle({
         id: '_entity@2',
         name: 'Entity',
         schema: {
@@ -262,9 +304,11 @@ describe('Stack.open', () => {
           handle: { kind: 'string' },
           pronouns: { kind: 'string' },
         },
+        migratesFrom: EntityV1,
       });
+      await reopenWith(migration(EntityV1, EntityV2, []));
+      await stack.defineType(EntityV2);
       const created = await stack.create('_entity@1', { did: 'did:key:x', name: 'X' });
-      stack.registerMigration({ from: '_entity@1', to: '_entity@2', migrate: (c) => ({ ...c }) });
       await stack.migrateAll('_entity');
 
       const found = await stack.getEntityByDid('did:key:x');
@@ -284,7 +328,7 @@ describe('Stack.open', () => {
 
     test('includes an unlisted card', async () => {
       const created = await stack.create('_entity@1', { did: 'did:key:x', name: 'X' });
-      await stack.mutate(created.id, { unlisted: true });
+      await stack.setUnlisted(created.id, true);
       const found = await stack.getEntityByDid('did:key:x');
       expect(found?.id).toBe(created.id);
     });
@@ -344,6 +388,14 @@ describe('defineType', () => {
     });
     const type = await stack.getType(NOTE_V2);
     expect(type?.migratesFrom).toBe(NOTE_V1);
+  });
+
+  test('refuses a migratesFrom that is not an earlier version of the same family', async () => {
+    for (const migratesFrom of ['com.example.other/note@1', NOTE_V2, 'note']) {
+      await expect(
+        stack.defineType({ id: NOTE_V2, name: 'Note', schema: {}, migratesFrom }),
+      ).rejects.toThrow(StackBadRequestError);
+    }
   });
 
   // -------------------------------------------------------
@@ -502,10 +554,9 @@ describe('defineType', () => {
     expect(after).toEqual(before);
   });
 
-  test('repeated seedSystemTypes()-style redefinition across Stack.open() calls stays idempotent', async () => {
-    // Simulates the every-open churn this issue closes: a second Stack
-    // instance (e.g. a fresh process reopening the same adapter) redefines
-    // the same types on the same underlying storage.
+  test('an identical redefinition from another Stack over the same storage keeps the stored type', async () => {
+    // A second Stack over one adapter — a fresh process reopening it —
+    // redefines what the first already stored.
     const before = await stack.getType(NOTE_V1);
     const stackB = await Stack.open(adapter);
     await stackB.defineType({
@@ -791,7 +842,6 @@ describe('create — backdating (createdAt/updatedAt)', () => {
   test('idTimestampSkewMs: null disables the id/createdAt consistency check too', async () => {
     const permissiveAdapter = await MemoryAdapter.open({
       ownerEntityId: 'owner-123',
-      timezone: 'UTC',
     });
     const permissiveStack = await Stack.open(permissiveAdapter, { idTimestampSkewMs: null });
     await permissiveStack.defineType({
@@ -939,7 +989,7 @@ describe('create — backdating (createdAt/updatedAt)', () => {
 });
 
 // -------------------------------------------------------
-// Type cache — create()/mutate()/etc. shouldn't pay a getType()
+// Type cache — create()/patchContent()/etc. shouldn't pay a getType()
 // round trip on every write for a value that can't change.
 // -------------------------------------------------------
 
@@ -1050,6 +1100,24 @@ describe('query — content filter null semantics', () => {
     );
     const path = [...Array(33).fill('n'), 'bad', 'name'].join('.');
     await expect(stack.query({ filter: { content: { [path]: 1 } } })).rejects.toThrow(
+      StackBadRequestError,
+    );
+  });
+
+  // The path cap and the content depth cap are one limit read from either
+  // side. See docs/spec/data-model.md § Nested content paths.
+  test('the longest legal path reaches the deepest value a write accepts', async () => {
+    const chain = (n: number): Record<string, unknown> =>
+      n === 1 ? { n: 'x' } : { n: chain(n - 1) };
+    const path = (n: number) => Array(n).fill('n').join('.');
+
+    const deepest = await stack.create(NOTE_V1, { text: 'deep', ...chain(33) });
+    const found = await stack.query({ filter: { content: { [path(33)]: 'x' } } });
+    expect(found.records.map((r) => r.id)).toEqual([deepest.id]);
+    await expect(stack.create(NOTE_V1, { text: 'deeper', ...chain(34) })).rejects.toThrow(
+      /Content nesting exceeds maximum depth of 32/,
+    );
+    await expect(stack.query({ filter: { content: { [path(34)]: 'x' } } })).rejects.toThrow(
       StackBadRequestError,
     );
   });
@@ -1168,7 +1236,7 @@ describe('query — capability fail-loud', () => {
 
   test('filter.content against an adapter reaching no content throws, not returns everything', async () => {
     const incapableStack = await Stack.open(
-      await IncapableMemoryAdapter.open({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
+      await IncapableMemoryAdapter.open({ ownerEntityId: 'owner-123' }),
     );
     await incapableStack.defineType({
       id: NOTE_V1,
@@ -1187,7 +1255,7 @@ describe('query — capability fail-loud', () => {
 
   test('contentPresent against an adapter without the capability throws', async () => {
     const incapableStack = await Stack.open(
-      await IncapableMemoryAdapter.open({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
+      await IncapableMemoryAdapter.open({ ownerEntityId: 'owner-123' }),
     );
     await incapableStack.defineType({
       id: NOTE_V1,
@@ -1206,7 +1274,7 @@ describe('query — capability fail-loud', () => {
 
   test('a query with neither filter still works against an incapable adapter', async () => {
     const incapableStack = await Stack.open(
-      await IncapableMemoryAdapter.open({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
+      await IncapableMemoryAdapter.open({ ownerEntityId: 'owner-123' }),
     );
     await incapableStack.defineType({
       id: NOTE_V1,
@@ -1480,18 +1548,18 @@ describe('update', () => {
 // The `parentId` key: the one native field a write reaches after create.
 // -------------------------------------------------------
 
-describe('Stack.mutate — the `parentId` key', () => {
+describe('Stack.setParent', () => {
   test('moves a record into a container', async () => {
     const box = await stack.create(NOTE_V1, { text: 'box' });
     const note = await stack.create(NOTE_V1, { text: 'note' });
-    const moved = await stack.mutate(note.id, { parentId: box.id });
+    const moved = await stack.setParent(note.id, box.id);
     expect(moved.parentId).toBe(box.id);
   });
 
   test('null moves a record to the root', async () => {
     const box = await stack.create(NOTE_V1, { text: 'box' });
     const note = await stack.create(NOTE_V1, { text: 'note' }, { parentId: box.id });
-    const moved = await stack.mutate(note.id, { parentId: null });
+    const moved = await stack.setParent(note.id, null);
     expect(moved.parentId).toBeUndefined();
   });
 
@@ -1502,7 +1570,7 @@ describe('Stack.mutate — the `parentId` key', () => {
   test('leaves version, updatedAt and the snapshot history untouched', async () => {
     const box = await stack.create(NOTE_V1, { text: 'box' });
     const note = await stack.create(NOTE_V1, { text: 'note' });
-    const moved = await stack.mutate(note.id, { parentId: box.id });
+    const moved = await stack.setParent(note.id, box.id);
     expect(moved.version).toBe(1);
     expect(moved.updatedAt).toEqual(note.updatedAt);
     expect(await stack.getVersions(note.id)).toEqual([]);
@@ -1511,7 +1579,7 @@ describe('Stack.mutate — the `parentId` key', () => {
   test('appends one journal entry naming where the record came from', async () => {
     const box = await stack.create(NOTE_V1, { text: 'box' });
     const note = await stack.create(NOTE_V1, { text: 'note' });
-    await stack.mutate(note.id, { parentId: box.id });
+    await stack.setParent(note.id, box.id);
     const entries = await stack.getJournal(note.id);
     expect(entries).toHaveLength(2); // create, then the move
     expect(entries[1].ops).toEqual(['reparent']);
@@ -1520,27 +1588,10 @@ describe('Stack.mutate — the `parentId` key', () => {
     expect(entries[1].previousParentId).toBeNull();
   });
 
-  // A set that names a bumping aspect alongside the move bumps once,
-  // covering everything it moved, and journals one entry naming both.
-  test('a content patch alongside the move bumps exactly once', async () => {
-    const box = await stack.create(NOTE_V1, { text: 'box' });
-    const note = await stack.create(NOTE_V1, { text: 'note' });
-    const moved = await stack.mutate(note.id, {
-      contentPatch: { text: 'edited' },
-      parentId: box.id,
-    });
-    expect(moved.version).toBe(2);
-    expect(await stack.getVersions(note.id)).toHaveLength(1);
-    const entries = await stack.getJournal(note.id);
-    expect(entries).toHaveLength(2);
-    expect([...entries[1].ops].sort()).toEqual(['patch', 'reparent']);
-    expect(entries[1].previousParentId).toBeNull();
-  });
-
   test('leaves content untouched', async () => {
     const box = await stack.create(NOTE_V1, { text: 'box' });
     const note = await stack.create(NOTE_V1, { text: 'note' });
-    const moved = await stack.mutate(note.id, { parentId: box.id });
+    const moved = await stack.setParent(note.id, box.id);
     expect(moved.content).toEqual({ text: 'note' });
   });
 
@@ -1549,62 +1600,52 @@ describe('Stack.mutate — the `parentId` key', () => {
   test('moving to the parent it already has is a no-op', async () => {
     const box = await stack.create(NOTE_V1, { text: 'box' });
     const note = await stack.create(NOTE_V1, { text: 'note' }, { parentId: box.id });
-    const same = await stack.mutate(note.id, { parentId: box.id });
+    const same = await stack.setParent(note.id, box.id);
     expect(same.version).toBe(1);
     expect(await stack.getVersions(note.id)).toEqual([]);
   });
 
   test('a root record set to null is a no-op', async () => {
     const note = await stack.create(NOTE_V1, { text: 'note' });
-    const same = await stack.mutate(note.id, { parentId: null });
+    const same = await stack.setParent(note.id, null);
     expect(same.version).toBe(1);
   });
 
   test('throws for unknown record', async () => {
-    await expect(stack.mutate('nonexistent', { parentId: null })).rejects.toThrow(
-      StackNotFoundError,
-    );
+    await expect(stack.setParent('nonexistent', null)).rejects.toThrow(StackNotFoundError);
   });
 
-  // A precondition on `version` can fence nothing here: the move does not
-  // move the number it names. Same stance an `associations`-only set takes.
+  // A precondition is a claim about the record's version, not about what
+  // the write moves, so a move that bumps nothing still checks it.
   // See docs/spec/versioning.md § Optimistic concurrency (`ifVersion`).
-  test('ifVersion alongside a parentId-only set is not checked', async () => {
+  test('a stale ifVersion refuses the move', async () => {
     const box = await stack.create(NOTE_V1, { text: 'box' });
     const note = await stack.create(NOTE_V1, { text: 'note' });
-    const moved = await stack.mutate(note.id, { parentId: box.id }, { ifVersion: 99 });
+    await expect(stack.setParent(note.id, box.id, { ifVersion: 99 })).rejects.toThrow(
+      StackVersionConflictError,
+    );
+    expect((await stack.get(note.id))!.parentId).toBeUndefined();
+    const moved = await stack.setParent(note.id, box.id, { ifVersion: note.version });
     expect(moved.parentId).toBe(box.id);
-  });
-
-  test('ifVersion is checked again once a bumping aspect shares the set', async () => {
-    const box = await stack.create(NOTE_V1, { text: 'box' });
-    const note = await stack.create(NOTE_V1, { text: 'note' });
-    await expect(
-      stack.mutate(
-        note.id,
-        { contentPatch: { text: 'edited' }, parentId: box.id },
-        { ifVersion: 99 },
-      ),
-    ).rejects.toThrow(StackVersionConflictError);
   });
 
   test('the record itself is refused as its own parent', async () => {
     const note = await stack.create(NOTE_V1, { text: 'note' });
-    await expect(stack.mutate(note.id, { parentId: note.id })).rejects.toThrow(StackConflictError);
+    await expect(stack.setParent(note.id, note.id)).rejects.toThrow(StackConflictError);
   });
 
   test('a descendant is refused as a parent', async () => {
     const a = await stack.create(NOTE_V1, { text: 'a' });
     const b = await stack.create(NOTE_V1, { text: 'b' }, { parentId: a.id });
     const c = await stack.create(NOTE_V1, { text: 'c' }, { parentId: b.id });
-    await expect(stack.mutate(a.id, { parentId: c.id })).rejects.toThrow(StackConflictError);
+    await expect(stack.setParent(a.id, c.id)).rejects.toThrow(StackConflictError);
   });
 
   test('a sibling subtree is not a descendant, and is allowed', async () => {
     const a = await stack.create(NOTE_V1, { text: 'a' });
     const b = await stack.create(NOTE_V1, { text: 'b' });
     const bChild = await stack.create(NOTE_V1, { text: 'b-child' }, { parentId: b.id });
-    const moved = await stack.mutate(a.id, { parentId: bChild.id });
+    const moved = await stack.setParent(a.id, bChild.id);
     expect(moved.parentId).toBe(bChild.id);
   });
 
@@ -1617,9 +1658,7 @@ describe('Stack.mutate — the `parentId` key', () => {
     for (let i = 0; i < 10; i++) {
       previous = await stack.create(NOTE_V1, { text: `n${i}` }, { parentId: previous.id });
     }
-    await expect(stack.mutate(root.id, { parentId: previous.id })).rejects.toThrow(
-      StackConflictError,
-    );
+    await expect(stack.setParent(root.id, previous.id)).rejects.toThrow(StackConflictError);
   });
 
   // A create supplying both id and parentId is the second edge-adding
@@ -1632,8 +1671,8 @@ describe('Stack.mutate — the `parentId` key', () => {
     const b = await stack.create(NOTE_V1, { text: 'b' }, { parentId: a.id });
     const minted = idWithTimestamp(Date.now());
     // Straight to the adapter: it holds no opinion on references, so this
-    // plants the dangling parent a change set's `parentId` would refuse.
-    await adapter.mutateRecord(a.id, { parentId: minted });
+    // plants the dangling parent setParent() would refuse.
+    await adapter.setParent(a.id, minted);
     await expect(
       stack.create(NOTE_V1, { text: 'z' }, { id: minted, parentId: b.id }),
     ).rejects.toThrow(StackConflictError);
@@ -1686,7 +1725,7 @@ describe('Stack.mutate — the `parentId` key', () => {
   test('parenting to a record that does not exist is refused', async () => {
     const note = await stack.create(NOTE_V1, { text: 'note' });
     const gone = idWithTimestamp(Date.now());
-    await expect(stack.mutate(note.id, { parentId: gone })).rejects.toThrow(StackConflictError);
+    await expect(stack.setParent(note.id, gone)).rejects.toThrow(StackConflictError);
   });
 
   test('creating under a record that does not exist is refused', async () => {
@@ -1704,7 +1743,7 @@ describe('Stack.mutate — the `parentId` key', () => {
     ['a reserved id', '_config'],
   ])('parenting to %s is refused as malformed', async (_name, bad) => {
     const note = await stack.create(NOTE_V1, { text: 'note' });
-    await expect(stack.mutate(note.id, { parentId: bad })).rejects.toThrow(StackBadRequestError);
+    await expect(stack.setParent(note.id, bad)).rejects.toThrow(StackBadRequestError);
     await expect(stack.create(NOTE_V1, { text: 'other' }, { parentId: bad })).rejects.toThrow(
       StackBadRequestError,
     );
@@ -1718,14 +1757,14 @@ describe('Stack.mutate — the `parentId` key', () => {
       previous = await stack.create(NOTE_V1, { text: `n${i}` }, { parentId: previous.id });
     }
     const note = await stack.create(NOTE_V1, { text: 'note' });
-    const moved = await stack.mutate(note.id, { parentId: previous.id });
+    const moved = await stack.setParent(note.id, previous.id);
     expect(moved.parentId).toBe(previous.id);
   });
 
   test('a parentId filter finds the record at its new home', async () => {
     const box = await stack.create(NOTE_V1, { text: 'box' });
     const note = await stack.create(NOTE_V1, { text: 'note' });
-    await stack.mutate(note.id, { parentId: box.id });
+    await stack.setParent(note.id, box.id);
     const result = await stack.query({ filter: { parentId: box.id } });
     expect(result.records.map((r) => r.id)).toEqual([note.id]);
   });
@@ -1753,7 +1792,7 @@ describe('Stack.restoreVersion — containment', () => {
     const other = await stack.create(NOTE_V1, { text: 'other' });
     const note = await stack.create(NOTE_V1, { text: 'note' }, { parentId: box.id });
     await stack.patchContent(note.id, { text: 'edited' });
-    await stack.mutate(note.id, { parentId: other.id });
+    await stack.setParent(note.id, other.id);
     const restored = await stack.restoreVersion(note.id, 1);
     expect(restored.content).toEqual({ text: 'note' });
     expect(restored.parentId).toBe(other.id);
@@ -1763,7 +1802,7 @@ describe('Stack.restoreVersion — containment', () => {
     const box = await stack.create(NOTE_V1, { text: 'box' });
     const note = await stack.create(NOTE_V1, { text: 'note' });
     await stack.patchContent(note.id, { text: 'edited' });
-    await stack.mutate(note.id, { parentId: box.id });
+    await stack.setParent(note.id, box.id);
     const restored = await stack.restoreVersion(note.id, 1);
     expect(restored.parentId).toBe(box.id);
   });
@@ -1771,7 +1810,9 @@ describe('Stack.restoreVersion — containment', () => {
   test('restoring rolls content back and leaves associations exactly as they stand', async () => {
     const box = await stack.create(NOTE_V1, { text: 'box' });
     const note = await stack.create(NOTE_V1, { text: 'note' }, { parentId: box.id });
-    await stack.associate(note.id, [{ kind: 'tag', label: 'pinned' }]); // no bump
+    await stack.editAssociations(note.id, [
+      { op: 'add', association: { kind: 'tag', label: 'pinned' } },
+    ]); // no bump
     await stack.patchContent(note.id, { text: 'edited' });
     const restored = await stack.restoreVersion(note.id, 1);
     expect(restored.content).toEqual({ text: 'note' });
@@ -1785,8 +1826,8 @@ describe('Stack.restoreVersion — containment', () => {
     const box = await stack.create(NOTE_V1, { text: 'box' });
     const note = await stack.create(NOTE_V1, { text: 'note' }, { parentId: box.id });
     await stack.patchContent(note.id, { text: 'edited' });
-    await stack.mutate(note.id, { parentId: null });
-    await stack.mutate(box.id, { parentId: note.id });
+    await stack.setParent(note.id, null);
+    await stack.setParent(box.id, note.id);
     const restored = await stack.restoreVersion(note.id, 1);
     expect(restored.content).toEqual({ text: 'note' });
     expect(restored.parentId).toBeUndefined();
@@ -1808,7 +1849,7 @@ describe('Stack.restoreVersion — containment', () => {
     const box = await stack.create(NOTE_V1, { text: 'box' });
     const note = await stack.create(NOTE_V1, { text: 'note' });
     await stack.delete(box.id, { purge: true });
-    await expect(stack.mutate(note.id, { parentId: box.id })).rejects.toThrow(StackConflictError);
+    await expect(stack.setParent(note.id, box.id)).rejects.toThrow(StackConflictError);
   });
 });
 
@@ -1819,21 +1860,8 @@ describe('Stack.restoreVersion — containment', () => {
 
 describe('records at rest', () => {
   beforeEach(async () => {
-    await stack.defineType({
-      id: NOTE_V2,
-      name: 'Note',
-      schema: {
-        text: { kind: 'text', required: true },
-        title: { kind: 'string' },
-      },
-      migratesFrom: NOTE_V1,
-    });
-
-    stack.registerMigration({
-      from: NOTE_V1,
-      to: NOTE_V2,
-      migrate: (content) => ({ ...content, title: '' }),
-    });
+    await reopenWith(noteV1ToV2);
+    await stack.defineType(NoteV2);
   });
 
   test('get() returns the record exactly as stored, no implicit migration', async () => {
@@ -1933,21 +1961,8 @@ describe('query — baseId filter', () => {
 
 describe("presentAt: 'latest' (explicit in-memory migration)", () => {
   beforeEach(async () => {
-    await stack.defineType({
-      id: NOTE_V2,
-      name: 'Note',
-      schema: {
-        text: { kind: 'text', required: true },
-        title: { kind: 'string' },
-      },
-      migratesFrom: NOTE_V1,
-    });
-
-    stack.registerMigration({
-      from: NOTE_V1,
-      to: NOTE_V2,
-      migrate: (content) => ({ ...content, title: '' }),
-    });
+    await reopenWith(noteV1ToV2);
+    await stack.defineType(NoteV2);
   });
 
   test("get({ presentAt: 'latest' }) returns migrated content in memory", async () => {
@@ -2022,7 +2037,7 @@ describe("presentAt: 'latest' (explicit in-memory migration)", () => {
   });
 
   test('registration gap: an older record with no migration path to a type this app has defined throws', async () => {
-    const gapAdapter = await MemoryAdapter.open({ ownerEntityId: 'owner-123', timezone: 'UTC' });
+    const gapAdapter = await MemoryAdapter.open({ ownerEntityId: 'owner-123' });
     const gapStack = await Stack.open(gapAdapter);
     await gapStack.defineType({
       id: NOTE_V1,
@@ -2035,8 +2050,8 @@ describe("presentAt: 'latest' (explicit in-memory migration)", () => {
       schema: { text: { kind: 'text', required: true }, title: { kind: 'string' } },
       migratesFrom: NOTE_V1,
     });
-    // Note: no registerMigration() call — this app knows v2 exists but has
-    // no path to reach it from a v1 record.
+    // No migrations passed at open: this app knows v2 exists but has no
+    // path to reach it from a v1 record.
     const record = await gapStack.create(NOTE_V1, { text: 'hello' });
 
     await expect(gapStack.get(record.id, { presentAt: 'latest' })).rejects.toThrow(
@@ -2045,7 +2060,7 @@ describe("presentAt: 'latest' (explicit in-memory migration)", () => {
   });
 
   test('chained migration: v1 → v2 → v3', async () => {
-    await stack.defineType({
+    const NoteV3 = typeHandle({
       id: NOTE_V3,
       name: 'Note',
       schema: {
@@ -2053,14 +2068,10 @@ describe("presentAt: 'latest' (explicit in-memory migration)", () => {
         title: { kind: 'string' },
         pinned: { kind: 'boolean' },
       },
-      migratesFrom: NOTE_V2,
+      migratesFrom: NoteV2,
     });
-
-    stack.registerMigration({
-      from: NOTE_V2,
-      to: NOTE_V3,
-      migrate: (content) => ({ ...content, pinned: false }),
-    });
+    await reopenWith(noteV1ToV2, migration(NoteV2, NoteV3, [add('pinned', false)]));
+    await stack.defineType(NoteV3);
 
     const record = await stack.create(NOTE_V1, { text: 'hello' });
     const fetched = await stack.get(record.id, { presentAt: 'latest' });
@@ -2071,15 +2082,59 @@ describe("presentAt: 'latest' (explicit in-memory migration)", () => {
 });
 
 // -------------------------------------------------------
-// registerMigration
+// Migrations passed at open
 // -------------------------------------------------------
 
-describe('registerMigration', () => {
-  test('throws if a migration from the same typeId is already registered', async () => {
-    stack.registerMigration({ from: NOTE_V1, to: NOTE_V2, migrate: (c) => c });
-    expect(() =>
-      stack.registerMigration({ from: NOTE_V1, to: NOTE_V2, migrate: (c) => c }),
-    ).toThrow(StackMigrationError);
+describe('Stack.open({ migrations })', () => {
+  test('refuses two migrations from the same TypeId', async () => {
+    const again = migration(NoteV1, NoteV2, [add('title', 'again')]);
+    await expect(Stack.open(adapter, { migrations: [noteV1ToV2, again] })).rejects.toThrow(
+      StackMigrationError,
+    );
+  });
+
+  test('refuses a step that names something other than two TypeIds', async () => {
+    const migrate = (c: Record<string, unknown>) => c;
+    for (const [from, to] of [
+      [NOTE_V1, 'com.example.test/note'],
+      ['note', NOTE_V2],
+    ]) {
+      await expect(
+        Stack.open(adapter, { migrations: [{ from, to, steps: [], migrate }] }),
+      ).rejects.toThrow(StackMigrationError);
+    }
+  });
+
+  test('refuses a step to the same or an earlier version of its family', async () => {
+    const migrate = (c: Record<string, unknown>) => c;
+    for (const to of [NOTE_V1, 'com.example.test/note@0']) {
+      await expect(
+        Stack.open(adapter, { migrations: [{ from: NOTE_V1, to, steps: [], migrate }] }),
+      ).rejects.toThrow(StackMigrationError);
+    }
+  });
+
+  test('refuses steps that form a cycle across families', async () => {
+    const migrate = (c: Record<string, unknown>) => c;
+    const other = 'com.example.other/note@1';
+    await expect(
+      Stack.open(adapter, {
+        migrations: [
+          { from: NOTE_V1, to: NOTE_V2, steps: [], migrate },
+          { from: NOTE_V2, to: other, steps: [], migrate },
+          { from: other, to: NOTE_V1, steps: [], migrate },
+        ],
+      }),
+    ).rejects.toThrow(`The migrations passed form a cycle through "${NOTE_V1}".`);
+  });
+
+  test('takes a step into another family', async () => {
+    const Other = typeHandle({ id: 'com.example.other/note@1', name: 'Other', schema: {} });
+    await stack.defineType(Other);
+    const note = await stack.create(NOTE_V1, { text: 'hi' });
+    await reopenWith(migration(NoteV1, Other, [drop('text')]));
+    await stack.migrateAll(fam(NOTE_V1));
+    expect((await stack.get(note.id))?.typeId).toBe(Other.id);
   });
 });
 
@@ -2089,21 +2144,8 @@ describe('registerMigration', () => {
 
 describe('migrateAll', () => {
   beforeEach(async () => {
-    await stack.defineType({
-      id: NOTE_V2,
-      name: 'Note',
-      schema: {
-        text: { kind: 'text', required: true },
-        title: { kind: 'string' },
-      },
-      migratesFrom: NOTE_V1,
-    });
-
-    stack.registerMigration({
-      from: NOTE_V1,
-      to: NOTE_V2,
-      migrate: (content) => ({ ...content, title: '' }),
-    });
+    await reopenWith(noteV1ToV2);
+    await stack.defineType(NoteV2);
   });
 
   test('throws StackMigrationError for an unknown baseId', async () => {
@@ -2124,13 +2166,14 @@ describe('migrateAll', () => {
   });
 
   test('migrates every record to the end of a three-version chain', async () => {
-    await stack.defineType({
+    const NoteV3 = typeHandle({
       id: NOTE_V3,
       name: 'Note',
-      schema: { text: { kind: 'text', required: true }, title: { kind: 'string' } },
-      migratesFrom: NOTE_V2,
+      schema: NoteV2.schema,
+      migratesFrom: NoteV2,
     });
-    stack.registerMigration({ from: NOTE_V2, to: NOTE_V3, migrate: (c) => ({ ...c }) });
+    await reopenWith(noteV1ToV2, migration(NoteV2, NoteV3, []));
+    await stack.defineType(NoteV3);
     const v1 = await stack.create(NOTE_V1, { text: 'one' });
     const v2 = await stack.create(NOTE_V2, { text: 'two', title: 't' });
 
@@ -2181,28 +2224,17 @@ describe('migrateAll', () => {
     expect(versions[0].typeId).toBe(NOTE_V1);
   });
 
-  test('aborts immediately if a migration function produces invalid content, leaving that record unmigrated', async () => {
-    // Fresh stack so this test can register its own (deliberately buggy)
+  test('aborts immediately if a migration produces invalid content, leaving that record unmigrated', async () => {
+    // Fresh stack so this test can pass its own (deliberately buggy)
     // migration instead of the valid one from the outer beforeEach.
-    const buggyAdapter = await MemoryAdapter.open({ ownerEntityId: 'owner-123', timezone: 'UTC' });
-    const buggyStack = await Stack.open(buggyAdapter);
-    await buggyStack.defineType({
-      id: NOTE_V1,
-      name: 'Note',
-      schema: { text: { kind: 'text', required: true } },
+    const buggyAdapter = await MemoryAdapter.open({ ownerEntityId: 'owner-123' });
+    const buggyStack = await Stack.open(buggyAdapter, {
+      // What derive() returns is known only when it runs, so validation at
+      // write time is what refuses it.
+      migrations: [migration(NoteV1, NoteV2, [derive('text', () => 42)])],
     });
-    await buggyStack.defineType({
-      id: NOTE_V2,
-      name: 'Note',
-      schema: { text: { kind: 'text', required: true }, title: { kind: 'string' } },
-      migratesFrom: NOTE_V1,
-    });
-    buggyStack.registerMigration({
-      from: NOTE_V1,
-      to: NOTE_V2,
-      // Buggy migration: drops the required "text" field instead of carrying it forward.
-      migrate: () => ({ title: '' }),
-    });
+    await buggyStack.defineType(NoteV1);
+    await buggyStack.defineType(NoteV2);
 
     const record = await buggyStack.create(NOTE_V1, { text: 'original' });
     await expect(buggyStack.migrateAll('com.example.test/note')).rejects.toThrow(
@@ -2218,7 +2250,7 @@ describe('migrateAll', () => {
     const record = await stack.create(NOTE_V1, { text: 'original' }); // v1
     // Simulate a migrateAll() interrupted between its snapshot and its
     // commitMigration() call, leaving an orphan row at v1.
-    await adapter.saveVersion(record.id, {
+    plantVersion(record.id, {
       version: 1,
       typeId: NOTE_V1,
       content: { text: 'original' },
@@ -2231,66 +2263,48 @@ describe('migrateAll', () => {
   });
 
   // migrateAll() and commitMigration() share one checked write path: a
-  // migration function is app code, but so is the app calling
+  // migration is app code, but so is the app calling
   // commitMigration(), and neither is entitled to move a DID binding or
   // slip a reserved key past validation.
-  test('aborts when a migration function would move a DID binding', async () => {
-    await stack.defineType({
+  test('aborts when a migration would move a DID binding', async () => {
+    const EntityV2 = typeHandle({
       id: '_entity@2',
       name: 'Entity',
-      schema: {
-        did: { kind: 'string', required: true },
-        name: { kind: 'string', required: true },
-      },
-      migratesFrom: '_entity@1',
+      schema: EntityV1.schema,
+      migratesFrom: EntityV1,
     });
-    stack.registerMigration({
-      from: '_entity@1',
-      to: '_entity@2',
-      migrate: (content) => ({ ...content, did: 'did:key:zHijacked' }),
-    });
+    await reopenWith(migration(EntityV1, EntityV2, [derive('did', () => 'did:key:zHijacked')]));
+    await stack.defineType(EntityV2);
     const card = await stack.create('_entity@1', { did: 'did:key:zAlice', name: 'Alice' });
 
-    await expect(stack.migrateAll('_entity')).rejects.toThrow(StackValidationError);
+    await expect(stack.migrateAll('_entity')).rejects.toThrow(StackConflictError);
     expect((await adapter.getRecord(card.id))?.content).toEqual({
       did: 'did:key:zAlice',
       name: 'Alice',
     });
   });
 
-  test('aborts when a migration function emits a reserved content key', async () => {
-    await stack.defineType({
+  test('refuses a migration producing a reserved content key', () => {
+    const NoteV3 = typeHandle({
       id: NOTE_V3,
       name: 'Note',
-      schema: { text: { kind: 'text', required: true }, title: { kind: 'string' } },
-      migratesFrom: NOTE_V2,
+      schema: NoteV2.schema,
+      migratesFrom: NoteV2,
     });
-    stack.registerMigration({
-      from: NOTE_V2,
-      to: NOTE_V3,
-      migrate: (content) => ({ ...content, ['__proto__']: 'polluted' }),
-    });
-    await stack.create(NOTE_V2, { text: 'hi', title: '' });
-
-    await expect(stack.migrateAll('com.example.test/note')).rejects.toThrow(StackValidationError);
+    expect(() => migration(NoteV2, NoteV3, [derive('__proto__', () => 'polluted')])).toThrow(
+      StackMigrationError,
+    );
   });
 
   test('still carries an unchanged DID binding through a migration', async () => {
-    await stack.defineType({
+    const EntityV2 = typeHandle({
       id: '_entity@2',
       name: 'Entity',
-      schema: {
-        did: { kind: 'string', required: true },
-        name: { kind: 'string', required: true },
-        pronouns: { kind: 'string' },
-      },
-      migratesFrom: '_entity@1',
+      schema: { ...EntityV1.schema, pronouns: { kind: 'string' } },
+      migratesFrom: EntityV1,
     });
-    stack.registerMigration({
-      from: '_entity@1',
-      to: '_entity@2',
-      migrate: (content) => ({ ...content, pronouns: 'they/them' }),
-    });
+    await reopenWith(migration(EntityV1, EntityV2, [add('pronouns', 'they/them')]));
+    await stack.defineType(EntityV2);
     const card = await stack.create('_entity@1', { did: 'did:key:zAlice', name: 'Alice' });
 
     const result = await stack.migrateAll('_entity');
@@ -2370,7 +2384,7 @@ describe('Stack.commitMigration', () => {
 // Migrate writes a full content replacement under a new typeId, so it is
 // create-shaped at the destination and update-shaped over the record as it
 // stands. These cover the checks it owes on both counts — without them,
-// migrate is a second write path to state create()/mutate() refuse.
+// migrate is a second write path to state create()/patchContent() refuse.
 // -------------------------------------------------------
 
 describe('Stack.commitMigration — binding fields', () => {
@@ -2379,7 +2393,7 @@ describe('Stack.commitMigration — binding fields', () => {
 
     await expect(
       stack.commitMigration(card.id, '_entity@1', { did: 'did:key:zBob', name: 'Alice' }),
-    ).rejects.toThrow(StackValidationError);
+    ).rejects.toThrow(StackConflictError);
     expect((await adapter.getRecord(card.id))?.content).toEqual({
       did: 'did:key:zAlice',
       name: 'Alice',
@@ -2390,7 +2404,7 @@ describe('Stack.commitMigration — binding fields', () => {
     const card = await stack.create('_entity@1', { did: 'did:key:zAlice', name: 'Alice' });
 
     await expect(stack.commitMigration(card.id, NOTE_V1, { text: 'shed' })).rejects.toThrow(
-      StackValidationError,
+      StackConflictError,
     );
   });
 
@@ -2437,7 +2451,7 @@ describe('Stack.commitMigration — _attachment protections', () => {
         mimeType: 'text/plain',
         size: 1,
       }),
-    ).rejects.toThrow(StackValidationError);
+    ).rejects.toThrow(StackConflictError);
     expect((await adapter.getRecord(a.id))?.content).toEqual(a.content);
   });
 
@@ -2453,7 +2467,7 @@ describe('Stack.commitMigration — _attachment protections', () => {
         mimeType: 'image/png',
         size: 999,
       }),
-    ).rejects.toThrow(StackValidationError);
+    ).rejects.toThrow(StackConflictError);
   });
 
   test('allows a migration that carries the immutable fields through', async () => {
@@ -2495,7 +2509,41 @@ describe('Stack.commitMigration — _attachment protections', () => {
         mimeType: 'image/png',
         size: 1,
       }),
-    ).rejects.toThrow(StackValidationError);
+    ).rejects.toThrow(StackConflictError);
+  });
+
+  test('a field held outside the family is not immutable on arrival', async () => {
+    await stack.defineType({
+      id: 'com.example.test/blob@1',
+      name: 'Blob',
+      schema: { size: { kind: 'number', required: true } },
+    });
+    const a = await stack.putAttachment(new Uint8Array([9]), { mimeType: 'text/plain' });
+    const blob = await stack.create('com.example.test/blob@1', { size: 3 });
+
+    const migrated = await stack.commitMigration(blob.id, '_attachment@1', {
+      fileId: a.content.fileId,
+      mimeType: 'text/plain',
+      size: 1,
+    });
+    expect(migrated.typeId).toBe('_attachment@1');
+  });
+
+  test('restoring into the family applies the mimeType-establishment check', async () => {
+    await stack.defineType({
+      id: 'com.example.test/blob@1',
+      name: 'Blob',
+      schema: {
+        fileId: { kind: 'string', required: true },
+        mimeType: { kind: 'string', required: true },
+        size: { kind: 'number', required: true },
+      },
+    });
+    const a = await stack.putAttachment(new Uint8Array([9]), { mimeType: 'text/plain' });
+    await stack.commitMigration(a.id, 'com.example.test/blob@1', { ...a.content });
+    await stack.putAttachment(new Uint8Array([9]), { mimeType: 'image/png' });
+
+    await expect(stack.restoreVersion(a.id, 1)).rejects.toThrow(/mimeType conflicts/);
   });
 });
 
@@ -2517,7 +2565,7 @@ describe('_group — at least one admin', () => {
 
   // The roster the write would produce is what is measured, so every case
   // below is about the post-state rather than about who is being removed.
-  describe('change-set associations', () => {
+  describe('setAssociations()', () => {
     test('refuses a list naming one identity twice', async () => {
       // Two entries under one identity describe a state no store can hold:
       // an adapter keys associations by identity, so the second displaces
@@ -2526,12 +2574,10 @@ describe('_group — at least one admin', () => {
       const record = await stack.create(NOTE_V1, { text: 'hello' });
       const fileId = 'a'.repeat(64);
       await expect(
-        stack.mutate(record.id, {
-          associations: [
-            { kind: 'attachment', label: 'cover', fileId, attachmentRecordId: '1hk153x00001' },
-            { kind: 'attachment', label: 'cover', fileId, attachmentRecordId: '1hk153x00002' },
-          ],
-        }),
+        stack.setAssociations(record.id, [
+          { kind: 'attachment', label: 'cover', fileId, attachmentRecordId: '1hk153x00001' },
+          { kind: 'attachment', label: 'cover', fileId, attachmentRecordId: '1hk153x00002' },
+        ]),
       ).rejects.toThrow(StackValidationError);
     });
 
@@ -2539,57 +2585,45 @@ describe('_group — at least one admin', () => {
       // (kind, label) is not identity — a record holds two `cover`
       // attachments as long as they name different files.
       const record = await stack.create(NOTE_V1, { text: 'hello' });
-      const updated = await stack.mutate(record.id, {
-        associations: [
-          { kind: 'attachment', label: 'cover', fileId: 'a'.repeat(64) },
-          { kind: 'attachment', label: 'cover', fileId: 'b'.repeat(64) },
-        ],
-      });
+      const updated = await stack.setAssociations(record.id, [
+        { kind: 'attachment', label: 'cover', fileId: 'a'.repeat(64) },
+        { kind: 'attachment', label: 'cover', fileId: 'b'.repeat(64) },
+      ]);
       expect(updated.associations).toHaveLength(2);
     });
 
     test('refuses a roster replacement that leaves no admin', async () => {
       const group = await stack.create('_group@1', { name: 'Editors' });
-      await expect(stack.mutate(group.id, { associations: [member('member-1')] })).rejects.toThrow(
+      await expect(stack.setAssociations(group.id, [member('member-1')])).rejects.toThrow(
         StackConflictError,
       );
     });
 
     test('refuses emptying the roster wholesale', async () => {
       const group = await stack.create('_group@1', { name: 'Editors' });
-      await expect(stack.mutate(group.id, { associations: [] })).rejects.toThrow(
-        /without an admin/,
-      );
+      await expect(stack.setAssociations(group.id, [])).rejects.toThrow(/without an admin/);
     });
 
     test('leaves the record untouched when it refuses', async () => {
       const group = await stack.create('_group@1', { name: 'Editors' });
-      await expect(stack.mutate(group.id, { associations: [] })).rejects.toThrow();
+      await expect(stack.setAssociations(group.id, [])).rejects.toThrow();
       const after = await stack.get(group.id);
       expect(after?.associations).toEqual([admin('owner-123')]);
       expect(after?.version).toBe(group.version);
     });
 
-    test('refuses the whole change set, including the keys that would have applied', async () => {
-      const group = await stack.create('_group@1', { name: 'Editors' });
-      await expect(
-        stack.mutate(group.id, { contentPatch: { name: 'Renamed' }, associations: [] }),
-      ).rejects.toThrow(StackConflictError);
-      const after = await stack.get(group.id);
-      expect((after?.content as { name: string }).name).toBe('Editors');
-    });
-
     test('allows a replacement that keeps an admin', async () => {
       const group = await stack.create('_group@1', { name: 'Editors' });
-      const updated = await stack.mutate(group.id, {
-        associations: [admin('owner-123'), member('member-1')],
-      });
+      const updated = await stack.setAssociations(group.id, [
+        admin('owner-123'),
+        member('member-1'),
+      ]);
       expect(updated.associations).toEqual([admin('owner-123'), member('member-1')]);
     });
 
     test('allows swapping one admin for another in a single write', async () => {
       const group = await stack.create('_group@1', { name: 'Editors' });
-      const updated = await stack.mutate(group.id, { associations: [admin('successor')] });
+      const updated = await stack.setAssociations(group.id, [admin('successor')]);
       expect(updated.associations).toEqual([admin('successor')]);
     });
 
@@ -2599,21 +2633,19 @@ describe('_group — at least one admin', () => {
       const group = await stack.create('_group@1', { name: 'Editors' });
       const note = await stack.create(NOTE_V1, { text: 'hello' });
       await expect(
-        stack.mutate(group.id, {
-          associations: [
-            {
-              kind: 'relationship',
-              label: 'admin',
-              target: { kind: 'record', recordId: note.id },
-            },
-          ],
-        }),
+        stack.setAssociations(group.id, [
+          {
+            kind: 'relationship',
+            label: 'admin',
+            target: { kind: 'record', recordId: note.id },
+          },
+        ]),
       ).rejects.toThrow(StackConflictError);
     });
 
     test('does not constrain a non-_group record', async () => {
       const note = await stack.create(NOTE_V1, { text: 'hello' });
-      const updated = await stack.mutate(note.id, { associations: [] });
+      const updated = await stack.setAssociations(note.id, []);
       expect(updated.associations ?? []).toEqual([]);
     });
   });
@@ -2621,28 +2653,34 @@ describe('_group — at least one admin', () => {
   describe('dissociate', () => {
     test('refuses removing the last admin', async () => {
       const group = await stack.create('_group@1', { name: 'Editors' });
-      await expect(stack.dissociate(group.id, [admin('owner-123')])).rejects.toThrow(
-        StackConflictError,
-      );
+      await expect(
+        stack.editAssociations(group.id, [{ op: 'remove', association: admin('owner-123') }]),
+      ).rejects.toThrow(StackConflictError);
     });
 
     test('allows an admin to remove themselves while another remains', async () => {
       const group = await stack.create('_group@1', { name: 'Editors' });
-      await stack.associate(group.id, [admin('co-admin')]);
-      const updated = await stack.dissociate(group.id, [admin('owner-123')]);
+      await stack.editAssociations(group.id, [{ op: 'add', association: admin('co-admin') }]);
+      const updated = await stack.editAssociations(group.id, [
+        { op: 'remove', association: admin('owner-123') },
+      ]);
       expect(updated.associations).toEqual([admin('co-admin')]);
     });
 
     test('allows removing a member when one admin remains', async () => {
       const group = await stack.create('_group@1', { name: 'Editors' });
-      await stack.associate(group.id, [member('member-1')]);
-      const updated = await stack.dissociate(group.id, [member('member-1')]);
+      await stack.editAssociations(group.id, [{ op: 'add', association: member('member-1') }]);
+      const updated = await stack.editAssociations(group.id, [
+        { op: 'remove', association: member('member-1') },
+      ]);
       expect(updated.associations).toEqual([admin('owner-123')]);
     });
 
     test('a no-op dissociate of an absent admin is still a no-op, not a refusal', async () => {
       const group = await stack.create('_group@1', { name: 'Editors' });
-      const updated = await stack.dissociate(group.id, [admin('never-was-admin')]);
+      const updated = await stack.editAssociations(group.id, [
+        { op: 'remove', association: admin('never-was-admin') },
+      ]);
       expect(updated.version).toBe(group.version);
     });
   });
@@ -2653,9 +2691,7 @@ describe('_group — at least one admin', () => {
   describe('no owner bypass', () => {
     test('the owner cannot empty a roster through plain Stack', async () => {
       const group = await stack.create('_group@1', { name: 'Editors' });
-      await expect(stack.mutate(group.id, { associations: [] })).rejects.toThrow(
-        StackConflictError,
-      );
+      await expect(stack.setAssociations(group.id, [])).rejects.toThrow(StackConflictError);
     });
 
     // No route through `Stack` produces an admin-less roster, so this state
@@ -2665,20 +2701,21 @@ describe('_group — at least one admin', () => {
     test('an admin-less roster is repairable by a write that adds an admin', async () => {
       const group = await stack.create('_group@1', { name: 'Editors' });
       // Reach past Stack to manufacture the pre-rule state.
-      await adapter.mutateRecord(group.id, { associations: [member('member-1')] }, {});
+      await adapter.setAssociations(group.id, [member('member-1')]);
       const orphaned = await stack.get(group.id);
       expect(orphaned?.associations).toEqual([member('member-1')]);
 
-      const repaired = await stack.mutate(group.id, {
-        associations: [member('member-1'), admin('rescuer')],
-      });
+      const repaired = await stack.setAssociations(group.id, [
+        member('member-1'),
+        admin('rescuer'),
+      ]);
       expect(repaired.associations).toEqual([member('member-1'), admin('rescuer')]);
     });
 
     test('a write that leaves an admin-less roster admin-less is still refused', async () => {
       const group = await stack.create('_group@1', { name: 'Editors' });
-      await adapter.mutateRecord(group.id, { associations: [member('member-1')] }, {});
-      await expect(stack.mutate(group.id, { associations: [member('member-2')] })).rejects.toThrow(
+      await adapter.setAssociations(group.id, [member('member-1')]);
+      await expect(stack.setAssociations(group.id, [member('member-2')])).rejects.toThrow(
         StackConflictError,
       );
     });
@@ -2693,7 +2730,7 @@ describe('_group — at least one admin', () => {
       const group = await stack.create('_group@1', { name: 'Editors' });
       const v = group.version;
       await stack.patchContent(group.id, { name: 'Renamed' }); // bumps, snapshots v
-      await stack.mutate(group.id, { associations: [admin('successor'), member('carol')] }); // no bump
+      await stack.setAssociations(group.id, [admin('successor'), member('carol')]); // no bump
 
       const restored = await stack.restoreVersion(group.id, v);
 
@@ -2704,10 +2741,10 @@ describe('_group — at least one admin', () => {
     test('restoring content after an admin was removed does not re-grant them', async () => {
       const group = await stack.create('_group@1', { name: 'Editors' });
       const v = group.version; // the version a snapshot will land on
-      await stack.mutate(group.id, { associations: [admin('owner-123'), admin('departing')] }); // no bump
+      await stack.setAssociations(group.id, [admin('owner-123'), admin('departing')]); // no bump
       await stack.patchContent(group.id, { name: 'v2' }); // bumps, snapshots v
 
-      await stack.dissociate(group.id, [admin('departing')]); // no bump
+      await stack.editAssociations(group.id, [{ op: 'remove', association: admin('departing') }]); // no bump
       const restored = await stack.restoreVersion(group.id, v);
 
       expect(restored.associations).toEqual([admin('owner-123')]);
@@ -2719,12 +2756,10 @@ describe('_group — at least one admin', () => {
     test('removed members are not restored', async () => {
       const group = await stack.create('_group@1', { name: 'Editors' });
       const v = group.version; // the version a snapshot will land on
-      await stack.mutate(group.id, {
-        associations: [admin('owner-123'), member('alice'), member('bob')],
-      }); // no bump
+      await stack.setAssociations(group.id, [admin('owner-123'), member('alice'), member('bob')]); // no bump
       await stack.patchContent(group.id, { name: 'v2' }); // bumps, snapshots v
 
-      await stack.mutate(group.id, { associations: [admin('owner-123')] }); // no bump
+      await stack.setAssociations(group.id, [admin('owner-123')]); // no bump
       const restored = await stack.restoreVersion(group.id, v);
 
       expect(restored.associations).toEqual([admin('owner-123')]);
@@ -2734,7 +2769,7 @@ describe('_group — at least one admin', () => {
     // the roster, so it cannot be what empties one.
     test('every version of a group stays restorable', async () => {
       const group = await stack.create('_group@1', { name: 'Editors' });
-      await stack.mutate(group.id, { associations: [admin('successor')] }); // no bump
+      await stack.setAssociations(group.id, [admin('successor')]); // no bump
       await stack.patchContent(group.id, { name: 'Renamed' });
 
       const restored = await stack.restoreVersion(group.id, group.version);
@@ -2746,13 +2781,198 @@ describe('_group — at least one admin', () => {
     test('a non-_group record behaves exactly the same: its associations are never restored either', async () => {
       const note = await stack.create(NOTE_V1, { text: 'hello' });
       const v = note.version; // the version a snapshot will land on
-      await stack.mutate(note.id, { associations: [admin('someone')] }); // no bump
+      await stack.setAssociations(note.id, [admin('someone')]); // no bump
       await stack.patchContent(note.id, { text: 'v2' }); // bumps, snapshots v
-      await stack.mutate(note.id, { associations: [member('other')] }); // no bump
+      await stack.setAssociations(note.id, [member('other')]); // no bump
 
       const restored = await stack.restoreVersion(note.id, v);
       expect(restored.associations).toEqual([member('other')]);
     });
+  });
+});
+
+type AspectVerb =
+  | 'setParent'
+  | 'setUnlisted'
+  | 'editAssociations'
+  | 'setAssociations'
+  | 'editAccess'
+  | 'setAccess';
+
+/** Land `other` just before the adapter applies Stack's next `verb`. */
+function racing(verb: AspectVerb, other: () => Promise<unknown>) {
+  const write = adapter[verb].bind(adapter) as (...args: unknown[]) => Promise<StackRecord>;
+  return vi.spyOn(adapter, verb).mockImplementationOnce((async (...args: unknown[]) => {
+    await other();
+    return write(...args);
+  }) as never);
+}
+
+// -------------------------------------------------------
+// Element-set writes compare the set they read
+// -------------------------------------------------------
+
+describe('element-set writes check their rules against the set they land on', () => {
+  const admin = (entityId: string): DataAssociation => ({
+    kind: 'relationship',
+    label: 'admin',
+    target: { kind: 'entity', entityId },
+  });
+  const tag = (label: string): DataAssociation => ({ kind: 'tag', label });
+  const grant = (label: 'read' | 'write'): AuthorityAssociation => ({
+    kind: 'permission',
+    label,
+    grantee: { kind: 'entity', entityId: 'x' },
+  });
+
+  test('two admins removing each other concurrently leave one admin', async () => {
+    const group = await stack.create('_group@1', { name: 'Editors' });
+    await stack.editAssociations(group.id, [{ op: 'add', association: admin('alice') }]);
+
+    const results = await Promise.allSettled([
+      stack.editAssociations(group.id, [{ op: 'remove', association: admin('owner-123') }]),
+      stack.editAssociations(group.id, [{ op: 'remove', association: admin('alice') }]),
+    ]);
+
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    const refused = results.find((r) => r.status === 'rejected') as PromiseRejectedResult;
+    expect(refused.reason).toBeInstanceOf(StackConflictError);
+    expect(refused.reason).toHaveProperty('message', expect.stringMatching(/without an admin/));
+    expect((await stack.get(group.id))!.associations).toHaveLength(1);
+  });
+
+  test('a roster write is refused when a write landing first leaves it the last admin', async () => {
+    const group = await stack.create('_group@1', { name: 'Editors' });
+    await stack.editAssociations(group.id, [{ op: 'add', association: admin('alice') }]);
+    racing('editAssociations', () =>
+      adapter.editAssociations(group.id, [{ op: 'remove', association: admin('alice') }]),
+    );
+
+    await expect(
+      stack.editAssociations(group.id, [{ op: 'remove', association: admin('owner-123') }]),
+    ).rejects.toThrow(/without an admin/);
+    expect((await stack.get(group.id))!.associations).toEqual([admin('owner-123')]);
+  });
+
+  test('a grant is refused when a write landing first removes the read it relied on', async () => {
+    const note = await stack.create(NOTE_V1, { text: 'hello' });
+    await stack.setAccess(note.id, [grant('read')]);
+    racing('editAccess', () => adapter.setAccess(note.id, []));
+
+    await expect(
+      stack.editAccess(note.id, [{ op: 'add', association: grant('write') }]),
+    ).rejects.toThrow(StackValidationError);
+    expect((await stack.get(note.id))!.permissions ?? []).toEqual([]);
+  });
+
+  test('the journal entry carries the delta against the set the write replaced', async () => {
+    const note = await stack.create(NOTE_V1, { text: 'hello' });
+    racing('setAssociations', () =>
+      adapter.editAssociations(note.id, [{ op: 'add', association: tag('b') }]),
+    );
+
+    await stack.setAssociations(note.id, [tag('a')]);
+    const entries = await stack.getJournal(note.id);
+    expect(entries.at(-1)!.associations).toEqual([
+      { op: 'add', association: tag('a') },
+      { op: 'remove', association: tag('b') },
+    ]);
+  });
+
+  test('a write that the moved set already satisfies returns the record unchanged', async () => {
+    const note = await stack.create(NOTE_V1, { text: 'hello' });
+    racing('setAccess', () => adapter.setAccess(note.id, [grant('read')]));
+
+    const same = await stack.setAccess(note.id, [grant('read')]);
+    expect(same.permissions).toEqual([grant('read')]);
+    expect(await stack.getJournal(note.id)).toHaveLength(1);
+  });
+
+  test('concurrent edits to one set all land, however many race', async () => {
+    const note = await stack.create(NOTE_V1, { text: 'hello' });
+    const labels = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+    const write = vi.spyOn(adapter, 'editAssociations');
+
+    await Promise.all(
+      labels.map((l) => stack.editAssociations(note.id, [{ op: 'add', association: tag(l) }])),
+    );
+
+    const after = await stack.get(note.id);
+    expect(after!.associations).toEqual(expect.arrayContaining(labels.map(tag)));
+    expect(after!.associations).toHaveLength(labels.length);
+    // More calls than writers: the edits really did race.
+    expect(write.mock.calls.length).toBeGreaterThan(labels.length);
+  });
+
+  test('a write keeps reading again for as long as the adapter finds its set moved', async () => {
+    const note = await stack.create(NOTE_V1, { text: 'hello' });
+    const moved = new ElementSetMovedError(note.id);
+    const write = vi
+      .spyOn(adapter, 'editAssociations')
+      .mockRejectedValueOnce(moved)
+      .mockRejectedValueOnce(moved)
+      .mockRejectedValueOnce(moved);
+
+    const updated = await stack.editAssociations(note.id, [{ op: 'add', association: tag('a') }]);
+    expect(updated.associations).toEqual([tag('a')]);
+    expect(write).toHaveBeenCalledTimes(4);
+  });
+
+  test('any other refusal from the adapter reaches the caller on the first attempt', async () => {
+    const note = await stack.create(NOTE_V1, { text: 'hello' });
+    const refusal = new StackConflictError('something else');
+    const write = vi.spyOn(adapter, 'setAccess').mockRejectedValue(refusal);
+
+    await expect(stack.setAccess(note.id, [grant('read')])).rejects.toBe(refusal);
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+});
+
+// -------------------------------------------------------
+// An aspect write never lands on a tombstone
+// -------------------------------------------------------
+
+describe('aspect writes never land on a record soft-deleted after Stack read it', () => {
+  const tag: DataAssociation = { kind: 'tag', label: 'a' };
+  const grant: AuthorityAssociation = {
+    kind: 'permission',
+    label: 'read',
+    grantee: { kind: 'entity', entityId: 'x' },
+  };
+  const writes: Record<AspectVerb, (id: string) => Promise<StackRecord>> = {
+    setParent: (id) => stack.setParent(id, null),
+    setUnlisted: (id) => stack.setUnlisted(id, true),
+    editAssociations: (id) => stack.editAssociations(id, [{ op: 'add', association: tag }]),
+    setAssociations: (id) => stack.setAssociations(id, [tag]),
+    editAccess: (id) => stack.editAccess(id, [{ op: 'add', association: grant }]),
+    setAccess: (id) => stack.setAccess(id, [grant]),
+  };
+  const verbs = Object.keys(writes) as AspectVerb[];
+
+  /** A note under a parent, so every verb above moves something. */
+  async function note(): Promise<StackRecord> {
+    const parent = await stack.create(NOTE_V1, { text: 'parent' });
+    return stack.create(NOTE_V1, { text: 'hello' }, { parentId: parent.id });
+  }
+
+  test.each(verbs)('%s is refused, unretried, when a soft delete lands first', async (verb) => {
+    const record = await note();
+    const write = racing(verb, () => stack.delete(record.id));
+
+    await expect(writes[verb](record.id)).rejects.toThrow(/soft-deleted/);
+    expect(write).toHaveBeenCalledTimes(1);
+    const after = (await stack.get(record.id, { includeDeleted: true }))!;
+    const aspects = (r: StackRecord) => [r.parentId, r.unlistedAt, r.associations, r.permissions];
+    expect(aspects(after)).toEqual(aspects(record));
+  });
+
+  test.each(verbs)('%s lands without a retry when a content patch lands first', async (verb) => {
+    const record = await note();
+    const write = racing(verb, () => stack.patchContent(record.id, { text: 'edited' }));
+
+    const updated = await writes[verb](record.id);
+    expect(updated.content).toEqual({ text: 'edited' });
+    expect(write).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -2793,21 +3013,8 @@ describe('Stack.commitMigration — _group', () => {
 
 describe('restoreVersion — typeId and validation', () => {
   beforeEach(async () => {
-    await stack.defineType({
-      id: NOTE_V2,
-      name: 'Note',
-      schema: {
-        text: { kind: 'text', required: true },
-        title: { kind: 'string' },
-      },
-      migratesFrom: NOTE_V1,
-    });
-
-    stack.registerMigration({
-      from: NOTE_V1,
-      to: NOTE_V2,
-      migrate: (content) => ({ ...content, title: '' }),
-    });
+    await reopenWith(noteV1ToV2);
+    await stack.defineType(NoteV2);
   });
 
   test('restores the snapshot’s own typeId, leaving a stale record that migrateAll() subsequently heals', async () => {
@@ -2831,7 +3038,7 @@ describe('restoreVersion — typeId and validation', () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
     // Simulate schema drift or adapter corruption: a stored snapshot whose
     // content no longer satisfies its own claimed type's schema.
-    await adapter.saveVersion(record.id, {
+    plantVersion(record.id, {
       version: 1,
       typeId: NOTE_V1,
       content: {}, // missing required "text"
@@ -2884,9 +3091,13 @@ describe('versions', () => {
 
   test('restoreVersion never restores associations, even ones held at the target version', async () => {
     const record = await stack.create(NOTE_V1, { text: 'original' }); // v1
-    await stack.associate(record.id, [{ kind: 'tag', label: 'favourite' }]); // no bump, still v1
+    await stack.editAssociations(record.id, [
+      { op: 'add', association: { kind: 'tag', label: 'favourite' } },
+    ]); // no bump, still v1
     await stack.patchContent(record.id, { text: 'changed' }); // v2, snapshots v1
-    await stack.dissociate(record.id, [{ kind: 'tag', label: 'favourite' }]); // no bump, still v2
+    await stack.editAssociations(record.id, [
+      { op: 'remove', association: { kind: 'tag', label: 'favourite' } },
+    ]); // no bump, still v2
     const restored = await stack.restoreVersion(record.id, 1); // v3
     expect(restored.content).toEqual({ text: 'original' });
     expect(restored.associations).toBeUndefined();
@@ -2895,7 +3106,9 @@ describe('versions', () => {
   test('restoreVersion leaves the record’s current associations exactly as they stand', async () => {
     const record = await stack.create(NOTE_V1, { text: 'original' }); // v1
     await stack.patchContent(record.id, { text: 'changed' }); // v2
-    await stack.associate(record.id, [{ kind: 'tag', label: 'favourite' }]); // no bump, still v2
+    await stack.editAssociations(record.id, [
+      { op: 'add', association: { kind: 'tag', label: 'favourite' } },
+    ]); // no bump, still v2
     const restored = await stack.restoreVersion(record.id, 1); // v3
     expect(restored.content).toEqual({ text: 'original' });
     expect(restored.associations).toEqual([{ kind: 'tag', label: 'favourite' }]);
@@ -2906,7 +3119,7 @@ describe('versions', () => {
 
   test('restoreVersion leaves the record’s permissions exactly as they stand', async () => {
     const record = await stack.create(NOTE_V1, { text: 'original' }); // v1
-    await stack.mutate(record.id, { permissions: [{ kind: 'anyone', label: 'read' }] }); // no bump
+    await stack.setAccess(record.id, [{ kind: 'anyone', label: 'read' }]); // no bump
     await stack.patchContent(record.id, { text: 'changed' }); // v2, snapshots v1
     const restored = await stack.restoreVersion(record.id, 1); // v3
     expect(restored.content).toEqual({ text: 'original' });
@@ -2915,8 +3128,10 @@ describe('versions', () => {
 
   test('a version snapshot carries neither associations nor permissions', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
-    await stack.associate(record.id, [{ kind: 'tag', label: 'x' }]); // no bump, still v1
-    await stack.mutate(record.id, { permissions: [{ kind: 'anyone', label: 'read' }] }); // no bump
+    await stack.editAssociations(record.id, [
+      { op: 'add', association: { kind: 'tag', label: 'x' } },
+    ]); // no bump, still v1
+    await stack.setAccess(record.id, [{ kind: 'anyone', label: 'read' }]); // no bump
     await stack.patchContent(record.id, { text: 'changed' }); // v2, snapshots v1
     const versions = await stack.getVersions(record.id);
     const v1snap = versions.find((v) => v.version === 1);
@@ -2930,12 +3145,16 @@ describe('versions', () => {
 // -------------------------------------------------------
 
 describe('versioning rule — mixed mutations', () => {
-  test('version increments by exactly one per real mutation, across mixed operation types — associate/dissociate never bump', async () => {
+  test('version increments by exactly one per real mutation, across mixed operation types — editAssociations never bump', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
     await stack.patchContent(record.id, { text: 'v2' }); // v2
-    await stack.associate(record.id, [{ kind: 'tag', label: 'x' }]); // no bump, still v2
-    await stack.mutate(record.id, { permissions: [{ kind: 'anyone', label: 'read' }] }); // no bump
-    await stack.dissociate(record.id, [{ kind: 'tag', label: 'x' }]); // no bump, still v2
+    await stack.editAssociations(record.id, [
+      { op: 'add', association: { kind: 'tag', label: 'x' } },
+    ]); // no bump, still v2
+    await stack.setAccess(record.id, [{ kind: 'anyone', label: 'read' }]); // no bump
+    await stack.editAssociations(record.id, [
+      { op: 'remove', association: { kind: 'tag', label: 'x' } },
+    ]); // no bump, still v2
     await stack.delete(record.id); // v3
     const undeleted = await stack.undelete(record.id); // v4
 
@@ -2948,10 +3167,16 @@ describe('versioning rule — mixed mutations', () => {
 
   test('no-op mutations never bump version or add a snapshot', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
-    await stack.associate(record.id, [{ kind: 'tag', label: 'x' }]); // no bump, still v1
-    await stack.associate(record.id, [{ kind: 'tag', label: 'x' }]); // no-op
-    await stack.dissociate(record.id, [{ kind: 'tag', label: 'gone' }]); // no-op
-    await stack.mutate(record.id, { permissions: [] }); // no-op (already private)
+    await stack.editAssociations(record.id, [
+      { op: 'add', association: { kind: 'tag', label: 'x' } },
+    ]); // no bump, still v1
+    await stack.editAssociations(record.id, [
+      { op: 'add', association: { kind: 'tag', label: 'x' } },
+    ]); // no-op
+    await stack.editAssociations(record.id, [
+      { op: 'remove', association: { kind: 'tag', label: 'gone' } },
+    ]); // no-op
+    await stack.setAccess(record.id, []); // no-op (already private)
     const updated = await adapter.getRecord(record.id);
     expect(updated?.version).toBe(1);
     expect(await stack.getVersions(record.id)).toHaveLength(0);
@@ -2997,61 +3222,60 @@ describe('ifVersion', () => {
 
   // A reshare moves no version, so a precondition on one would fence a
   // write the number it names cannot describe — the same reason
-  // associate()/dissociate() take none.
-  test('a reshare ignores a stale ifVersion; associate()/dissociate() never bump version', async () => {
+  // editAssociations() take none.
+  // A precondition is a claim about the record's version, not about what
+  // the write moves. See docs/spec/versioning.md § Optimistic concurrency.
+  test('every write checks ifVersion, including the ones that never bump', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
     await stack.patchContent(record.id, { text: 'v2' }); // v2
+    const stale = { ifVersion: 1 };
+    const tag = { kind: 'tag', label: 'x' } as const;
+    const anyone = { kind: 'anyone', label: 'read' } as const;
 
-    const reshared = await stack.mutate(
-      record.id,
-      { permissions: [{ kind: 'anyone', label: 'read' }] },
-      { ifVersion: 1 }, // stale for the record, but this write never bumps
-    );
+    for (const write of [
+      () => stack.setAccess(record.id, [anyone], stale),
+      () => stack.editAccess(record.id, [{ op: 'add', association: anyone }], stale),
+      () => stack.setAssociations(record.id, [tag], stale),
+      () => stack.editAssociations(record.id, [{ op: 'add', association: tag }], stale),
+      () => stack.setUnlisted(record.id, true, stale),
+      () => stack.setParent(record.id, null, stale),
+    ]) {
+      await expect(write()).rejects.toThrow(StackVersionConflictError);
+    }
+
+    const reshared = await stack.setAccess(record.id, [anyone], { ifVersion: 2 });
     expect(reshared.version).toBe(2);
-    expect(reshared.permissions).toEqual([{ kind: 'anyone', label: 'read' }]);
-
-    const associated = await stack.associate(record.id, [{ kind: 'tag', label: 'x' }]);
-    expect(associated.version).toBe(2);
-    const dissociated = await stack.dissociate(record.id, [{ kind: 'tag', label: 'x' }]);
-    expect(dissociated.version).toBe(2);
-
-    expect((await stack.get(record.id))?.version).toBe(2);
+    expect(reshared.permissions).toEqual([anyone]);
   });
 
-  test('mutate() with an associations-only change set ignores a stale ifVersion, like associate()/dissociate()', async () => {
+  // Omitting it keeps last-writer-wins, so an edit lands whatever order
+  // concurrent writes arrive in.
+  test('association edits without ifVersion never bump and land after any write', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
     await stack.patchContent(record.id, { text: 'v2' }); // v2
-
-    const updated = await stack.mutate(
-      record.id,
-      { associations: [{ kind: 'tag', label: 'x' }] },
-      { ifVersion: 1 }, // stale for the record, but this write never bumps
-    );
-    expect(updated.version).toBe(2);
-    expect(updated.associations).toEqual([{ kind: 'tag', label: 'x' }]);
+    const tag = { kind: 'tag', label: 'x' } as const;
+    expect(
+      (await stack.editAssociations(record.id, [{ op: 'add', association: tag }])).version,
+    ).toBe(2);
+    expect(
+      (await stack.editAssociations(record.id, [{ op: 'remove', association: tag }])).version,
+    ).toBe(2);
   });
 
-  test('a stale ifVersion is refused even where the change set turns out to write nothing', async () => {
+  test('a stale ifVersion is refused even where the write turns out to move nothing', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
     await stack.patchContent(record.id, { text: 'v2' }); // v2
 
     // Restating the content the record already holds moves nothing, but the
     // caller still staked a claim about the version it was working from.
-    await expect(
-      stack.mutate(record.id, { contentPatch: { text: 'v2' } }, { ifVersion: 1 }),
-    ).rejects.toThrow(StackVersionConflictError);
+    await expect(stack.patchContent(record.id, { text: 'v2' }, { ifVersion: 1 })).rejects.toThrow(
+      StackVersionConflictError,
+    );
 
-    // A set naming `associations` alongside it is still guarded, even where
-    // the associations are the only aspect that moves.
-    await expect(
-      stack.mutate(
-        record.id,
-        { contentPatch: { text: 'v2' }, associations: [{ kind: 'tag', label: 'x' }] },
-        { ifVersion: 1 },
-      ),
-    ).rejects.toThrow(StackVersionConflictError);
-
-    expect((await stack.get(record.id))?.associations ?? []).toEqual([]);
+    // Likewise a set the record already satisfies.
+    await expect(stack.setAssociations(record.id, [], { ifVersion: 1 })).rejects.toThrow(
+      StackVersionConflictError,
+    );
   });
 
   test('delete() (soft) and undelete() enforce ifVersion', async () => {
@@ -3144,7 +3368,7 @@ describe('orphan version row recovery', () => {
     // Simulate an interrupted write: the v1 snapshot committed, but the
     // mutation that should have bumped past it never did — an orphan row
     // sitting at the record's own current version.
-    await adapter.saveVersion(record.id, {
+    plantVersion(record.id, {
       version: 1,
       typeId: NOTE_V1,
       content: { text: 'hello' },
@@ -3165,7 +3389,7 @@ describe('orphan version row recovery', () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' }); // v1
     await stack.patchContent(record.id, { text: 'v2' }); // v2, snapshots v1
 
-    await adapter.saveVersion(record.id, {
+    plantVersion(record.id, {
       version: 2,
       typeId: NOTE_V1,
       content: { text: 'v2' },
@@ -3191,9 +3415,9 @@ describe('orphan version row recovery', () => {
     // with is v1's real, already-superseded history entry) and must be
     // rejected before any part of B's mutation applies.
     await expect(
-      adapter.mutateRecord(
+      adapter.patchContent(
         record.id,
-        { contentPatch: { text: 'from B' } },
+        { text: 'from B' },
         {
           snapshot: {
             version: 1,
@@ -3248,11 +3472,11 @@ describe('delete', () => {
         content: { fileId },
       } = await stack.putAttachment(new Uint8Array([1, 2, 3]), { mimeType: 'image/png' });
       const note = await stack.create(NOTE_V1, { text: 'hello' });
-      await stack.associate(note.id, [{ kind: 'attachment', label: 'cover', fileId }]);
+      await stack.editAssociations(note.id, [
+        { op: 'add', association: { kind: 'attachment', label: 'cover', fileId } },
+      ]);
 
-      expect(await stack.delete(note.id, { purge: true })).toEqual({
-        referencedFileIds: [fileId],
-      });
+      expect((await stack.delete(note.id, { purge: true })).referencedFileIds).toEqual([fileId]);
     });
 
     test('names a file-ref content field, and names each file once', async () => {
@@ -3266,11 +3490,11 @@ describe('delete', () => {
       } = await stack.putAttachment(new Uint8Array([4, 5, 6]), { mimeType: 'image/png' });
       const photo = await stack.create(PHOTO, { coverFileId: fileId });
       // The same file, reached both ways: one file, one entry.
-      await stack.associate(photo.id, [{ kind: 'attachment', label: 'cover', fileId }]);
+      await stack.editAssociations(photo.id, [
+        { op: 'add', association: { kind: 'attachment', label: 'cover', fileId } },
+      ]);
 
-      expect(await stack.delete(photo.id, { purge: true })).toEqual({
-        referencedFileIds: [fileId],
-      });
+      expect((await stack.delete(photo.id, { purge: true })).referencedFileIds).toEqual([fileId]);
     });
 
     test('the bytes survive the purge — reporting is not deleting', async () => {
@@ -3279,7 +3503,9 @@ describe('delete', () => {
         content: { fileId },
       } = await stack.putAttachment(data, { mimeType: 'image/png' });
       const note = await stack.create(NOTE_V1, { text: 'hello' });
-      await stack.associate(note.id, [{ kind: 'attachment', label: 'cover', fileId }]);
+      await stack.editAssociations(note.id, [
+        { op: 'add', association: { kind: 'attachment', label: 'cover', fileId } },
+      ]);
 
       const { referencedFileIds } = await stack.delete(note.id, { purge: true });
       expect(await stack.getAttachment(fileId)).toEqual(data);
@@ -3294,11 +3520,13 @@ describe('delete', () => {
         content: { fileId },
       } = await stack.putAttachment(new Uint8Array([1, 2, 3]), { mimeType: 'image/png' });
       const note = await stack.create(NOTE_V1, { text: 'hello' });
-      await stack.associate(note.id, [{ kind: 'attachment', label: 'cover', fileId }]);
+      await stack.editAssociations(note.id, [
+        { op: 'add', association: { kind: 'attachment', label: 'cover', fileId } },
+      ]);
 
       // A tombstone is recoverable and must find its attachments intact,
       // so its references still stand.
-      expect(await stack.delete(note.id)).toEqual({ referencedFileIds: [] });
+      expect((await stack.delete(note.id)).referencedFileIds).toEqual([]);
       await expect(stack.deleteAttachment(fileId)).rejects.toThrow(StackConflictError);
     });
   });
@@ -3306,6 +3534,7 @@ describe('delete', () => {
   test('a purge of a record that is not there is silent', async () => {
     // Nothing was purged, so nothing was stranded to report.
     await expect(stack.delete('01hzzzzzzzzzzzzzzzzzzzzzzz', { purge: true })).resolves.toEqual({
+      record: null,
       referencedFileIds: [],
     });
   });
@@ -3346,58 +3575,40 @@ describe('delete', () => {
   });
 });
 
-describe('deleteAndReturn', () => {
+describe('delete() reports the record it acted on', () => {
   test('a purge reports the record as it stood at destruction, associations included', async () => {
     const {
       content: { fileId },
     } = await stack.putAttachment(new Uint8Array([1, 2, 3]), { mimeType: 'image/png' });
     const note = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.associate(note.id, [{ kind: 'attachment', label: 'cover', fileId }]);
+    await stack.editAssociations(note.id, [
+      { op: 'add', association: { kind: 'attachment', label: 'cover', fileId } },
+    ]);
 
-    const { record, referencedFileIds } = await stack.deleteAndReturn(note.id, { purge: true });
+    const { record, referencedFileIds } = await stack.delete(note.id, { purge: true });
     expect(record?.id).toBe(note.id);
     expect(record?.associations).toEqual([{ kind: 'attachment', label: 'cover', fileId }]);
     expect(referencedFileIds).toEqual([fileId]);
     expect(await adapter.getRecord(note.id)).toBeNull();
   });
 
-  // The property the issue this closes is about: nothing reads the record
-  // ahead of the destroy, so nothing landing between a read and a destroy
-  // can be missed by the response. A separate pre-read is the bug, not an
-  // implementation detail of it — asserting it never happens is what turns
-  // this from a fixture that happens to pass into one that would fail if
-  // the race were reintroduced.
+  // Nothing reads the record ahead of the destroy, so nothing landing
+  // between a read and a destroy can be missed by the response.
   test('never reads the record separately before a purge — nothing can slip in between', async () => {
     const note = await stack.create(NOTE_V1, { text: 'hello' });
     const getRecordSpy = vi.spyOn(adapter, 'getRecord');
 
-    await stack.deleteAndReturn(note.id, { purge: true });
+    await stack.delete(note.id, { purge: true });
 
     expect(getRecordSpy).not.toHaveBeenCalled();
   });
 
   test('a soft delete reports the resulting tombstone', async () => {
     const note = await stack.create(NOTE_V1, { text: 'hello' });
-    const { record, referencedFileIds } = await stack.deleteAndReturn(note.id);
+    const { record, referencedFileIds } = await stack.delete(note.id);
     expect(record?.deletedAt).toBeInstanceOf(Date);
     expect(record?.version).toBe(2);
     expect(referencedFileIds).toEqual([]);
-  });
-
-  test('a purge of a record that is not there reports a null record', async () => {
-    await expect(
-      stack.deleteAndReturn('01hzzzzzzzzzzzzzzzzzzzzzzz', { purge: true }),
-    ).resolves.toEqual({ record: null, referencedFileIds: [] });
-  });
-
-  test('delete() is deleteAndReturn() minus the record', async () => {
-    const note = await stack.create(NOTE_V1, { text: 'hello' });
-    const full = await stack.deleteAndReturn(note.id, { purge: true });
-
-    const other = await stack.create(NOTE_V1, { text: 'hello again' });
-    const stripped = await stack.delete(other.id, { purge: true });
-
-    expect(stripped).toEqual({ referencedFileIds: full.referencedFileIds });
   });
 });
 
@@ -3409,126 +3620,101 @@ describe('_config protections', () => {
   const CONFIG_ID = '_config';
   const CONFIG_TYPE = '_config@1';
 
-  // MemoryAdapter never materializes a _config record on its own (ownerEntityId
-  // is a plain constructor field) — the guards under test operate on whatever
-  // record exists at id "_config", so tests seed one directly.
-  async function seedConfig(entityId = 'owner-123', timezone = 'UTC') {
-    return adapter.createRecord({
-      id: CONFIG_ID,
-      typeId: CONFIG_TYPE,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-      content: { entityId, timezone },
-      version: 1,
-    });
-  }
+  // The adapter is created holding _config — owner-123, UTC, at version 1 —
+  // as every store is, so the guards under test operate on that record.
 
-  test('patchContent() rejects a change to entityId', async () => {
-    await seedConfig();
-    await expect(stack.patchContent(CONFIG_ID, { entityId: 'someone-else' })).rejects.toThrow(
+  test('patchContent() rejects a change to ownerEntityId', async () => {
+    await expect(stack.patchContent(CONFIG_ID, { ownerEntityId: 'someone-else' })).rejects.toThrow(
       StackConflictError,
     );
-    expect((await adapter.getRecord(CONFIG_ID))?.content.entityId).toBe('owner-123');
+    expect((await adapter.getRecord(CONFIG_ID))?.content.ownerEntityId).toBe('owner-123');
   });
 
-  test('patchContent() allows changing timezone', async () => {
-    await seedConfig();
-    const updated = await stack.patchContent(CONFIG_ID, { timezone: 'America/New_York' });
-    expect((updated.content as Record<string, unknown>).timezone).toBe('America/New_York');
-  });
-
-  test('setting entityId to its current value is a no-op, not an error', async () => {
-    await seedConfig('owner-123');
-    await expect(stack.patchContent(CONFIG_ID, { entityId: 'owner-123' })).resolves.toBeDefined();
+  test('setting ownerEntityId to its current value is a no-op, not an error', async () => {
+    await expect(
+      stack.patchContent(CONFIG_ID, { ownerEntityId: 'owner-123' }),
+    ).resolves.toBeDefined();
   });
 
   test('soft delete is rejected', async () => {
-    await seedConfig();
     await expect(stack.delete(CONFIG_ID)).rejects.toThrow(StackConflictError);
     expect(await adapter.getRecord(CONFIG_ID)).not.toBeNull();
   });
 
   test('purge is rejected', async () => {
-    await seedConfig();
     await expect(stack.delete(CONFIG_ID, { purge: true })).rejects.toThrow(StackConflictError);
     expect(await adapter.getRecord(CONFIG_ID)).not.toBeNull();
   });
 
-  test('restoreVersion() rejects a snapshot with a different entityId', async () => {
-    await seedConfig('owner-123');
+  test('restoreVersion() rejects a snapshot with a different ownerEntityId', async () => {
     // Simulates a snapshot that predates this guard, or a bypassed
-    // direct-adapter write — either way, a stored version whose entityId
+    // direct-adapter write — either way, a stored version whose ownerEntityId
     // disagrees with the live record's must not be restorable.
-    await adapter.saveVersion(CONFIG_ID, {
+    plantVersion(CONFIG_ID, {
       version: 1,
       typeId: CONFIG_TYPE,
-      content: { entityId: 'someone-else', timezone: 'UTC' },
+      content: { ownerEntityId: 'someone-else' },
       updatedAt: new Date(),
     });
     await expect(stack.restoreVersion(CONFIG_ID, 1)).rejects.toThrow(StackConflictError);
   });
 
-  test('restoreVersion() allows a snapshot with the same entityId', async () => {
-    await seedConfig('owner-123', 'UTC');
-    await stack.patchContent(CONFIG_ID, { timezone: 'America/New_York' });
+  test('restoreVersion() allows a snapshot with the same ownerEntityId', async () => {
+    plantVersion(CONFIG_ID, {
+      version: 1,
+      typeId: CONFIG_TYPE,
+      content: { ownerEntityId: 'owner-123' },
+      updatedAt: new Date(),
+    });
     const restored = await stack.restoreVersion(CONFIG_ID, 1);
-    expect((restored.content as Record<string, unknown>).timezone).toBe('UTC');
+    expect(restored.content).toEqual({ ownerEntityId: 'owner-123' });
   });
 
   test('generic query excludes _config', async () => {
-    await seedConfig();
     const result = await stack.query({ filter: { typeId: CONFIG_TYPE } });
     expect(result.records).toHaveLength(0);
   });
 
   test('_config is still addressable directly by ID', async () => {
-    await seedConfig();
     expect(await stack.get(CONFIG_ID)).not.toBeNull();
   });
 
-  test('ScopedStack delegation: the owner cannot change entityId via scoped update either', async () => {
-    await seedConfig('owner-123');
+  test('ScopedStack delegation: the owner cannot change ownerEntityId via scoped update either', async () => {
     await expect(
-      stack.asEntity('owner-123').patchContent(CONFIG_ID, { entityId: 'someone-else' }),
+      stack.asEntity('owner-123').patchContent(CONFIG_ID, { ownerEntityId: 'someone-else' }),
     ).rejects.toThrow(StackConflictError);
   });
 
   test('ScopedStack delegation: the owner cannot delete _config via scoped delete either', async () => {
-    await seedConfig('owner-123');
     await expect(stack.asEntity('owner-123').delete(CONFIG_ID)).rejects.toThrow(StackConflictError);
   });
 
-  test('commitMigration() rejects a change to entityId', async () => {
-    await seedConfig('owner-123');
+  test('commitMigration() rejects a change to ownerEntityId', async () => {
     await stack.defineType({
       id: '_config@2',
       name: 'Config',
       schema: {
-        entityId: { kind: 'string', required: true },
-        timezone: { kind: 'string' },
+        ownerEntityId: { kind: 'string', required: true },
       },
     });
 
     await expect(
-      stack.commitMigration(CONFIG_ID, '_config@2', { entityId: 'someone-else' }),
+      stack.commitMigration(CONFIG_ID, '_config@2', { ownerEntityId: 'someone-else' }),
     ).rejects.toThrow(StackConflictError);
     expect((await adapter.getRecord(CONFIG_ID))?.typeId).toBe(CONFIG_TYPE); // never committed
   });
 
-  test('commitMigration() allows the same entityId', async () => {
-    await seedConfig('owner-123');
+  test('commitMigration() allows the same ownerEntityId', async () => {
     await stack.defineType({
       id: '_config@2',
       name: 'Config',
       schema: {
-        entityId: { kind: 'string', required: true },
-        timezone: { kind: 'string' },
+        ownerEntityId: { kind: 'string', required: true },
       },
     });
 
     const migrated = await stack.commitMigration(CONFIG_ID, '_config@2', {
-      entityId: 'owner-123',
-      timezone: 'America/New_York',
+      ownerEntityId: 'owner-123',
     });
     expect(migrated.typeId).toBe('_config@2');
   });
@@ -3659,6 +3845,33 @@ describe('flush / close', () => {
     await stack.close();
     await stack.close();
     expect(closes).toBe(1);
+  });
+});
+
+describe('close during a write', () => {
+  test('a write admitted before close() is not refused by its own parent checks', async () => {
+    const parent = await stack.create(NOTE_V1, { text: 'parent' });
+    const pending = stack.create(NOTE_V1, { text: 'child' }, { parentId: parent.id });
+    const closing = stack.close();
+    await expect(pending).resolves.toMatchObject({ parentId: parent.id });
+    await closing;
+  });
+
+  test('a write admitted before close() is not refused by its attachment pointer check', async () => {
+    const upload = await stack.putAttachment(new Uint8Array([1]), { mimeType: 'text/plain' });
+    const { fileId } = upload.content;
+    const pending = stack.create(
+      NOTE_V1,
+      { text: 'with file' },
+      {
+        associations: [
+          { kind: 'attachment', label: 'file', fileId, attachmentRecordId: upload.id },
+        ],
+      },
+    );
+    const closing = stack.close();
+    await expect(pending).resolves.toMatchObject({ content: { text: 'with file' } });
+    await closing;
   });
 });
 
@@ -3975,16 +4188,6 @@ describe('grantType', () => {
     ).rejects.toThrow(StackValidationError);
   });
 
-  test('listTypeGrants loads on an adapter whose sort.fields omits createdAt', async () => {
-    const bare = await MemoryAdapter.open({ ownerEntityId: 'owner-123', timezone: 'UTC' });
-    (bare as { capabilities: StackAdapter['capabilities'] }).capabilities = {
-      ...bare.capabilities,
-      sort: { fields: [], contentField: false },
-    };
-    const bareStack = await Stack.open(bare);
-    expect(await bareStack.listTypeGrants()).toEqual([]);
-  });
-
   // A tier that names nobody reaches nobody, so storing one would leave a
   // grant that can only deny while reading as a share that worked.
   test('rejects a group target with an empty groupId', async () => {
@@ -4162,11 +4365,14 @@ describe('listTypeGrants', () => {
 
   test('an entity target also returns grants naming a group the entity belongs to', async () => {
     const group = await stack.create('_group@1', { name: 'Editors' });
-    await stack.associate(group.id, [
+    await stack.editAssociations(group.id, [
       {
-        kind: 'relationship',
-        label: 'member',
-        target: { kind: 'entity', entityId: 'entity-abc' },
+        op: 'add',
+        association: {
+          kind: 'relationship',
+          label: 'member',
+          target: { kind: 'entity', entityId: 'entity-abc' },
+        },
       },
     ]);
     await stack.grantType(fam(NOTE_V1), {
@@ -4189,11 +4395,14 @@ describe('listTypeGrants', () => {
   // than no listing at all.
   test('a grant naming a record outside the _group family is not reported as applying', async () => {
     const notAGroup = await stack.create(NOTE_V1, { text: 'not a group' });
-    await stack.associate(notAGroup.id, [
+    await stack.editAssociations(notAGroup.id, [
       {
-        kind: 'relationship',
-        label: 'member',
-        target: { kind: 'entity', entityId: 'entity-abc' },
+        op: 'add',
+        association: {
+          kind: 'relationship',
+          label: 'member',
+          target: { kind: 'entity', entityId: 'entity-abc' },
+        },
       },
     ]);
     await stack.grantType(fam(NOTE_V1), {
@@ -4267,11 +4476,14 @@ describe('listTypeGrants', () => {
 
   test('an entity target does not return a group grant for a group the entity does not belong to', async () => {
     const group = await stack.create('_group@1', { name: 'Editors' });
-    await stack.associate(group.id, [
+    await stack.editAssociations(group.id, [
       {
-        kind: 'relationship',
-        label: 'member',
-        target: { kind: 'entity', entityId: 'entity-xyz' },
+        op: 'add',
+        association: {
+          kind: 'relationship',
+          label: 'member',
+          target: { kind: 'entity', entityId: 'entity-xyz' },
+        },
       },
     ]);
     await stack.grantType(fam(NOTE_V1), {
@@ -4360,6 +4572,80 @@ describe('revokeType', () => {
     expect(
       await stack.listTypeGrants({ kind: 'group', groupId: 'group-abc', role: 'any' }),
     ).toHaveLength(1);
+  });
+
+  // A grant's actions are a set: the order they were named in, or a verb
+  // named twice, is not part of what the grant says.
+  test('matches the stored actions as a set, whatever their order', async () => {
+    const granted = await stack.grantType(fam(NOTE_V1), {
+      actions: ['read-any', 'update-any'],
+      grantee: { kind: 'entity', entityId: 'entity-abc' },
+    });
+    const withdrawn = await stack.revokeType(fam(NOTE_V1), {
+      actions: ['update-any', 'read-any'],
+      grantee: { kind: 'entity', entityId: 'entity-abc' },
+    });
+    expect(withdrawn.map((r) => r.id)).toEqual([granted.id]);
+  });
+
+  // A write refuses a repeated action; one that reached storage some other
+  // way — an import, a foreign server — is still read as a set.
+  test('withdraws a stored grant that names an action twice', async () => {
+    const now = new Date();
+    const granted = await adapter.createRecord({
+      id: generateId(),
+      typeId: '_grant@1',
+      createdAt: now,
+      updatedAt: now,
+      version: 1,
+      content: {
+        baseId: fam(NOTE_V1),
+        actions: ['read-any', 'read-any'],
+        grantee: { kind: 'entity', entityId: 'entity-abc' },
+      },
+    });
+    const withdrawn = await stack.revokeType(fam(NOTE_V1), {
+      actions: ['read-any'],
+      grantee: { kind: 'entity', entityId: 'entity-abc' },
+    });
+    expect(withdrawn.map((r) => r.id)).toEqual([granted.id]);
+  });
+
+  test.each([
+    [
+      'grantType()',
+      () =>
+        stack.grantType(fam(NOTE_V1), {
+          actions: ['read-any', 'read-any'],
+          grantee: { kind: 'entity', entityId: 'entity-abc' },
+        }),
+    ],
+    [
+      'a _grant write',
+      () =>
+        stack.create('_grant@1', {
+          baseId: fam(NOTE_V1),
+          actions: ['read-any', 'read-any'],
+          grantee: { kind: 'entity', entityId: 'entity-abc' },
+        }),
+    ],
+  ])('%s refuses an action named twice', async (_label, write) => {
+    const refused = await write().catch((e: unknown) => e);
+    expect(refused).toBeInstanceOf(StackValidationError);
+    expect((refused as StackValidationError).errors.map((e) => e.path)).toEqual(['actions[1]']);
+  });
+
+  test('a subset of the stored actions withdraws nothing', async () => {
+    await stack.grantType(fam(NOTE_V1), {
+      actions: ['read-any', 'update-any'],
+      grantee: { kind: 'entity', entityId: 'entity-abc' },
+    });
+    expect(
+      await stack.revokeType(fam(NOTE_V1), {
+        actions: ['read-any'],
+        grantee: { kind: 'entity', entityId: 'entity-abc' },
+      }),
+    ).toEqual([]);
   });
 
   test("role 'any' is listing-only — grantType() and revokeType() refuse it", async () => {
@@ -4515,7 +4801,9 @@ describe('revokeType', () => {
 describe('associate / dissociate', () => {
   test('associate adds a tag', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.associate(record.id, [{ kind: 'tag', label: 'favourite' }]);
+    await stack.editAssociations(record.id, [
+      { op: 'add', association: { kind: 'tag', label: 'favourite' } },
+    ]);
     const updated = await adapter.getRecord(record.id);
     expect(updated?.associations?.some((a) => a.kind === 'tag' && a.label === 'favourite')).toBe(
       true,
@@ -4524,8 +4812,12 @@ describe('associate / dissociate', () => {
 
   test('dissociate removes a tag', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.associate(record.id, [{ kind: 'tag', label: 'favourite' }]);
-    await stack.dissociate(record.id, [{ kind: 'tag', label: 'favourite' }]);
+    await stack.editAssociations(record.id, [
+      { op: 'add', association: { kind: 'tag', label: 'favourite' } },
+    ]);
+    await stack.editAssociations(record.id, [
+      { op: 'remove', association: { kind: 'tag', label: 'favourite' } },
+    ]);
     const updated = await adapter.getRecord(record.id);
     // Dissociating the only association leaves the key omitted entirely
     // (associations: undefined), mirroring the SQL adapters' rowToRecord
@@ -4535,7 +4827,9 @@ describe('associate / dissociate', () => {
 
   test('associate never bumps version or snapshots', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    const updated = await stack.associate(record.id, [{ kind: 'tag', label: 'favourite' }]);
+    const updated = await stack.editAssociations(record.id, [
+      { op: 'add', association: { kind: 'tag', label: 'favourite' } },
+    ]);
     expect(updated.version).toBe(1);
     expect((await adapter.getRecord(record.id))?.version).toBe(1);
     expect(await stack.getVersions(record.id)).toHaveLength(0);
@@ -4543,23 +4837,33 @@ describe('associate / dissociate', () => {
 
   test('associate is a no-op for a duplicate association', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.associate(record.id, [{ kind: 'tag', label: 'favourite' }]);
-    await stack.associate(record.id, [{ kind: 'tag', label: 'favourite' }]);
+    await stack.editAssociations(record.id, [
+      { op: 'add', association: { kind: 'tag', label: 'favourite' } },
+    ]);
+    await stack.editAssociations(record.id, [
+      { op: 'add', association: { kind: 'tag', label: 'favourite' } },
+    ]);
     const updated = await adapter.getRecord(record.id);
     expect(updated?.version).toBe(1);
     expect(await stack.getVersions(record.id)).toHaveLength(0);
   });
 
   test('associate throws StackNotFoundError for a missing record', async () => {
-    await expect(stack.associate('nonexistent', [{ kind: 'tag', label: 'x' }])).rejects.toThrow(
-      StackNotFoundError,
-    );
+    await expect(
+      stack.editAssociations('nonexistent', [
+        { op: 'add', association: { kind: 'tag', label: 'x' } },
+      ]),
+    ).rejects.toThrow(StackNotFoundError);
   });
 
   test('dissociate never bumps version or snapshots', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.associate(record.id, [{ kind: 'tag', label: 'favourite' }]);
-    const updated = await stack.dissociate(record.id, [{ kind: 'tag', label: 'favourite' }]);
+    await stack.editAssociations(record.id, [
+      { op: 'add', association: { kind: 'tag', label: 'favourite' } },
+    ]);
+    const updated = await stack.editAssociations(record.id, [
+      { op: 'remove', association: { kind: 'tag', label: 'favourite' } },
+    ]);
     expect(updated.version).toBe(1);
     expect((await adapter.getRecord(record.id))?.version).toBe(1);
     expect(await stack.getVersions(record.id)).toHaveLength(0);
@@ -4567,16 +4871,20 @@ describe('associate / dissociate', () => {
 
   test('dissociate is a no-op when the association is not present', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.dissociate(record.id, [{ kind: 'tag', label: 'nonexistent' }]);
+    await stack.editAssociations(record.id, [
+      { op: 'remove', association: { kind: 'tag', label: 'nonexistent' } },
+    ]);
     const updated = await adapter.getRecord(record.id);
     expect(updated?.version).toBe(1);
     expect(await stack.getVersions(record.id)).toHaveLength(0);
   });
 
   test('dissociate throws StackNotFoundError for a missing record', async () => {
-    await expect(stack.dissociate('nonexistent', [{ kind: 'tag', label: 'x' }])).rejects.toThrow(
-      StackNotFoundError,
-    );
+    await expect(
+      stack.editAssociations('nonexistent', [
+        { op: 'remove', association: { kind: 'tag', label: 'x' } },
+      ]),
+    ).rejects.toThrow(StackNotFoundError);
   });
 });
 
@@ -4610,11 +4918,11 @@ describe('Stack — authority and data never share a call', () => {
 
   test('an unscoped associations write naming a permission kind is refused', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
+    await expect(stack.setAssociations(record.id, [asData(readFor('entity-abc'))])).rejects.toThrow(
+      StackBadRequestError,
+    );
     await expect(
-      stack.mutate(record.id, { associations: [asData(readFor('entity-abc'))] }),
-    ).rejects.toThrow(StackBadRequestError);
-    await expect(
-      stack.mutate(record.id, { associations: [asData({ kind: 'anyone', label: 'read' })] }),
+      stack.setAssociations(record.id, [asData({ kind: 'anyone', label: 'read' })]),
     ).rejects.toThrow(StackBadRequestError);
     expect((await stack.get(record.id))?.permissions).toBeUndefined();
   });
@@ -4632,29 +4940,37 @@ describe('Stack — authority and data never share a call', () => {
     ).rejects.toThrow(StackBadRequestError);
   });
 
-  test('associate()/dissociate() refuse an authority kind', async () => {
+  test('editAssociations() refuse an authority kind', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await expect(stack.associate(record.id, [asData(readFor('entity-abc'))])).rejects.toThrow(
-      StackBadRequestError,
-    );
     await expect(
-      stack.dissociate(record.id, [asData({ kind: 'anyone', label: 'read' })]),
+      stack.editAssociations(record.id, [
+        { op: 'add', association: asData(readFor('entity-abc')) },
+      ]),
+    ).rejects.toThrow(StackBadRequestError);
+    await expect(
+      stack.editAssociations(record.id, [
+        { op: 'remove', association: asData({ kind: 'anyone', label: 'read' }) },
+      ]),
     ).rejects.toThrow(StackBadRequestError);
   });
 
-  test('grantAccess()/revokeAccess() refuse a data kind', async () => {
+  test('editAccess() refuse a data kind', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
     const tag = asAuthority({ kind: 'tag', label: 'draft' });
-    await expect(stack.grantAccess(record.id, [tag])).rejects.toThrow(StackBadRequestError);
-    await expect(stack.revokeAccess(record.id, [tag])).rejects.toThrow(StackBadRequestError);
+    await expect(stack.editAccess(record.id, [{ op: 'add', association: tag }])).rejects.toThrow(
+      StackBadRequestError,
+    );
+    await expect(stack.editAccess(record.id, [{ op: 'remove', association: tag }])).rejects.toThrow(
+      StackBadRequestError,
+    );
   });
 });
 
 // -------------------------------------------------------
-// grantAccess()/revokeAccess()
+// editAccess()
 // -------------------------------------------------------
 
-describe('Stack.grantAccess/revokeAccess', () => {
+describe('Stack.editAccess', () => {
   const readFor = (entityId: string): AuthorityAssociation => ({
     kind: 'permission',
     label: 'read',
@@ -4668,8 +4984,10 @@ describe('Stack.grantAccess/revokeAccess', () => {
 
   test('amends the set rather than replacing it, and never bumps', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.grantAccess(record.id, [readFor('entity-a')]);
-    const updated = await stack.grantAccess(record.id, [readFor('entity-b')]);
+    await stack.editAccess(record.id, [{ op: 'add', association: readFor('entity-a') }]);
+    const updated = await stack.editAccess(record.id, [
+      { op: 'add', association: readFor('entity-b') },
+    ]);
 
     expect(updated.permissions).toEqual([readFor('entity-a'), readFor('entity-b')]);
     expect(updated.version).toBe(1);
@@ -4679,29 +4997,31 @@ describe('Stack.grantAccess/revokeAccess', () => {
 
   test('refuse a soft-deleted record, so a tombstone keeps the permissions it had', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.grantAccess(record.id, [readFor('entity-a')]);
+    await stack.editAccess(record.id, [{ op: 'add', association: readFor('entity-a') }]);
     await stack.delete(record.id);
 
-    await expect(stack.grantAccess(record.id, [readFor('entity-b')])).rejects.toThrow(
-      StackConflictError,
-    );
-    await expect(stack.revokeAccess(record.id, [readFor('entity-a')])).rejects.toThrow(
-      StackConflictError,
-    );
+    await expect(
+      stack.editAccess(record.id, [{ op: 'add', association: readFor('entity-b') }]),
+    ).rejects.toThrow(StackConflictError);
+    await expect(
+      stack.editAccess(record.id, [{ op: 'remove', association: readFor('entity-a') }]),
+    ).rejects.toThrow(StackConflictError);
     const tombstone = await stack.get(record.id, { includeDeleted: true });
     expect(tombstone?.permissions).toEqual([readFor('entity-a')]);
   });
 
   test('a grant already held is a no-op — no journal entry', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.grantAccess(record.id, [readFor('entity-a')]);
-    await stack.grantAccess(record.id, [readFor('entity-a')]);
+    await stack.editAccess(record.id, [{ op: 'add', association: readFor('entity-a') }]);
+    await stack.editAccess(record.id, [{ op: 'add', association: readFor('entity-a') }]);
     expect(await stack.getJournal(record.id)).toHaveLength(2);
   });
 
   test('revoking something the record does not carry is a no-op', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    const updated = await stack.revokeAccess(record.id, [readFor('entity-a')]);
+    const updated = await stack.editAccess(record.id, [
+      { op: 'remove', association: readFor('entity-a') },
+    ]);
     expect(updated.permissions).toBeUndefined();
     expect(await stack.getJournal(record.id)).toHaveLength(1);
   });
@@ -4710,30 +5030,30 @@ describe('Stack.grantAccess/revokeAccess', () => {
   // lands on the removal that would leave a write standing alone.
   test('refuses a grant of write with no read, and a revoke that takes the read away', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await expect(stack.grantAccess(record.id, [writeFor('entity-a')])).rejects.toThrow(
-      StackValidationError,
-    );
+    await expect(
+      stack.editAccess(record.id, [{ op: 'add', association: writeFor('entity-a') }]),
+    ).rejects.toThrow(StackValidationError);
 
-    await stack.grantAccess(record.id, [readFor('entity-a')]);
-    await stack.grantAccess(record.id, [writeFor('entity-a')]);
-    await expect(stack.revokeAccess(record.id, [readFor('entity-a')])).rejects.toThrow(
-      StackValidationError,
-    );
+    await stack.editAccess(record.id, [{ op: 'add', association: readFor('entity-a') }]);
+    await stack.editAccess(record.id, [{ op: 'add', association: writeFor('entity-a') }]);
+    await expect(
+      stack.editAccess(record.id, [{ op: 'remove', association: readFor('entity-a') }]),
+    ).rejects.toThrow(StackValidationError);
   });
 
   test('throws StackNotFoundError for a missing record', async () => {
-    await expect(stack.grantAccess('nonexistent', [readFor('entity-a')])).rejects.toThrow(
-      StackNotFoundError,
-    );
-    await expect(stack.revokeAccess('nonexistent', [readFor('entity-a')])).rejects.toThrow(
-      StackNotFoundError,
-    );
+    await expect(
+      stack.editAccess('nonexistent', [{ op: 'add', association: readFor('entity-a') }]),
+    ).rejects.toThrow(StackNotFoundError);
+    await expect(
+      stack.editAccess('nonexistent', [{ op: 'remove', association: readFor('entity-a') }]),
+    ).rejects.toThrow(StackNotFoundError);
   });
 
   test('a grant appends one journal entry carrying the element, a revoke its `previous`', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.grantAccess(record.id, [readFor('entity-a')]);
-    await stack.revokeAccess(record.id, [readFor('entity-a')]);
+    await stack.editAccess(record.id, [{ op: 'add', association: readFor('entity-a') }]);
+    await stack.editAccess(record.id, [{ op: 'remove', association: readFor('entity-a') }]);
 
     const [, granted, revoked] = await stack.getJournal(record.id);
     expect(granted.ops).toEqual(['reshare']);
@@ -4745,10 +5065,10 @@ describe('Stack.grantAccess/revokeAccess', () => {
   });
 });
 
-describe('Stack.mutate — the `permissions` key', () => {
+describe('Stack.setAccess', () => {
   test('moves the set without bumping version or taking a snapshot', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.mutate(record.id, { permissions: [{ kind: 'anyone', label: 'read' }] });
+    await stack.setAccess(record.id, [{ kind: 'anyone', label: 'read' }]);
     const updated = await adapter.getRecord(record.id);
     expect(updated?.version).toBe(1);
     expect(updated?.updatedAt).toEqual(record.updatedAt);
@@ -4762,7 +5082,7 @@ describe('Stack.mutate — the `permissions` key', () => {
       { text: 'hello' },
       { associations: [{ kind: 'tag', label: 'draft' }] },
     );
-    await stack.mutate(record.id, { permissions: [{ kind: 'anyone', label: 'read' }] });
+    await stack.setAccess(record.id, [{ kind: 'anyone', label: 'read' }]);
     const updated = await adapter.getRecord(record.id);
     expect(updated?.associations).toEqual([{ kind: 'tag', label: 'draft' }]);
     expect(updated?.permissions).toEqual([{ kind: 'anyone', label: 'read' }]);
@@ -4770,8 +5090,8 @@ describe('Stack.mutate — the `permissions` key', () => {
 
   test('is a no-op for a set that says the same thing', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.mutate(record.id, { permissions: [{ kind: 'anyone', label: 'read' }] });
-    await stack.mutate(record.id, { permissions: [{ kind: 'anyone', label: 'read' }] });
+    await stack.setAccess(record.id, [{ kind: 'anyone', label: 'read' }]);
+    await stack.setAccess(record.id, [{ kind: 'anyone', label: 'read' }]);
     const updated = await adapter.getRecord(record.id);
     expect(updated?.permissions).toEqual([{ kind: 'anyone', label: 'read' }]);
     // The create and the first grant; the restatement adds nothing.
@@ -4794,12 +5114,10 @@ describe('Stack.mutate — the `permissions` key', () => {
     stack.subscribe((c) => {
       seen.push(c);
     });
-    await stack.mutate(record.id, {
-      permissions: [
-        { kind: 'anyone', label: 'read' },
-        { kind: 'permission', label: 'read', grantee: entity },
-      ],
-    });
+    await stack.setAccess(record.id, [
+      { kind: 'anyone', label: 'read' },
+      { kind: 'permission', label: 'read', grantee: entity },
+    ]);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(seen).toEqual([]);
     expect(await stack.getJournal(record.id)).toHaveLength(1);
@@ -4807,7 +5125,7 @@ describe('Stack.mutate — the `permissions` key', () => {
 
   test('setting empty permissions on an already-private record is a no-op', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.mutate(record.id, { permissions: [] });
+    await stack.setAccess(record.id, []);
     const updated = await adapter.getRecord(record.id);
     expect(updated?.version).toBe(1);
     expect(await stack.getJournal(record.id)).toHaveLength(1);
@@ -4829,9 +5147,9 @@ describe('Stack.mutate — the `permissions` key', () => {
       },
     );
 
-    const updated = await stack.mutate(record.id, {
-      permissions: [{ kind: 'permission', label: 'read', grantee: entityB }],
-    });
+    const updated = await stack.setAccess(record.id, [
+      { kind: 'permission', label: 'read', grantee: entityB },
+    ]);
 
     expect(updated.version).toBe(record.version);
     expect(updated.updatedAt).toEqual(record.updatedAt);
@@ -4850,26 +5168,22 @@ describe('Stack.mutate — the `permissions` key', () => {
   test('rejects an entry conveying write without read', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
     await expect(
-      stack.mutate(record.id, {
-        permissions: [
-          {
-            kind: 'permission',
-            label: 'write',
-            grantee: { kind: 'entity', entityId: 'entity-abc' },
-          },
-        ],
-      }),
+      stack.setAccess(record.id, [
+        {
+          kind: 'permission',
+          label: 'write',
+          grantee: { kind: 'entity', entityId: 'entity-abc' },
+        },
+      ]),
     ).rejects.toThrow(StackValidationError);
     await expect(
-      stack.mutate(record.id, {
-        permissions: [
-          {
-            kind: 'permission',
-            label: 'write',
-            grantee: { kind: 'group', groupId: 'group-abc', role: 'member' },
-          },
-        ],
-      }),
+      stack.setAccess(record.id, [
+        {
+          kind: 'permission',
+          label: 'write',
+          grantee: { kind: 'group', groupId: 'group-abc', role: 'member' },
+        },
+      ]),
     ).rejects.toThrow(StackValidationError);
     expect((await adapter.getRecord(record.id))?.permissions).toBeUndefined();
   });
@@ -4894,40 +5208,36 @@ describe('Stack.mutate — the `permissions` key', () => {
 
   test('throws StackNotFoundError for a missing record', async () => {
     await expect(
-      stack.mutate('nonexistent', { permissions: [{ kind: 'anyone', label: 'read' }] }),
+      stack.setAccess('nonexistent', [{ kind: 'anyone', label: 'read' }]),
     ).rejects.toThrow(StackNotFoundError);
   });
 
   test('adding role: "admin" to a group entry replaces the member grantee', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.mutate(record.id, {
-      permissions: [
-        {
-          kind: 'permission',
-          label: 'read',
-          grantee: { kind: 'group', groupId: 'group-1', role: 'member' },
-        },
-        {
-          kind: 'permission',
-          label: 'write',
-          grantee: { kind: 'group', groupId: 'group-1', role: 'member' },
-        },
-      ],
-    });
-    await stack.mutate(record.id, {
-      permissions: [
-        {
-          kind: 'permission',
-          label: 'read',
-          grantee: { kind: 'group', groupId: 'group-1', role: 'admin' },
-        },
-        {
-          kind: 'permission',
-          label: 'write',
-          grantee: { kind: 'group', groupId: 'group-1', role: 'admin' },
-        },
-      ],
-    });
+    await stack.setAccess(record.id, [
+      {
+        kind: 'permission',
+        label: 'read',
+        grantee: { kind: 'group', groupId: 'group-1', role: 'member' },
+      },
+      {
+        kind: 'permission',
+        label: 'write',
+        grantee: { kind: 'group', groupId: 'group-1', role: 'member' },
+      },
+    ]);
+    await stack.setAccess(record.id, [
+      {
+        kind: 'permission',
+        label: 'read',
+        grantee: { kind: 'group', groupId: 'group-1', role: 'admin' },
+      },
+      {
+        kind: 'permission',
+        label: 'write',
+        grantee: { kind: 'group', groupId: 'group-1', role: 'admin' },
+      },
+    ]);
     const updated = await adapter.getRecord(record.id);
     expect(updated?.version).toBe(1);
     expect(updated?.permissions).toEqual([
@@ -4946,34 +5256,30 @@ describe('Stack.mutate — the `permissions` key', () => {
 
   test('widening a group entry to role: "member" replaces the admin grantee', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.mutate(record.id, {
-      permissions: [
-        {
-          kind: 'permission',
-          label: 'read',
-          grantee: { kind: 'group', groupId: 'group-1', role: 'admin' },
-        },
-        {
-          kind: 'permission',
-          label: 'write',
-          grantee: { kind: 'group', groupId: 'group-1', role: 'admin' },
-        },
-      ],
-    });
-    await stack.mutate(record.id, {
-      permissions: [
-        {
-          kind: 'permission',
-          label: 'read',
-          grantee: { kind: 'group', groupId: 'group-1', role: 'member' },
-        },
-        {
-          kind: 'permission',
-          label: 'write',
-          grantee: { kind: 'group', groupId: 'group-1', role: 'member' },
-        },
-      ],
-    });
+    await stack.setAccess(record.id, [
+      {
+        kind: 'permission',
+        label: 'read',
+        grantee: { kind: 'group', groupId: 'group-1', role: 'admin' },
+      },
+      {
+        kind: 'permission',
+        label: 'write',
+        grantee: { kind: 'group', groupId: 'group-1', role: 'admin' },
+      },
+    ]);
+    await stack.setAccess(record.id, [
+      {
+        kind: 'permission',
+        label: 'read',
+        grantee: { kind: 'group', groupId: 'group-1', role: 'member' },
+      },
+      {
+        kind: 'permission',
+        label: 'write',
+        grantee: { kind: 'group', groupId: 'group-1', role: 'member' },
+      },
+    ]);
     const updated = await adapter.getRecord(record.id);
     expect(updated?.version).toBe(1);
     expect(updated?.permissions).toEqual([
@@ -4992,34 +5298,30 @@ describe('Stack.mutate — the `permissions` key', () => {
 
   test('a genuinely-identical group entry (matching role) still no-ops', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.mutate(record.id, {
-      permissions: [
-        {
-          kind: 'permission',
-          label: 'read',
-          grantee: { kind: 'group', groupId: 'group-1', role: 'admin' },
-        },
-        {
-          kind: 'permission',
-          label: 'write',
-          grantee: { kind: 'group', groupId: 'group-1', role: 'admin' },
-        },
-      ],
-    });
-    await stack.mutate(record.id, {
-      permissions: [
-        {
-          kind: 'permission',
-          label: 'read',
-          grantee: { kind: 'group', groupId: 'group-1', role: 'admin' },
-        },
-        {
-          kind: 'permission',
-          label: 'write',
-          grantee: { kind: 'group', groupId: 'group-1', role: 'admin' },
-        },
-      ],
-    });
+    await stack.setAccess(record.id, [
+      {
+        kind: 'permission',
+        label: 'read',
+        grantee: { kind: 'group', groupId: 'group-1', role: 'admin' },
+      },
+      {
+        kind: 'permission',
+        label: 'write',
+        grantee: { kind: 'group', groupId: 'group-1', role: 'admin' },
+      },
+    ]);
+    await stack.setAccess(record.id, [
+      {
+        kind: 'permission',
+        label: 'read',
+        grantee: { kind: 'group', groupId: 'group-1', role: 'admin' },
+      },
+      {
+        kind: 'permission',
+        label: 'write',
+        grantee: { kind: 'group', groupId: 'group-1', role: 'admin' },
+      },
+    ]);
     const updated = await adapter.getRecord(record.id);
     expect(updated?.version).toBe(1);
     // The create and the one grant; the restatement adds nothing.
@@ -5031,14 +5333,14 @@ describe('Stack.mutate — the `permissions` key', () => {
 // The `unlisted` key
 // -------------------------------------------------------
 
-describe('Stack.mutate — the `unlisted` key', () => {
+describe('Stack.setUnlisted', () => {
   // The journal's `unlist`/`list` ops are complete and invertible, so a
   // listing transition needs no snapshot and leaves `version` and
   // `updatedAt` where they stood.
   // See docs/spec/versioning.md § Version history.
   test('sets unlistedAt without bumping version or updatedAt', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.mutate(record.id, { unlisted: true });
+    await stack.setUnlisted(record.id, true);
     const updated = await adapter.getRecord(record.id);
     expect(updated?.version).toBe(1);
     expect(updated?.updatedAt).toEqual(record.updatedAt);
@@ -5048,7 +5350,7 @@ describe('Stack.mutate — the `unlisted` key', () => {
 
   test('appends one journal entry per transition', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.mutate(record.id, { unlisted: true });
+    await stack.setUnlisted(record.id, true);
     const entries = await stack.getJournal(record.id);
     expect(entries).toHaveLength(2); // create, then the unlist
     expect(entries[1].ops).toEqual(['unlist']);
@@ -5057,8 +5359,8 @@ describe('Stack.mutate — the `unlisted` key', () => {
 
   test('clears unlistedAt on the reverse call', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.mutate(record.id, { unlisted: true });
-    await stack.mutate(record.id, { unlisted: false });
+    await stack.setUnlisted(record.id, true);
+    await stack.setUnlisted(record.id, false);
     const updated = await adapter.getRecord(record.id);
     expect(updated?.version).toBe(1);
     expect(updated?.unlistedAt).toBeUndefined();
@@ -5066,18 +5368,20 @@ describe('Stack.mutate — the `unlisted` key', () => {
 
   test('is a no-op when already in the requested state — no journal entry', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.mutate(record.id, { unlisted: false });
+    await stack.setUnlisted(record.id, false);
     expect(await stack.getJournal(record.id)).toHaveLength(1);
 
-    await stack.mutate(record.id, { unlisted: true });
-    await stack.mutate(record.id, { unlisted: true });
+    await stack.setUnlisted(record.id, true);
+    await stack.setUnlisted(record.id, true);
     expect(await stack.getJournal(record.id)).toHaveLength(2);
   });
 
-  test('ifVersion alongside an unlisted-only set is not checked', async () => {
+  test('a stale ifVersion refuses the transition', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    const unlisted = await stack.mutate(record.id, { unlisted: true }, { ifVersion: 99 });
-    expect(unlisted.unlistedAt).toBeInstanceOf(Date);
+    await expect(stack.setUnlisted(record.id, true, { ifVersion: 99 })).rejects.toThrow(
+      StackVersionConflictError,
+    );
+    expect((await stack.get(record.id))!.unlistedAt).toBeUndefined();
   });
 
   test('does not touch permissions', async () => {
@@ -5086,15 +5390,13 @@ describe('Stack.mutate — the `unlisted` key', () => {
       { text: 'hello' },
       { permissions: [{ kind: 'anyone', label: 'read' }] },
     );
-    await stack.mutate(record.id, { unlisted: true });
+    await stack.setUnlisted(record.id, true);
     const updated = await adapter.getRecord(record.id);
     expect(updated?.permissions).toEqual([{ kind: 'anyone', label: 'read' }]);
   });
 
   test('throws StackNotFoundError for a missing record', async () => {
-    await expect(stack.mutate('nonexistent', { unlisted: true })).rejects.toThrow(
-      StackNotFoundError,
-    );
+    await expect(stack.setUnlisted('nonexistent', true)).rejects.toThrow(StackNotFoundError);
   });
 
   test('create({ unlisted: true }) stamps unlistedAt from the start', async () => {
@@ -5130,7 +5432,9 @@ describe('Stack.mutate — the `unlisted` key', () => {
 describe('mutators return the record they produced', () => {
   test('associate returns the record with the association applied, version unchanged', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    const updated = await stack.associate(record.id, [{ kind: 'tag', label: 'favourite' }]);
+    const updated = await stack.editAssociations(record.id, [
+      { op: 'add', association: { kind: 'tag', label: 'favourite' } },
+    ]);
     expect(updated.version).toBe(1);
     expect(updated.associations).toEqual([{ kind: 'tag', label: 'favourite' }]);
     expect(updated).toEqual(await adapter.getRecord(record.id));
@@ -5138,28 +5442,30 @@ describe('mutators return the record they produced', () => {
 
   test('dissociate returns the record with the association gone, version unchanged', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.associate(record.id, [{ kind: 'tag', label: 'favourite' }]);
-    const updated = await stack.dissociate(record.id, [{ kind: 'tag', label: 'favourite' }]);
+    await stack.editAssociations(record.id, [
+      { op: 'add', association: { kind: 'tag', label: 'favourite' } },
+    ]);
+    const updated = await stack.editAssociations(record.id, [
+      { op: 'remove', association: { kind: 'tag', label: 'favourite' } },
+    ]);
     expect(updated.version).toBe(1);
     expect(updated.associations).toBeUndefined();
   });
 
-  test('a permissions change set returns the record carrying the new permissions', async () => {
+  test('setAccess() returns the record carrying the new permissions', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    const updated = await stack.mutate(record.id, {
-      permissions: [{ kind: 'anyone', label: 'read' }],
-    });
+    const updated = await stack.setAccess(record.id, [{ kind: 'anyone', label: 'read' }]);
     expect(updated.version).toBe(1);
     expect(updated.permissions).toEqual([{ kind: 'anyone', label: 'read' }]);
   });
 
-  test('an unlisted change set returns the record carrying unlistedAt', async () => {
+  test('setUnlisted() returns the record carrying unlistedAt', async () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    const unlisted = await stack.mutate(record.id, { unlisted: true });
+    const unlisted = await stack.setUnlisted(record.id, true);
     expect(unlisted.version).toBe(1);
     expect(unlisted.unlistedAt).toBeInstanceOf(Date);
 
-    const relisted = await stack.mutate(record.id, { unlisted: false });
+    const relisted = await stack.setUnlisted(record.id, false);
     expect(relisted.version).toBe(1);
     expect(relisted.unlistedAt).toBeUndefined();
   });
@@ -5172,17 +5478,23 @@ describe('mutators return the record they produced', () => {
       { text: 'hello' },
       { permissions: [{ kind: 'anyone', label: 'read' }] },
     );
-    await stack.associate(record.id, [{ kind: 'tag', label: 'favourite' }]);
+    await stack.editAssociations(record.id, [
+      { op: 'add', association: { kind: 'tag', label: 'favourite' } },
+    ]);
     const current = await adapter.getRecord(record.id);
 
-    expect(await stack.associate(record.id, [{ kind: 'tag', label: 'favourite' }])).toEqual(
-      current,
-    );
-    expect(await stack.dissociate(record.id, [{ kind: 'tag', label: 'absent' }])).toEqual(current);
     expect(
-      await stack.mutate(record.id, { permissions: [{ kind: 'anyone', label: 'read' }] }),
+      await stack.editAssociations(record.id, [
+        { op: 'add', association: { kind: 'tag', label: 'favourite' } },
+      ]),
     ).toEqual(current);
-    expect(await stack.mutate(record.id, { unlisted: false })).toEqual(current);
+    expect(
+      await stack.editAssociations(record.id, [
+        { op: 'remove', association: { kind: 'tag', label: 'absent' } },
+      ]),
+    ).toEqual(current);
+    expect(await stack.setAccess(record.id, [{ kind: 'anyone', label: 'read' }])).toEqual(current);
+    expect(await stack.setUnlisted(record.id, false)).toEqual(current);
     expect((await adapter.getRecord(record.id))?.version).toBe(1);
   });
 });
@@ -5730,26 +6042,25 @@ describe('nested content paths', () => {
   });
 
   test('a nested path needs filter.content: "path"', async () => {
-    const narrow = Object.assign(
-      await MemoryAdapter.open({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
-      {
-        capabilities: {
-          filter: {
-            content: 'field',
-            contentPresent: false,
-            search: false,
-          },
-          sort: {
-            fields: ['createdAt', 'updatedAt', 'version'],
-            contentField: false,
-          },
-          limits: {
-            attachmentBytes: null,
-            contentBytes: null,
-          },
+    const narrow = Object.assign(await MemoryAdapter.open({ ownerEntityId: 'owner-123' }), {
+      capabilities: {
+        filter: {
+          content: 'field',
+          contentPresent: false,
+          contentByType: false,
+          search: false,
+        },
+        sort: {
+          fields: ['createdAt', 'updatedAt', 'version'],
+          contentField: false,
+          contentFieldByType: false,
+        },
+        limits: {
+          attachmentBytes: null,
+          contentBytes: null,
         },
       },
-    );
+    });
     const narrowStack = await Stack.open(narrow as StackAdapter);
 
     // A single-segment filter is still served by the 'field' rung.
@@ -5770,10 +6081,14 @@ describe('nested content paths', () => {
 
 describe('limits.contentBytes pre-check', () => {
   const withContentCeiling = async (contentBytes: number): Promise<StackAdapter> =>
-    Object.assign(await MemoryAdapter.open({ ownerEntityId: 'owner-123', timezone: 'UTC' }), {
+    Object.assign(await MemoryAdapter.open({ ownerEntityId: 'owner-123' }), {
       capabilities: {
-        filter: { content: 'path', contentPresent: true, search: false },
-        sort: { fields: ['createdAt', 'updatedAt', 'version'], contentField: true },
+        filter: { content: 'path', contentPresent: true, contentByType: true, search: false },
+        sort: {
+          fields: ['createdAt', 'updatedAt', 'version'],
+          contentField: true,
+          contentFieldByType: true,
+        },
         limits: { attachmentBytes: null, contentBytes },
       },
     });
@@ -5824,10 +6139,14 @@ describe('limits.contentBytes pre-check', () => {
 
 describe('putAttachment — limits.attachmentBytes pre-check', () => {
   const withCeiling = async (attachmentBytes: number): Promise<StackAdapter> =>
-    Object.assign(await MemoryAdapter.open({ ownerEntityId: 'owner-123', timezone: 'UTC' }), {
+    Object.assign(await MemoryAdapter.open({ ownerEntityId: 'owner-123' }), {
       capabilities: {
-        filter: { content: 'none', contentPresent: false, search: false },
-        sort: { fields: ['createdAt', 'updatedAt', 'version'], contentField: false },
+        filter: { content: 'none', contentPresent: false, contentByType: false, search: false },
+        sort: {
+          fields: ['createdAt', 'updatedAt', 'version'],
+          contentField: false,
+          contentFieldByType: false,
+        },
         limits: { attachmentBytes, contentBytes: null },
       },
     });
@@ -5879,7 +6198,7 @@ describe('putAttachment — atomic adapter path', () => {
       version: 1,
     };
     const atomicAdapter: StackAdapter = Object.assign(
-      await MemoryAdapter.open({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
+      await MemoryAdapter.open({ ownerEntityId: 'owner-123' }),
       { putAttachmentWithMetadata: vi.fn().mockResolvedValue(fabricatedRecord) },
     );
     const atomicStack = await Stack.open(atomicAdapter);
@@ -5916,7 +6235,7 @@ describe('putAttachment — atomic adapter path', () => {
       version: 1,
     };
     const atomicAdapter: StackAdapter = Object.assign(
-      await MemoryAdapter.open({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
+      await MemoryAdapter.open({ ownerEntityId: 'owner-123' }),
       { putAttachmentWithMetadata: vi.fn().mockResolvedValue(fabricatedRecord) },
     );
     const atomicStack = await Stack.open(atomicAdapter);
@@ -6091,7 +6410,7 @@ describe('Stack.getAttachmentRecords', () => {
   // content-filtered query a compliant local adapter takes.
   test('finds a record past the first page on an adapter reaching no content', async () => {
     const incapableStack = await Stack.open(
-      await IncapableMemoryAdapter.open({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
+      await IncapableMemoryAdapter.open({ ownerEntityId: 'owner-123' }),
     );
     for (let i = 0; i < 55; i++) {
       await incapableStack.create('_attachment@1', {
@@ -6129,12 +6448,15 @@ describe('attachment association — attachmentRecordId', () => {
     const { second, fileId } = await twoUploads();
     const record = await stack.create(NOTE_V1, { text: 'hello' });
 
-    await stack.associate(record.id, [
+    await stack.editAssociations(record.id, [
       {
-        kind: 'attachment',
-        label: 'embed',
-        fileId,
-        attachmentRecordId: second.id,
+        op: 'add',
+        association: {
+          kind: 'attachment',
+          label: 'embed',
+          fileId,
+          attachmentRecordId: second.id,
+        },
       },
     ]);
 
@@ -6147,21 +6469,27 @@ describe('attachment association — attachmentRecordId', () => {
   test('re-pointing an existing association updates it in place, version unchanged', async () => {
     const { first, second, fileId } = await twoUploads();
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.associate(record.id, [
+    await stack.editAssociations(record.id, [
       {
-        kind: 'attachment',
-        label: 'embed',
-        fileId,
-        attachmentRecordId: first.id,
+        op: 'add',
+        association: {
+          kind: 'attachment',
+          label: 'embed',
+          fileId,
+          attachmentRecordId: first.id,
+        },
       },
     ]);
 
-    const updated = await stack.associate(record.id, [
+    const updated = await stack.editAssociations(record.id, [
       {
-        kind: 'attachment',
-        label: 'embed',
-        fileId,
-        attachmentRecordId: second.id,
+        op: 'add',
+        association: {
+          kind: 'attachment',
+          label: 'embed',
+          fileId,
+          attachmentRecordId: second.id,
+        },
       },
     ]);
 
@@ -6180,28 +6508,31 @@ describe('attachment association — attachmentRecordId', () => {
       fileId,
       attachmentRecordId: first.id,
     };
-    await stack.associate(record.id, [association]);
+    await stack.editAssociations(record.id, [{ op: 'add', association: association }]);
 
-    await stack.associate(record.id, [association]);
+    await stack.editAssociations(record.id, [{ op: 'add', association: association }]);
 
     expect((await adapter.getRecord(record.id))?.version).toBe(1);
   });
 
-  test('a change set that only re-points an association is a change, but never bumps version', async () => {
+  test('a set that only re-points an association is a change, but never bumps version', async () => {
     const { first, second, fileId } = await twoUploads();
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.associate(record.id, [
+    await stack.editAssociations(record.id, [
       {
-        kind: 'attachment',
-        label: 'embed',
-        fileId,
-        attachmentRecordId: first.id,
+        op: 'add',
+        association: {
+          kind: 'attachment',
+          label: 'embed',
+          fileId,
+          attachmentRecordId: first.id,
+        },
       },
     ]);
 
-    const updated = await stack.mutate(record.id, {
-      associations: [{ kind: 'attachment', label: 'embed', fileId, attachmentRecordId: second.id }],
-    });
+    const updated = await stack.setAssociations(record.id, [
+      { kind: 'attachment', label: 'embed', fileId, attachmentRecordId: second.id },
+    ]);
 
     expect(updated.version).toBe(1);
     expect(updated.associations?.[0]).toMatchObject({ attachmentRecordId: second.id });
@@ -6212,20 +6543,26 @@ describe('attachment association — attachmentRecordId', () => {
   test('associating without a pointer clears the one stored, version unchanged', async () => {
     const { first, fileId } = await twoUploads();
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.associate(record.id, [
+    await stack.editAssociations(record.id, [
       {
-        kind: 'attachment',
-        label: 'embed',
-        fileId,
-        attachmentRecordId: first.id,
+        op: 'add',
+        association: {
+          kind: 'attachment',
+          label: 'embed',
+          fileId,
+          attachmentRecordId: first.id,
+        },
       },
     ]);
 
-    const updated = await stack.associate(record.id, [
+    const updated = await stack.editAssociations(record.id, [
       {
-        kind: 'attachment',
-        label: 'embed',
-        fileId,
+        op: 'add',
+        association: {
+          kind: 'attachment',
+          label: 'embed',
+          fileId,
+        },
       },
     ]);
 
@@ -6233,21 +6570,24 @@ describe('attachment association — attachmentRecordId', () => {
     expect(updated.version).toBe(1);
   });
 
-  test('a change set restating an association without its pointer clears it, version unchanged', async () => {
+  test('a set restating an association without its pointer clears it, version unchanged', async () => {
     const { first, fileId } = await twoUploads();
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.associate(record.id, [
+    await stack.editAssociations(record.id, [
       {
-        kind: 'attachment',
-        label: 'embed',
-        fileId,
-        attachmentRecordId: first.id,
+        op: 'add',
+        association: {
+          kind: 'attachment',
+          label: 'embed',
+          fileId,
+          attachmentRecordId: first.id,
+        },
       },
     ]);
 
-    const updated = await stack.mutate(record.id, {
-      associations: [{ kind: 'attachment', label: 'embed', fileId }],
-    });
+    const updated = await stack.setAssociations(record.id, [
+      { kind: 'attachment', label: 'embed', fileId },
+    ]);
 
     expect(updated.associations).toEqual([{ kind: 'attachment', label: 'embed', fileId }]);
     expect(updated.version).toBe(1);
@@ -6256,16 +6596,21 @@ describe('attachment association — attachmentRecordId', () => {
   test('dissociate matches on identity, ignoring the pointer', async () => {
     const { first, fileId } = await twoUploads();
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.associate(record.id, [
+    await stack.editAssociations(record.id, [
       {
-        kind: 'attachment',
-        label: 'embed',
-        fileId,
-        attachmentRecordId: first.id,
+        op: 'add',
+        association: {
+          kind: 'attachment',
+          label: 'embed',
+          fileId,
+          attachmentRecordId: first.id,
+        },
       },
     ]);
 
-    await stack.dissociate(record.id, [{ kind: 'attachment', label: 'embed', fileId }]);
+    await stack.editAssociations(record.id, [
+      { op: 'remove', association: { kind: 'attachment', label: 'embed', fileId } },
+    ]);
 
     expect((await adapter.getRecord(record.id))?.associations).toBeUndefined();
   });
@@ -6275,12 +6620,15 @@ describe('attachment association — attachmentRecordId', () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
 
     await expect(
-      stack.associate(record.id, [
+      stack.editAssociations(record.id, [
         {
-          kind: 'attachment',
-          label: 'embed',
-          fileId,
-          attachmentRecordId: 'nonexistent1',
+          op: 'add',
+          association: {
+            kind: 'attachment',
+            label: 'embed',
+            fileId,
+            attachmentRecordId: 'nonexistent1',
+          },
         },
       ]),
     ).rejects.toThrow(StackValidationError);
@@ -6292,12 +6640,15 @@ describe('attachment association — attachmentRecordId', () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
 
     await expect(
-      stack.associate(record.id, [
+      stack.editAssociations(record.id, [
         {
-          kind: 'attachment',
-          label: 'embed',
-          fileId,
-          attachmentRecordId: other.id,
+          op: 'add',
+          association: {
+            kind: 'attachment',
+            label: 'embed',
+            fileId,
+            attachmentRecordId: other.id,
+          },
         },
       ]),
     ).rejects.toThrow(StackValidationError);
@@ -6312,12 +6663,15 @@ describe('attachment association — attachmentRecordId', () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
 
     await expect(
-      stack.associate(record.id, [
+      stack.editAssociations(record.id, [
         {
-          kind: 'attachment',
-          label: 'embed',
-          fileId,
-          attachmentRecordId: elsewhere.id,
+          op: 'add',
+          association: {
+            kind: 'attachment',
+            label: 'embed',
+            fileId,
+            attachmentRecordId: elsewhere.id,
+          },
         },
       ]),
     ).rejects.toThrow(StackValidationError);
@@ -6335,12 +6689,15 @@ describe('attachment association — attachmentRecordId', () => {
     const record = await stack.create(NOTE_V1, { text: 'hello' });
     const reject = async (attachmentRecordId: string) => {
       try {
-        await stack.associate(record.id, [
+        await stack.editAssociations(record.id, [
           {
-            kind: 'attachment',
-            label: 'embed',
-            fileId,
-            attachmentRecordId,
+            op: 'add',
+            association: {
+              kind: 'attachment',
+              label: 'embed',
+              fileId,
+              attachmentRecordId,
+            },
           },
         ]);
         throw new Error('expected a rejection');
@@ -6379,16 +6736,14 @@ describe('attachment association — attachmentRecordId', () => {
     expect(created.associations?.[0]).toMatchObject({ attachmentRecordId: first.id });
   });
 
-  test('validates a pointer supplied in a change set', async () => {
+  test('validates a pointer supplied in a set write', async () => {
     const { fileId } = await twoUploads();
     const record = await stack.create(NOTE_V1, { text: 'hello' });
 
     await expect(
-      stack.mutate(record.id, {
-        associations: [
-          { kind: 'attachment', label: 'embed', fileId, attachmentRecordId: 'nonexistent1' },
-        ],
-      }),
+      stack.setAssociations(record.id, [
+        { kind: 'attachment', label: 'embed', fileId, attachmentRecordId: 'nonexistent1' },
+      ]),
     ).rejects.toThrow(StackValidationError);
   });
 
@@ -6397,12 +6752,15 @@ describe('attachment association — attachmentRecordId', () => {
   test('an association carrying a pointer still counts as a reference', async () => {
     const { second, fileId } = await twoUploads();
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.associate(record.id, [
+    await stack.editAssociations(record.id, [
       {
-        kind: 'attachment',
-        label: 'embed',
-        fileId,
-        attachmentRecordId: second.id,
+        op: 'add',
+        association: {
+          kind: 'attachment',
+          label: 'embed',
+          fileId,
+          attachmentRecordId: second.id,
+        },
       },
     ]);
 
@@ -6411,7 +6769,7 @@ describe('attachment association — attachmentRecordId', () => {
 
   // The record's own stored data stays writable: re-sending an association
   // it already carries is not a fresh claim about the record it names.
-  test('a change set restating an association with a dangling pointer is accepted', async () => {
+  test('a set restating an association with a dangling pointer is accepted', async () => {
     const { second, fileId } = await twoUploads();
     const record = await stack.create(NOTE_V1, { text: 'hello' });
     const association: DataAssociation = {
@@ -6420,13 +6778,10 @@ describe('attachment association — attachmentRecordId', () => {
       fileId,
       attachmentRecordId: second.id,
     };
-    await stack.associate(record.id, [association]);
+    await stack.editAssociations(record.id, [{ op: 'add', association: association }]);
     await stack.delete(second.id, { purge: true });
 
-    const updated = await stack.mutate(record.id, {
-      associations: [association],
-      contentPatch: { text: 'edited' },
-    });
+    const updated = await stack.setAssociations(record.id, [association]);
 
     expect(updated.associations).toEqual([association]);
   });
@@ -6436,12 +6791,15 @@ describe('attachment association — attachmentRecordId', () => {
   test('a dangling pointer survives on the record it annotates', async () => {
     const { second, fileId } = await twoUploads();
     const record = await stack.create(NOTE_V1, { text: 'hello' });
-    await stack.associate(record.id, [
+    await stack.editAssociations(record.id, [
       {
-        kind: 'attachment',
-        label: 'embed',
-        fileId,
-        attachmentRecordId: second.id,
+        op: 'add',
+        association: {
+          kind: 'attachment',
+          label: 'embed',
+          fileId,
+          attachmentRecordId: second.id,
+        },
       },
     ]);
 
@@ -6476,7 +6834,7 @@ describe('_attachment@1 mimeType conflict on create', () => {
     await stack.putAttachment(data, { mimeType: 'text/markdown' });
 
     await expect(stack.putAttachment(data, { mimeType: 'text/plain' })).rejects.toThrow(
-      StackValidationError,
+      StackConflictError,
     );
 
     // The rejected upload's metadata record must not have been created.
@@ -6492,14 +6850,14 @@ describe('_attachment@1 mimeType conflict on create', () => {
     const data = new Uint8Array([1, 2, 3]);
     await stack.putAttachment(data, { mimeType: 'text/markdown' });
 
-    let error: StackValidationError | undefined;
+    let error: StackConflictError | undefined;
     try {
       await stack.putAttachment(data, { mimeType: 'text/plain' });
     } catch (e) {
-      error = e as StackValidationError;
+      error = e as StackConflictError;
     }
-    expect(error).toBeInstanceOf(StackValidationError);
-    const message = JSON.stringify(error?.errors);
+    expect(error).toBeInstanceOf(StackConflictError);
+    const message = error?.message;
     expect(message).not.toContain('text/markdown');
     expect(message).not.toContain('text/plain');
   });
@@ -6510,7 +6868,7 @@ describe('_attachment@1 mimeType conflict on create', () => {
   // real-world default) would take.
   test('conflict is detected even when the established record is beyond the first query page (>50 records, fallback path)', async () => {
     const incapableStack = await Stack.open(
-      await IncapableMemoryAdapter.open({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
+      await IncapableMemoryAdapter.open({ ownerEntityId: 'owner-123' }),
     );
     for (let i = 0; i < 55; i++) {
       await incapableStack.create('_attachment@1', {
@@ -6523,7 +6881,7 @@ describe('_attachment@1 mimeType conflict on create', () => {
     await incapableStack.putAttachment(data, { mimeType: 'text/markdown' });
 
     await expect(incapableStack.putAttachment(data, { mimeType: 'text/plain' })).rejects.toThrow(
-      StackValidationError,
+      StackConflictError,
     );
   });
 
@@ -6537,7 +6895,7 @@ describe('_attachment@1 mimeType conflict on create', () => {
     await stack.commitMigration(id, '_attachment@2', { fileId, mimeType: 'text/markdown', size });
 
     await expect(stack.putAttachment(data, { mimeType: 'text/plain' })).rejects.toThrow(
-      StackValidationError,
+      StackConflictError,
     );
     await expect(stack.putAttachment(data, { mimeType: 'text/markdown' })).resolves.toBeDefined();
   });
@@ -6549,7 +6907,7 @@ describe('_attachment@1 mimeType conflict on create', () => {
     await stack.delete(metaRecord.id);
 
     await expect(stack.putAttachment(data, { mimeType: 'text/plain' })).rejects.toThrow(
-      StackValidationError,
+      StackConflictError,
     );
   });
 
@@ -6585,7 +6943,7 @@ describe('_attachment@1 mimeType conflict on create', () => {
     // Core's write-time check reads the same winner: a third upload
     // matching it is accepted, one matching the loser is not.
     await expect(stack.putAttachment(data, { mimeType: 'text/html' })).rejects.toThrow(
-      StackValidationError,
+      StackConflictError,
     );
     await expect(stack.putAttachment(data, { mimeType: 'image/png' })).resolves.toBeDefined();
   });
@@ -6616,11 +6974,11 @@ describe('_attachment@1 mimeType conflict on create', () => {
 });
 
 // -------------------------------------------------------
-// _attachment@1 immutable fields on update: filename is the only
-// field that may change after a metadata record is created.
+// _attachment@1 immutable fields: filename is the only field that may
+// change after a metadata record is created.
 // -------------------------------------------------------
 
-describe('_attachment@1 immutable fields on update', () => {
+describe('_attachment@1 immutable fields', () => {
   test('filename may be changed', async () => {
     const data = new Uint8Array([1, 2, 3]);
     await stack.putAttachment(data, { mimeType: 'image/png', filename: 'old.png' });
@@ -6631,16 +6989,13 @@ describe('_attachment@1 immutable fields on update', () => {
     expect((updated.content as Record<string, unknown>).filename).toBe('new.png');
   });
 
-  test('changing mimeType is rejected, even to the same value', async () => {
+  test('changing mimeType is rejected', async () => {
     const data = new Uint8Array([1, 2, 3]);
     await stack.putAttachment(data, { mimeType: 'image/png' });
     const [record] = (await stack.query({ filter: { typeId: '_attachment@1' } })).records;
 
     await expect(stack.patchContent(record.id, { mimeType: 'image/jpeg' })).rejects.toThrow(
-      StackValidationError,
-    );
-    await expect(stack.patchContent(record.id, { mimeType: 'image/png' })).rejects.toThrow(
-      StackValidationError,
+      StackConflictError,
     );
   });
 
@@ -6650,7 +7005,7 @@ describe('_attachment@1 immutable fields on update', () => {
     const [record] = (await stack.query({ filter: { typeId: '_attachment@1' } })).records;
 
     await expect(stack.patchContent(record.id, { fileId: 'some-other-file' })).rejects.toThrow(
-      StackValidationError,
+      StackConflictError,
     );
   });
 
@@ -6659,20 +7014,28 @@ describe('_attachment@1 immutable fields on update', () => {
     await stack.putAttachment(data, { mimeType: 'image/png' });
     const [record] = (await stack.query({ filter: { typeId: '_attachment@1' } })).records;
 
-    await expect(stack.patchContent(record.id, { size: 999 })).rejects.toThrow(
-      StackValidationError,
-    );
+    await expect(stack.patchContent(record.id, { size: 999 })).rejects.toThrow(StackConflictError);
   });
 
-  test('setting fileId or size to their current value is a no-op, not an error', async () => {
+  test('restating fileId, mimeType or size unchanged is not a change', async () => {
     const data = new Uint8Array([1, 2, 3]);
     await stack.putAttachment(data, { mimeType: 'image/png' });
     const [record] = (await stack.query({ filter: { typeId: '_attachment@1' } })).records;
-    const content = record.content as Record<string, unknown>;
+    const { fileId, mimeType, size } = record.content as Record<string, unknown>;
 
-    await expect(
-      stack.patchContent(record.id, { fileId: content.fileId, size: content.size }),
-    ).resolves.toBeDefined();
+    await expect(stack.patchContent(record.id, { fileId, mimeType, size })).resolves.toBeDefined();
+  });
+
+  test('restoring a snapshot from before a migration cannot move fileId', async () => {
+    const data = new Uint8Array([1, 2, 3]);
+    await stack.putAttachment(data, { mimeType: 'image/png' });
+    const note = await stack.create(NOTE_V1, { text: 'not yet an attachment' });
+    const [record] = (await stack.query({ filter: { typeId: '_attachment@1' } })).records;
+    await stack.commitMigration(note.id, '_attachment@1', {
+      ...(record.content as Record<string, unknown>),
+    });
+
+    await expect(stack.restoreVersion(note.id, 1)).rejects.toThrow(/fileId.*immutable/);
   });
 });
 
@@ -6687,11 +7050,14 @@ describe('deleteAttachment', () => {
       content: { fileId },
     } = await stack.putAttachment(data, { mimeType: 'image/png' });
     const note = await stack.create(NOTE_V1, { text: 'hi' });
-    await stack.associate(note.id, [
+    await stack.editAssociations(note.id, [
       {
-        kind: 'attachment',
-        label: 'cover',
-        fileId,
+        op: 'add',
+        association: {
+          kind: 'attachment',
+          label: 'cover',
+          fileId,
+        },
       },
     ]);
 
@@ -6707,11 +7073,14 @@ describe('deleteAttachment', () => {
       content: { fileId },
     } = await stack.putAttachment(data, { mimeType: 'image/png' });
     const note = await stack.create(NOTE_V1, { text: 'hi' });
-    await stack.associate(note.id, [
+    await stack.editAssociations(note.id, [
       {
-        kind: 'attachment',
-        label: 'cover',
-        fileId,
+        op: 'add',
+        association: {
+          kind: 'attachment',
+          label: 'cover',
+          fileId,
+        },
       },
     ]);
     await stack.delete(note.id);
@@ -6755,7 +7124,7 @@ describe('deleteAttachment', () => {
       }
     }
     const noBytesStack = await Stack.open(
-      await NoBytesAdapter.open({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
+      await NoBytesAdapter.open({ ownerEntityId: 'owner-123' }),
     );
 
     await expect(noBytesStack.deleteAttachment('nonexistent-file')).rejects.toThrow(
@@ -6768,7 +7137,7 @@ describe('deleteAttachment', () => {
   // in-memory fallback the test name describes.
   test('leaves no orphaned metadata when the matching record is beyond the first page (>50 records)', async () => {
     const incapableStack = await Stack.open(
-      await IncapableMemoryAdapter.open({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
+      await IncapableMemoryAdapter.open({ ownerEntityId: 'owner-123' }),
     );
     const targetFileId = 'target-file-abc';
     for (let i = 0; i < 55; i++) {
@@ -6861,13 +7230,12 @@ describe('deleteAttachment', () => {
       }
       async deleteUnreferencedAttachmentRecords(
         fileId: string,
-        metadataTypeIds: string[],
+        metadataBaseId: string,
       ): Promise<StackRecord[]> {
-        calls.push('atomic');
-        calls.push(...metadataTypeIds);
+        calls.push('atomic', metadataBaseId);
         const toDelete = [...this.records.values()].filter(
           (r) =>
-            metadataTypeIds.includes(r.typeId) &&
+            baseIdOf(r.typeId) === metadataBaseId &&
             (r.content as Record<string, unknown>).fileId === fileId,
         );
         for (const r of toDelete) {
@@ -6877,9 +7245,7 @@ describe('deleteAttachment', () => {
         return toDelete;
       }
     }
-    const atomicStack = await Stack.open(
-      await AtomicAdapter.open({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
-    );
+    const atomicStack = await Stack.open(await AtomicAdapter.open({ ownerEntityId: 'owner-123' }));
     await atomicStack.defineType({
       id: NOTE_V1,
       name: 'Note',
@@ -6891,9 +7257,8 @@ describe('deleteAttachment', () => {
     } = await atomicStack.putAttachment(new Uint8Array([9]), { mimeType: 'image/png' });
     await atomicStack.deleteAttachment(fileId);
 
-    // The family, not just @1 — core resolves the baseId so the adapter
-    // never has to.
-    expect(calls).toEqual(['atomic', '_attachment@1']);
+    // The adapter is handed the family, not one of its versions.
+    expect(calls).toEqual(['atomic', '_attachment']);
   });
 });
 
@@ -6907,11 +7272,14 @@ describe('collectAttachmentGarbage', () => {
       content: { fileId },
     } = await stack.putAttachment(new Uint8Array([1]), { mimeType: 'image/png' });
     const note = await stack.create(NOTE_V1, { text: 'hi' });
-    await stack.associate(note.id, [
+    await stack.editAssociations(note.id, [
       {
-        kind: 'attachment',
-        label: 'cover',
-        fileId,
+        op: 'add',
+        association: {
+          kind: 'attachment',
+          label: 'cover',
+          fileId,
+        },
       },
     ]);
     await stack.delete(note.id, { purge: true });
@@ -6928,11 +7296,14 @@ describe('collectAttachmentGarbage', () => {
       content: { fileId },
     } = await stack.putAttachment(new Uint8Array([1]), { mimeType: 'image/png' });
     const note = await stack.create(NOTE_V1, { text: 'hi' });
-    await stack.associate(note.id, [
+    await stack.editAssociations(note.id, [
       {
-        kind: 'attachment',
-        label: 'cover',
-        fileId,
+        op: 'add',
+        association: {
+          kind: 'attachment',
+          label: 'cover',
+          fileId,
+        },
       },
     ]);
 
@@ -6948,11 +7319,14 @@ describe('collectAttachmentGarbage', () => {
       content: { fileId },
     } = await stack.putAttachment(new Uint8Array([1]), { mimeType: 'image/png' });
     const note = await stack.create(NOTE_V1, { text: 'hi' });
-    await stack.associate(note.id, [
+    await stack.editAssociations(note.id, [
       {
-        kind: 'attachment',
-        label: 'cover',
-        fileId,
+        op: 'add',
+        association: {
+          kind: 'attachment',
+          label: 'cover',
+          fileId,
+        },
       },
     ]);
     await stack.delete(note.id);
@@ -7051,7 +7425,7 @@ describe('collectAttachmentGarbage', () => {
       override listBlobs: (() => Promise<BlobInfo[]>) | undefined = undefined;
     }
     const noListBlobsStack = await Stack.open(
-      await NoListBlobsAdapter.open({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
+      await NoListBlobsAdapter.open({ ownerEntityId: 'owner-123' }),
     );
     const {
       content: { fileId },
@@ -7073,7 +7447,7 @@ describe('collectAttachmentGarbage', () => {
       override listBlobs: (() => Promise<BlobInfo[]>) | undefined = undefined;
     }
     const noListBlobsStack = await Stack.open(
-      await NoListBlobsAdapter.open({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
+      await NoListBlobsAdapter.open({ ownerEntityId: 'owner-123' }),
     );
     const {
       id,
@@ -7096,7 +7470,6 @@ describe('collectAttachmentGarbage', () => {
     }
     const noListBlobsAdapter = await NoListBlobsAdapter.open({
       ownerEntityId: 'owner-123',
-      timezone: 'UTC',
     });
     const noListBlobsStack = await Stack.open(noListBlobsAdapter);
     await noListBlobsAdapter.putBlob(new Uint8Array([9, 9, 9]));
@@ -7106,7 +7479,7 @@ describe('collectAttachmentGarbage', () => {
     expect(result.deletedFileIds).toEqual([]);
   });
 
-  // A concurrent associate() landing between the sweep's own scan and its
+  // A concurrent editAssociations() landing between the sweep's own scan and its
   // per-file deleteAttachment() call would make that call throw
   // StackConflictError — the sweep must skip that one file, not abort, and
   // must keep collecting everything else it already found.
@@ -7261,7 +7634,7 @@ describe('_app.did bindings', () => {
       did: APP_DID,
     });
     await expect(stack.patchContent(app.id, { did: 'did:key:z6MkMoved' })).rejects.toThrow(
-      StackValidationError,
+      StackConflictError,
     );
   });
 
@@ -7271,7 +7644,7 @@ describe('_app.did bindings', () => {
       name: 'My Notes App',
       did: APP_DID,
     });
-    await expect(stack.patchContent(app.id, { did: null })).rejects.toThrow(StackValidationError);
+    await expect(stack.patchContent(app.id, { did: null })).rejects.toThrow(StackConflictError);
   });
 
   test('a card carrying no DID may adopt one', async () => {
@@ -7290,7 +7663,7 @@ describe('_app.did bindings', () => {
     });
     await stack.patchContent(app.id, { did: APP_DID });
 
-    await expect(stack.restoreVersion(app.id, 1)).rejects.toThrow(StackValidationError);
+    await expect(stack.restoreVersion(app.id, 1)).rejects.toThrow(StackConflictError);
   });
 
   test('a card may be restored onto the DID it already holds', async () => {
@@ -7347,7 +7720,7 @@ describe('_app.appId bindings', () => {
   test('rejects an update that moves a card off the appId it holds', async () => {
     const app = await stack.create('_app@1', { appId: 'com.example.notes', name: 'My Notes App' });
     await expect(stack.patchContent(app.id, { appId: 'com.example.bank' })).rejects.toThrow(
-      StackValidationError,
+      StackConflictError,
     );
   });
 
@@ -7396,7 +7769,7 @@ describe('_entity.did bindings', () => {
   test('rejects an update that repoints a card at another key', async () => {
     const alice = await stack.create('_entity@1', { did: ALICE, name: 'Alice' });
     await expect(stack.patchContent(alice.id, { did: MALLORY })).rejects.toThrow(
-      StackValidationError,
+      StackConflictError,
     );
   });
 
@@ -7419,7 +7792,7 @@ describe('_entity.did bindings', () => {
   // short-circuiting is what keeps the walk bounded, not a narrower scan.
   test('finds a clash past page one on an adapter reaching no content', async () => {
     const incapable = await Stack.open(
-      await IncapableMemoryAdapter.open({ ownerEntityId: 'owner-123', timezone: 'UTC' }),
+      await IncapableMemoryAdapter.open({ ownerEntityId: 'owner-123' }),
     );
     for (let i = 0; i < 60; i++) {
       await incapable.create('_entity@1', { did: `did:key:filler${i}`, name: `Filler ${i}` });
@@ -7485,11 +7858,14 @@ describe('relationship targets', () => {
   test('a record target names this stack by omitting stackUrl, never by emptying it', async () => {
     const note = await stack.create(NOTE_V1, { text: 'host' });
     await expect(
-      stack.associate(note.id, [
+      stack.editAssociations(note.id, [
         {
-          kind: 'relationship',
-          label: 'series',
-          target: { kind: 'record', recordId: 'somerecordid', stackUrl: '' },
+          op: 'add',
+          association: {
+            kind: 'relationship',
+            label: 'series',
+            target: { kind: 'record', recordId: 'somerecordid', stackUrl: '' },
+          },
         },
       ]),
     ).rejects.toThrow(StackValidationError);
@@ -7498,11 +7874,14 @@ describe('relationship targets', () => {
   test('a target outside the three kinds is refused', async () => {
     const note = await stack.create(NOTE_V1, { text: 'host' });
     await expect(
-      stack.associate(note.id, [
+      stack.editAssociations(note.id, [
         {
-          kind: 'relationship',
-          label: 'series',
-          target: { kind: 'Record', recordId: 'somerecordid' } as unknown as RelationshipTarget,
+          op: 'add',
+          association: {
+            kind: 'relationship',
+            label: 'series',
+            target: { kind: 'Record', recordId: 'somerecordid' } as unknown as RelationshipTarget,
+          },
         },
       ]),
     ).rejects.toThrow(StackValidationError);
@@ -7521,21 +7900,21 @@ describe('relationship targets', () => {
     const association = element as unknown as DataAssociation;
     const authority = element as unknown as AuthorityAssociation;
 
-    await expect(stack.associate(note.id, [association])).rejects.toThrow(StackValidationError);
-    await expect(stack.mutate(note.id, { associations: [association] })).rejects.toThrow(
+    await expect(
+      stack.editAssociations(note.id, [{ op: 'add', association: association }]),
+    ).rejects.toThrow(StackValidationError);
+    await expect(stack.setAssociations(note.id, [association])).rejects.toThrow(
       StackValidationError,
     );
-    await expect(stack.mutate(note.id, { permissions: [authority] })).rejects.toThrow(
-      StackValidationError,
-    );
+    await expect(stack.setAccess(note.id, [authority])).rejects.toThrow(StackValidationError);
     await expect(
       stack.create(NOTE_V1, { text: 'host' }, { associations: [association] }),
     ).rejects.toThrow(StackValidationError);
     // Two of them reach the duplicate-identity check, which asks the same
     // equality every surface does.
-    await expect(
-      stack.mutate(note.id, { associations: [association, association] }),
-    ).rejects.toThrow(StackValidationError);
+    await expect(stack.setAssociations(note.id, [association, association])).rejects.toThrow(
+      StackValidationError,
+    );
   });
 
   test('a target outside the three kinds is refused at create too', async () => {
@@ -7567,11 +7946,14 @@ describe('relationship targets', () => {
   ])('%s requires a non-empty identifier', async (_name, target) => {
     const note = await stack.create(NOTE_V1, { text: 'host' });
     await expect(
-      stack.associate(note.id, [
+      stack.editAssociations(note.id, [
         {
-          kind: 'relationship',
-          label: 'series',
-          target: target as RelationshipTarget,
+          op: 'add',
+          association: {
+            kind: 'relationship',
+            label: 'series',
+            target: target as RelationshipTarget,
+          },
         },
       ]),
     ).rejects.toThrow(StackValidationError);
@@ -7579,18 +7961,24 @@ describe('relationship targets', () => {
 
   test('two targets differing only by namespace are two associations', async () => {
     const note = await stack.create(NOTE_V1, { text: 'crossposted' });
-    await stack.associate(note.id, [
+    await stack.editAssociations(note.id, [
       {
-        kind: 'relationship',
-        label: 'syndicated-to',
-        target: { kind: 'external', ns: 'atproto', id: 'copy-1' },
+        op: 'add',
+        association: {
+          kind: 'relationship',
+          label: 'syndicated-to',
+          target: { kind: 'external', ns: 'atproto', id: 'copy-1' },
+        },
       },
     ]);
-    await stack.associate(note.id, [
+    await stack.editAssociations(note.id, [
       {
-        kind: 'relationship',
-        label: 'syndicated-to',
-        target: { kind: 'external', ns: 'activitypub', id: 'copy-1' },
+        op: 'add',
+        association: {
+          kind: 'relationship',
+          label: 'syndicated-to',
+          target: { kind: 'external', ns: 'activitypub', id: 'copy-1' },
+        },
       },
     ]);
 
@@ -7600,25 +7988,34 @@ describe('relationship targets', () => {
 
   test('dissociate removes only the target it names', async () => {
     const note = await stack.create(NOTE_V1, { text: 'crossposted' });
-    await stack.associate(note.id, [
+    await stack.editAssociations(note.id, [
       {
-        kind: 'relationship',
-        label: 'syndicated-to',
-        target: { kind: 'external', ns: 'atproto', id: 'copy-1' },
+        op: 'add',
+        association: {
+          kind: 'relationship',
+          label: 'syndicated-to',
+          target: { kind: 'external', ns: 'atproto', id: 'copy-1' },
+        },
       },
     ]);
-    await stack.associate(note.id, [
+    await stack.editAssociations(note.id, [
       {
-        kind: 'relationship',
-        label: 'syndicated-to',
-        target: { kind: 'external', ns: 'activitypub', id: 'copy-1' },
+        op: 'add',
+        association: {
+          kind: 'relationship',
+          label: 'syndicated-to',
+          target: { kind: 'external', ns: 'activitypub', id: 'copy-1' },
+        },
       },
     ]);
-    await stack.dissociate(note.id, [
+    await stack.editAssociations(note.id, [
       {
-        kind: 'relationship',
-        label: 'syndicated-to',
-        target: { kind: 'external', ns: 'atproto', id: 'copy-1' },
+        op: 'remove',
+        association: {
+          kind: 'relationship',
+          label: 'syndicated-to',
+          target: { kind: 'external', ns: 'atproto', id: 'copy-1' },
+        },
       },
     ]);
 
@@ -7636,18 +8033,24 @@ describe('relationship targets', () => {
   // different references — which is the distinction group rosters rest on.
   test('a record target does not match an entity target with the same value', async () => {
     const note = await stack.create(NOTE_V1, { text: 'ambiguous' });
-    await stack.associate(note.id, [
+    await stack.editAssociations(note.id, [
       {
-        kind: 'relationship',
-        label: 'about',
-        target: { kind: 'record', recordId: 'did:key:z6MkAlice' },
+        op: 'add',
+        association: {
+          kind: 'relationship',
+          label: 'about',
+          target: { kind: 'record', recordId: 'did:key:z6MkAlice' },
+        },
       },
     ]);
-    await stack.associate(note.id, [
+    await stack.editAssociations(note.id, [
       {
-        kind: 'relationship',
-        label: 'about',
-        target: { kind: 'entity', entityId: 'did:key:z6MkAlice' },
+        op: 'add',
+        association: {
+          kind: 'relationship',
+          label: 'about',
+          target: { kind: 'entity', entityId: 'did:key:z6MkAlice' },
+        },
       },
     ]);
 
@@ -7657,11 +8060,14 @@ describe('relationship targets', () => {
 
   test('a record target in another stack is stored with its stackUrl', async () => {
     const note = await stack.create(NOTE_V1, { text: 'reply' });
-    await stack.associate(note.id, [
+    await stack.editAssociations(note.id, [
       {
-        kind: 'relationship',
-        label: 'reply-to',
-        target: { kind: 'record', recordId: 'abc123', stackUrl: 'https://alice.example/stack' },
+        op: 'add',
+        association: {
+          kind: 'relationship',
+          label: 'reply-to',
+          target: { kind: 'record', recordId: 'abc123', stackUrl: 'https://alice.example/stack' },
+        },
       },
     ]);
 
@@ -7684,27 +8090,40 @@ describe('query — relatedTo filter', () => {
   beforeEach(async () => {
     subject = await stack.create(NOTE_V1, { text: 'target' });
     const withSeries = await stack.create(NOTE_V1, { text: 'in a series' });
-    await stack.associate(withSeries.id, [
+    await stack.editAssociations(withSeries.id, [
       {
-        kind: 'relationship',
-        label: 'series',
-        target: { kind: 'record', recordId: subject.id },
+        op: 'add',
+        association: {
+          kind: 'relationship',
+          label: 'series',
+          target: { kind: 'record', recordId: subject.id },
+        },
       },
     ]);
     const syndicated = await stack.create(NOTE_V1, { text: 'crossposted' });
-    await stack.associate(syndicated.id, [
+    await stack.editAssociations(syndicated.id, [
       {
-        kind: 'relationship',
-        label: 'syndicated-to',
-        target: { kind: 'external', ns: 'atproto', id: 'at://did:plc:abc/app.bsky.feed.post/3k4' },
+        op: 'add',
+        association: {
+          kind: 'relationship',
+          label: 'syndicated-to',
+          target: {
+            kind: 'external',
+            ns: 'atproto',
+            id: 'at://did:plc:abc/app.bsky.feed.post/3k4',
+          },
+        },
       },
     ]);
     const authored = await stack.create(NOTE_V1, { text: 'by someone' });
-    await stack.associate(authored.id, [
+    await stack.editAssociations(authored.id, [
       {
-        kind: 'relationship',
-        label: 'author',
-        target: { kind: 'entity', entityId: 'did:key:z6MkAlice' },
+        op: 'add',
+        association: {
+          kind: 'relationship',
+          label: 'author',
+          target: { kind: 'entity', entityId: 'did:key:z6MkAlice' },
+        },
       },
     ]);
     await stack.create(NOTE_V1, { text: 'unrelated' });
@@ -7787,11 +8206,14 @@ describe('query — relatedTo filter', () => {
   // An absent stackUrl is not a wildcard: it names this stack.
   test('a local record target does not match the same id in another stack', async () => {
     const remote = await stack.create(NOTE_V1, { text: 'remote reply' });
-    await stack.associate(remote.id, [
+    await stack.editAssociations(remote.id, [
       {
-        kind: 'relationship',
-        label: 'reply-to',
-        target: { kind: 'record', recordId: subject.id, stackUrl: 'https://alice.example/stack' },
+        op: 'add',
+        association: {
+          kind: 'relationship',
+          label: 'reply-to',
+          target: { kind: 'record', recordId: subject.id, stackUrl: 'https://alice.example/stack' },
+        },
       },
     ]);
 
@@ -7828,10 +8250,16 @@ describe('query — attachment filter', () => {
 
   beforeEach(async () => {
     const both = await stack.create(NOTE_V1, { text: 'cover F1, thumb F2' });
-    await stack.associate(both.id, [{ kind: 'attachment', label: 'cover', fileId: F1 }]);
-    await stack.associate(both.id, [{ kind: 'attachment', label: 'thumb', fileId: F2 }]);
+    await stack.editAssociations(both.id, [
+      { op: 'add', association: { kind: 'attachment', label: 'cover', fileId: F1 } },
+    ]);
+    await stack.editAssociations(both.id, [
+      { op: 'add', association: { kind: 'attachment', label: 'thumb', fileId: F2 } },
+    ]);
     const cover = await stack.create(NOTE_V1, { text: 'cover F2' });
-    await stack.associate(cover.id, [{ kind: 'attachment', label: 'cover', fileId: F2 }]);
+    await stack.editAssociations(cover.id, [
+      { op: 'add', association: { kind: 'attachment', label: 'cover', fileId: F2 } },
+    ]);
     await stack.defineType({
       id: PHOTO,
       name: 'Photo',
@@ -7912,10 +8340,10 @@ describe('undefined types stay inside the error taxonomy', () => {
 });
 
 // -------------------------------------------------------
-// Change sets
+// One verb per aspect
 // -------------------------------------------------------
 
-describe('Stack.mutate — one call, one version', () => {
+describe('Stack — each write verb moves one aspect', () => {
   let box: StackRecord;
   let note: StackRecord;
 
@@ -7924,191 +8352,117 @@ describe('Stack.mutate — one call, one version', () => {
     note = await stack.create(NOTE_V1, { text: 'hello' });
   });
 
-  test('moves every named aspect in a single version', async () => {
-    const moved = await stack.mutate(note.id, {
-      contentPatch: { text: 'edited' },
-      parentId: box.id,
-      permissions: [{ kind: 'anyone', label: 'read' }],
-      unlisted: true,
-    });
+  test('only patchContent bumps the version and snapshots', async () => {
+    await stack.setParent(note.id, box.id);
+    await stack.setUnlisted(note.id, true);
+    await stack.setAssociations(note.id, [{ kind: 'tag', label: 'x' }]);
+    await stack.setAccess(note.id, [{ kind: 'anyone', label: 'read' }]);
+    expect((await stack.get(note.id))!.version).toBe(note.version);
+    expect(await stack.getVersions(note.id)).toHaveLength(0);
 
-    expect(moved.version).toBe(note.version + 1);
-    expect(moved.content).toEqual({ text: 'edited' });
-    expect(moved.parentId).toBe(box.id);
-    expect(moved.permissions).toEqual([{ kind: 'anyone', label: 'read' }]);
-    expect(moved.unlistedAt).toBeInstanceOf(Date);
-  });
-
-  test('snapshots the prior state once, whatever the change set moved', async () => {
-    await stack.mutate(note.id, { contentPatch: { text: 'edited' }, parentId: box.id });
+    const patched = await stack.patchContent(note.id, { text: 'edited' });
+    expect(patched.version).toBe(note.version + 1);
     const versions = await stack.getVersions(note.id);
     expect(versions).toHaveLength(1);
     expect(versions[0]).toMatchObject({ version: 1, content: { text: 'hello' } });
-    expect('parentId' in versions[0]!).toBe(false);
+    expect(patched.parentId).toBe(box.id);
+    expect(patched.unlistedAt).toBeInstanceOf(Date);
   });
 
-  test('emits one event naming every aspect that actually moved', async () => {
+  test('a write the record already satisfies writes nothing', async () => {
     const seen: RecordChange[] = [];
     await stack.subscribe((c) => seen.push(c));
-    await stack.mutate(note.id, {
-      contentPatch: { text: 'edited' },
-      parentId: box.id,
-      permissions: [{ kind: 'anyone', label: 'read' }],
-    });
-
-    expect(seen).toHaveLength(1);
-    expect([...seen[0]!.ops].sort()).toEqual(['patch', 'reparent', 'reshare']);
-    expect(seen[0]!.kind).toBe('changed');
-    expect(seen[0]!.version).toBe(2);
-  });
-
-  // ops comes from the record's own diff, so restating a value is not a
-  // change — which is also what keeps the no-op rule and the event agreeing.
-  test('reports only the aspects that moved, not the keys that were named', async () => {
-    const seen: RecordChange[] = [];
-    await stack.subscribe((c) => seen.push(c));
-    await stack.mutate(note.id, {
-      contentPatch: { text: 'edited' },
-      parentId: null,
-      unlisted: false,
-    });
-
-    expect(seen[0]!.ops).toEqual(['patch']);
-  });
-
-  test('a change set already satisfied in every key writes nothing', async () => {
-    const seen: RecordChange[] = [];
-    await stack.subscribe((c) => seen.push(c));
-    const same = await stack.mutate(note.id, {
-      contentPatch: { text: 'hello' },
-      parentId: null,
-      permissions: [],
-      unlisted: false,
-    });
-
-    expect(same.version).toBe(note.version);
+    for (const same of [
+      await stack.patchContent(note.id, { text: 'hello' }),
+      await stack.setParent(note.id, null),
+      await stack.setUnlisted(note.id, false),
+      await stack.setAssociations(note.id, []),
+      await stack.setAccess(note.id, []),
+    ]) {
+      expect(same.version).toBe(note.version);
+    }
     expect(seen).toHaveLength(0);
-    expect(await stack.getVersions(note.id)).toHaveLength(0);
+    expect(await stack.getJournal(note.id)).toHaveLength(1);
   });
 
-  test('a change set naming no key at all is refused', async () => {
-    await expect(stack.mutate(note.id, {})).rejects.toThrow(StackBadRequestError);
+  test('setParent(null) moves to the root and setUnlisted(false) relists', async () => {
+    await stack.setParent(note.id, box.id);
+    await stack.setUnlisted(note.id, true);
+
+    expect((await stack.setParent(note.id, null)).parentId).toBeUndefined();
+    expect((await stack.setUnlisted(note.id, false)).unlistedAt).toBeUndefined();
   });
 
-  // Presence, not truthiness: both of these name an aspect.
-  test('parentId: null moves to the root and unlisted: false relists', async () => {
-    const inBox = await stack.mutate(note.id, { parentId: box.id, unlisted: true });
-    expect(inBox.parentId).toBe(box.id);
-
-    const out = await stack.mutate(note.id, { parentId: null, unlisted: false });
-    expect(out.parentId).toBeUndefined();
-    expect(out.unlistedAt).toBeUndefined();
-  });
-
-  test('one ifVersion fences the whole change set', async () => {
-    await expect(
-      stack.mutate(
-        note.id,
-        { contentPatch: { text: 'edited' }, parentId: box.id },
-        { ifVersion: 99 },
-      ),
-    ).rejects.toThrow(StackVersionConflictError);
-
-    const unchanged = await stack.get(note.id);
-    expect(unchanged!.version).toBe(1);
-    expect(unchanged!.content).toEqual({ text: 'hello' });
-    expect(unchanged!.parentId).toBeUndefined();
-  });
-
-  // A refused key refuses the call, so nothing lands — the content patch
-  // here is perfectly valid and must still not be applied.
-  test('a refused key leaves every other key unapplied', async () => {
+  test('a destination that is malformed or absent is refused', async () => {
     // Format is checked before existence, so a malformed destination is a
-    // 400 naming the problem and a well-formed absent one is a 409 — and
-    // neither lets the content patch beside it land.
-    await expect(
-      stack.mutate(note.id, { contentPatch: { text: 'edited' }, parentId: 'nosuchrecord' }),
-    ).rejects.toThrow(StackBadRequestError);
-    await expect(
-      stack.mutate(note.id, { contentPatch: { text: 'edited' }, parentId: generateId() }),
-    ).rejects.toThrow(StackConflictError);
-
-    const unchanged = await stack.get(note.id);
-    expect(unchanged!.version).toBe(1);
-    expect(unchanged!.content).toEqual({ text: 'hello' });
-  });
-
-  test('an invalid content patch refuses the move beside it', async () => {
-    await expect(
-      stack.mutate(note.id, { contentPatch: { text: 42 }, parentId: box.id }),
-    ).rejects.toThrow(StackValidationError);
+    // 400 naming the problem and a well-formed absent one is a 409.
+    await expect(stack.setParent(note.id, 'nosuchrecord')).rejects.toThrow(StackBadRequestError);
+    await expect(stack.setParent(note.id, generateId())).rejects.toThrow(StackConflictError);
     expect((await stack.get(note.id))!.parentId).toBeUndefined();
   });
 
+  test('refuses a move that would make the record its own ancestor', async () => {
+    await stack.setParent(note.id, box.id);
+    await expect(stack.setParent(box.id, note.id)).rejects.toThrow(StackConflictError);
+  });
+
   test('replaces the association set, and reports the diff as add and remove', async () => {
-    await stack.associate(note.id, [{ kind: 'tag', label: 'old' }]);
+    await stack.editAssociations(note.id, [
+      { op: 'add', association: { kind: 'tag', label: 'old' } },
+    ]);
     const seen: RecordChange[] = [];
     await stack.subscribe((c) => seen.push(c));
 
-    const swapped = await stack.mutate(note.id, {
-      associations: [{ kind: 'tag', label: 'new' }],
-    });
+    const swapped = await stack.setAssociations(note.id, [{ kind: 'tag', label: 'new' }]);
 
     expect(swapped.associations).toEqual([{ kind: 'tag', label: 'new' }]);
     expect([...seen[0]!.ops].sort()).toEqual(['associate', 'dissociate']);
   });
 
-  // unlist is the one op that must survive being bundled: a subscriber
-  // holding the record has to be told to drop it, so kind stays 'removed'.
-  test('an unlist bundled with an edit is still kind removed', async () => {
+  test('an unlist is kind removed', async () => {
     const seen: RecordChange[] = [];
-    await stack.subscribe((c) => seen.push(c), { includeUnlisted: true });
-    await stack.mutate(note.id, { contentPatch: { text: 'edited' }, unlisted: true });
+    await stack.subscribe((c) => seen.push(c), { filter: { includeUnlisted: true } });
+    await stack.setUnlisted(note.id, true);
 
     expect(seen[0]!.kind).toBe('removed');
-    expect([...seen[0]!.ops].sort()).toEqual(['patch', 'unlist']);
+    expect(seen[0]!.ops).toEqual(['unlist']);
   });
 
-  test('a reparent bundled with an edit still reaches the origin container', async () => {
-    await stack.mutate(note.id, { parentId: box.id });
+  test('a move to the root still reaches the origin container', async () => {
+    await stack.setParent(note.id, box.id);
     const seen: RecordChange[] = [];
     await stack.subscribe((c) => seen.push(c), { filter: { parentId: box.id } });
 
-    await stack.mutate(note.id, { contentPatch: { text: 'edited' }, parentId: null });
+    await stack.setParent(note.id, null);
     expect(seen).toHaveLength(1);
-    expect(seen[0]!.ops).toContain('reparent');
+    expect(seen[0]!.ops).toEqual(['reparent']);
   });
 
-  test('refuses a move that would make the record its own ancestor', async () => {
-    await stack.mutate(note.id, { parentId: box.id });
-    await expect(
-      stack.mutate(box.id, { contentPatch: { text: 'x' }, parentId: note.id }),
-    ).rejects.toThrow(StackConflictError);
-  });
-
-  // The adapter is handed only what moved, so restating an aspect cannot
-  // rewrite it — an unlistedAt dragged forward by an unrelated edit would
-  // move the record's publish moment with no op reporting it.
+  // Restating an aspect writes nothing, so an unlistedAt is never dragged
+  // forward with no op reporting it.
   test('restating an aspect does not rewrite it', async () => {
-    const unlistedAt = (await stack.mutate(note.id, { unlisted: true })).unlistedAt;
-    const perms: AuthorityAssociation[] = [{ kind: 'anyone', label: 'read' }];
-    await stack.mutate(note.id, { permissions: perms });
-
-    await stack.mutate(note.id, {
-      contentPatch: { text: 'edited' },
-      unlisted: true,
-      permissions: perms,
-    });
-
-    const after = await stack.get(note.id);
-    expect(after!.unlistedAt).toEqual(unlistedAt);
-    expect(after!.permissions).toEqual(perms);
+    const unlistedAt = (await stack.setUnlisted(note.id, true)).unlistedAt;
+    await stack.setUnlisted(note.id, true);
+    expect((await stack.get(note.id))!.unlistedAt).toEqual(unlistedAt);
   });
 
-  test('patchContent is mutate with contentPatch alone', async () => {
-    const patched = await stack.patchContent(note.id, { text: 'edited' });
-    expect(patched.content).toEqual({ text: 'edited' });
-    expect(patched.version).toBe(2);
+  // The order docs/spec/data-model.md § Publishing is several writes gives: content, then
+  // access, then listing, each fenced to the version the review produced.
+  test('a publish fenced to the reviewed version refuses to widen access over a later edit', async () => {
+    const reviewed = await stack.setUnlisted(note.id, true);
+    const final = await stack.patchContent(
+      note.id,
+      { text: 'final' },
+      { ifVersion: reviewed.version },
+    );
+    await stack.patchContent(note.id, { text: 'sneaked in' });
+
+    await expect(
+      stack.setAccess(note.id, [{ kind: 'anyone', label: 'read' }], { ifVersion: final.version }),
+    ).rejects.toThrow(StackVersionConflictError);
+    const after = await stack.get(note.id);
+    expect(after!.permissions).toBeUndefined();
+    expect(after!.unlistedAt).toBeInstanceOf(Date);
   });
 });
 
@@ -8123,10 +8477,10 @@ describe('Stack — a tombstone refuses mutation', () => {
   });
 
   test.each([
-    ['mutate', () => stack.mutate(note.id, { contentPatch: { text: 'x' } })],
+    ['mutate', () => stack.patchContent(note.id, { text: 'x' })],
     ['patchContent', () => stack.patchContent(note.id, { text: 'x' })],
-    ['associate', () => stack.associate(note.id, [tag])],
-    ['dissociate', () => stack.dissociate(note.id, [tag])],
+    ['associate', () => stack.editAssociations(note.id, [{ op: 'add', association: tag }])],
+    ['dissociate', () => stack.editAssociations(note.id, [{ op: 'remove', association: tag }])],
     ['restoreVersion', () => stack.restoreVersion(note.id, 1)],
   ])('%s throws StackConflictError', async (_verb, call) => {
     await expect(call()).rejects.toThrow(StackConflictError);
@@ -8190,12 +8544,54 @@ describe('query — sort direction defaults', () => {
     );
   });
 
-  test('the adapter receives an explicit direction, or no sort at all', async () => {
+  test('the adapter always receives a complete sort', async () => {
     const spy = vi.spyOn(adapter, 'queryRecords');
     await stack.query();
     await stack.query({ sort: { contentField: 'text' } });
-    expect(spy.mock.calls[0]![0]).not.toHaveProperty('sort');
+    expect(spy.mock.calls[0]![0].sort).toEqual({ field: 'createdAt', direction: 'desc' });
     expect(spy.mock.calls[1]![0].sort).toEqual({ contentField: 'text', direction: 'asc' });
+  });
+
+  test('the adapter receives an explicit limit: the default page, or the ceiling', async () => {
+    const spy = vi.spyOn(adapter, 'queryRecords');
+    await stack.query();
+    await stack.query({ limit: 5 });
+    await stack.query({ limit: 5000 });
+    expect(spy.mock.calls.map(([q]) => q.limit)).toEqual([50, 5, 1000]);
+  });
+
+  test('the adapter receives filter.baseId as given, and no presentAt', async () => {
+    const spy = vi.spyOn(adapter, 'queryRecords');
+    await stack.query({ filter: { baseId: fam(NOTE_V1) }, presentAt: 'latest' });
+    const [sent] = spy.mock.calls[0]!;
+    expect(sent).not.toHaveProperty('presentAt');
+    expect(sent.filter).toEqual({ baseId: fam(NOTE_V1) });
+  });
+
+  test('a malformed query is refused even when its family has no Types', async () => {
+    await expect(
+      stack.query({ filter: { baseId: 'com.example.none/thing' }, limit: 0 }),
+    ).rejects.toThrow(StackBadRequestError);
+  });
+
+  test('a query refused for a capability never reaches the adapter', async () => {
+    const incapable = await IncapableMemoryAdapter.open({ ownerEntityId: 'owner-x' });
+    const spy = vi.spyOn(incapable, 'queryRecords');
+    const incapableStack = await Stack.open(incapable);
+    await expect(
+      incapableStack.query({ filter: { content: { text: 'a' } } }),
+    ).rejects.toMatchObject({ capability: 'filter.content' });
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  test('refuses a sort that names a direction alone', async () => {
+    await expect(stack.query({ sort: { direction: 'asc' } as never })).rejects.toThrow(
+      /names exactly one/,
+    );
+  });
+
+  test.each([0, -1, 1.5, Number.NaN])('refuses a limit of %s', async (limit) => {
+    await expect(stack.query({ limit })).rejects.toThrow(StackBadRequestError);
   });
 });
 
@@ -8252,7 +8648,7 @@ describe('_grant writes hold the target to a family', () => {
     await expect(stack.create('_grant@1', content('_app'))).rejects.toThrow(StackValidationError);
   });
 
-  test('mutate() refuses a patch that makes the target versioned or protected', async () => {
+  test('patchContent() refuses a patch that makes the target versioned or protected', async () => {
     const g = await stack.create('_grant@1', content(fam(NOTE_V1)));
     await expect(stack.patchContent(g.id, { baseId: NOTE_V1 })).rejects.toThrow(
       StackValidationError,

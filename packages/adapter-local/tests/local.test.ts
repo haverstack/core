@@ -3,6 +3,7 @@ import { mkdirSync, rmSync, existsSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { OwnerMismatchError } from '@haverstack/core/adapter';
+import { Stack } from '@haverstack/core';
 import { LocalAdapter } from '../src/index.js';
 import type { StackRecord } from '@haverstack/core';
 
@@ -19,12 +20,11 @@ afterEach(() => {
   rmSync(testDir, { recursive: true, force: true });
 });
 
-const initAdapter = (opts?: { timezone?: string; ownerEntityId?: string }) =>
+const initAdapter = (opts?: { ownerEntityId?: string }) =>
   LocalAdapter.open({
     create: 'exclusive',
     path: dbPath,
     ownerEntityId: opts?.ownerEntityId ?? 'entity-123',
-    timezone: opts?.timezone ?? 'America/New_York',
   });
 
 const makeRecord = (overrides: Partial<StackRecord> = {}): StackRecord => ({
@@ -57,11 +57,6 @@ describe('initialize', () => {
     expect(adapter.ownerEntityId).toBe('owner-abc');
   });
 
-  test('exposes timezone', async () => {
-    const adapter = await initAdapter({ timezone: 'Europe/London' });
-    expect(adapter.timezone).toBe('Europe/London');
-  });
-
   test('throws if database already exists', async () => {
     await initAdapter();
     await expect(initAdapter()).rejects.toThrow(/already exists/);
@@ -90,11 +85,10 @@ describe('open', () => {
     expect(await adapter2.getRecord('persist-test')).not.toBeNull();
   });
 
-  test('preserves ownerEntityId and timezone across reopen', async () => {
-    await initAdapter({ ownerEntityId: 'owner-abc', timezone: 'Europe/London' });
+  test('preserves ownerEntityId across reopen', async () => {
+    await initAdapter({ ownerEntityId: 'owner-abc' });
     const adapter = await LocalAdapter.open({ path: dbPath });
     expect(adapter.ownerEntityId).toBe('owner-abc');
-    expect(adapter.timezone).toBe('Europe/London');
   });
 });
 
@@ -169,16 +163,6 @@ describe('open with create: ifMissing', () => {
       }),
     ).rejects.toThrow(OwnerMismatchError);
     expect(existsSync(`${dbPath}.lock`)).toBe(false);
-  });
-
-  test('passes timezone through when the store is created', async () => {
-    const adapter = await LocalAdapter.open({
-      create: 'ifMissing',
-      path: dbPath,
-      ownerEntityId: 'owner-abc',
-      timezone: 'Europe/London',
-    });
-    expect(adapter.timezone).toBe('Europe/London');
   });
 });
 
@@ -290,9 +274,10 @@ describe('deleteUnreferencedAttachmentRecords', () => {
       }),
     );
 
-    const deleted = await adapter.deleteUnreferencedAttachmentRecords('file-1', [
-      'com.example.test/_attachment@1',
-    ]);
+    const deleted = await adapter.deleteUnreferencedAttachmentRecords(
+      'file-1',
+      'com.example.test/_attachment',
+    );
     expect(deleted.map((r) => r.id)).toEqual(['meta1']);
     expect(await adapter.getRecord('meta1')).toBeNull();
   });
@@ -319,7 +304,7 @@ describe('journal', () => {
     await adapter.createRecord(makeRecord({ id: 'rec1' }));
     const association = { kind: 'attachment', label: 'embed', fileId: 'file-1' } as const;
 
-    await adapter.amendAssociations(
+    await adapter.editAssociations(
       'rec1',
       [{ op: 'add', association: { ...association, attachmentRecordId: 'meta1' } }],
       {
@@ -332,7 +317,7 @@ describe('journal', () => {
         },
       },
     );
-    await adapter.amendAssociations(
+    await adapter.editAssociations(
       'rec1',
       [{ op: 'add', association: { ...association, attachmentRecordId: 'meta2' } }],
       {
@@ -367,8 +352,8 @@ describe('journal', () => {
     const adapter = await initAdapter();
     await adapter.createRecord(makeRecord({ id: 'rec1' }));
     const association = { kind: 'tag', label: 'draft' } as const;
-    await adapter.amendAssociations('rec1', [{ op: 'add', association: association }]);
-    await adapter.amendAssociations('rec1', [{ op: 'remove', association: association }], {
+    await adapter.editAssociations('rec1', [{ op: 'add', association: association }]);
+    await adapter.editAssociations('rec1', [{ op: 'remove', association: association }], {
       journal: {
         kind: 'changed',
         ops: ['dissociate'],
@@ -379,5 +364,36 @@ describe('journal', () => {
     const entries = await adapter.getJournal('rec1');
     expect(entries.map((e) => e.ops)).toEqual([['dissociate']]);
     expect(entries[0]!.associations).toEqual([{ op: 'remove', association }]);
+  });
+});
+
+// -------------------------------------------------------
+// Scoped queries
+// -------------------------------------------------------
+
+describe('scoped query', () => {
+  // The cursor and whether one comes back are decided among the Records
+  // the requester can read. See docs/spec/disclosure.md § What a query reveals.
+  test('names no Record the requester cannot read, and ends where the readable ones do', async () => {
+    const stack = await Stack.open(await initAdapter({ ownerEntityId: 'owner-abc' }));
+    await stack.defineType({
+      id: 'com.ex/secret@1',
+      name: 'Secret',
+      schema: { ssn: { kind: 'text' } },
+    });
+    for (let i = 0; i < 17; i++) await stack.create('com.ex/secret@1', { ssn: `x${i}` });
+    const shared = await stack.create(
+      'com.ex/secret@1',
+      { ssn: 'shared' },
+      { permissions: [{ kind: 'anyone', label: 'read' }] },
+    );
+
+    const anon = stack.asEntity(null);
+    const query = { filter: { typeId: 'com.ex/secret@1' }, sort: { contentField: 'ssn' } };
+    expect(await anon.query({ ...query, limit: 1 })).toEqual({
+      records: [expect.objectContaining({ id: shared.id })],
+      cursor: null,
+    });
+    await stack.close();
   });
 });

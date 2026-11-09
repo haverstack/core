@@ -1,16 +1,17 @@
 import { describe, test, expect } from 'vitest';
-import { combineAdapters } from '../src/combine.js';
+import { combineAdapters } from '../src/adapter/combine.js';
 import type {
   StackRecordAdapter,
   StackBlobAdapter,
   StackCapabilities,
   BlobInfo,
   StackRecord,
-  RecordChangeSet,
   FileId,
   TypeId,
-  SubscribeChangesOptions,
-} from '../src/types.js';
+  BaseId,
+  SubscribeOptions,
+  RecordHistory,
+} from '../src/types/index.js';
 
 const purgedRecord: StackRecord = {
   id: 'meta1',
@@ -29,11 +30,13 @@ const capabilities: StackCapabilities = {
   filter: {
     content: 'none',
     contentPresent: false,
+    contentByType: false,
     search: false,
   },
   sort: {
     fields: ['createdAt', 'updatedAt', 'version'],
     contentField: false,
+    contentFieldByType: false,
   },
   limits: {
     attachmentBytes: null,
@@ -46,10 +49,16 @@ function makeRecordAdapter(overrides: Partial<StackRecordAdapter> = {}): StackRe
   return {
     capabilities,
     ownerEntityId: 'owner-123',
-    timezone: 'UTC',
+    writers: 'owner',
     createRecord: async (r) => r,
     getRecord: async () => null,
-    mutateRecord: async () => {
+    patchContent: async () => {
+      throw new Error('not implemented');
+    },
+    setParent: async () => {
+      throw new Error('not implemented');
+    },
+    setUnlisted: async () => {
       throw new Error('not implemented');
     },
     deleteRecord: async () => null,
@@ -58,12 +67,20 @@ function makeRecordAdapter(overrides: Partial<StackRecordAdapter> = {}): StackRe
     },
     queryRecords: async () => ({ records: [], cursor: null }),
     getJournal: async () => [],
-    amendAssociations: async () => {
+    editAssociations: async () => {
+      throw new Error('not implemented');
+    },
+    setAssociations: async () => {
+      throw new Error('not implemented');
+    },
+    editAccess: async () => {
+      throw new Error('not implemented');
+    },
+    setAccess: async () => {
       throw new Error('not implemented');
     },
     getVersions: async () => [],
     getVersion: async () => null,
-    saveVersion: async () => {},
     restoreVersion: async () => {
       throw new Error('not implemented');
     },
@@ -88,13 +105,12 @@ function makeBlobAdapter(overrides: Partial<StackBlobAdapter> = {}): StackBlobAd
 }
 
 describe('combineAdapters', () => {
-  test('forwards ownerEntityId, timezone, and capabilities from the record adapter', () => {
+  test('forwards ownerEntityId and capabilities from the record adapter', () => {
     const adapter = combineAdapters({
-      record: makeRecordAdapter({ ownerEntityId: 'owner-xyz', timezone: 'Europe/London' }),
+      record: makeRecordAdapter({ ownerEntityId: 'owner-xyz' }),
       blob: makeBlobAdapter(),
     });
     expect(adapter.ownerEntityId).toBe('owner-xyz');
-    expect(adapter.timezone).toBe('Europe/London');
     expect(adapter.capabilities).toBe(capabilities);
   });
 
@@ -133,39 +149,46 @@ describe('combineAdapters', () => {
     expect(fileId).toBe('computed-id');
   });
 
-  test('forwards a change set to the record adapter', async () => {
-    let calledWith: [string, RecordChangeSet] | undefined;
+  test('forwards each aspect write to the record adapter, arguments and options alike', async () => {
+    const calls: unknown[][] = [];
+    const record =
+      (name: string) =>
+      async (...args: unknown[]) => {
+        calls.push([name, ...args]);
+        return purgedRecord;
+      };
     const adapter = combineAdapters({
       record: makeRecordAdapter({
-        mutateRecord: async (id, changes) => {
-          calledWith = [id, changes];
-          return { ...purgedRecord, unlistedAt: changes.unlisted ? new Date() : undefined };
-        },
+        patchContent: record('patchContent'),
+        setParent: record('setParent'),
+        setUnlisted: record('setUnlisted'),
+        editAssociations: record('editAssociations'),
+        setAssociations: record('setAssociations'),
+        editAccess: record('editAccess'),
+        setAccess: record('setAccess'),
       }),
       blob: makeBlobAdapter(),
     });
 
-    await adapter.mutateRecord('r1', { unlisted: true });
-    expect(calledWith).toEqual(['r1', { unlisted: true }]);
-  });
-
-  test('forwards every key of a change set, not just the first', async () => {
-    let calledWith: [string, RecordChangeSet] | undefined;
-    const adapter = combineAdapters({
-      record: makeRecordAdapter({
-        mutateRecord: async (id, changes) => {
-          calledWith = [id, changes];
-          return {
-            ...purgedRecord,
-            ...(changes.parentId != null && { parentId: changes.parentId }),
-          };
-        },
-      }),
-      blob: makeBlobAdapter(),
-    });
-
-    await adapter.mutateRecord('r1', { parentId: 'box1', contentPatch: { text: 'x' } });
-    expect(calledWith).toEqual(['r1', { parentId: 'box1', contentPatch: { text: 'x' } }]);
+    const opts = { ifVersion: 3 };
+    const tag = { kind: 'tag' as const, label: 'x' };
+    const anyone = { kind: 'anyone' as const, label: 'read' as const };
+    await adapter.patchContent('r1', { text: 'x' }, opts);
+    await adapter.setParent('r1', 'box1', opts);
+    await adapter.setUnlisted('r1', true, opts);
+    await adapter.editAssociations('r1', [{ op: 'add', association: tag }], opts);
+    await adapter.setAssociations('r1', [tag], opts);
+    await adapter.editAccess('r1', [{ op: 'add', association: anyone }], opts);
+    await adapter.setAccess('r1', [anyone], opts);
+    expect(calls).toEqual([
+      ['patchContent', 'r1', { text: 'x' }, opts],
+      ['setParent', 'r1', 'box1', opts],
+      ['setUnlisted', 'r1', true, opts],
+      ['editAssociations', 'r1', [{ op: 'add', association: tag }], opts],
+      ['setAssociations', 'r1', [tag], opts],
+      ['editAccess', 'r1', [{ op: 'add', association: anyone }], opts],
+      ['setAccess', 'r1', [anyone], opts],
+    ]);
   });
 
   // putAttachmentWithMetadata promises bytes + record as one atomic
@@ -198,8 +221,8 @@ describe('combineAdapters', () => {
           seen.create = opts;
           return r;
         },
-        amendAssociations: async (_id, _changes, opts) => {
-          seen.amend = opts;
+        editAssociations: async (_id, _edits, opts) => {
+          seen.edit = opts;
           return null as never;
         },
       }),
@@ -218,23 +241,23 @@ describe('combineAdapters', () => {
       },
       journal,
     );
-    await adapter.amendAssociations(
+    await adapter.editAssociations(
       'r1',
       [{ op: 'add', association: { kind: 'tag', label: 'x' } }],
       journal,
     );
 
     expect(seen.create).toBe(journal);
-    expect(seen.amend).toBe(journal);
+    expect(seen.edit).toBe(journal);
   });
 
   describe('optional capability forwarding', () => {
     test('deleteUnreferencedAttachmentRecords is present when the record adapter implements it', async () => {
-      let calledWith: [FileId, TypeId[]] | undefined;
+      let calledWith: [FileId, BaseId] | undefined;
       const adapter = combineAdapters({
         record: makeRecordAdapter({
-          deleteUnreferencedAttachmentRecords: async (fileId, metadataTypeIds) => {
-            calledWith = [fileId, metadataTypeIds];
+          deleteUnreferencedAttachmentRecords: async (fileId, metadataBaseId) => {
+            calledWith = [fileId, metadataBaseId];
             return [purgedRecord];
           },
         }),
@@ -242,12 +265,9 @@ describe('combineAdapters', () => {
       });
 
       expect(adapter.deleteUnreferencedAttachmentRecords).toBeDefined();
-      const result = await adapter.deleteUnreferencedAttachmentRecords!('file-1', [
-        '_attachment@1',
-        '_attachment@2',
-      ]);
+      const result = await adapter.deleteUnreferencedAttachmentRecords!('file-1', '_attachment');
       expect(result).toEqual([purgedRecord]);
-      expect(calledWith).toEqual(['file-1', ['_attachment@1', '_attachment@2']]);
+      expect(calledWith).toEqual(['file-1', '_attachment']);
     });
 
     test('deleteUnreferencedAttachmentRecords is absent when the record adapter does not implement it', () => {
@@ -256,6 +276,30 @@ describe('combineAdapters', () => {
         blob: makeBlobAdapter(),
       });
       expect(adapter.deleteUnreferencedAttachmentRecords).toBeUndefined();
+    });
+
+    test('importRecord is present when the record adapter implements it', async () => {
+      let calledWith: [StackRecord, RecordHistory] | undefined;
+      const adapter = combineAdapters({
+        record: makeRecordAdapter({
+          importRecord: async (record, history) => {
+            calledWith = [record, history];
+            return record;
+          },
+        }),
+        blob: makeBlobAdapter(),
+      });
+      const history: RecordHistory = { versions: [], journal: [] };
+      expect(await adapter.importRecord!(purgedRecord, history)).toBe(purgedRecord);
+      expect(calledWith).toEqual([purgedRecord, history]);
+    });
+
+    test('importRecord is absent when the record adapter does not implement it', () => {
+      const adapter = combineAdapters({
+        record: makeRecordAdapter(),
+        blob: makeBlobAdapter(),
+      });
+      expect(adapter.importRecord).toBeUndefined();
     });
 
     test('listBlobs is present when the blob adapter implements it', async () => {
@@ -278,11 +322,11 @@ describe('combineAdapters', () => {
     });
 
     test('subscribeChanges is present when the record adapter implements it', async () => {
-      let received: SubscribeChangesOptions | undefined;
+      let received: SubscribeOptions | undefined;
       const stop = () => {};
       const adapter = combineAdapters({
         record: makeRecordAdapter({
-          subscribeChanges: async (opts: SubscribeChangesOptions) => {
+          subscribeChanges: async (opts: SubscribeOptions) => {
             received = opts;
             return stop;
           },

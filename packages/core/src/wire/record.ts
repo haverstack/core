@@ -1,0 +1,133 @@
+/**
+ * Stack — Wire Record Bodies
+ * -------------------------------------------------------
+ * `POST /records` is the one endpoint where a client sends a whole record
+ * and the server may trust only part of it. This module turns that body
+ * into the arguments `ScopedStack.create()` takes, so the disposition of
+ * each field — stamped, conditionally dropped, forwarded — is structural
+ * rather than a property of how carefully a route was written. Which field
+ * gets which is not derivable from its name, and the rules are normative
+ * for servers in other languages, so they live in the spec rather than
+ * here: docs/spec/wire-format.md § Records.
+ */
+
+import type { ScopedStack } from '../scoped-stack/scoped-stack.js';
+import { StackBadRequestError } from '../errors.js';
+import { fieldError, requireBody } from './body.js';
+import type { BackdatableCreateRecordOptions } from '../stack/client.js';
+import type { AuthorityAssociation, DataAssociation, StackRecord, TypeId } from '../types/index.js';
+
+/**
+ * A `POST /records` body as the three arguments `ScopedStack.create()`
+ * takes. Not spread-ready, so a call site reads as three deliberate things.
+ */
+export type WireCreateRequest = {
+  typeId: TypeId;
+  content: Record<string, unknown>;
+  /** Omitted, not optional: a caller cannot forward what the type lacks. */
+  options: Omit<BackdatableCreateRecordOptions, 'createdBy'>;
+};
+
+/**
+ * Every top-level key a wire record carries — a `StackRecord`'s, so a new
+ * field fails to compile here until it is listed. A create body is a whole
+ * record, so each of these is accepted — stamped ones are then dropped —
+ * and anything else is refused. See docs/spec/wire-format.md § Unrecognized input.
+ */
+const WIRE_RECORD_KEYS: readonly string[] = Object.keys({
+  id: true,
+  typeId: true,
+  createdAt: true,
+  updatedAt: true,
+  content: true,
+  version: true,
+  parentId: true,
+  appId: true,
+  createdBy: true,
+  updatedBy: true,
+  deletedAt: true,
+  unlistedAt: true,
+  permissions: true,
+  associations: true,
+} satisfies Record<keyof StackRecord, true>);
+
+function optionalString(body: Record<string, unknown>, key: string): string | undefined {
+  const value = body[key];
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') fieldError(key, `${key} must be a string`);
+  return value;
+}
+
+function optionalArray<T>(body: Record<string, unknown>, key: string): T[] | undefined {
+  const value = body[key];
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) fieldError(key, `${key} must be an array`);
+  return value as T[];
+}
+
+/**
+ * A wire date for one of the owner-only clock fields. An `Invalid Date`
+ * must not reach `create()`: its `NaN` timestamp switches the id-skew
+ * check off instead of failing it.
+ */
+function ownerDate(body: Record<string, unknown>, key: string): Date | undefined {
+  const value = body[key];
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' && typeof value !== 'number')
+    fieldError(key, `${key} must be a date string`);
+  const date = new Date(value as string | number);
+  if (isNaN(date.getTime())) fieldError(key, `Invalid ${key}: ${JSON.stringify(value)}`);
+  return date;
+}
+
+/**
+ * Read a `POST /records` body as a create by `scoped`, the view the server
+ * will create through. Taking the view, not a session or a boolean, keeps
+ * the owner-acting-alone decision in core. Values beyond shape are
+ * `Stack`'s to judge, or two answers drift.
+ */
+export function createOptionsFromWireRecord(
+  body: unknown,
+  scoped: Pick<ScopedStack, 'ownerActingAlone'>,
+): WireCreateRequest {
+  const record = requireBody(body, 'record body');
+  const unknown = Object.keys(record).filter((key) => !WIRE_RECORD_KEYS.includes(key));
+  if (unknown.length > 0)
+    throw new StackBadRequestError(
+      `Unknown record key${unknown.length > 1 ? 's' : ''}: ${unknown.join(', ')}`,
+    );
+
+  const typeId = record.typeId;
+  if (typeof typeId !== 'string' || typeId === '')
+    throw new StackBadRequestError('Invalid record body: typeId is required');
+  const content = record.content;
+  if (typeof content !== 'object' || content === null || Array.isArray(content))
+    throw new StackBadRequestError('Invalid record body: content is required');
+
+  const options: WireCreateRequest['options'] = {};
+
+  const id = optionalString(record, 'id');
+  if (id !== undefined) options.id = id;
+  const parentId = optionalString(record, 'parentId');
+  if (parentId !== undefined) options.parentId = parentId;
+  const appId = optionalString(record, 'appId');
+  if (appId !== undefined) options.appId = appId;
+
+  const permissions = optionalArray<AuthorityAssociation>(record, 'permissions');
+  if (permissions !== undefined) options.permissions = permissions;
+  const associations = optionalArray<DataAssociation>(record, 'associations');
+  if (associations !== undefined) options.associations = associations;
+
+  // Presence is the whole signal: an unlisted record is unlisted from
+  // birth, so the timestamp a client sends has nothing to say.
+  if (optionalString(record, 'unlistedAt') !== undefined) options.unlisted = true;
+
+  if (scoped.ownerActingAlone) {
+    const createdAt = ownerDate(record, 'createdAt');
+    if (createdAt !== undefined) options.createdAt = createdAt;
+    const updatedAt = ownerDate(record, 'updatedAt');
+    if (updatedAt !== undefined) options.updatedAt = updatedAt;
+  }
+
+  return { typeId, content: content as Record<string, unknown>, options };
+}

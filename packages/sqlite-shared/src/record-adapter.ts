@@ -1,6 +1,6 @@
 /**
  * The engine-independent half of a SQLite-backed StackRecordAdapter: the
- * capability declaration and the delegation of all seventeen
+ * capability declaration and the delegation of all twenty-three
  * StackRecordAdapter methods onto SharedSqlRecordLogic. Every method here
  * is a forward with no engine-specific content, so an adapter that owns a
  * SqlExecutor already knows how to answer all of them.
@@ -21,19 +21,30 @@ import type {
   RecordJournalEntry,
   StackType,
   TypeId,
+  BaseId,
   FileId,
   RecordVersion,
-  ActorOptions,
   StackRecord,
-  StackQuery,
   QueryResult,
   AssociationEdit,
-  RecordChangeSet,
+  AuthorityAssociation,
+  DataAssociation,
   StackCapabilities,
+  ConfigContent,
 } from '@haverstack/core';
-import type { StackRecordAdapter, JournalOptions } from '@haverstack/core/adapter';
+import type {
+  AdapterQuery,
+  StackRecordAdapter,
+  AspectWriteOptions,
+  ElementWriteOptions,
+  JournalOptions,
+  MutateOptions,
+  Reach,
+  RecordHistory,
+  StoreWriters,
+} from '@haverstack/core/adapter';
+import { trackWrites } from '@haverstack/core/adapter';
 import type { SqlExecutor } from './executor.js';
-import type { StackConfig } from './config.js';
 import { SharedSqlRecordLogic } from './record-logic.js';
 
 /**
@@ -46,11 +57,13 @@ export const SQLITE_RECORD_CAPABILITIES: StackCapabilities = {
   filter: {
     content: 'path',
     contentPresent: true,
+    contentByType: true,
     search: true,
   },
   sort: {
     fields: ['createdAt', 'updatedAt', 'version'],
     contentField: true,
+    contentFieldByType: true,
   },
   limits: {
     attachmentBytes: null,
@@ -62,14 +75,22 @@ export abstract class SharedSqlRecordAdapter implements StackRecordAdapter {
   readonly capabilities: StackCapabilities = SQLITE_RECORD_CAPABILITIES;
 
   readonly ownerEntityId: string;
-  readonly timezone: string | undefined;
+
+  /** Each engine holds its database for one process; see docs/spec/adapters.md § Concurrency & storage ownership. */
+  readonly writers: StoreWriters = 'owner';
 
   private readonly record: SharedSqlRecordLogic;
 
-  protected constructor(exec: SqlExecutor, config: StackConfig) {
+  /** Moved by every write method; see head(). */
+  private readonly written = trackWrites(this);
+
+  protected constructor(exec: SqlExecutor, config: ConfigContent) {
     this.record = new SharedSqlRecordLogic({ exec });
-    this.ownerEntityId = config.entityId;
-    this.timezone = config.timezone;
+    this.ownerEntityId = config.ownerEntityId;
+  }
+
+  async head(): Promise<string> {
+    return this.written.read();
   }
 
   // -------------------------------------------------------
@@ -80,43 +101,42 @@ export abstract class SharedSqlRecordAdapter implements StackRecordAdapter {
     return this.record.createRecord(record, opts);
   }
 
+  importRecord(record: StackRecord, history: RecordHistory): Promise<StackRecord> {
+    return this.record.importRecord(record, history);
+  }
+
   getRecord(id: string): Promise<StackRecord | null> {
     return this.record.getRecord(id);
   }
 
-  mutateRecord(
+  patchContent(
     id: string,
-    changes: RecordChangeSet,
-    opts?: {
-      ifVersion?: number;
-      snapshot?: RecordVersion;
-      bumpsVersion?: boolean;
-    } & ActorOptions &
-      JournalOptions,
+    patch: Record<string, unknown | null>,
+    opts?: MutateOptions,
   ): Promise<StackRecord> {
-    return this.record.mutateRecord(id, changes, opts);
+    return this.record.patchContent(id, patch, opts);
+  }
+
+  setParent(id: string, parentId: string | null, opts?: AspectWriteOptions): Promise<StackRecord> {
+    return this.record.setParent(id, parentId, opts);
+  }
+
+  setUnlisted(id: string, unlisted: boolean, opts?: AspectWriteOptions): Promise<StackRecord> {
+    return this.record.setUnlisted(id, unlisted, opts);
   }
 
   deleteRecord(
     id: string,
-    opts?: { purge?: boolean; ifVersion?: number; snapshot?: RecordVersion } & ActorOptions &
-      JournalOptions,
+    opts?: { purge?: boolean } & MutateOptions,
   ): Promise<StackRecord | null> {
     return this.record.deleteRecord(id, opts);
   }
 
-  undeleteRecord(
-    id: string,
-    opts?: { ifVersion?: number; snapshot?: RecordVersion } & ActorOptions & JournalOptions,
-  ): Promise<StackRecord> {
+  undeleteRecord(id: string, opts?: MutateOptions): Promise<StackRecord> {
     return this.record.undeleteRecord(id, opts);
   }
 
-  restoreVersion(
-    id: string,
-    version: number,
-    opts?: { ifVersion?: number; snapshot?: RecordVersion } & ActorOptions & JournalOptions,
-  ): Promise<StackRecord> {
+  restoreVersion(id: string, version: number, opts?: MutateOptions): Promise<StackRecord> {
     return this.record.restoreVersion(id, version, opts);
   }
 
@@ -124,20 +144,24 @@ export abstract class SharedSqlRecordAdapter implements StackRecordAdapter {
     id: string,
     toTypeId: TypeId,
     content: Record<string, unknown>,
-    opts?: { ifVersion?: number; snapshot?: RecordVersion } & ActorOptions & JournalOptions,
+    opts?: MutateOptions,
   ): Promise<StackRecord> {
     return this.record.commitMigration(id, toTypeId, content, opts);
   }
 
-  queryRecords(query: StackQuery): Promise<QueryResult> {
+  queryRecords(query: AdapterQuery): Promise<QueryResult> {
     return this.record.queryRecords(query);
+  }
+
+  queryReadable(query: AdapterQuery, reach: Reach): Promise<QueryResult> {
+    return this.record.queryReadable(query, reach);
   }
 
   deleteUnreferencedAttachmentRecords(
     fileId: FileId,
-    metadataTypeIds: TypeId[],
+    metadataBaseId: BaseId,
   ): Promise<StackRecord[]> {
-    return this.record.deleteUnreferencedAttachmentRecords(fileId, metadataTypeIds);
+    return this.record.deleteUnreferencedAttachmentRecords(fileId, metadataBaseId);
   }
 
   // -------------------------------------------------------
@@ -150,10 +174,6 @@ export abstract class SharedSqlRecordAdapter implements StackRecordAdapter {
 
   getVersion(id: string, version: number): Promise<RecordVersion | null> {
     return this.record.getVersion(id, version);
-  }
-
-  saveVersion(id: string, version: RecordVersion): Promise<void> {
-    return this.record.saveVersion(id, version);
   }
 
   // -------------------------------------------------------
@@ -181,15 +201,39 @@ export abstract class SharedSqlRecordAdapter implements StackRecordAdapter {
   }
 
   // -------------------------------------------------------
-  // Associations
+  // Associations and permissions
   // -------------------------------------------------------
 
-  amendAssociations(
-    recordId: string,
-    changes: AssociationEdit[],
-    opts?: JournalOptions,
+  editAssociations(
+    id: string,
+    edits: AssociationEdit[],
+    opts?: ElementWriteOptions<DataAssociation>,
   ): Promise<StackRecord> {
-    return this.record.amendAssociations(recordId, changes, opts);
+    return this.record.editAssociations(id, edits, opts);
+  }
+
+  setAssociations(
+    id: string,
+    associations: DataAssociation[],
+    opts?: ElementWriteOptions<DataAssociation>,
+  ): Promise<StackRecord> {
+    return this.record.setAssociations(id, associations, opts);
+  }
+
+  editAccess(
+    id: string,
+    edits: AssociationEdit[],
+    opts?: ElementWriteOptions<AuthorityAssociation>,
+  ): Promise<StackRecord> {
+    return this.record.editAccess(id, edits, opts);
+  }
+
+  setAccess(
+    id: string,
+    permissions: AuthorityAssociation[],
+    opts?: ElementWriteOptions<AuthorityAssociation>,
+  ): Promise<StackRecord> {
+    return this.record.setAccess(id, permissions, opts);
   }
 
   // -------------------------------------------------------

@@ -1,0 +1,69 @@
+/**
+ * @haverstack/core/adapter
+ * -------------------------------------------------------
+ * The interfaces a storage adapter implements — the full StackAdapter,
+ * its record and blob halves, and the options Stack hands them — plus the
+ * helpers adapters share. Audience: adapter implementers (see the in-repo
+ * adapters). Types an app reads too, such as StackCapabilities, live in
+ * the root entry point instead: every export has exactly one home.
+ */
+
+export type {
+  AdapterQuery,
+  PlainQuery,
+  AdapterSort,
+  StackAdapter,
+  StackRecordAdapter,
+  StackBlobAdapter,
+  BlobInfo,
+  BlobsQuery,
+  StoreWriters,
+  StoreReadMember,
+  StoreWriteMethod,
+  RecordWriteMethod,
+  BlobWriteMethod,
+  SnapshotOptions,
+  JournalEntryInput,
+  JournalOptions,
+  MutateOptions,
+  AspectWriteOptions,
+  ElementWriteOptions,
+  Reach,
+  RecordHistory,
+  StoreSeed,
+} from '../types/index.js';
+export { sameAssociationSet } from '../associations/identity.js';
+export {
+  ElementSetMovedError,
+  FormatMismatchError,
+  OwnerMismatchError,
+  softDeletedRefusal,
+} from '../errors.js';
+export { assertFileId, blobWindow } from './blobs.js';
+export { trackWrites, combinedHead } from './head.js';
+export type { WriteHead } from './head.js';
+export { FILE_ID_RE } from '../validate.js';
+export { combineAdapters } from './combine.js';
+export { copyStack } from './copy.js';
+export type { CreateStore } from './copy.js';
+export { newStoreSeed } from './seed.js';
+export { inReach } from './reach.js';
+export type { ReachedRecord } from './reach.js';
+export {
+  assertQueryCapabilities,
+  assertValidSort,
+  resolveQuery,
+  assertValidAssociationFilters,
+  assertValidJournalQuery,
+  assertValidVersionsQuery,
+  filtersContent,
+  parseContentFilterKey,
+} from '../query-validation.js';
+export {
+  contentSortEntry,
+  contentSortKey,
+  compareSortEntries,
+  constantSortEntry,
+  sortConstant,
+} from './sort.js';
+export type { SortEntry } from './sort.js';

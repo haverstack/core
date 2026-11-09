@@ -139,29 +139,18 @@ export const _resetIdState = (): void => {
 // -------------------------------------------------------
 
 /**
- * Largest timestamp (ms since epoch) that still encodes to the
- * 9-character prefix an ID's format requires: 32^9 - 1, i.e.
- * 3084-12-12T12:41:28.831Z. One millisecond past it the prefix grows to 10
- * characters and the ID no longer passes isValidIdFormat() — the library
- * would be minting an ID it rejects on the way back in. generateId() can't
- * reach this, since it encodes Date.now(); generateIdForTimestamp() takes
- * whatever timestamp the caller asks for, so it is the one that has to
- * check.
+ * Largest timestamp that still encodes to the 9-character prefix an ID's
+ * format requires (32^9 - 1, 3084-12-12T12:41:28.831Z); past it the library
+ * would mint an ID it rejects. Only generateIdForTimestamp() can reach it,
+ * since generateId() encodes Date.now().
  */
 export const MAX_ID_TIMESTAMP = Math.pow(BASE, MIN_TIMESTAMP_LENGTH) - 1;
 
 /**
- * Generate a new Stack record ID. Time-sortable: lexicographic order
- * matches creation order, with same-millisecond IDs monotonically
- * incremented.
- *
- * A millisecond whose suffix space is spent carries into the next one
- * rather than failing, so how many IDs a millisecond holds never depends
- * on where its random suffix happened to start — which is what keeps the
- * order total and the call free of a capacity a caller cannot see.
- * See docs/spec/data-model.md § Record IDs.
- *
- * @param timestamp - Override the timestamp (ms since epoch). Defaults to Date.now().
+ * Generate a new record ID, `timestamp` defaulting to now; lexicographic
+ * order matches creation order. A spent millisecond carries into the next
+ * rather than failing, so capacity never depends on where the random suffix
+ * started. See docs/spec/data-model.md § Record IDs.
  */
 export const generateId = (timestamp: number = Date.now()): string => {
   let effectiveTimestamp = Math.max(timestamp, lastTimestamp);
@@ -182,18 +171,11 @@ export const generateId = (timestamp: number = Date.now()): string => {
 };
 
 /**
- * Mint an ID for an arbitrary (typically past) timestamp — used by
- * Stack.create() to derive an ID from an explicit `createdAt` when
- * importing historical records. Deliberately bypasses generateId()'s
- * monotonic `lastTimestamp` floor: that floor exists to protect *live* ID
- * generation from a backward clock step (NTP correction, suspend/resume),
- * and would otherwise clamp a deliberately historical timestamp forward to
- * "now" the moment the process has minted any live ID past it — silently
- * defeating the backdate it was asked for. Same-millisecond uniqueness for
- * a historical timestamp is therefore left to a fresh random suffix each
- * call rather than the live incrementing scheme; a collision surfaces the
- * same way any client-supplied id collision does, as StackConflictError
- * from the adapter.
+ * Mint an ID for an arbitrary, typically past, timestamp — Stack.create()'s
+ * backdated import. Bypasses generateId()'s monotonic floor, which guards
+ * live minting from clock steps but would clamp a historical timestamp to
+ * now. Uniqueness rests on a fresh random suffix; a collision surfaces as
+ * the adapter's StackConflictError.
  */
 export const generateIdForTimestamp = (timestamp: number): string => {
   if (!Number.isFinite(timestamp) || timestamp < 0 || timestamp > MAX_ID_TIMESTAMP) {

@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach } from 'vitest';
-import { Stack } from '../src/stack.js';
+import { Stack } from '../src/stack/stack.js';
 import {
   StackConflictError,
   StackNotFoundError,
@@ -9,8 +9,10 @@ import {
 } from '../src/errors.js';
 import { MemoryAdapter } from '../src/testing.js';
 import { isPlanEmpty } from '../src/install.js';
-import type { AppManifest } from '../src/install.js';
-import type { AppContent, GrantContent, InstallContent, StackRecord } from '../src/types.js';
+import { migration, typeHandle } from '../src/type-handle.js';
+import { add } from '../src/migration-steps.js';
+import type { AppManifest, InstallPlan } from '../src/install.js';
+import type { AppContent, GrantContent, InstallContent, StackRecord } from '../src/types/index.js';
 
 const OWNER = 'did:key:owner';
 const APP_DID = 'did:key:notes-app';
@@ -22,21 +24,23 @@ const NOTE_2 = 'com.example.notes/note@2';
 const TAG_1 = 'com.example.tags/tag@1';
 const COMMONS_NOTE = 'org.haverstack/note@1';
 
+const NOTE_1_TYPE = typeHandle({ id: NOTE_1, name: 'Note', schema: { text: { kind: 'text' } } });
+
 const manifest = (overrides: Partial<AppManifest> = {}): AppManifest => ({
   appId: 'com.example.notes',
   name: 'Notes',
   version: '1.0.0',
-  types: [{ id: NOTE_1, name: 'Note', schema: { text: { kind: 'text' } } }],
+  types: [NOTE_1_TYPE],
   requests: [{ baseId: 'com.example.notes/note', actions: ['create', 'read-any'] }],
   ...overrides,
 });
 
-const NOTE_2_TYPE = {
+const NOTE_2_TYPE = typeHandle({
   id: NOTE_2,
   name: 'Note',
   schema: { text: { kind: 'text' }, pinned: { kind: 'boolean' } },
-  migratesFrom: NOTE_1,
-} as const;
+  migratesFrom: NOTE_1_TYPE,
+});
 
 const MIGRATING = [
   { baseId: 'com.example.notes/note', actions: ['read-any', 'update-any'] },
@@ -44,8 +48,13 @@ const MIGRATING = [
 
 let stack: Stack;
 
+/** Applies `plan` as an owner approving exactly it would. */
+function apply(plan: InstallPlan) {
+  return stack.installApp(plan.manifest, { did: plan.did, fingerprint: plan.fingerprint });
+}
+
 async function install(m: AppManifest, did = APP_DID) {
-  return stack.installApp(await stack.planInstall(m, { did }));
+  return apply(await stack.planInstall(m, { did }));
 }
 
 async function linkedGrants(record: StackRecord): Promise<GrantContent[]> {
@@ -101,7 +110,7 @@ describe('installApp()', () => {
       requestsRemoved: [],
       newKey: false,
     });
-    const second = await stack.installApp(plan);
+    const second = await apply(plan);
     expect(second.id).toBe(first.id);
     expect(await stack.listTypeGrants()).toHaveLength(1);
   });
@@ -115,7 +124,7 @@ describe('installApp()', () => {
     expect(plan.requestsAdded).toEqual(MIGRATING);
     expect(plan.requestsRemoved).toEqual(manifest().requests);
 
-    const upgraded = await stack.installApp(plan);
+    const upgraded = await apply(plan);
     expect(upgraded.content.defines).toEqual([NOTE_1, NOTE_2]);
     expect((await linkedGrants(upgraded)).map((g) => g.actions)).toEqual([
       ['read-any', 'update-any'],
@@ -128,7 +137,7 @@ describe('installApp()', () => {
     await install(manifest());
     const plan = await stack.planInstall(manifest(), { did: OTHER_DID });
     expect(plan.newKey).toBe(true);
-    await stack.installApp(plan);
+    await apply(plan);
     expect(
       (await stack.listTypeGrants()).map(
         (g) => (g.content.grantee as { entityId: string }).entityId,
@@ -142,7 +151,156 @@ describe('installApp()', () => {
   test('refuses a plan the stack has moved on from', async () => {
     const plan = await stack.planInstall(manifest(), { did: APP_DID });
     await install(manifest());
-    await expect(stack.installApp(plan)).rejects.toThrow(StackConflictError);
+    await expect(apply(plan)).rejects.toThrow(StackConflictError);
+  });
+
+  test('a fingerprint changes when the manifest or the key does', async () => {
+    const plan = await stack.planInstall(manifest(), { did: APP_DID });
+    expect(plan.fingerprint).toMatch(/^[0-9a-f]{64}$/);
+    for (const other of [
+      await stack.planInstall(manifest({ name: 'Notes+' }), { did: APP_DID }),
+      await stack.planInstall(manifest({ version: '2.0.0' }), { did: APP_DID }),
+      await stack.planInstall(manifest(), { did: OTHER_DID }),
+    ]) {
+      expect(other.fingerprint).not.toBe(plan.fingerprint);
+    }
+  });
+
+  test('a fingerprint names a canonical form, so order is no difference', async () => {
+    const BOOK_1 = 'com.example.notes/book@1';
+    const base = manifest({
+      types: [
+        NOTE_1_TYPE,
+        {
+          id: BOOK_1,
+          name: 'Book',
+          schema: {
+            status: { kind: 'enum', values: ['want', 'read'], required: true },
+            title: { kind: 'string' },
+          },
+        },
+      ],
+      requests: [
+        { baseId: 'com.example.notes/note', actions: ['create', 'read-any'] },
+        { baseId: 'com.example.notes/book', actions: ['read-any'] },
+      ],
+    });
+    const { fingerprint } = await stack.planInstall(base, { did: APP_DID });
+
+    const reordered = manifest({
+      types: [
+        {
+          // Keys inside the schema reordered, and enum values with them.
+          schema: {
+            title: { kind: 'string' },
+            status: { required: true, values: ['read', 'want'], kind: 'enum' },
+          },
+          name: 'Book',
+          id: BOOK_1,
+        },
+        NOTE_1_TYPE,
+      ],
+      requests: [
+        { baseId: 'com.example.notes/book', actions: ['read-any'] },
+        { baseId: 'com.example.notes/note', actions: ['read-any', 'create'] },
+      ],
+    } as Partial<AppManifest>);
+    const keysReversed = Object.fromEntries(Object.entries(base).reverse()) as AppManifest;
+    for (const m of [reordered, keysReversed]) {
+      expect((await stack.planInstall(m, { did: APP_DID })).fingerprint).toBe(fingerprint);
+    }
+  });
+
+  test('a manifest reports every refusal at once, each at its place in the manifest', async () => {
+    const note = 'com.example.notes/note';
+    const refused = await stack
+      .planInstall(
+        manifest({
+          requests: [
+            { baseId: note, actions: ['update-any'] },
+            { baseId: note, actions: ['read-any', 'read-any'] },
+          ],
+        }),
+        { did: APP_DID },
+      )
+      .catch((e: unknown) => e);
+    expect(refused).toBeInstanceOf(StackValidationError);
+    expect((refused as StackValidationError).errors.map((e) => e.path).sort()).toEqual([
+      'requests[0].actions[0]',
+      'requests[1].actions[1]',
+      'requests[1].baseId',
+    ]);
+  });
+
+  test('a manifest naming an action twice is refused, as grantType() refuses it', async () => {
+    const refused = await stack
+      .planInstall(
+        manifest({
+          requests: [{ baseId: 'com.example.notes/note', actions: ['read-any', 'read-any'] }],
+        }),
+        { did: APP_DID },
+      )
+      .catch((e: unknown) => e);
+    expect(refused).toBeInstanceOf(StackValidationError);
+    expect((refused as StackValidationError).errors.map((e) => e.path)).toEqual([
+      'requests[0].actions[1]',
+    ]);
+  });
+
+  test('a fingerprint names the plan the owner saw, so an edit it does not show leaves it', async () => {
+    await install(manifest());
+    const reviewed = await stack.planInstall(manifest({ version: '1.1.0' }), { did: APP_DID });
+    // The owner relabels the app's card: their label, which no plan shows.
+    const card = (await stack.query({ filter: { baseId: '_app' } })).records[0]!;
+    await stack.patchContent(card.id, { name: 'My notes' });
+    const record = await stack.installApp(manifest({ version: '1.1.0' }), {
+      did: APP_DID,
+      fingerprint: reviewed.fingerprint,
+    });
+    expect(record.content).toMatchObject({ version: '1.1.0' });
+  });
+
+  test('a manifest listing a family twice is refused, as one listing a type twice is', async () => {
+    const note = 'com.example.notes/note';
+    const refused = await stack
+      .planInstall(
+        manifest({
+          requests: [
+            { baseId: note, actions: ['create'] },
+            { baseId: note, actions: ['read-any'] },
+          ],
+        }),
+        { did: APP_DID },
+      )
+      .catch((e: unknown) => e);
+    expect(refused).toBeInstanceOf(StackValidationError);
+    expect((refused as StackValidationError).errors.map((e) => e.path)).toEqual([
+      'requests[1].baseId',
+    ]);
+  });
+
+  test('applies a manifest only while it plans to the approved fingerprint', async () => {
+    const reviewed = await stack.planInstall(manifest(), { did: APP_DID });
+    await stack.defineType(manifest().types[0]!);
+
+    const approve = (fingerprint: string) =>
+      stack.installApp(manifest(), { did: APP_DID, fingerprint });
+    await expect(approve(reviewed.fingerprint)).rejects.toThrow(StackConflictError);
+    expect((await stack.query({ filter: { baseId: '_install' } })).records).toEqual([]);
+
+    const fresh = await stack.planInstall(manifest(), { did: APP_DID });
+    const record = await approve(fresh.fingerprint);
+    expect(record.content).toMatchObject({ appId: 'com.example.notes' });
+  });
+
+  test('an approval of one manifest does not apply another', async () => {
+    const reviewed = await stack.planInstall(manifest(), { did: APP_DID });
+    await expect(
+      stack.installApp(manifest({ version: '2.0.0' }), {
+        did: APP_DID,
+        fingerprint: reviewed.fingerprint,
+      }),
+    ).rejects.toThrow(StackConflictError);
   });
 
   test('the plan lists every type it would write, commons types included', async () => {
@@ -154,7 +312,7 @@ describe('installApp()', () => {
       { id: NOTE_1, change: 'new' },
       { id: COMMONS_NOTE, change: 'new' },
     ]);
-    await stack.installApp(plan);
+    await apply(plan);
 
     const renamed = await stack.planInstall(
       manifest({ types: [{ ...manifest().types[0]!, name: 'Memo' }] }),
@@ -196,7 +354,7 @@ describe('installApp()', () => {
   test('a plan made before a type was defined is refused', async () => {
     const plan = await stack.planInstall(manifest(), { did: APP_DID });
     await stack.defineType(manifest().types[0]!);
-    await expect(stack.installApp(plan)).rejects.toThrow(StackConflictError);
+    await expect(apply(plan)).rejects.toThrow(StackConflictError);
   });
 
   test('a key registered to another app is refused', async () => {
@@ -231,11 +389,12 @@ describe('installApp()', () => {
       }),
       { did: APP_DID },
     );
-    expect(plan.foreignRequests).toEqual([
+    const expected = [
       { baseId: 'com.example.tags/tag', actions: ['read-any'], owner: 'com.example.tags' },
       { baseId: 'org.haverstack/note', actions: ['read-any'], owner: 'commons' },
       { baseId: '_entity', actions: ['read-any'], owner: 'system' },
-    ]);
+    ];
+    expect(plan.foreignRequests).toEqual(expected);
   });
 
   test('another app’s family can be used through a request, never defined', async () => {
@@ -344,8 +503,15 @@ describe('what an installed app sees', () => {
   test('a key no longer linked loses read on the install; other readers keep it', async () => {
     await install(manifest());
     const record = await install(manifest(), OTHER_DID);
-    await stack.grantAccess(record.id, [
-      { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: PERSON } },
+    await stack.editAccess(record.id, [
+      {
+        op: 'add',
+        association: {
+          kind: 'permission',
+          label: 'read',
+          grantee: { kind: 'entity', entityId: PERSON },
+        },
+      },
     ]);
     const otherCard = (await stack.query({ filter: { baseId: '_app' } })).records.find(
       (r) => (r.content as AppContent).did === OTHER_DID,
@@ -365,7 +531,7 @@ describe('what an installed app sees', () => {
     expect(() => {
       (plan.manifest.requests as unknown[]).push({ baseId: '_entity', actions: ['read-any'] });
     }).toThrow(TypeError);
-    const record = await stack.installApp(plan);
+    const record = await apply(plan);
     expect(record.content.requests).toEqual(manifest().requests);
   });
 
@@ -390,22 +556,22 @@ describe('what an installed app sees', () => {
       ).toBe(false);
     }
     const bumped = await stack.planInstall(manifest({ version: '1.0.1' }), { did: APP_DID });
-    const record = await stack.installApp(bumped);
+    const record = await apply(bumped);
     expect(record.content).toMatchObject({ version: '1.0.1' });
   });
 
-  test('requests compare as sets of actions, so a repeated action cannot keep one dropped', async () => {
+  test('narrowing a request revokes the grant actions it drops', async () => {
     await install(manifest({ requests: MIGRATING }));
-    const padded = await stack.planInstall(
-      manifest({
-        requests: [{ baseId: 'com.example.notes/note', actions: ['read-any', 'read-any'] }],
-      }),
+    const narrowed = await stack.planInstall(
+      manifest({ requests: [{ baseId: 'com.example.notes/note', actions: ['read-any'] }] }),
       { did: APP_DID },
     );
-    expect(padded.requestsRemoved).toEqual(MIGRATING);
-    const record = await stack.installApp(padded);
+    expect(narrowed.requestsRemoved).toEqual(MIGRATING);
+    const record = await apply(narrowed);
     expect((await linkedGrants(record)).flatMap((g) => g.actions)).not.toContain('update-any');
+  });
 
+  test('requests compare as sets of actions', async () => {
     const reordered = (actions: ('create' | 'read-any')[]) =>
       manifest({ requests: [{ baseId: 'com.example.notes/note', actions }] });
     await install(reordered(['read-any', 'create']));
@@ -427,6 +593,40 @@ describe('the _install record', () => {
         }),
       ).rejects.toThrow(StackValidationError);
     }
+  });
+
+  test('a request naming an action twice is refused, as on every action list', async () => {
+    const refused = await stack
+      .create<InstallContent>('_install@1', {
+        appId: 'com.example.notes',
+        name: 'Notes',
+        defines: [],
+        requests: [{ baseId: 'com.example.notes/note', actions: ['read-any', 'read-any'] }],
+      })
+      .catch((e: unknown) => e);
+    expect(refused).toBeInstanceOf(StackValidationError);
+    expect((refused as StackValidationError).errors.map((e) => e.path)).toEqual([
+      'requests[0].actions[1]',
+    ]);
+  });
+
+  test('a family requested twice or a version defined twice is refused, as in a manifest', async () => {
+    const refused = await stack
+      .create<InstallContent>('_install@1', {
+        appId: 'com.example.notes',
+        name: 'Notes',
+        defines: [NOTE_1, NOTE_1],
+        requests: [
+          { baseId: 'com.example.notes/note', actions: ['create'] },
+          { baseId: 'com.example.notes/note', actions: ['read-any'] },
+        ],
+      })
+      .catch((e: unknown) => e);
+    expect(refused).toBeInstanceOf(StackValidationError);
+    expect((refused as StackValidationError).errors.map((e) => e.path)).toEqual([
+      'defines[1]',
+      'requests[1].baseId',
+    ]);
   });
 
   test('one install answers for each appId, and appId is immutable', async () => {
@@ -453,13 +653,15 @@ describe('the _install record', () => {
     ).rejects.toThrow(StackValidationError);
 
     const record = await install(manifest());
-    await stack.grantAccess(
+    await stack.editAccess(
       record.id,
-      (['read', 'write'] as const).map((label) => ({
-        kind: 'permission' as const,
-        label,
-        grantee: { kind: 'entity' as const, entityId: PERSON },
-      })),
+      (['read', 'write'] as const)
+        .map((label) => ({
+          kind: 'permission' as const,
+          label,
+          grantee: { kind: 'entity' as const, entityId: PERSON },
+        }))
+        .map((association) => ({ op: 'add' as const, association })),
     );
     await expect(
       stack.asEntity(PERSON).patchContent(record.id, { name: 'Renamed' }),
@@ -604,13 +806,11 @@ describe('commitMigration() for an installed app', () => {
 
 describe("migrateAll({ sweep: 'listed' })", () => {
   test('migrates live, listed records and counts the deleted ones it passed over', async () => {
-    await stack.defineType(manifest().types[0]!);
-    await stack.defineType(NOTE_2_TYPE);
-    stack.registerMigration({
-      from: NOTE_1,
-      to: NOTE_2,
-      migrate: (c) => ({ ...c, pinned: false }),
+    stack = await Stack.open(await MemoryAdapter.open({ ownerEntityId: OWNER }), {
+      migrations: [migration(NOTE_1_TYPE, NOTE_2_TYPE, [add('pinned', false)])],
     });
+    await stack.defineType(NOTE_1_TYPE);
+    await stack.defineType(NOTE_2_TYPE);
     const live = await stack.create(NOTE_1, { text: 'a' });
     const deleted = await stack.create(NOTE_1, { text: 'b' });
     await stack.delete(deleted.id);
@@ -634,5 +834,27 @@ describe('the _app card an install registers', () => {
     const card = (await stack.query({ filter: { baseId: '_app' } })).records[0]!;
     expect((card.content as AppContent).name).toBe('Notes');
     expect(card.createdBy).toBeUndefined();
+  });
+});
+
+describe('answerInstall()', () => {
+  test("answers pending for the request's own key until the owner installs it", async () => {
+    const scoped = stack.asEntity(APP_DID);
+    expect(await scoped.answerInstall(manifest())).toEqual({ status: 'pending' });
+    const install = await apply(await stack.planInstall(manifest(), { did: APP_DID }));
+    expect(await scoped.answerInstall(manifest())).toEqual({ status: 'installed', install });
+  });
+
+  test('a changed manifest is pending again', async () => {
+    await install(manifest());
+    const result = await stack.asEntity(APP_DID).answerInstall(manifest({ version: '2.0.0' }));
+    expect(result).toEqual({ status: 'pending' });
+  });
+
+  test.each([
+    ['an anonymous request', () => stack.asEntity(null)],
+    ['a key acting for someone', () => stack.asActor({ principalId: APP_DID, subjectId: PERSON })],
+  ])('refuses %s', async (_, scope) => {
+    await expect(scope().answerInstall(manifest())).rejects.toThrow(StackPermissionError);
   });
 });

@@ -12,10 +12,10 @@
  */
 
 import { describe, test, expect, beforeEach, afterEach } from 'vitest';
-import type { StackBlobAdapter } from '@haverstack/core/adapter';
+import type { FileId } from '@haverstack/core';
+import { FILE_ID_RE } from '@haverstack/core/adapter';
+import type { BlobWriteMethod, StackBlobAdapter } from '@haverstack/core/adapter';
 import { expectStackErrorCode } from './errors.js';
-
-const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
 
 async function sha256Hex(data: Uint8Array): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', data as BufferSource);
@@ -66,7 +66,7 @@ export function runBlobAdapterConformance(options: BlobAdapterConformanceOptions
     test('putBlob returns the SHA-256 hex of the stored bytes', async () => {
       const data = new TextEncoder().encode('hello attachment');
       const fileId = await adapter.putBlob(data);
-      expect(fileId).toMatch(SHA256_HEX_RE);
+      expect(fileId).toMatch(FILE_ID_RE);
       expect(fileId).toBe(await sha256Hex(data));
     });
 
@@ -120,6 +120,35 @@ export function runBlobAdapterConformance(options: BlobAdapterConformanceOptions
       await expect(adapter.deleteBlob('b'.repeat(64))).resolves.toBeUndefined();
     });
 
+    // Optional, so each test asks whether the adapter has head() at all.
+    // See docs/spec/portability.md § Copying a stack.
+    describe('head', () => {
+      test('stands still across reads', async () => {
+        if (!adapter.head) return;
+        const fileId = await adapter.putBlob(new TextEncoder().encode('read, not written'));
+        const before = await adapter.head();
+        await adapter.getBlob(fileId);
+        await adapter.listBlobs?.();
+        expect(await adapter.head()).toBe(before);
+      });
+
+      // Keyed by every write method on StackBlobAdapter, as the record
+      // suite's list is: a method added to the interface fails typecheck
+      // here until it is listed.
+      const writes: Record<BlobWriteMethod, (fileId: FileId) => Promise<unknown>> = {
+        putBlob: () => adapter.putBlob(new TextEncoder().encode('moves the head')),
+        deleteBlob: (fileId) => adapter.deleteBlob(fileId),
+      };
+
+      test.each(Object.entries(writes))('moves on %s', async (_method, write) => {
+        if (!adapter.head) return;
+        const fileId = await adapter.putBlob(new TextEncoder().encode('already here'));
+        const before = await adapter.head();
+        await write(fileId);
+        expect(await adapter.head()).not.toBe(before);
+      });
+    });
+
     if (listBlobs) {
       describe('listBlobs', () => {
         test('returns an empty array for an empty store', async () => {
@@ -141,6 +170,20 @@ export function runBlobAdapterConformance(options: BlobAdapterConformanceOptions
           await adapter.deleteBlob(fileId);
           const files = await adapter.listBlobs!();
           expect(files.some((f) => f.fileId === fileId)).toBe(false);
+        });
+
+        test('reads in fileId order and pages forward from afterFileId, exclusive', async () => {
+          const ids: string[] = [];
+          for (const body of ['one', 'two', 'three']) {
+            ids.push(await adapter.putBlob(new TextEncoder().encode(body)));
+          }
+          ids.sort();
+
+          expect((await adapter.listBlobs!()).map((f) => f.fileId)).toEqual(ids);
+          const first = await adapter.listBlobs!({ limit: 2 });
+          expect(first.map((f) => f.fileId)).toEqual(ids.slice(0, 2));
+          const rest = await adapter.listBlobs!({ afterFileId: ids[1], limit: 2 });
+          expect(rest.map((f) => f.fileId)).toEqual(ids.slice(2));
         });
       });
     }

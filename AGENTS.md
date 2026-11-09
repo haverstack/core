@@ -67,7 +67,8 @@ This is about _our_ history. Genuinely foreign input — a third-party server's 
 
 ## Architecture rules
 
-- **`Stack` is the invariant layer; adapters are storage engines.** Validation, `_config` protection, ID rules, migration policy, and permission checks live in `packages/core` so every adapter inherits them. Don't reimplement an invariant inside an adapter. (The one documented exception: the `_config` query exclusion must live in each adapter's own query predicate.)
+- **`Stack` is the invariant layer; adapters are storage engines.** Validation, `_config` protection, ID rules, migration policy, and permission checks live in `packages/core` so every adapter inherits them. Don't reimplement an invariant inside an adapter. What an adapter applies is conditions core resolved and handed it as data — a query's `filter`, a scoped query's [reach](./docs/spec/adapters.md#querying-within-a-reach) — plus one constant condition, the `_config` exclusion; conditions belong in the adapter's own predicate because filtering a page after `limit` under-fills it.
+- **Validate where data enters; trust it inside.** Public API calls and wire requests are checked once. A stored Type or Record from an adapter is trusted to match its type: don't guard for a hand-edited store (a missing `values` list, an unknown `kind`). That includes `adapter-api`: its server is held to the wire contract the way a storage engine is held to the adapter contract. See [CONTRIBUTING.md § Architecture conventions](./CONTRIBUTING.md#architecture-conventions).
 - **Package prefixes declare the contract**: `adapter-*` = full `StackAdapter`, `record-adapter-*` = `StackRecordAdapter`, `blob-adapter-*` = `StackBlobAdapter`.
 - **Optional capabilities are optional methods**, checked for truthiness at the call site with a documented fallback — never a boolean in `capabilities`.
 - **Shared SQLite logic goes in `@haverstack/sqlite-shared`**, not duplicated across adapters. It is `private` and bundled into its consumers at build time, so it is never a `dependencies` entry and adding an export to it does not widen any package's public API.
@@ -91,7 +92,7 @@ pnpm changeset
 - **`patch`** for anything a consumer cannot observe; **`minor`** for anything they can. Every package is `0.x`, so minor _is_ the breaking slot.
 - **Never `major`** — that cuts a 1.0 release, which is not a PR-level decision.
 - **No changeset** for tests, CI, or repo tooling.
-- `@haverstack/sqlite-shared` is `private` and has no version to publish. Record a change to it against `@haverstack/record-adapter-sqlite`, which bundles it — a changeset naming only private packages is rejected. If a template hands you a list of every package (changeset-bot's does), trim it to what you changed.
+- `@haverstack/sqlite-shared` is `private` and has no version to publish. Record a change to it against both packages that bundle it, `@haverstack/record-adapter-sqlite` and `@haverstack/record-adapter-do-sqlite` — each ships its own copy, so each changelog owes the entry. A changeset naming only private packages is rejected. If a template hands you a list of every package (changeset-bot's does), trim it to what you changed.
 
 A `minor` on a package minor-bumps everything that depends on it, transitively; a `patch` bumps nothing else. Preview with `node scripts/expand-changesets.mjs --dry-run`. Never hand-edit a `version` field or a `CHANGELOG.md` — CI owns both. See [CONTRIBUTING.md § Releasing](./CONTRIBUTING.md#releasing).
 

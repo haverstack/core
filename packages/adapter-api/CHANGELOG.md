@@ -1,5 +1,151 @@
 # @haverstack/adapter-api
 
+## 0.46.0
+
+### Minor Changes
+
+- [#487](https://github.com/haverstack/core/pull/487) [`e75fd78`](https://github.com/haverstack/core/commit/e75fd787d653e0ef9257832121d3d5c7e90fdd35) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `StackClient` is now everything a session can ask of a stack, and `ScopedStack` decides each one, so a server built on it makes no ownership or permission determination of its own. `StackClient` gains `defineType()`, `getType()`, `listTypes()`, `typeIsCompatible()`, and the optional `listBlobs()` and `head()`, which `Stack` has exactly when its adapter does and `ScopedStack` exactly when its `Stack` does. `ScopedStack` refuses `defineType()`, `listBlobs()` and `head()` to all but the owner acting alone.
+
+  `ScopedStack.answerInstall(manifest)` answers an install request for the session's own key, `installed` or `pending`, refusing anonymous and delegated sessions.
+
+  `createOptionsFromWireRecord(body, scoped)` takes the `ScopedStack` the server will create through, in place of a session and the owner's id, and reads its new `ownerActingAlone`. `isOwnerActingAlone()` is removed.
+
+  `InstallRequestResult` is exported from `@haverstack/core` instead of `@haverstack/adapter-api`.
+
+  `MemoryAdapter.head` in `@haverstack/core/testing` is now an optional field, as `listBlobs` is, so a test subclass can remove it; a caller invoking it directly asserts it present (`adapter.head!()`).
+
+### Patch Changes
+
+- Updated dependencies [[`e75fd78`](https://github.com/haverstack/core/commit/e75fd787d653e0ef9257832121d3d5c7e90fdd35)]:
+  - @haverstack/wire-types@0.46.0
+  - @haverstack/core@0.47.0
+
+## 0.45.0
+
+### Minor Changes
+
+- Released for a breaking change in `@haverstack/core`, `@haverstack/wire-types`.
+
+### Patch Changes
+
+- Updated dependencies [[`eeeaf69`](https://github.com/haverstack/core/commit/eeeaf694bac965db1756952919de1f2cbbf77f0a)]:
+  - @haverstack/wire-types@0.45.0
+  - @haverstack/core@0.46.0
+
+## 0.44.0
+
+### Minor Changes
+
+- [#482](https://github.com/haverstack/core/pull/482) [`fae64b4`](https://github.com/haverstack/core/commit/fae64b480a193eb71fbf7ebb56d3da11d56f9f2f) Thanks [@cuibonobo](https://github.com/cuibonobo)! - A hosted stack's owner can copy it out over the wire with `copyStack(host, create)`.
+  - `head()`, an optional adapter method, says where a store's writes stand: the same string until anything is written, a different one after. A head read while a write is in flight matches no other. Every local adapter has one, counted by `trackWrites()` in `@haverstack/core/adapter`, which wraps each write method listed by the new `StoreWriteMethod` type; `combineAdapters()` and `LocalAdapter` combine both halves'.
+  - `copyStack()` reads the source's head before and after, and refuses with `StackConflictError` if they differ. A source or target without `head()` is refused with `InvalidAdapterError`.
+  - `listBlobs({ afterFileId?, limit? })` pages in `fileId` order on every blob adapter. `blobWindow()`, `FILE_ID_RE` and `assertFileId()` in `@haverstack/core/adapter` are shared by the blob adapters.
+  - `GET /blobs` and `GET /head` serve the owner acting alone, advertised in discovery as `blobs: { list: true }` and `head: { read: true }`. `APIAdapter.listBlobs()` and `APIAdapter.head()` are present only when advertised. `@haverstack/wire-types` adds `WireBlobsResponse`, `WireHeadResponse`, `serializeBlobInfo()`, `supportsBlobListing()` and `supportsHead()`; `@haverstack/core/wire` adds `parseBlobsParams()`.
+  - Every record adapter states `writers: 'owner' | 'shared'`, who writes its store. `Stack` reads it, not the presence of `subscribeChanges()`, to refuse scoping a shared stack, and refuses `subscribe()` with `StackBadRequestError` on a shared stack with no relay. `APIAdapter` is `'shared'`, and its `subscribeChanges()` is present only when discovery advertises a feed; `requestInstall()` likewise only when discovery advertises install requests. `APIAdapterCapabilityError` is removed.
+  - Conformance fixtures for both endpoints and their discovery keys; the adapter conformance suites check that `head()`, where an adapter has one, moves on every write method and stands still across reads.
+
+### Patch Changes
+
+- Updated dependencies [[`fae64b4`](https://github.com/haverstack/core/commit/fae64b480a193eb71fbf7ebb56d3da11d56f9f2f)]:
+  - @haverstack/core@0.45.0
+  - @haverstack/wire-types@0.44.0
+
+## 0.43.0
+
+### Minor Changes
+
+- [#470](https://github.com/haverstack/core/pull/470) [`e0475d2`](https://github.com/haverstack/core/commit/e0475d2fdd09581310d819d3d2b5effe4191603c) Thanks [@cuibonobo](https://github.com/cuibonobo)! - The stack owner has one name wherever a field can only hold the owner: `ownerEntityId`.
+  - `_config`'s content is `{ ownerEntityId, timezone }`, and `ConfigContent.entityId` is `ConfigContent.ownerEntityId`.
+  - The discovery response (`GET /.well-known/stack`) carries `ownerEntityId` in place of `entityId`, in `DiscoveryResponse` and the discovery fixtures. The `_config` ownership-conflict fixture is `error-conflict-config-owner-change`.
+  - Fields that may hold any entity, such as a relationship target or a grantee, keep `entityId`.
+
+- [#470](https://github.com/haverstack/core/pull/470) [`b02e69c`](https://github.com/haverstack/core/commit/b02e69c4675e7397d2fca76c314261a9744053bf) Thanks [@cuibonobo](https://github.com/cuibonobo)! - A stack can be copied whole between adapters, authorship and history included.
+  - `copyStack(from, create)` in `@haverstack/core/adapter` copies every Record, soft-deleted and unlisted ones too, with its versions and journal, plus every Type and every blob, into a new store `create` makes from the source's `_config` record and its history, and returns it open. `_config` travels as every Record does. Both ends must list their blobs, and the target must hold nothing yet, so `APIAdapter` cannot yet be copied from. Copying into a `LocalAdapter` store is an export; copying out of one is an import.
+  - It writes through the new optional `StackRecordAdapter.importRecord(record, { versions, journal })`, which every local adapter implements and `APIAdapter` does not.
+  - `StackIdentity`, `CreateStore`, `StoreSeed`, `newStoreSeed()` and `identityOf()` are exported beside it. Every adapter that creates stores takes a `seed` in place of `ownerEntityId` and `timezone`: the `_config` record, with its history, a new store is created holding. A seed only creates: storage already holding a store refuses it, and `NativeSQLiteRecordAdapter`/`LocalAdapter` take no `create` beside one. `MemoryAdapter` now holds a real `_config` record.
+  - Every SQLite store names its layout in a one-row `format` table, and opening one in another layout throws the new `FormatMismatchError` (from `@haverstack/core/adapter`). A new store is written whole, tables included, in one transaction — a table of the same name already in the database fails the create — and a failed `NativeSQLiteRecordAdapter.open()` removes a file it created.
+  - `OwnerMismatchError` reads `<where> is owned by "X", not "Y"`, and `copyStack()` throws it too.
+  - `saveVersion()` is removed from the adapter contract: `importRecord()` is the one standalone history write.
+  - `@haverstack/adapter-conformance` checks `importRecord()` in the record suite and adds `runCopyConformance()`, which holds a full adapter to both halves of a copy.
+
+- [#477](https://github.com/haverstack/core/pull/477) [`2169cff`](https://github.com/haverstack/core/commit/2169cff10f9c30bc44966c8ce90f5394cf50620d) Thanks [@cuibonobo](https://github.com/cuibonobo)! - A time value carries what it means: a `date`'s form says whether it is a moment, a calendar day or a wall-clock reading (see docs/spec/data-model.md § Types). Nothing reads a stack-wide timezone, so `_config` holds only `{ ownerEntityId }`.
+  - `timezone` is removed from `ConfigContent` and the `_config@1` schema, from every adapter's `open()` options, from `stack.timezone` and `StackRecordAdapter` and every adapter that exposed it, and from the discovery response (`DiscoveryResponse` and the discovery fixtures; `discovery-omits-absent-timezone` is removed).
+  - `StackIdentity` and `identityOf()` are removed: `ConfigContent` is what an adapter holds, and `newStoreSeed()` stores the one it is given whole.
+
+### Patch Changes
+
+- Updated dependencies [[`f1985fd`](https://github.com/haverstack/core/commit/f1985fdf6af7308c8f6f49e44ae5d06e911177df), [`c4ed857`](https://github.com/haverstack/core/commit/c4ed857a27ee0faea99b425afded4e4bae70e389), [`e0475d2`](https://github.com/haverstack/core/commit/e0475d2fdd09581310d819d3d2b5effe4191603c), [`b02e69c`](https://github.com/haverstack/core/commit/b02e69c4675e7397d2fca76c314261a9744053bf), [`7f3d108`](https://github.com/haverstack/core/commit/7f3d108100dbb7a358fdc8d1bb6e3edb2455ec45), [`2169cff`](https://github.com/haverstack/core/commit/2169cff10f9c30bc44966c8ce90f5394cf50620d)]:
+  - @haverstack/core@0.44.0
+  - @haverstack/wire-types@0.43.0
+
+## 0.42.0
+
+### Minor Changes
+
+- [#467](https://github.com/haverstack/core/pull/467) [`b263486`](https://github.com/haverstack/core/commit/b263486c238257dac15be43e7bae68d4f110d062) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `filter.baseId` is a condition every adapter matches, like `typeId`: a record matches when its `typeId` with the `@version` suffix stripped equals one of the values. `Stack` no longer resolves it to a `typeId` set against registered Types before the adapter call, so `queryRecords()` and `queryReadable()` receive it as given, and `AdapterFilter` is removed — `AdapterQuery` takes a plain `RecordFilter`. `MemoryAdapter` and the SQLite adapters match it; the SQLite ones as a `type_id` range, so the index still serves it. The conformance suite holds every adapter to it, including that a family never matches one that only shares its prefix.
+
+  It travels on the wire like any other key: `?baseId=` on `GET /records` (repeatable, as on `GET /changes`) and `filter.baseId` in a `POST /records/query` body. The parsers decode it instead of refusing it, `APIAdapter` sends it, and `assertQueryTravels()` refuses only `presentAt`. A new fixture, `query-by-type-family`, pins the encoding.
+
+  Every other family an adapter is handed is matched the same way:
+  - A `Reach` is over families: `fence`, `within.baseIds` and `within.authored.baseIds` (renamed from `types`) hold `BaseId`s, and `queryReadable()` receives the reach as `ScopedStack` built it. `Reach` no longer takes a type parameter, and `inReach(record, reach)` matches by the record's family.
+  - `deleteUnreferencedAttachmentRecords(fileId, metadataBaseId)` takes the `_attachment` family rather than its registered versions.
+
+  `includeUnlisted` moves from `SubscribeOptions` into `ChangeFilter`, so a subscription writes `subscribe(handler, { filter: { includeUnlisted: true } })` as a query writes `filter.includeUnlisted`. `?includeUnlisted=` on `GET /changes` is unchanged; `parseChangeParams()` returns it as `filter.includeUnlisted`, and `ParsedChangeParams` no longer has an `includeUnlisted` field.
+
+- [#451](https://github.com/haverstack/core/pull/451) [`f810209`](https://github.com/haverstack/core/commit/f8102090ae6ccf2cc971c901c6258a83c0c51afe) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Every aspect of a record has one narrow write verb, so no call can change more than its caller means to. `mutate()` and its change set are removed: content is written with `patchContent()`, containment with `setParent(id, parentId | null)`, listing with `setUnlisted(id, boolean)`, associations with `editAssociations()` or `setAssociations()`, and permissions with `editAccess()` or `setAccess()`. `edit*` applies a list of `add`/`remove` edits; `set*` replaces the whole set. `associate()`, `dissociate()`, `grantAccess()` and `revokeAccess()` are removed in favour of the `edit*` verbs, and `amendAssociations()`/`amendAccess()` are renamed to them. `deleteAndReturn()` is removed: `delete()` always returns `{ record, referencedFileIds }`.
+
+  Every write accepts `ifVersion` and always checks it, including the writes that never bump `version`, so a publish can fence `setAccess()` and `setUnlisted()` to the content it reviewed.
+
+  `StackRecordAdapter` narrows to match: `mutateRecord()` and `amendAssociations()` are replaced by `patchContent()`, `setParent()`, `setUnlisted()`, `editAssociations()`, `setAssociations()`, `editAccess()` and `setAccess()`, each taking `ifVersion`. `BumpVersionOptions`, `RecordChangeSet`, `assertOneSurface()`, `partitionAssociations()` and `AUTHORITY_ASSOCIATION_KINDS` are removed. SQLite adapters store permissions in a `permissions` table of their own.
+
+  On the wire, `PATCH /records/:id` is replaced by `PATCH /records/:id/content` (a bare patch body), `PUT /records/:id/parent` and `PUT /records/:id/unlisted`; `PUT /records/:id/associations` and `PUT /records/:id/permissions` replace a set; `PATCH /entity` becomes `PATCH /entity/content`. Every write endpoint reads and checks `If-Match`. `changesFromWireBody()` and `parseEntityPatchBody()` are replaced by `parseContentPatchBody()`, `parseParentBody()`, `parseUnlistedBody()`, `parseAssociationsBody()` and `parsePermissionsBody()`.
+
+- [#459](https://github.com/haverstack/core/pull/459) [`70e8c6a`](https://github.com/haverstack/core/commit/70e8c6a4886f84f57498100df28eb8a7b6e91b99) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Read the server URL's parsed scheme: `https:` is required unless the host is loopback or `allowInsecure` is set, however the scheme is spelled, and a URL that is not `http(s)` at all is refused before anything is sent.
+
+- [#465](https://github.com/haverstack/core/pull/465) [`ffc1b1a`](https://github.com/haverstack/core/commit/ffc1b1a17d3cae8878a44a61603480e5fd4568f7) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `Stack` resolves every query default before an adapter sees the query: the sort (`createdAt`, newest first, when none is named), its direction, and the page size (50, capped at 1000). `queryRecords()` and `queryReadable()` take an `AdapterQuery` whose `sort` and `limit` are always present, built by `resolveQuery()`, which `@haverstack/core/adapter` exports beside `AdapterQuery` and `AdapterSort`. No adapter carries a default of its own, and `APIAdapter` always sends the sort, direction and limit.
+
+  `createdAt` is the floor of `sort.fields`: every adapter orders by it, and `normalizeCapabilities()` reads it into any list a server declares. The conformance suite checks that an adapter declares it.
+
+  Every query entry point runs two checks, both exported from `@haverstack/core/adapter`: `resolveQuery()` for the query's shape, and `assertQueryCapabilities(query, capabilities)` for its filter and sort together. `assertSortCapability` is no longer exported. A sort must name exactly one of `field`, `contentField` or `contentFieldByType`, so a `direction` alone, in process or as `?direction=` on the wire, is refused.
+
+  Every `limit` — on `query()`, `getVersions()` and `getJournal()` — is a positive integer, and anything else is refused with `StackBadRequestError` by `Stack`. A journal `limit` of 0 is now refused. The wire parsers decode shape only and leave the range to `Stack`: `parseQueryBody()` decodes a numeric `limit` as given, and `parsePositiveInt` is renamed `parseUnsignedInt`, since it always accepted 0.
+
+  `APIAdapter.queryRecords()` trusts the query it is given. `Stack` has already checked it against `APIAdapter`'s capabilities, so a query the server cannot answer is refused with the same `StackBadRequestError`, naming the capability, that any adapter's would get, and still before a request is sent. `APIAdapterCapabilityError` now covers only the endpoints discovery advertises beside `capabilities` (`'changes'` and `'installs'`), and `@haverstack/adapter-api` no longer re-exports `MissingCapability`. `AdapterQuery` carries no `presentAt`, which `Stack` applies itself. `resolveQuery()` takes a `PlainQuery`, the same shape `parseQueryParams()` and `parseQueryBody()` now return.
+
+### Patch Changes
+
+- Updated dependencies [[`29041aa`](https://github.com/haverstack/core/commit/29041aad7002ab5dc5b89ee306aaf6b39c102d55), [`73ed256`](https://github.com/haverstack/core/commit/73ed2566ebff1c32b32b6d24fef8d76344890dca), [`b263486`](https://github.com/haverstack/core/commit/b263486c238257dac15be43e7bae68d4f110d062), [`52f9486`](https://github.com/haverstack/core/commit/52f9486d9e5a0a7c6a6c6235e4336223e4c90cfa), [`18608e5`](https://github.com/haverstack/core/commit/18608e50a8c77288f6c235f006de87193b9bea52), [`f810209`](https://github.com/haverstack/core/commit/f8102090ae6ccf2cc971c901c6258a83c0c51afe), [`70e8c6a`](https://github.com/haverstack/core/commit/70e8c6a4886f84f57498100df28eb8a7b6e91b99), [`ffc1b1a`](https://github.com/haverstack/core/commit/ffc1b1a17d3cae8878a44a61603480e5fd4568f7), [`03a6199`](https://github.com/haverstack/core/commit/03a619915d042753a6cd5c2e1801e75677f99595), [`e707ca6`](https://github.com/haverstack/core/commit/e707ca6d3d68c34a26015f507228c7549d5844e7)]:
+  - @haverstack/core@0.43.0
+  - @haverstack/wire-types@0.42.0
+
+## 0.41.0
+
+### Minor Changes
+
+- [#443](https://github.com/haverstack/core/pull/443) [`ffefedd`](https://github.com/haverstack/core/commit/ffefeddcad5479890978aa77e4ecd410932ec5f9) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `APIAdapter` no longer defines `flush()` or `close()`. Both were no-ops, and both are optional on `StackAdapter`, so `Stack` skips them already; a caller invoking them directly on an `APIAdapter` can drop the call.
+
+- [#443](https://github.com/haverstack/core/pull/443) [`ffefedd`](https://github.com/haverstack/core/commit/ffefeddcad5479890978aa77e4ecd410932ec5f9) Thanks [@cuibonobo](https://github.com/cuibonobo)! - A discovery or auth handshake response that is empty or not JSON now throws `APIAdapterError` naming the endpoint, as every other success response does, rather than a `SyntaxError` or `TypeError`.
+
+- [#444](https://github.com/haverstack/core/pull/444) [`ddad23c`](https://github.com/haverstack/core/commit/ddad23c52f7d4d93e7a2910f65dfc9862167d5fc) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Only a refused credential is reported as an authentication failure. A handshake step answering a bare `5xx` now throws `APIAdapterError` rather than `APIAdapterHandshakeError`, and a renewal that fails on a dropped connection or a server error surfaces as that `APIAdapterConnectionError` or `APIAdapterError` rather than as `APIAdapterReauthError`. A change feed whose renewal fails that way keeps reconnecting instead of stopping.
+
+### Patch Changes
+
+- [#443](https://github.com/haverstack/core/pull/443) [`d82f64e`](https://github.com/haverstack/core/commit/d82f64e8ad729bc34946c48c0d3ec0dc5805bd8b) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Errors for a response missing its body now name the endpoint exactly as it was requested, encoded path and query string included.
+
+- [#436](https://github.com/haverstack/core/pull/436) [`90d800a`](https://github.com/haverstack/core/commit/90d800a8e86c079855a17627582f015186ffe081) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `StackRecordAdapter.subscribeChanges()` takes `SubscribeOptions`, the same options a subscriber passes to `subscribe()`. `SubscribeChangesOptions` is gone from `@haverstack/core/adapter`; it had the same fields, and `Stack` already forwarded every one of them, the subscriber's own `onError` included. A new `MutateOptions` type in `@haverstack/core/adapter` names the options every version-bumping adapter mutation takes. `GrantContent` and `InstallRequest` are now derived from `TypeGrant`.
+
+- [#443](https://github.com/haverstack/core/pull/443) [`e18ddb7`](https://github.com/haverstack/core/commit/e18ddb7cf5f92423fdfb1a925c7f571c8f001196) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Split the adapter into one module per layer. The package exports are unchanged.
+
+- [#442](https://github.com/haverstack/core/pull/442) [`59f34ce`](https://github.com/haverstack/core/commit/59f34ce3cf777c39db3fa08bacb645f8001f9ae2) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `@haverstack/wire-types` no longer restates shapes `@haverstack/core` already defines, and its auth handshake types share one prefix:
+  - `AuthChallengeRequest` and `AuthTokenRequest` are removed. Use `WireAuthChallengeRequest` and `WireAuthTokenRequest`, re-exported from `@haverstack/core/wire`, where the parsers that return them live.
+  - `AuthChallengeResponse` and `AuthTokenResponse` are renamed `WireAuthChallengeResponse` and `WireAuthTokenResponse` to match. Their shape is unchanged.
+  - `WireActor` and `WireChangeActor` are now aliases of core's `Actor` and `ChangeActor`. Their shape is unchanged.
+  - `WireAssociationEditsRequest` is removed; nothing referenced it.
+
+- Updated dependencies [[`7d30040`](https://github.com/haverstack/core/commit/7d30040c4b61b8e5881604d0c042fec9c7e45122), [`98401c0`](https://github.com/haverstack/core/commit/98401c0a1a8b86fd2bfec74072ca3c3504320b66), [`a40cee0`](https://github.com/haverstack/core/commit/a40cee01aaaf37baf95be802f266ff1ee6ce320d), [`fdca4ca`](https://github.com/haverstack/core/commit/fdca4ca25760b19a79bc660404ebf95cf9c9048b), [`c427f43`](https://github.com/haverstack/core/commit/c427f435620c5766121723a54516f5a68df63561), [`90d800a`](https://github.com/haverstack/core/commit/90d800a8e86c079855a17627582f015186ffe081), [`7d30040`](https://github.com/haverstack/core/commit/7d30040c4b61b8e5881604d0c042fec9c7e45122), [`da5148b`](https://github.com/haverstack/core/commit/da5148bdb3e25e770e947df0c4c2af5b2a6f0f44), [`44fc3f6`](https://github.com/haverstack/core/commit/44fc3f645839c3a5a5eef3463826dcc0098bf089), [`d0b7950`](https://github.com/haverstack/core/commit/d0b795047ec9f8920a717a075f091cfa2462dc66), [`f616aaa`](https://github.com/haverstack/core/commit/f616aaa741c97fe1de1cfb262081e1f378082051), [`9b4adef`](https://github.com/haverstack/core/commit/9b4adef9bbb205ef27c161724dd2fe863254ffd2), [`59f34ce`](https://github.com/haverstack/core/commit/59f34ce3cf777c39db3fa08bacb645f8001f9ae2), [`89e0a07`](https://github.com/haverstack/core/commit/89e0a07b03ade71449cd20b7ad0333761c39a41f), [`55c33ba`](https://github.com/haverstack/core/commit/55c33ba3c0a55ec01796bce8b633fbad4a79cf76)]:
+  - @haverstack/core@0.42.0
+  - @haverstack/wire-types@0.41.0
+
 ## 0.40.0
 
 ### Minor Changes

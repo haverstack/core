@@ -1,0 +1,117 @@
+/**
+ * Combining adapters
+ * -------------------------------------------------------
+ * A full StackAdapter assembled from a record half and a blob half, so a
+ * deployment can keep records and bytes in different backends without
+ * either adapter knowing about the other.
+ */
+
+import type {
+  Reach,
+  RecordChange,
+  RecordHistory,
+  StackRecord,
+  StackAdapter,
+  StackRecordAdapter,
+  StackBlobAdapter,
+  AdapterQuery,
+  SubscribeOptions,
+} from '../types/index.js';
+import { combinedHead } from './head.js';
+
+/**
+ * Compose a StackRecordAdapter and a StackBlobAdapter into a single StackAdapter.
+ * Use this when you want different backends for records and blobs, e.g.:
+ *
+ *   const adapter = combineAdapters({ record: sqliteAdapter, blob: s3Adapter });
+ *   const stack = await Stack.open(adapter);
+ */
+export function combineAdapters(parts: {
+  record: StackRecordAdapter;
+  blob: StackBlobAdapter;
+}): StackAdapter {
+  return {
+    get capabilities() {
+      return parts.record.capabilities;
+    },
+    get ownerEntityId() {
+      return parts.record.ownerEntityId;
+    },
+    // The record half's, since writers names who writes the Records.
+    get writers() {
+      return parts.record.writers;
+    },
+
+    createRecord: (r, opts) => parts.record.createRecord(r, opts),
+    getRecord: (id) => parts.record.getRecord(id),
+    patchContent: (id, patch, opts) => parts.record.patchContent(id, patch, opts),
+    deleteRecord: (id, opts) => parts.record.deleteRecord(id, opts),
+    undeleteRecord: (id, opts) => parts.record.undeleteRecord(id, opts),
+    queryRecords: (q) => parts.record.queryRecords(q),
+
+    setParent: (id, parentId, opts) => parts.record.setParent(id, parentId, opts),
+    setUnlisted: (id, unlisted, opts) => parts.record.setUnlisted(id, unlisted, opts),
+    editAssociations: (id, edits, opts) => parts.record.editAssociations(id, edits, opts),
+    setAssociations: (id, list, opts) => parts.record.setAssociations(id, list, opts),
+    editAccess: (id, edits, opts) => parts.record.editAccess(id, edits, opts),
+    setAccess: (id, list, opts) => parts.record.setAccess(id, list, opts),
+
+    getVersions: (id, query) => parts.record.getVersions(id, query),
+    getVersion: (id, v) => parts.record.getVersion(id, v),
+    getJournal: (id, query) => parts.record.getJournal(id, query),
+    restoreVersion: (id, v, opts) => parts.record.restoreVersion(id, v, opts),
+    commitMigration: (id, toTypeId, content, opts) =>
+      parts.record.commitMigration(id, toTypeId, content, opts),
+
+    saveType: (t) => parts.record.saveType(t),
+    getType: (id) => parts.record.getType(id),
+    listTypes: () => parts.record.listTypes(),
+
+    // Conditionally spread so an unimplemented optional capability stays
+    // absent on the combined adapter, rather than silently becoming
+    // "supported" via a wrapper that forwards to a missing method.
+    ...(parts.record.deleteUnreferencedAttachmentRecords && {
+      deleteUnreferencedAttachmentRecords: (fileId: string, metadataBaseId: string) =>
+        parts.record.deleteUnreferencedAttachmentRecords!(fileId, metadataBaseId),
+    }),
+    ...(parts.record.importRecord && {
+      importRecord: (r: StackRecord, history: RecordHistory) =>
+        parts.record.importRecord!(r, history),
+    }),
+    ...(parts.record.queryReadable && {
+      queryReadable: (q: AdapterQuery, reach: Reach) => parts.record.queryReadable!(q, reach),
+    }),
+
+    // Forwarded on the same terms: dropping it would leave a shared record
+    // backend's feed unread, and Stack would refuse to subscribe at all.
+    ...(parts.record.subscribeChanges && {
+      subscribeChanges: (opts: SubscribeOptions, handler: (change: RecordChange) => void) =>
+        parts.record.subscribeChanges!(opts, handler),
+    }),
+
+    // StackAdapter.putAttachmentWithMetadata is deliberately never
+    // synthesized here: glued backends have no shared transaction to honor
+    // its atomicity promise (docs/spec/adapters.md § Interface split).
+    // Stack.putAttachment() falls back to bytes-then-create().
+    putBlob: (data) => parts.blob.putBlob(data),
+    getBlob: (id) => parts.blob.getBlob(id),
+    deleteBlob: (id) => parts.blob.deleteBlob(id),
+    ...(parts.blob.listBlobs && {
+      listBlobs: (query) => parts.blob.listBlobs!(query),
+    }),
+    // One head for the whole store, so a write to either half moves it.
+    ...(parts.record.head &&
+      parts.blob.head && {
+        head: async () => combinedHead(await parts.record.head!(), await parts.blob.head!()),
+      }),
+
+    async flush() {
+      await parts.record.flush?.();
+      await parts.blob.flush?.();
+    },
+    async close() {
+      await parts.record.close?.();
+      await parts.blob.close?.();
+    },
+  };
+}

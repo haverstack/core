@@ -8,7 +8,7 @@ This section is the model and the local API. Its wire encoding — discovery, `G
 
 Two things follow immediately:
 
-- **The event set is closed.** These writes emit and no others: create, purge, the association and permission endpoints, every endpoint that bumps `version`, and a change set naming any [no-bump key](./versioning.md#version-history). A server has nothing to decide for itself about which verbs are reportable.
+- **The event set is closed.** These writes emit and no others: create, purge, every endpoint that bumps `version`, and every [no-bump write](./versioning.md#version-history) — parent, listing, association and permission. A server has nothing to decide for itself about which verbs are reportable.
 - **A no-op mutation emits nothing.** What decides is `ops`, not `version`. Re-adding an association the record already holds, setting a deep-equal permission set, or deleting an already-deleted record produces no `ops` at all, and no `ops` means no event. A subscriber never sees a phantom change.
 
 ## What a feed is not
@@ -70,32 +70,35 @@ type RecordChange = {
 
 **Two discriminators at different altitudes, not per-verb events.** `kind` is the coarse branch every consumer must make, and it is closed at four values: a subscriber that handles exactly `created`/`changed`/`removed`/`purged` is _correct_, not merely adequate. `changed` is an **upsert** signal, never "you have seen this before" — a subscriber can receive `changed` for a record it has never seen, because gaining access arrives that way. `kind` names what a subscriber should do with a copy it holds — `created` and `changed` upsert it, `removed` drops it, `purged` drops it and expects nothing left behind — and `ops` names why. `removed` covers both a soft delete and an unlist, so a handler that must tell a tombstone from an unlisted record reads `ops` (or `record.deletedAt`). `ops` is the precise verb list, for audit logs and sync engines that care whether a permission change or a content edit produced this change.
 
-**Every op is a verb, named after the call that produced it.** Most share the method's name. Three don't, because the method covers more than one op:
+**Every op is a verb, named after the call that produced it:**
 
-| op        | produced by                                                                         |
-| --------- | ----------------------------------------------------------------------------------- |
-| `patch`   | `mutate()`'s `contentPatch` key, or `patchContent()`                                |
-| `reshare` | `grantAccess()`/`revokeAccess()`/`amendAccess()`, or `mutate()`'s `permissions` key |
-| `purge`   | `delete(id, { purge: true })`, which is also where `kind: 'purged'` gets its name   |
+| op                        | produced by                                                                       |
+| ------------------------- | --------------------------------------------------------------------------------- |
+| `patch`                   | `patchContent()`                                                                  |
+| `reparent`                | `setParent()`                                                                     |
+| `unlist`, `list`          | `setUnlisted(id, true)`, `setUnlisted(id, false)`                                 |
+| `associate`, `dissociate` | `editAssociations()`/`setAssociations()`, for what it added and what it removed   |
+| `reshare`                 | `editAccess()`/`setAccess()`                                                      |
+| `purge`                   | `delete(id, { purge: true })`, which is also where `kind: 'purged'` gets its name |
 
-`delete` is the soft delete, `amendAssociations()` reports `associate` for its adds and `dissociate` for its removes, and `reparent`, `unlist` and `list` are `mutate()`'s `parentId` and `unlisted` keys. One word means one thing everywhere it appears: the option you pass, the op in `ops`, the entry in [the journal](./journal.md#the-entry) and the `kind`.
+`delete`, `undelete`, `migrate`, `restore` and `create` share their method's name, and `delete` is the soft delete. One word means one thing everywhere it appears: the option you pass, the op in `ops`, the entry in [the journal](./journal.md#the-entry) and the `kind`.
 
-**`ops` is a list because [one mutation can change several aspects](./data-model.md#mutations).** A `mutate()` call producing a single version reports every aspect it moved — `['patch', 'reparent']` for an edit that also moved the record, `['associate', 'dissociate']` for one association swapped for another — derived by comparing the record against its own prior state, never from the shape of the request. A caller that names an aspect without changing it is not reported as changing it. The list is unordered, carries no duplicates, and is never empty: a call that changes nothing produces no version and therefore no event.
+**`ops` is a list because one association write can both add and remove.** A swap of one association for another reports `['associate', 'dissociate']`, derived by comparing the record against its own prior state, never from the shape of the request. A caller that names an element without changing it is not reported as changing it. The list is unordered, carries no duplicates, and is never empty: a call that changes nothing produces no event.
 
-Every op outside `mutate()`'s reach is emitted **alone**: `create`, `delete`, `undelete`, `purge`, `migrate` and `restore` each name a whole-record transition and never share a frame, however much they moved. So a multi-entry `ops` is always a change set or an `amendAssociations()` that both adds and removes (`['associate', 'dissociate']`), and `restore` remains one op because it settles content and its type alone — containment, listing and associations are left where they stand, so there is nothing of theirs for `restore` to bundle. See [Versioning § Restore semantics](./versioning.md#restore-semantics).
+Every other op is emitted **alone**, since [each write verb moves one aspect](./data-model.md#mutations): `create`, `delete`, `undelete`, `purge`, `migrate` and `restore` each name a whole-record transition and never share a frame, however much they moved. So a multi-entry `ops` is always an association write that both adds and removes, and `restore` remains one op because it settles content and its type alone — containment, listing and associations are left where they stand, so there is nothing of theirs for `restore` to bundle. See [Versioning § Restore semantics](./versioning.md#restore-semantics).
 
-**`associationsAdded`/`associationsRemoved` are the live report of what an `associate()`/`dissociate()`/`amendAssociations()` call moved** — associations are never snapshotted (see [Versioning § Version history](./versioning.md#version-history)), so the durable record of the same delta is [the change journal](./journal.md), which a subscriber who missed the frame reads instead. Both report only what is true **now**, the same convention every other field on this type follows:
+**`associationsAdded`/`associationsRemoved` are the live report of what an `editAssociations()`/`setAssociations()` call moved** — associations are never snapshotted (see [Versioning § Version history](./versioning.md#version-history)), so the durable record of the same delta is [the change journal](./journal.md), which a subscriber who missed the frame reads instead. Both report only what is true **now**, the same convention every other field on this type follows:
 
 - `associationsAdded` is each association as it now stands, current annotation included. A re-point (a new `attachmentRecordId` on an association the record already held) surfaces here under its new value; the value it replaced is not on this frame or any other, because a frame reports what is current — the journal's [`repoint`](./journal.md#the-entry) is what keeps it.
 - `associationsRemoved` is identity only — `kind` and `label`, plus `fileId` for an attachment — never the annotation a removed association carried. An attachment's `attachmentRecordId` is not repeated on removal, the same way a `purged` frame never carries the content it destroyed: the field names what happened, not a payload that is no longer current. The journal's [`remove`](./journal.md#the-entry) keeps the annotation, because putting an association back is exactly what that tier is read for.
 
-Neither list is ever present on an op other than `associate`/`dissociate`, and a swap of one association for another (`ops: ['associate', 'dissociate']`), through `amendAssociations()` or a `mutate()` change set, carries both — the tag added in `associationsAdded`, the tag it replaced in `associationsRemoved`.
+Neither list is ever present on an op other than `associate`/`dissociate`, and a swap of one association for another (`ops: ['associate', 'dissociate']`), through either verb, carries both — the tag added in `associationsAdded`, the tag it replaced in `associationsRemoved`.
 
-**Both lists carry the data half alone.** Permission elements share the association delta in storage and in [the journal](./journal.md#the-entry), and are kept off these two fields deliberately: `reshare` is the op that announces an ACL move, so a subscriber watching tags is never handed the stack's sharing graph as a side effect. The op is derived from that same computed delta rather than decided beside it, so the op, the journal entry and [the reshare gate](./access-control.md#storage-unifies-the-api-does-not) cannot disagree — and a subscriber learns an ACL moved without inspecting a delta at all. What it moved _to_ is on the record, for a subscriber who may read it.
+**Both lists carry associations alone.** Permission elements share the delta shape in [the journal](./journal.md#the-entry), and are kept off these two fields deliberately: `reshare` is the op that announces an ACL move, so a subscriber watching tags is never handed the stack's sharing graph as a side effect. The op is derived from that same computed delta rather than decided beside it, so the op and the journal entry cannot disagree — and a subscriber learns an ACL moved without inspecting a delta at all. What it moved _to_ is on the record, for a subscriber who may read it.
 
 **Both lists are derived from the [journal's tagged list](./journal.md#the-entry), not computed beside it.** One write names what it moved once; the durable half takes that list as it stands and the frame is flattened out of it. So a frame can never report an edit an entry doesn't, and the two shapes are a difference in what each tier is read for rather than two comparisons that might disagree.
 
-**`kind` resolves to the most conservative entry in `ops`.** A change set carrying `unlist` is `removed` whatever else it carries, because a subscriber holding the record still has to drop it and an `upsert` would leave a stale copy behind — an edit bundled with an unlist reaches a default subscriber as a removal, and the edit is not separately announced. Nothing else in the set competes: `list`, `patch`, `reshare`, `reparent`, `associate` and `dissociate` are all `changed`, and no op that maps to `created` or `purged` can appear beside another.
+**`kind` follows from `ops`.** `unlist` is `removed`, because a subscriber holding the record still has to drop it and an `upsert` would leave a stale copy behind. `list`, `patch`, `reshare`, `reparent`, `associate` and `dissociate` are all `changed`, and no op that maps to `created` or `purged` can appear beside another.
 
 **One event shape, not one event per verb.** A subscriber wiring named events (`record:create`, `record:update`, `record:delete`) would silently miss every verb it didn't name, and the bug would stay invisible until an index drifted from the records it describes.
 
@@ -139,11 +142,11 @@ Filtering is unaffected: the emitter holds the record it destroyed, so a subscri
 
 ## Soft-deleted records reach the feed as tombstones
 
-A purge carries nothing because erasure must leave no trace. Soft delete is the gentler neighbour, and it gets the gentler rule: under `ScopedStack`, a frame whose record carries `deletedAt` delivers [the same tombstone `get()` returns](./versioning.md#the-tombstone-is-literal) — identity, clock, `deletedAt`, `permissions`, and an empty `content` — rather than the body.
+A purge carries nothing because erasure must leave no trace. Soft delete is the gentler neighbour, and it gets the gentler rule: under `ScopedStack`, a frame whose record carries `deletedAt` delivers it [as `get()` returns it](./versioning.md#the-tombstone-is-literal) to the same subscriber: the tombstone, or the whole Record to the owner acting alone.
 
 The reason is the one that governs the [unlisted exclusion](#the-unlisted-transition): a feed that served what `query()` and `get()` withhold would be a strictly better read channel than either, and the withholding would be decoration. A subscriber still learns everything the event exists to tell it — this record is deleted, drop your copy — which needs no body at all.
 
-The projection keys on the record's `deletedAt`, not on the op, so it covers the `delete` transition and any later frame about a record that is still deleted, while an `unlist` frame — whose record stays fully readable — is untouched. Unscoped `Stack` subscribers receive the whole record: that layer is trusted by definition and reaches every record by other means.
+The projection keys on the record's `deletedAt`, not on the op, so it covers the `delete` transition and any later frame about a record that is still deleted, while an `unlist` frame — whose record stays fully readable — is untouched. Unscoped `Stack` subscribers receive the whole record, and so does the owner acting alone, who holds the same standing: that layer is trusted by definition and reaches every record by other means.
 
 ## Prior state is not in the envelope
 
@@ -154,12 +157,12 @@ There is no `previous`. Prior state is already a first-class, addressable thing:
 **Handlers never block, delay, or fail a write.**
 
 - **The write is durable before any handler runs.** A handler cannot veto, amend, or roll back what it is being told about.
-- **A throwing handler cannot fail the write**, because there is nothing left to fail. The error goes to the subscription's `onError`; with no `onError` it is rethrown asynchronously so that it surfaces as an unhandled error rather than vanishing. It never reaches the caller of `create()`/`mutate()`.
-- **Handlers are invoked after the adapter write resolves and before the mutating method's promise settles.** So `await stack.mutate(...)` guarantees subscribers have been _notified_, and guarantees nothing about work they deferred.
+- **A throwing handler cannot fail the write**, because there is nothing left to fail. The error goes to the subscription's `onError`; with no `onError` it is rethrown asynchronously so that it surfaces as an unhandled error rather than vanishing. It never reaches the caller of `create()`/`patchContent()`.
+- **Handlers are invoked after the adapter write resolves and before the mutating method's promise settles.** So `await stack.patchContent(...)` guarantees subscribers have been _notified_, and guarantees nothing about work they deferred.
 
 **An `async` handler is permitted; it is simply not awaited.** The handler type is `(change: RecordChange) => void`, and a `void` return means the value is ignored, not that the function must be synchronous. Passing an `async` function is the normal way to defer work: it runs to its first `await`, yields, and the emitter moves on. What it does not buy is ordering or completion.
 
-**What "never delays a write" does and does not promise.** It is a guarantee about the emitter: no handler's returned promise is awaited, so a subscriber cannot extend a write by deferring work. It is not a guarantee against a handler's _synchronous_ body. Handlers run inline on the caller's thread, and a record adapter backed by `node:sqlite` has just run its write synchronously on that same thread ([Adapters § Adapter backends](./adapters.md#adapter-backends)), so a handler doing heavy synchronous work extends that occupied window. Handlers should return promptly and defer anything substantial.
+**What "never delays a write" does and does not promise.** It is a guarantee about the emitter: no handler's returned promise is awaited, so a subscriber cannot extend a write by deferring work. It is not a guarantee against a handler's _synchronous_ body. Handlers run inline on the caller's thread, and a record adapter backed by `node:sqlite` has just run its write synchronously on that same thread ([Adapters § SQLite-backed adapters](./adapters.md#sqlite-backed-adapters)), so a handler doing heavy synchronous work extends that occupied window. Handlers should return promptly and defer anything substantial.
 
 An indexer that must not miss a write does not get that from a blocking hook — it gets it from a resumable cursor and idempotent application. A blocking hook buys a world where every subscriber is a latency and failure dependency of every write.
 
@@ -174,23 +177,18 @@ The one adapter-side hook is the inverse direction:
 ```ts
 // StackRecordAdapter, optional
 subscribeChanges?(
-  opts: SubscribeChangesOptions,
+  opts: SubscribeOptions, // as below — Stack forwards every key
   handler: (change: RecordChange) => void,
 ): Promise<Unsubscribe>; // Unsubscribe = () => void, as below
-
-type SubscribeChangesOptions = {
-  filter?: ChangeFilter;
-  since?: string;
-  includeRecords?: boolean;
-  includeUnlisted?: boolean;
-  onError?: (err: unknown) => void;
-  onReset?: () => void;
-};
 ```
 
-An optional method checked for truthiness at the call site, per [Adapters § Adapter capabilities](./adapters.md#adapter-capabilities) — never a boolean in `capabilities`. A remote adapter implements it; local adapters do not, and their absence is not a gap: [a stack's storage has exactly one owning process](./adapters.md#concurrency--storage-ownership), so locally there is no third party whose writes could have been missed. **Resumption is meaningful only in the multi-writer topology.**
+An optional method checked for truthiness at the call site, per [Adapters § Adapter capabilities](./adapters.md#adapter-capabilities) — never a boolean in `capabilities`. Its presence says one thing: a relay can be opened. `APIAdapter` has it when the server [advertises a feed](./change-feed.md#advertising-it); local adapters never do.
 
-`onError` here is the relay's own trouble — a connection it could not restore — rather than a subscriber's, and `onReset` is the gap that leaves. A relay reports what it is told and decides nothing, so it has no handler of its own to route errors from.
+**Whether a relay is needed is a separate fact, `writers`**, which every record adapter states: `'owner'` when this process is the only writer of the store's Records, `'shared'` when others write them too. It names the Records' writers alone, because a feed reports Records alone: a blob store with other writers leaves this stream whole, and is [the head's concern](./adapters.md#concurrency--storage-ownership) instead. Every local adapter says `'owner'` — [a stack's storage has exactly one owning process](./adapters.md#concurrency--storage-ownership), so there is no third party whose writes could be missed — and `APIAdapter` says `'shared'`, feed or no feed. `combineAdapters()` takes the record half's. **Resumption is meaningful only in the multi-writer topology.**
+
+**A `'shared'` stack with no relay refuses `subscribe()`** with `StackBadRequestError`, before anything is sent. A stream of this process's own writes would pass for the whole while every change made elsewhere went unreported — [the failure that looks fine in testing](./change-feed.md#feed-implementation-checklist) — and a filter a server has not declared is refused the same way, rather than answered partly. The repair is a server that offers a feed, or polling `query()`.
+
+**The relay takes the subscriber's own options.** A relay reports what it is told and decides nothing, so there is no option only a local emitter answers and no separate shape to keep in step. The subscriber's `onError` therefore hears two things on a relaying stack: its own handler throwing, and a connection the relay could not restore. `onReset` is the gap the latter leaves.
 
 **One relay per subscription, carrying that subscription's filter.** The filter travels rather than being applied to what comes back, because `createdBy` and `parentId` are answerable only where the record is: the far end holds it, and this end never will. Sharing one relay across subscriptions would mean either re-deriving those filters locally without the record, or subscribing unfiltered and paying for every change on every subscription.
 
@@ -210,14 +208,16 @@ type Unsubscribe = () => void;
 type SubscribeOptions = {
   filter?: ChangeFilter;
   includeRecords?: boolean;
-  includeUnlisted?: boolean; // owner-only under ScopedStack — see Unlisted records
   since?: string; // resume cursor — the last `cursor` present on a delivered RecordChange
   onError?: (err: unknown) => void;
   onReset?: () => void;
 };
 
 // Every key means what it means on RecordFilter
-type ChangeFilter = Pick<RecordFilter, 'typeId' | 'baseId' | 'parentId' | 'createdBy'> & {
+type ChangeFilter = Pick<
+  RecordFilter,
+  'typeId' | 'baseId' | 'parentId' | 'createdBy' | 'includeUnlisted' // owner-only under ScopedStack — see Unlisted records
+> & {
   kinds?: ChangeKind[];
 };
 
@@ -229,10 +229,10 @@ interface StackClient {
 - **It lives on `StackClient`**, so both `Stack` and `ScopedStack` implement it, and plugin code written against `StackClient` gets reactivity without learning the backend.
 - **`subscribe()` is async and resolves when the subscription is live** — immediately for a local stack, after a server's ready signal for a remote one. This makes the no-gap startup pattern the natural one: `await subscribe()`, _then_ `query()` for initial state, and let the consumer's own version comparison absorb the overlap. A synchronous `subscribe()` would leave every remote consumer to discover that race alone.
 - **It returns an unsubscribe function**, not `off(name, handler)`: handler identity is a bad key once closures are involved.
-- **`ChangeFilter` is a subset of [`RecordFilter`](./data-model.md#filter), and every key means the same thing in both.** `typeId` is an exact match, `baseId` matches the whole family, and `createdBy` names the record's author — never the actor — with the same `subjectId` / `principalId` lists. The app that loads a set with `query()` and then follows it with `subscribe()` passes one value to both and sees the same records in each. A subscriber that wants to survive a type version bump says `baseId`, which is matched by family exactly as [grants are](./access-control.md#type-level-grants) — and, unlike in `query()`, covers versions registered after the subscription opened, since it is matched against each change's `typeId` rather than resolved against registered Types up front.
+- **`ChangeFilter` is a subset of [`RecordFilter`](./data-model.md#filter), and every key means the same thing in both.** `typeId` is an exact match, `baseId` matches the whole family, and `createdBy` names the record's author — never the actor — with the same `subjectId` / `principalId` lists. The app that loads a set with `query()` and then follows it with `subscribe()` passes one value to both and sees the same records in each. A subscriber that wants to survive a type version bump says `baseId`, which is matched by family exactly as [grants are](./access-control.md#type-level-grants) — against each change's `typeId`, so it covers versions registered after the subscription opened.
 - **Filtering is exact, not advisory.** A filtered subscription never receives an event outside its filter; a consumer that filters again is doing redundant work, not defensive work.
 - **`onReset` is the one control signal an app must handle.** A reconnect that resumes cleanly is the adapter's business and the app never hears about it; `onReset` means a gap opened that resumption could not close, and reconciling by query is the repair — the same work as startup. It never fires on a local stack, which has one writing process and so no gap to open. Passing a `since` the far end refuses (a `resume: false` server, an expired cursor) fires it on the very first connection — that is a gap too, and the one an app most needs to hear about: the difference between "you are current" and "you are missing an unknown amount."
-- **`since` resumes a subscription; it does not restart one.** It is forwarded to the adapter as `SubscribeChangesOptions.since` — see [Where events come from](#where-events-come-from) — so it means something only where a relay exists. A stack with no relay has no third party whose writes could have been missed, and so no cursor it could ever have minted; passing `since` there throws `StackBadRequestError` rather than silently starting from the present, which would let the caller believe it resumed when it did not. `ScopedStack.subscribe()` refuses it for the same reason it refuses a relay outright — see [Permission scoping](#permission-scoping) — a scoped view never has a relay of its own to resume. A cursor outside the [framable charset](./change-feed.md#frames) is refused the same way and by the same layer, so a malformed one reports identically whatever adapter is underneath; the value is otherwise opaque, checked for whether it can be framed and never for what it means.
+- **`since` resumes a subscription; it does not restart one.** It is forwarded to the adapter's `subscribeChanges()` unchanged — see [Where events come from](#where-events-come-from) — so it means something only where a relay exists. A stack with no relay has no third party whose writes could have been missed, and so no cursor it could ever have minted; passing `since` there throws `StackBadRequestError` rather than silently starting from the present, which would let the caller believe it resumed when it did not. `ScopedStack.subscribe()` refuses it for the same reason it refuses a relay outright — see [Permission scoping](#permission-scoping) — a scoped view never has a relay of its own to resume. A cursor outside the [framable charset](./change-feed.md#frames) is refused the same way and by the same layer, so a malformed one reports identically whatever adapter is underneath; the value is otherwise opaque, checked for whether it can be framed and never for what it means.
 
 ## Permission scoping
 
@@ -240,14 +240,14 @@ interface StackClient {
 
 **The unlisted exclusion composes with `canRead` rather than replacing it, and is not a second ACL either.** It is the same boundary an unfiltered `query()` applies, asked again here so the feed can never deliver more than an equivalent `query()` would return — see [The unlisted transition](#the-unlisted-transition) below.
 
-**A scoped view of a stack that relays refuses to subscribe**, with `RelayScopeError`. `canRead` needs the record, and a relayed frame does not carry one — on a `purged` frame there is nothing left to fetch either. Neither answer available here is honest: delivering relayed frames would hand a narrower scope events it may not be entitled to, and delivering only local writes would silently drop every change made elsewhere, which is [the failure that looks fine in testing](./change-feed.md#feed-implementation-checklist). A relayed feed is already scoped by the session that opened it, so the way to scope one is to open it with the session you mean — a server does exactly that, subscribing unscoped at the storage owner it holds and fanning out per connection.
+**A `'shared'` stack cannot be scoped at all** — [`asEntity()` refuses it](./access-control.md#enforcement-stackasentity) with `ScopeUnavailableError`, relay or none. `canRead` needs the record, and a relayed frame does not carry one — on a `purged` frame there is nothing left to fetch either. Neither answer available here is honest: delivering relayed frames would hand a narrower scope events it may not be entitled to, and delivering only local writes would silently drop every change made elsewhere, which is [the failure that looks fine in testing](./change-feed.md#feed-implementation-checklist). A relayed feed is already scoped by the session that opened it, so the way to scope one is to open it with the session you mean — a server does exactly that, subscribing unscoped at the storage owner it holds and fanning out per connection.
 
 - **A record a subscriber cannot read produces no event**, not an empty or redacted one. Event existence is itself a disclosure — the same reasoning that keeps a count of the whole match off a [query result](./data-model.md#sorting-and-pagination).
 - **A `purged` record is evaluated at mutation time**, on the record as it stood, because after the write there is nothing left to check.
 - **The check fails closed.** A permission decision that cannot be made is not a yes: the event is dropped and the error goes to `onError`.
 - **Delivery is serialized per subscription.** The permission check is asynchronous, so without a queue two changes to one record could be decided out of order and delivered newest-first, breaking the ordering guarantee below.
 
-**Authority is cached per subscription, and expired by the stream itself.** `canRead` resolves grants, and re-resolving them per event would be a `_grant` scan for every change the stack makes. A subscription therefore prefetches grants once and memoizes group-roster roles — and drops both when a `_grant` or `_group` event passes through it, _before_ that event is filtered, so a subscriber that cannot read the revocation still has its cache expired by it.
+**Authority is held per subscription, and expired by the stream itself.** `canRead` asks the requester's `read` [reach](./access-control.md#reach), built from its grants and rosters, and rebuilding it per event would be a `_grant` scan for every change the stack makes. A subscription therefore holds one [authority snapshot](./access-control.md#reach) for its life — the grants, the rosters and the reach built from them — and clears the grants on a `_grant` event and the rosters on a `_group` event, each with the reach, _before_ that event is filtered, so a subscriber that cannot read the revocation still has its held snapshot expired by it.
 
 **This is only sound because every authority-changing write emits.** `_grant` and `_group` writes are ordinary record mutations and reach the emitter like any other. A future change that altered either without emitting would strand every cached decision, so that invariant belongs to this section as much as to [Where events come from](#where-events-come-from).
 
@@ -265,7 +265,7 @@ An unlisted record that emits a change event to a default subscriber is not unli
 | Unlisted → listed (`list`)   |            **Yes**             | The publish moment                                                  |
 | Purge while unlisted         |               No               | Same reasoning as row 1 — nothing was ever announced to un-announce |
 
-Only the second row needs special-casing. Every other row falls out of checking the record's **current** `unlistedAt` against the subscriber's `includeUnlisted`, the same check `query()`'s default filter makes: a just-created or still-unlisted record's current state already excludes it, with no need to know which ops produced the event. The `unlist` transition is the one case where that check would give the wrong answer, because the record's post-change state is exactly what it is announcing — so the exclusion is asked of the **pre**-change state there, which is why `unlist` gets a dedicated op (mapped to `kind: 'removed'`, per [The event shape](#the-event-shape)) rather than reusing `reshare`'s pattern of one op for both directions. A change set that unlists while also editing is asked the same question, and answers it the same way.
+Only the second row needs special-casing. Every other row falls out of checking the record's **current** `unlistedAt` against the subscriber's `filter.includeUnlisted`, the same check `query()`'s default filter makes: a just-created or still-unlisted record's current state already excludes it, with no need to know which ops produced the event. The `unlist` transition is the one case where that check would give the wrong answer, because the record's post-change state is exactly what it is announcing — so the exclusion is asked of the **pre**-change state there, which is why `unlist` gets a dedicated op (mapped to `kind: 'removed'`, per [The event shape](#the-event-shape)) rather than reusing `reshare`'s pattern of one op for both directions.
 
 **`list` needs no new semantics.** Kind `changed` is already an upsert a subscriber may never have seen before — the same case [gaining access](#known-limitations) already covers — so a record created silently, edited silently any number of times while unlisted, and finally relisted reaches a default subscriber as a single `changed` event it upserts as if seeing the record for the first time.
 
@@ -273,7 +273,7 @@ Only the second row needs special-casing. Every other row falls out of checking 
 
 A `parentId` filter is answered by the record, not the envelope, so a record that moves between containers would otherwise be announced only to the container it arrived in — the departure would be silent, and a subscriber watching the origin would keep a record that is no longer there. A move is therefore matched against **both** sides of it: the record's post-change `parentId` for the destination, and the pre-change one for the origin. Same shape as the [`unlist` transition](#the-unlisted-transition), which likewise cannot be decided from the post-change record alone.
 
-**`reparent` is the only op that moves a record**, and it is the only one matched this way. A frame carrying it is matched against both containers however many other aspects share the change set with it. Every frame without one leaves `parentId` where it was, so the two sides are the same container and the second match is a no-op — [a restore included](./versioning.md#restore-semantics), which settles content alone and therefore reaches only the container the record is already in. Undoing a move is a `reparent` of its own, and routes like the move it undoes.
+**`reparent` is the only op that moves a record**, and it is the only one matched this way. A frame carrying it is matched against both containers. Every frame without one leaves `parentId` where it was, so the two sides are the same container and the second match is a no-op — [a restore included](./versioning.md#restore-semantics), which settles content alone and therefore reaches only the container the record is already in. Undoing a move is a `reparent` of its own, and routes like the move it undoes.
 
 **A frame carries only the destination.** `parentId` on a frame means what it means everywhere — the record's state at the moment of the change — and a subscriber tells the two cases apart by comparing it to the filter it subscribed with: equal is an arrival, unequal is a departure. Nothing more is needed, and adding a `previousParentId` to the wire would give every subscriber a second container's ID to reason about for the sake of a comparison they can already make.
 

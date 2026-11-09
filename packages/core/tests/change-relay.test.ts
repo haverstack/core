@@ -5,10 +5,10 @@
  * the other. See docs/spec/events.md § Where events come from.
  */
 import { describe, test, expect, beforeEach, vi } from 'vitest';
-import { Stack } from '../src/stack.js';
-import { StackBadRequestError, RelayScopeError } from '../src/errors.js';
+import { Stack } from '../src/stack/stack.js';
+import { StackBadRequestError, ScopeUnavailableError } from '../src/errors.js';
 import { MemoryAdapter, type MemoryAdapterOpenOptions } from '../src/testing.js';
-import type { RecordChange, SubscribeChangesOptions } from '../src/types.js';
+import type { RecordChange, StoreWriters, SubscribeOptions } from '../src/types/index.js';
 
 const NOTE = 'com.example.test/note@1';
 const OWNER = 'owner-123';
@@ -23,8 +23,11 @@ class RelayingMemoryAdapter extends MemoryAdapter {
   static override async open(opts: MemoryAdapterOpenOptions): Promise<RelayingMemoryAdapter> {
     return new RelayingMemoryAdapter(opts);
   }
+  /** Others write the store behind it, which is why it relays. */
+  override readonly writers: StoreWriters = 'shared';
+
   readonly relays: {
-    opts: SubscribeChangesOptions;
+    opts: SubscribeOptions;
     push: (change: RecordChange) => void;
     stopped: boolean;
   }[] = [];
@@ -33,7 +36,7 @@ class RelayingMemoryAdapter extends MemoryAdapter {
   refuseWith: Error | undefined;
 
   async subscribeChanges(
-    opts: SubscribeChangesOptions,
+    opts: SubscribeOptions,
     handler: (change: RecordChange) => void,
   ): Promise<() => void> {
     if (this.refuseWith) throw this.refuseWith;
@@ -61,7 +64,7 @@ let adapter: RelayingMemoryAdapter;
 let stack: Stack;
 
 beforeEach(async () => {
-  adapter = await RelayingMemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' });
+  adapter = await RelayingMemoryAdapter.open({ ownerEntityId: OWNER });
   stack = await Stack.open(adapter);
   await stack.defineType({
     id: NOTE,
@@ -211,9 +214,7 @@ describe('a stack whose adapter relays', () => {
 
 describe('a stack whose adapter does not relay', () => {
   test('refuses `since`, which names a cursor it never minted', async () => {
-    const local = await Stack.open(
-      await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' }),
-    );
+    const local = await Stack.open(await MemoryAdapter.open({ ownerEntityId: OWNER }));
     await local.defineType({
       id: NOTE,
       name: 'Note',
@@ -228,16 +229,42 @@ describe('a stack whose adapter does not relay', () => {
   });
 });
 
+// Others write the store, and nothing relays their changes: a stream of
+// this process's own writes would pass for the whole. See
+// docs/spec/events.md § Where events come from.
+describe('a stack others write, with no relay', () => {
+  class SharedMemoryAdapter extends MemoryAdapter {
+    static override async open(opts: MemoryAdapterOpenOptions): Promise<SharedMemoryAdapter> {
+      return new SharedMemoryAdapter(opts);
+    }
+    override readonly writers: StoreWriters = 'shared';
+  }
+
+  test('refuses subscribe()', async () => {
+    const shared = await Stack.open(await SharedMemoryAdapter.open({ ownerEntityId: OWNER }));
+    await expect(shared.subscribe(() => {})).rejects.toBeInstanceOf(StackBadRequestError);
+    await shared.close();
+  });
+
+  test('refuses a scoped view', async () => {
+    const shared = await Stack.open(await SharedMemoryAdapter.open({ ownerEntityId: OWNER }));
+    expect(() => shared.asEntity(OWNER)).toThrow(ScopeUnavailableError);
+    await shared.close();
+  });
+});
+
 describe('a scoped view of a stack that relays', () => {
-  test('refuses to subscribe rather than narrow a feed it cannot re-scope', async () => {
-    const scoped = stack.asEntity(REMOTE_EDITOR);
-    await expect(scoped.subscribe(() => {})).rejects.toBeInstanceOf(RelayScopeError);
+  // A relayed frame was scoped by the session that opened the feed, so no
+  // narrower scope can be kept over it. See docs/spec/access-control.md
+  // § Enforcement: Stack.asEntity().
+  test('is refused up front, for every requester', () => {
+    expect(() => stack.asEntity(REMOTE_EDITOR)).toThrow(ScopeUnavailableError);
+    expect(() => stack.asEntity(REMOTE_EDITOR)).toThrow(/others write its store/);
+    expect(() => stack.asEntity(OWNER)).toThrow(ScopeUnavailableError);
   });
 
   test('subscribes normally when the adapter relays nothing', async () => {
-    const local = await Stack.open(
-      await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' }),
-    );
+    const local = await Stack.open(await MemoryAdapter.open({ ownerEntityId: OWNER }));
     await local.defineType({
       id: NOTE,
       name: 'Note',
@@ -252,9 +279,7 @@ describe('a scoped view of a stack that relays', () => {
   });
 
   test('refuses `since` even when the adapter relays nothing', async () => {
-    const local = await Stack.open(
-      await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' }),
-    );
+    const local = await Stack.open(await MemoryAdapter.open({ ownerEntityId: OWNER }));
     await local.defineType({
       id: NOTE,
       name: 'Note',

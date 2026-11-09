@@ -1,7 +1,10 @@
 /**
  * Stack — Schema Utilities
  * -------------------------------------------------------
- * Schema hashing and type compatibility checks.
+ * What can be said about a TypeSchema and a TypeId without a stack: a
+ * schema's hash, whether one schema reads as another, whether one is a
+ * legal in-place evolution of another, and how a TypeId splits into its
+ * family and version.
  *
  * Hashing produces a stable SHA-256 fingerprint of a TypeSchema
  * by canonicalizing it first (alphabetical keys, minified JSON).
@@ -9,8 +12,10 @@
  * the namespaced ID controlled by the app author.
  */
 
-import type { TypeSchema, FieldDef, ScalarFieldKind } from './types.js';
+import type { TypeSchema, FieldDef, ScalarFieldKind } from './types/index.js';
 import type { ReadonlyTypeSchema } from './type-handle.js';
+import { formatEnumValues } from './validate.js';
+import { sha256Hex } from './hash.js';
 
 // -------------------------------------------------------
 // Canonical schema serialization
@@ -58,11 +63,11 @@ const canonicalizeFieldDef = (def: FieldDef): unknown => {
     };
   }
 
-  // Scalar. `enum` is sorted so reordering the values is not a change.
+  // Scalar. An enum's `values` are sorted so reordering them is not a change.
   return {
-    ...(def.kind === 'string' && def.enum && { enum: [...def.enum].sort() }),
     kind: def.kind,
     ...(def.required !== undefined && { required: def.required }),
+    ...(def.kind === 'enum' && { values: [...def.values].sort() }),
   };
 };
 
@@ -84,11 +89,7 @@ const canonicalizeSchema = (schema: TypeSchema): unknown => {
  * schemas hash differently, the schema was mutated without a version bump.
  */
 export const hashSchema = async (schema: TypeSchema): Promise<string> => {
-  const canonical = JSON.stringify(canonicalizeSchema(schema));
-  const buffer = new TextEncoder().encode(canonical);
-  const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
+  return sha256Hex(JSON.stringify(canonicalizeSchema(schema)));
 };
 
 // -------------------------------------------------------
@@ -97,12 +98,14 @@ export const hashSchema = async (schema: TypeSchema): Promise<string> => {
 
 /**
  * Kinds acceptable in a candidate field, per required kind. `string` and
- * `text` are mutually acceptable for reading; everything else requires an
- * exact match. See docs/spec/data-model.md § Type compatibility.
+ * `text` are mutually acceptable for reading, and either accepts an enum,
+ * whose values are strings; everything else requires an exact match. A
+ * required enum takes the subset rule in isFieldCompatible instead. See
+ * docs/spec/data-model.md § Type compatibility.
  */
-const READ_COMPATIBLE: Record<ScalarFieldKind, ScalarFieldKind[]> = {
-  string: ['string', 'text'],
-  text: ['text', 'string'],
+const READ_COMPATIBLE: Record<Exclude<ScalarFieldKind, 'enum'>, ScalarFieldKind[]> = {
+  string: ['string', 'text', 'enum'],
+  text: ['text', 'string', 'enum'],
   number: ['number'],
   boolean: ['boolean'],
   date: ['date'],
@@ -110,8 +113,8 @@ const READ_COMPATIBLE: Record<ScalarFieldKind, ScalarFieldKind[]> = {
   'file-ref': ['file-ref'],
 };
 
-// Candidate schemas can come from another app's Type definition (the
-// untrusted side of duck-typed consumption), so recursion into array
+// Candidate schemas can come from another app's Type definition, whose
+// shape validation bounds its depth, so recursion into array
 // items / object properties is depth-bounded — matches MAX_VALIDATION_DEPTH
 // in validate.ts. Past the limit we can't verify compatibility, so we
 // fail closed (treat as incompatible) rather than risk a stack overflow.
@@ -148,6 +151,12 @@ const isFieldCompatible = (candidate: FieldDef, required: FieldDef, depth: numbe
     );
   }
   if (candidate.kind === 'array' || candidate.kind === 'object') return false;
+  // A consumer expecting an enum can handle only the values it lists.
+  if (required.kind === 'enum') {
+    if (candidate.kind !== 'enum') return false;
+    const allowed = new Set(required.values);
+    return candidate.values.every((v) => allowed.has(v));
+  }
   return READ_COMPATIBLE[required.kind].includes(candidate.kind);
 };
 
@@ -180,9 +189,8 @@ export const isCompatible = (
 // Schema evolution legality (drift detection)
 // -------------------------------------------------------
 //
-// Deliberately distinct from isCompatible() above: read compatibility and
-// evolution legality are different relations that disagree on text/string.
-// See docs/spec/data-model.md § Type compatibility.
+// Distinct from isCompatible(): the two relations disagree on text/string
+// and enum. See docs/spec/data-model.md § Type compatibility.
 
 export type SchemaDriftViolation = {
   /** Field path where the drift was detected, e.g. "title" or "author.name". Empty string means array-item context. */
@@ -207,7 +215,10 @@ const diffField = (
     violations.push({ path, message: 'exceeds max nesting depth; cannot verify additive change' });
     return;
   }
-  if (stored.kind !== candidate.kind) {
+  // An enum becoming a string accepts strictly more, so it is the one kind
+  // change that is additive.
+  const widensEnum = stored.kind === 'enum' && candidate.kind === 'string';
+  if (stored.kind !== candidate.kind && !widensEnum) {
     violations.push({
       path,
       message: `kind changed from "${stored.kind}" to "${candidate.kind}"`,
@@ -220,20 +231,12 @@ const diffField = (
       message: `required changed from ${!!stored.required} to ${!!candidate.required}`,
     });
   }
-  // An enum narrows what a string field accepts when it is added or loses
-  // values, and widens it when it is removed or gains them.
-  if (stored.kind === 'string' && candidate.kind === 'string') {
-    if (!stored.enum && candidate.enum) {
-      violations.push({ path, message: 'enum added to an existing string field' });
-    } else if (stored.enum && candidate.enum) {
-      const kept = new Set(candidate.enum);
-      const removed = stored.enum.filter((v) => !kept.has(v));
-      if (removed.length > 0) {
-        violations.push({
-          path,
-          message: `enum values removed: ${removed.map((v) => JSON.stringify(v)).join(', ')}`,
-        });
-      }
+  // Losing a value narrows what an enum accepts; gaining one widens it.
+  if (stored.kind === 'enum' && candidate.kind === 'enum') {
+    const kept = new Set(candidate.values);
+    const removed = stored.values.filter((v) => !kept.has(v));
+    if (removed.length > 0) {
+      violations.push({ path, message: `enum values removed: ${formatEnumValues(removed)}` });
     }
   }
   // Opening a declared container, or closing an open one, changes which
@@ -304,6 +307,16 @@ export const diffSchemas = (stored: TypeSchema, candidate: TypeSchema): SchemaDr
   return violations;
 };
 
+/**
+ * A schema's top-level `file-ref` fields — the content half of what a
+ * record references, beside its attachment associations. A nested one is
+ * validated but is not a reference. See docs/spec/data-model.md § Types.
+ */
+export const fileRefFields = (schema: ReadonlyTypeSchema): string[] =>
+  Object.entries(schema)
+    .filter(([, def]) => def.kind === 'file-ref')
+    .map(([field]) => field);
+
 // -------------------------------------------------------
 // Type ID parsing
 // -------------------------------------------------------
@@ -320,17 +333,30 @@ export const parseTypeId = (typeId: string): { baseId: string; version: number }
 };
 
 /**
- * Build a versioned TypeId from a base ID and version number.
- * e.g. ("com.example.myapp/note", 2) → "com.example.myapp/note@2"
- */
-export const buildTypeId = (baseId: string, version: number): string => `${baseId}@${version}`;
-
-/**
  * Extract the base (family) ID from a TypeId, tolerating an already-bare
  * baseId (no "@n" suffix) as a no-op. Used to compare across versions —
  * e.g. a grant on "comment@1" and a record at "comment@2" share a baseId.
  */
 export const baseIdOf = (typeId: string): string => parseTypeId(typeId)?.baseId ?? typeId;
+
+/**
+ * Why `migratesFrom` cannot be the lineage of `id`, or null if it can. A
+ * version migrates from an earlier version of its own family; a step into
+ * another family is a migration, not lineage. See docs/spec/data-model.md
+ * § Type migrations.
+ */
+export const lineageProblem = (id: string, migratesFrom: unknown): string | null => {
+  if (migratesFrom === undefined) return null;
+  const self = parseTypeId(id);
+  const from = typeof migratesFrom === 'string' ? parseTypeId(migratesFrom) : null;
+  if (!self || !from) {
+    return `migratesFrom must be a versioned TypeId, e.g. "com.example.myapp/note@1".`;
+  }
+  if (from.baseId !== self.baseId || from.version >= self.version) {
+    return `"${id}" cannot migrate from "${migratesFrom as string}": migratesFrom names an earlier version of the same family.`;
+  }
+  return null;
+};
 
 /**
  * Why `value` cannot name a type family, or null if it can. A family is a

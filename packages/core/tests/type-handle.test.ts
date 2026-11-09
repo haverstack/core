@@ -1,25 +1,43 @@
-import { describe, test, expect, expectTypeOf, beforeEach } from 'vitest';
-import { Stack } from '../src/stack.js';
+import { describe, test, expect, expectTypeOf } from 'vitest';
+import { Stack } from '../src/stack/stack.js';
 import { MemoryAdapter } from '../src/testing.js';
-import { typeHandle } from '../src/type-handle.js';
-import type { ContentOf, PatchOf, TypedChange, TypedRecord } from '../src/type-handle.js';
-import { StackBadRequestError, StackMigrationError, StackValidationError } from '../src/errors.js';
-import type { StackClient } from '../src/stack.js';
-import type { TypeSchema } from '../src/types.js';
+import { migration, typeHandle } from '../src/type-handle.js';
+import { add, derive, drop, map, rename } from '../src/migration-steps.js';
+import type {
+  ContentOf,
+  ReadonlyTypeSchema,
+  StoredContentOf,
+  UnlistedValue,
+} from '../src/type-handle.js';
+import { StackBadRequestError, StackMigrationError } from '../src/errors.js';
+import type { TypeId, TypeSchema } from '../src/types/index.js';
 
 const OWNER = 'owner-123';
 
-// Scoped delivery is asynchronous: the permission check is.
-const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
-
-const Book = typeHandle('com.example.reading/book@2', {
-  title: { kind: 'string', required: true },
-  status: { kind: 'string', enum: ['want', 'reading', 'finished', 'abandoned'], required: true },
-  pages: { kind: 'number' },
+const BookV1 = typeHandle({
+  id: 'com.example.reading/book@1',
+  name: 'Book',
+  schema: {
+    title: { kind: 'string', required: true },
+    status: { kind: 'enum', values: ['want', 'reading', 'done'], required: true },
+  },
 });
 
-const Shelf = typeHandle('com.example.reading/shelf@1', {
-  name: { kind: 'string', required: true },
+const Book = typeHandle({
+  id: 'com.example.reading/book@2',
+  name: 'Book',
+  migratesFrom: BookV1,
+  schema: {
+    title: { kind: 'string', required: true },
+    status: { kind: 'enum', values: ['want', 'reading', 'finished', 'abandoned'], required: true },
+    pages: { kind: 'number' },
+  },
+});
+
+const Shelf = typeHandle({
+  id: 'com.example.reading/shelf@1',
+  name: 'Shelf',
+  schema: { name: { kind: 'string', required: true } },
 });
 
 type BookContent = ContentOf<typeof Book.schema>;
@@ -28,26 +46,30 @@ type BookContent = ContentOf<typeof Book.schema>;
 // The mapping, one assertion per field kind
 // -------------------------------------------------------
 
-const Everything = typeHandle('com.example/everything@1', {
-  s: { kind: 'string', required: true },
-  e: { kind: 'string', enum: ['a', 'b'], required: true },
-  t: { kind: 'text', required: true },
-  n: { kind: 'number', required: true },
-  b: { kind: 'boolean', required: true },
-  d: { kind: 'date', required: true },
-  r: { kind: 'record-ref', required: true },
-  f: { kind: 'file-ref', required: true },
-  tags: { kind: 'array', items: { kind: 'string' }, required: true },
-  grid: { kind: 'array', items: { kind: 'array', items: { kind: 'number' } }, required: true },
-  bag: { kind: 'array', open: true, required: true },
-  nested: {
-    kind: 'object',
-    required: true,
-    properties: { inner: { kind: 'boolean', required: true }, note: { kind: 'string' } },
+const Everything = typeHandle({
+  id: 'com.example/everything@1',
+  name: 'Everything',
+  schema: {
+    s: { kind: 'string', required: true },
+    e: { kind: 'enum', values: ['a', 'b'], required: true },
+    t: { kind: 'text', required: true },
+    n: { kind: 'number', required: true },
+    b: { kind: 'boolean', required: true },
+    d: { kind: 'date', required: true },
+    r: { kind: 'record-ref', required: true },
+    f: { kind: 'file-ref', required: true },
+    tags: { kind: 'array', items: { kind: 'string' }, required: true },
+    grid: { kind: 'array', items: { kind: 'array', items: { kind: 'number' } }, required: true },
+    bag: { kind: 'array', open: true, required: true },
+    nested: {
+      kind: 'object',
+      required: true,
+      properties: { inner: { kind: 'boolean', required: true }, note: { kind: 'string' } },
+    },
+    free: { kind: 'object', open: true, required: true },
+    maybe: { kind: 'string' },
+    explicitlyOptional: { kind: 'number', required: false },
   },
-  free: { kind: 'object', open: true, required: true },
-  maybe: { kind: 'string' },
-  explicitlyOptional: { kind: 'number', required: false },
 });
 
 describe('ContentOf', () => {
@@ -89,285 +111,323 @@ describe('ContentOf', () => {
   });
 });
 
-describe('PatchOf', () => {
-  test('makes every field optional and allows null only on optional fields', () => {
-    expectTypeOf<PatchOf<typeof Book.schema>>().toEqualTypeOf<{
-      title?: string;
-      status?: 'want' | 'reading' | 'finished' | 'abandoned';
-      pages?: number | null;
+describe('StoredContentOf', () => {
+  test('reads an enum as its listed values or any other string', () => {
+    expectTypeOf<StoredContentOf<typeof Book.schema>>().toEqualTypeOf<{
+      title: string;
+      status: 'want' | 'reading' | 'finished' | 'abandoned' | UnlistedValue;
+      pages?: number;
     }>();
   });
 
-  test('rejects a typo, a null on a required field, and a value outside the enum', () => {
-    const ok: PatchOf<typeof Book.schema> = { pages: null, status: 'finished' };
-    // @ts-expect-error a typo'd key
-    const typo: PatchOf<typeof Book.schema> = { titel: 'x' };
-    // @ts-expect-error a required field can be replaced but not removed
-    const nullRequired: PatchOf<typeof Book.schema> = { title: null };
-    // @ts-expect-error a value outside the enum
-    const wrongEnum: PatchOf<typeof Book.schema> = { status: 'paused' };
-    expect([ok, typo, nullRequired, wrongEnum]).toHaveLength(4);
+  test('reads an enum nested in an array or object the same way', () => {
+    const Nested = typeHandle({
+      id: 'com.example/nested@1',
+      name: 'Nested',
+      schema: {
+        tags: { kind: 'array', items: { kind: 'enum', values: ['x'] }, required: true },
+        meta: {
+          kind: 'object',
+          required: true,
+          properties: { mood: { kind: 'enum', values: ['y'], required: true } },
+        },
+      },
+    });
+    expect(Nested.baseId).toBe('com.example/nested');
+    expectTypeOf<StoredContentOf<typeof Nested.schema>>().toEqualTypeOf<{
+      tags: ('x' | UnlistedValue)[];
+      meta: { mood: 'y' | UnlistedValue };
+    }>();
   });
 });
 
 describe('typeHandle()', () => {
-  test('carries the id, its family and the schema', () => {
+  test('carries the id, its family, the name, the schema and what it migrates from', () => {
     expect(Book.id).toBe('com.example.reading/book@2');
     expect(Book.baseId).toBe('com.example.reading/book');
+    expect(Book.name).toBe('Book');
     expect(Book.schema.title).toEqual({ kind: 'string', required: true });
+    expect(Book.migratesFrom).toBe(BookV1.id);
+  });
+
+  test('takes migratesFrom as a TypeId too', () => {
+    const fromId = typeHandle({
+      id: 'com.example.reading/book@2',
+      name: 'Book',
+      schema: {},
+      migratesFrom: BookV1.id,
+    });
+    expect(fromId.migratesFrom).toBe(BookV1.id);
+  });
+
+  test('leaves migratesFrom off a first version', () => {
+    expect('migratesFrom' in BookV1).toBe(false);
+  });
+
+  test('takes migratesFrom only as an earlier version of its own family', () => {
+    const bookV3 = (migratesFrom: unknown) => () =>
+      typeHandle({
+        id: 'com.example.reading/book@3',
+        name: 'Book',
+        schema: {},
+        migratesFrom: migratesFrom as TypeId,
+      });
+    expect(bookV3(Shelf)).toThrow(StackBadRequestError);
+    expect(bookV3('com.example.reading/book@3')).toThrow(StackBadRequestError);
+    expect(bookV3('com.example.reading/book@4')).toThrow(StackBadRequestError);
+    expect(bookV3('book')).toThrow(StackBadRequestError);
+    expect(bookV3(null)).toThrow(StackBadRequestError);
+    expect(bookV3(BookV1)().migratesFrom).toBe(BookV1.id);
   });
 
   test('refuses a malformed TypeId', () => {
-    expect(() => typeHandle('book', {})).toThrow(StackBadRequestError);
+    expect(() => typeHandle({ id: 'book', name: 'Book', schema: {} })).toThrow(
+      StackBadRequestError,
+    );
   });
 
   test('rejects a schema the field kinds do not describe', () => {
     // @ts-expect-error an unknown kind
-    typeHandle('com.example/x@1', { a: { kind: 'bigint' } });
+    typeHandle({ id: 'com.example/x@1', name: 'X', schema: { a: { kind: 'bigint' } } });
     // @ts-expect-error an array with neither items nor open
-    typeHandle('com.example/x@1', { a: { kind: 'array' } });
+    typeHandle({ id: 'com.example/x@1', name: 'X', schema: { a: { kind: 'array' } } });
   });
 
   test('core TypeSchema fits the literal schema type', () => {
-    const fromCore: TypeSchema = { a: { kind: 'string', enum: ['x'] } };
-    expect(typeHandle('com.example/x@1', fromCore).schema).toBe(fromCore);
+    const fromCore: TypeSchema = { a: { kind: 'enum', values: ['x'] } };
+    expect(typeHandle({ id: 'com.example/x@1', name: 'X', schema: fromCore }).schema).toBe(
+      fromCore,
+    );
   });
 });
 
-// -------------------------------------------------------
-// Typed reads and writes
-// -------------------------------------------------------
-
-describe.each([
-  ['Stack', (s: Stack): StackClient => s],
-  ['ScopedStack', (s: Stack): StackClient => s.asEntity(OWNER)],
-] as const)('typed reads and writes on %s', (_name, view) => {
-  let stack: Stack;
-  let client: ReturnType<typeof view>;
-
-  beforeEach(async () => {
-    stack = await Stack.open(await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' }));
-    await stack.defineType({ ...Book, name: 'Book' });
-    await stack.defineType({ ...Shelf, name: 'Shelf' });
-    client = view(stack);
+const handle = <const S extends ReadonlyTypeSchema>(
+  version: number,
+  schema: S,
+  migratesFrom?: TypeId,
+) =>
+  typeHandle({
+    id: `com.example/x@${version}`,
+    name: 'X',
+    schema,
+    ...(migratesFrom && { migratesFrom }),
   });
 
-  test('create() returns content typed from the handle', async () => {
-    const book = await client.create(Book, { title: 'Dune', status: 'want' });
-    expectTypeOf(book).toEqualTypeOf<TypedRecord<typeof Book.schema>>();
-    expect(book.typeId).toBe(Book.id);
-    expect(book.content.title).toBe('Dune');
+describe('migration()', () => {
+  test('builds migrate() from its steps, carrying every field no step names', () => {
+    const m = migration(BookV1, Book, [map('status', { done: 'finished' })]);
+    expect(m.from).toBe(BookV1.id);
+    expect(m.to).toBe(Book.id);
+    expect(m.steps).toHaveLength(1);
+    expect(m.migrate({ title: 'Dune', status: 'done' })).toEqual({
+      title: 'Dune',
+      status: 'finished',
+    });
   });
 
-  test('create() refuses content outside the schema at compile time', async () => {
-    // @ts-expect-error a value outside the enum
-    await client.create(Book, { title: 'x', status: 'paused' }).catch(() => undefined);
+  test('carries a value the source handle does not list through map()', () => {
+    const m = migration(BookV1, Book, [map('status', { done: 'finished' })]);
+    expect(m.migrate({ title: 'Dune', status: 'paused' })).toEqual({
+      title: 'Dune',
+      status: 'paused',
+    });
   });
 
-  test('get() round-trips a record as typed content', async () => {
-    const created = await client.create(Book, { title: 'Dune', status: 'want' });
-    const got = await client.get(Book, created.id);
-    expectTypeOf(got).toEqualTypeOf<TypedRecord<typeof Book.schema> | null>();
-    expect(got?.content).toEqual({ title: 'Dune', status: 'want' });
-  });
-
-  test('get() answers null for a missing record', async () => {
-    expect(await client.get(Book, 'nope')).toBeNull();
-  });
-
-  test('get() throws for a record of another Type', async () => {
-    const shelf = await client.create(Shelf, { name: 'Fiction' });
-    await expect(client.get(Book, shelf.id)).rejects.toThrow(
-      `Record "${shelf.id}" is com.example.reading/shelf@1, not com.example.reading/book@2`,
+  test('applies steps in order, each to what the last left', () => {
+    const V1 = handle(1, {
+      author: { kind: 'string', required: true },
+      tags: { kind: 'array', items: { kind: 'enum', values: ['a', 'b'] } },
+      archived: { kind: 'boolean' },
+    });
+    const V2 = handle(
+      2,
+      {
+        by: { kind: 'string', required: true },
+        tags: { kind: 'array', items: { kind: 'enum', values: ['x', 'b'] } },
+        priority: { kind: 'enum', values: ['low', 'normal'], required: true },
+        initial: { kind: 'string' },
+      },
+      V1.id,
     );
+    const m = migration(V1, V2, [
+      rename('author', 'by'),
+      map('tags', { a: 'x' }),
+      add('priority', 'normal'),
+      drop('archived'),
+      derive('initial', (c) => c.author.slice(0, 1) || undefined),
+    ]);
+    expect(m.migrate({ author: 'Ada', tags: ['a', 'b'], archived: true })).toEqual({
+      by: 'Ada',
+      tags: ['x', 'b'],
+      priority: 'normal',
+      initial: 'A',
+    });
+    expect(m.migrate({ author: '' })).toEqual({ by: '', priority: 'normal' });
   });
 
-  test('get() throws once the family has moved past the handle', async () => {
-    const book = await client.create(Book, { title: 'Dune', status: 'want' });
-    await stack.defineType({
-      id: 'com.example.reading/book@3',
-      name: 'Book',
-      schema: { ...Book.schema, isbn: { kind: 'string' } },
-      migratesFrom: Book.id,
-    });
-    stack.registerMigration({
-      from: Book.id,
-      to: 'com.example.reading/book@3',
-      migrate: (c) => c,
-    });
-    await expect(client.get(Book, book.id)).rejects.toThrow(/book@3, not .*book@2/);
+  test('types derive() on the source content as stored', () => {
+    migration(BookV1, Book, [
+      derive('status', (c) => {
+        expectTypeOf(c).toEqualTypeOf<StoredContentOf<typeof BookV1.schema>>();
+        return c.status === 'done' ? 'finished' : c.status;
+      }),
+    ]);
+    // Never run: the check is the compiler's.
+    void (() =>
+      // @ts-expect-error the source declares no `isbn`
+      migration(BookV1, Book, [derive('pages', (c) => c.isbn)]));
   });
 
-  test('get() throws when the app has not registered the migration', async () => {
-    const book = await client.create(Book, { title: 'Dune', status: 'want' });
-    await stack.defineType({
+  test('refuses a target in the same family that does not migrate from the source', () => {
+    const BookV3 = typeHandle({
       id: 'com.example.reading/book@3',
       name: 'Book',
       schema: Book.schema,
+      migratesFrom: Book,
     });
-    await expect(client.get(Book, book.id)).rejects.toThrow(StackMigrationError);
-  });
-
-  test('get() throws on an enum value the handle does not list', async () => {
-    const book = await client.create(Book, { title: 'Dune', status: 'want' });
-    // The writer's schema listed one more value than this reader's handle.
-    await stack.defineType({
-      id: Book.id,
-      name: 'Book',
-      schema: {
-        ...Book.schema,
-        status: {
-          kind: 'string',
-          enum: ['want', 'reading', 'finished', 'abandoned', 'paused'],
-          required: true,
-        },
-      },
-    });
-    await stack.patchContent(book.id, { status: 'paused' });
-    await expect(client.get(Book, book.id)).rejects.toThrow(StackValidationError);
-  });
-
-  test('get() reads a tombstone as null', async () => {
-    const book = await client.create(Book, { title: 'Dune', status: 'want' });
-    await client.delete(book.id);
-    expect(await client.get(Book, book.id)).toBeNull();
-  });
-
-  test('query() returns typed records of the handle and hides tombstones', async () => {
-    const live = await client.create(Book, { title: 'Dune', status: 'want' });
-    const gone = await client.create(Book, { title: 'Emma', status: 'want' });
-    await client.create(Shelf, { name: 'Fiction' });
-    await client.delete(gone.id);
-
-    const { records } = await client.query(Book);
-    expectTypeOf(records).toEqualTypeOf<TypedRecord<typeof Book.schema>[]>();
-    expect(records.map((r) => r.id)).toEqual([live.id]);
-  });
-
-  test('query() filters on content', async () => {
-    await client.create(Book, { title: 'Dune', status: 'want' });
-    await client.create(Book, { title: 'Emma', status: 'reading' });
-    const { records } = await client.query(Book, { filter: { content: { status: 'reading' } } });
-    expect(records.map((r) => r.content.title)).toEqual(['Emma']);
-  });
-
-  test('query() refuses includeDeleted', async () => {
-    await expect(
-      // @ts-expect-error typed reads do not offer includeDeleted
-      client.query(Book, { filter: { includeDeleted: true } }),
-    ).rejects.toThrow(StackBadRequestError);
-  });
-
-  test('query() throws on a record of the family at another version', async () => {
-    await client.create(Book, { title: 'Dune', status: 'want' });
-    await stack.defineType({ id: 'com.example.reading/book@3', name: 'Book', schema: Book.schema });
-    await expect(client.query(Book)).rejects.toThrow(StackMigrationError);
-  });
-
-  test('patchContent() takes a typed patch and returns the typed record', async () => {
-    const book = await client.create(Book, { title: 'Dune', status: 'want', pages: 412 });
-    const updated = await client.patchContent(Book, book.id, { status: 'reading', pages: null });
-    expectTypeOf(updated).toEqualTypeOf<TypedRecord<typeof Book.schema>>();
-    expect(updated.content).toEqual({ title: 'Dune', status: 'reading' });
-  });
-
-  test('patchContent() refuses a typo, a null on a required field and a bad enum', async () => {
-    const book = await client.create(Book, { title: 'Dune', status: 'want' });
-    // @ts-expect-error a typo'd key
-    await client.patchContent(Book, book.id, { titel: 'x' }).catch(() => undefined);
-    // @ts-expect-error null on a required field
-    await client.patchContent(Book, book.id, { title: null }).catch(() => undefined);
-    // @ts-expect-error a value outside the enum
-    await client.patchContent(Book, book.id, { status: 'paused' }).catch(() => undefined);
-  });
-
-  test('mutate() carries a typed contentPatch beside the other keys', async () => {
-    const book = await client.create(Book, { title: 'Dune', status: 'want' });
-    const updated = await client.mutate(Book, book.id, {
-      contentPatch: { status: 'finished' },
-      unlisted: true,
-    });
-    expect(updated.content.status).toBe('finished');
-    expect(updated.unlistedAt).toBeDefined();
-  });
-
-  test("subscribe() delivers only the handle's Type, with the record typed", async () => {
-    const seen: TypedChange<typeof Book.schema>[] = [];
-    const stop = await client.subscribe(Book, (change) => seen.push(change), {
-      includeRecords: true,
-    });
-    await client.create(Shelf, { name: 'Fiction' });
-    const book = await client.create(Book, { title: 'Dune', status: 'want' });
-    await settle();
-    stop();
-
-    expect(seen.map((c) => c.recordId)).toEqual([book.id]);
-    expectTypeOf(seen[0].record).toEqualTypeOf<TypedRecord<typeof Book.schema> | undefined>();
-    expect(seen[0].record?.content).toEqual({ title: 'Dune', status: 'want' });
-  });
-
-  test('subscribe() takes the rest of the change filter', async () => {
-    const seen: string[] = [];
-    const stop = await client.subscribe(Book, (c) => seen.push(c.kind), {
-      filter: { kinds: ['removed'] },
-    });
-    const book = await client.create(Book, { title: 'Dune', status: 'want' });
-    await client.delete(book.id);
-    await settle();
-    stop();
-    expect(seen).toEqual(['removed']);
-  });
-
-  test('subscribe() withholds a record holding an enum value the handle does not list', async () => {
-    const seen: TypedChange<typeof Book.schema>[] = [];
-    const book = await client.create(Book, { title: 'Dune', status: 'want' });
-    await stack.defineType({
-      id: Book.id,
-      name: 'Book',
-      schema: {
-        ...Book.schema,
-        status: {
-          kind: 'string',
-          enum: ['want', 'reading', 'finished', 'abandoned', 'paused'],
-          required: true,
-        },
-      },
-    });
-    const stop = await client.subscribe(Book, (change) => seen.push(change), {
-      includeRecords: true,
-    });
-    await stack.patchContent(book.id, { status: 'paused' });
-    await settle();
-    stop();
-
-    expect(seen).toHaveLength(1);
-    expect(seen[0].recordId).toBe(book.id);
-    expect(seen[0].record).toBeUndefined();
-  });
-
-  test('a typed write to a record of another Type throws before writing', async () => {
-    const shelf = await client.create(Shelf, { name: 'Fiction' });
-    await expect(client.patchContent(Book, shelf.id, { title: 'x' })).rejects.toThrow(
-      StackBadRequestError,
+    expect(() => migration(BookV1, BookV3, [])).toThrow(
+      `Cannot migrate "${BookV1.id}" to "${BookV3.id}": "${BookV3.id}" migrates from "${Book.id}".`,
     );
-    expect((await stack.get(shelf.id))?.version).toBe(shelf.version);
+    expect(() => migration(Book, BookV1, [])).toThrow(StackMigrationError);
   });
 
-  test('a typed write to a tombstone is refused as an untyped one is', async () => {
-    const book = await client.create(Book, { title: 'Dune', status: 'want' });
-    await client.delete(book.id);
-    await expect(client.patchContent(Book, book.id, { title: 'x' })).rejects.toThrow(
-      /soft-deleted/,
-    );
+  test('builds a step into another family without lineage', () => {
+    const m = migration(Shelf, Book, [rename('name', 'title'), add('status', 'want')]);
+    expect(m.migrate({ name: 'Fiction' })).toEqual({ title: 'Fiction', status: 'want' });
+  });
+
+  describe('checks its steps against both schemas', () => {
+    const V1 = handle(1, {
+      title: { kind: 'string', required: true },
+      status: { kind: 'enum', values: ['open', 'done'] },
+      count: { kind: 'number' },
+      meta: { kind: 'object', properties: { a: { kind: 'string' } } },
+    });
+    const at = (schema: ReadonlyTypeSchema) => handle(2, schema, V1.id);
+    const refused = (
+      to: ReturnType<typeof at>,
+      steps: Parameters<typeof migration<typeof V1.schema, ReadonlyTypeSchema>>[2],
+      message: string,
+    ) =>
+      expect(() => migration(V1, to, steps)).toThrow(
+        `Cannot migrate "${V1.id}" to "${to.id}": ${message}.`,
+      );
+    const same = at(V1.schema);
+
+    test('a step naming a field that is not there', () => {
+      refused(
+        same,
+        [rename('nope', 'title')],
+        'rename("nope", "title"): "nope" is not a field at this point',
+      );
+      refused(
+        same,
+        [drop('title'), drop('title')],
+        'drop("title"): "title" is not a field at this point',
+      );
+      refused(same, [map('nope', {})], 'map("nope", …): "nope" is not a field at this point');
+    });
+
+    test('a step onto a field that is already there', () => {
+      refused(
+        same,
+        [rename('title', 'count')],
+        'rename("title", "count"): "count" is already a field at this point',
+      );
+      refused(
+        same,
+        [add('title', 'x')],
+        'add("title", …): "title" is already a field at this point',
+      );
+    });
+
+    test('a field the target does not declare', () => {
+      const { count: _count, ...rest } = V1.schema;
+      refused(
+        at(rest),
+        [],
+        '"count" is carried to a Type that does not declare it; drop or rename it',
+      );
+      refused(
+        at(V1.schema),
+        [derive('extra', () => 1)],
+        '"extra" is carried to a Type that does not declare it; drop or rename it',
+      );
+    });
+
+    test('a required field nothing produces', () => {
+      refused(
+        at({ ...V1.schema, due: { kind: 'date', required: true } }),
+        [],
+        '"due" is required at the target, and no step produces it',
+      );
+    });
+
+    test('a carried field the target would refuse', () => {
+      refused(
+        at({ ...V1.schema, count: { kind: 'string' } }),
+        [],
+        '"count" changes kind from number to string',
+      );
+      refused(
+        at({ ...V1.schema, count: { kind: 'number', required: true } }),
+        [],
+        '"count" is optional at the source and required at the target',
+      );
+      refused(
+        at({ ...V1.schema, status: { kind: 'enum', values: ['open', 'finished'] } }),
+        [],
+        '"status" holds "done", which the target\'s enum does not list',
+      );
+      refused(
+        at({ ...V1.schema, status: { kind: 'enum', values: ['open'] } }),
+        [map('status', { done: 'closed' })],
+        '"status" holds "done" (mapped to "closed"), which the target\'s enum does not list',
+      );
+      refused(
+        at({ ...V1.schema, meta: { kind: 'object', properties: {} } }),
+        [],
+        '"meta.a" is not declared at the target',
+      );
+    });
+
+    test('a map of a field that holds no strings', () => {
+      refused(
+        same,
+        [map('count', { a: 'b' })],
+        'map("count", …): only an enum, string or text field, or an array of one, can be mapped',
+      );
+    });
+
+    test('an added value the target refuses', () => {
+      refused(
+        at({ ...V1.schema, priority: { kind: 'number' } }),
+        [add('priority', 'high')],
+        '"priority" is set to a value the target refuses: Expected number, got string',
+      );
+    });
+
+    test('accepts a widening it can carry', () => {
+      expect(() =>
+        migration(
+          V1,
+          at({ ...V1.schema, status: { kind: 'string' }, title: { kind: 'text', required: true } }),
+          [],
+        ),
+      ).not.toThrow();
+      expect(() =>
+        migration(V1, at({ ...V1.schema, status: { kind: 'enum', values: ['open', 'closed'] } }), [
+          map('status', { done: 'closed' }),
+        ]),
+      ).not.toThrow();
+    });
   });
 });
 
 describe('defineType()', () => {
-  test('accepts a handle with a name', async () => {
-    const stack = await Stack.open(
-      await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' }),
-    );
-    const type = await stack.defineType({ ...Book, name: 'Book' });
+  test('accepts a handle as it is', async () => {
+    const stack = await Stack.open(await MemoryAdapter.open({ ownerEntityId: OWNER }));
+    const type = await stack.defineType(Book);
     expect(type.id).toBe(Book.id);
     expect(type.schema).toEqual(Book.schema);
   });

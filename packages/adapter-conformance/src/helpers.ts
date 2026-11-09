@@ -7,7 +7,7 @@
  * MemoryAdapter resolves through a registered type's schema).
  */
 
-import type { StackRecord, StackType } from '@haverstack/core';
+import type { RecordVersion, StackRecord, StackType } from '@haverstack/core';
 
 let counter = 0;
 
@@ -44,5 +44,17 @@ export function makeRecord(overrides: Partial<StackRecord> = {}): StackRecord {
     content: { title: 'Untitled' },
     version: 1,
     ...overrides,
+  };
+}
+
+/** The snapshot a version-bumping write takes of `record` as it stands. */
+export function snapshotOf(record: StackRecord): RecordVersion {
+  return {
+    version: record.version,
+    typeId: record.typeId,
+    content: record.content,
+    updatedAt: record.updatedAt,
+    ...(record.createdBy && { createdBy: record.createdBy }),
+    ...(record.updatedBy && { updatedBy: record.updatedBy }),
   };
 }

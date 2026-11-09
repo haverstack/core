@@ -1,7 +1,8 @@
 import { describe, test, expect, beforeEach } from 'vitest';
-import { Stack } from '../src/stack.js';
+import { Stack } from '../src/stack/stack.js';
 import { MemoryAdapter } from '../src/testing.js';
-import type { RecordChange, StackRecord } from '../src/types.js';
+import { migration, typeHandle } from '../src/type-handle.js';
+import type { RecordChange, StackRecord } from '../src/types/index.js';
 
 const fam = (typeId: string): string => typeId.split('@')[0]!;
 const NOTE = 'com.example.test/note@1';
@@ -22,7 +23,7 @@ const collector = () => {
 };
 
 beforeEach(async () => {
-  adapter = await MemoryAdapter.open({ ownerEntityId: OWNER, timezone: 'UTC' });
+  adapter = await MemoryAdapter.open({ ownerEntityId: OWNER });
   stack = await Stack.open(adapter);
   await stack.defineType({
     id: NOTE,
@@ -63,9 +64,13 @@ describe('every mutation that bumps a version emits exactly one event', () => {
     await stack.subscribe(handler, { filter: { typeId: NOTE } });
 
     await stack.patchContent(note.id, { text: 'edited' });
-    await stack.associate(note.id, [{ kind: 'tag', label: 'starred' }]);
-    await stack.dissociate(note.id, [{ kind: 'tag', label: 'starred' }]);
-    await stack.mutate(note.id, { permissions: [{ kind: 'anyone', label: 'read' }] });
+    await stack.editAssociations(note.id, [
+      { op: 'add', association: { kind: 'tag', label: 'starred' } },
+    ]);
+    await stack.editAssociations(note.id, [
+      { op: 'remove', association: { kind: 'tag', label: 'starred' } },
+    ]);
+    await stack.setAccess(note.id, [{ kind: 'anyone', label: 'read' }]);
     await stack.delete(note.id);
     await stack.undelete(note.id);
     await stack.restoreVersion(note.id, 1);
@@ -129,8 +134,10 @@ describe('every mutation that bumps a version emits exactly one event', () => {
     await stack.subscribe(handler, { filter: { typeId: NOTE } });
 
     await stack.patchContent(note.id, { text: 'v2' });
-    await stack.associate(note.id, [{ kind: 'tag', label: 'starred' }]);
-    await stack.mutate(note.id, { permissions: [{ kind: 'anyone', label: 'read' }] });
+    await stack.editAssociations(note.id, [
+      { op: 'add', association: { kind: 'tag', label: 'starred' } },
+    ]);
+    await stack.setAccess(note.id, [{ kind: 'anyone', label: 'read' }]);
     await stack.patchContent(note.id, { text: 'v3' });
 
     expect(seen.map((c) => c.version)).toEqual([2, 2, 2, 3]);
@@ -145,18 +152,23 @@ describe('a mutation that changes nothing emits nothing', () => {
   test.each([
     [
       're-adding an association already present',
-      async (id: string) => stack.associate(id, [{ kind: 'tag', label: 'starred' }]),
-      async (id: string) => stack.associate(id, [{ kind: 'tag', label: 'starred' }]),
+      async (id: string) =>
+        stack.editAssociations(id, [{ op: 'add', association: { kind: 'tag', label: 'starred' } }]),
+      async (id: string) =>
+        stack.editAssociations(id, [{ op: 'add', association: { kind: 'tag', label: 'starred' } }]),
     ],
     [
       'removing an association that is not there',
       async () => {},
-      async (id: string) => stack.dissociate(id, [{ kind: 'tag', label: 'absent' }]),
+      async (id: string) =>
+        stack.editAssociations(id, [
+          { op: 'remove', association: { kind: 'tag', label: 'absent' } },
+        ]),
     ],
     [
       'setting a deep-equal permission set',
-      async (id: string) => stack.mutate(id, { permissions: [{ kind: 'anyone', label: 'read' }] }),
-      async (id: string) => stack.mutate(id, { permissions: [{ kind: 'anyone', label: 'read' }] }),
+      async (id: string) => stack.setAccess(id, [{ kind: 'anyone', label: 'read' }]),
+      async (id: string) => stack.setAccess(id, [{ kind: 'anyone', label: 'read' }]),
     ],
     [
       'deleting an already-deleted record',
@@ -202,23 +214,14 @@ describe('a mutation that changes nothing emits nothing', () => {
 
 describe('every record emits, including the ones a query hides', () => {
   test('_config reports a change despite never being returned by query()', async () => {
-    // Seeded through the adapter: the reserved id is unreachable from
-    // create(), and MemoryAdapter carries identity as fields rather than
-    // as the record the SQL adapters store.
-    await adapter.createRecord({
-      id: '_config',
-      typeId: '_config@1',
-      createdAt: new Date(),
-      updatedAt: new Date(),
-      content: { entityId: OWNER, timezone: 'UTC' },
-      version: 1,
-    });
     const { seen, handler } = collector();
     await stack.subscribe(handler);
 
-    await stack.patchContent('_config', { timezone: 'Europe/London' });
+    await stack.editAssociations('_config', [
+      { op: 'add', association: { kind: 'tag', label: 'seen' } },
+    ]);
 
-    expect(seen.map((c) => [c.recordId, c.ops])).toEqual([['_config', ['patch']]]);
+    expect(seen.map((c) => c.recordId)).toEqual(['_config']);
     // Addressable only by ID, so a query still cannot see it.
     const queried = await stack.query({});
     expect(queried.records.map((r) => r.id)).not.toContain('_config');
@@ -237,12 +240,19 @@ describe('every record emits, including the ones a query hides', () => {
   });
 
   test('migrateAll fans out — one event per migrated record, no batch frame', async () => {
-    await stack.defineType({
-      id: NOTE_V2,
+    const NoteV1 = typeHandle({
+      id: NOTE,
       name: 'Note',
       schema: { text: { kind: 'text', required: true } },
     });
-    stack.registerMigration({ from: NOTE, to: NOTE_V2, migrate: (c) => c });
+    const NoteV2 = typeHandle({
+      id: NOTE_V2,
+      name: 'Note',
+      schema: NoteV1.schema,
+      migratesFrom: NoteV1,
+    });
+    stack = await Stack.open(adapter, { migrations: [migration(NoteV1, NoteV2, [])] });
+    await stack.defineType(NoteV2);
     const ids = [];
     for (let i = 0; i < 3; i++) ids.push((await stack.create(NOTE, { text: `n${i}` })).id);
     const { seen, handler } = collector();
@@ -273,7 +283,7 @@ describe('an unlisted record is invisible to a default subscriber, even unscoped
 
   test('includeUnlisted: true — even on an unscoped Stack — opts back in', async () => {
     const { seen, handler } = collector();
-    await stack.subscribe(handler, { filter: { typeId: NOTE }, includeUnlisted: true });
+    await stack.subscribe(handler, { filter: { typeId: NOTE, includeUnlisted: true } });
 
     await stack.create(NOTE, { text: 'draft' }, { unlisted: true });
 
@@ -285,7 +295,7 @@ describe('an unlisted record is invisible to a default subscriber, even unscoped
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE } });
 
-    await stack.mutate(note.id, { unlisted: true });
+    await stack.setUnlisted(note.id, true);
 
     expect(seen.map((c) => [c.kind, c.ops])).toEqual([['removed', ['unlist']]]);
   });
@@ -295,7 +305,7 @@ describe('an unlisted record is invisible to a default subscriber, even unscoped
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE } });
 
-    await stack.mutate(note.id, { unlisted: false });
+    await stack.setUnlisted(note.id, false);
 
     expect(seen.map((c) => [c.kind, c.ops])).toEqual([['changed', ['list']]]);
   });
@@ -343,11 +353,11 @@ describe('actor names who performed the change', () => {
     expect(seen[0]!.record!.createdBy?.subjectId).toBe(AUTHOR);
   });
 
-  // associate()/dissociate() never bump, so they never restamp
+  // editAssociations() never bump, so they never restamp
   // record.updatedBy — the actor for their event has to travel as an
   // explicit opt instead of being read off the record. See
   // docs/spec/versioning.md § Version history.
-  test('associate()/dissociate() name the acting identity in the event even though they never restamp the record', async () => {
+  test('editAssociations() name the acting identity in the event even though they never restamp the record', async () => {
     await stack.grantType(fam(NOTE), {
       actions: ['create', 'read-any', 'update-any'],
       grantee: { kind: 'authenticated' },
@@ -356,8 +366,12 @@ describe('actor names who performed the change', () => {
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE }, includeRecords: true });
 
-    await stack.asEntity(EDITOR).associate(note.id, [{ kind: 'tag', label: 'x' }]);
-    await stack.asEntity(EDITOR).dissociate(note.id, [{ kind: 'tag', label: 'x' }]);
+    await stack
+      .asEntity(EDITOR)
+      .editAssociations(note.id, [{ op: 'add', association: { kind: 'tag', label: 'x' } }]);
+    await stack
+      .asEntity(EDITOR)
+      .editAssociations(note.id, [{ op: 'remove', association: { kind: 'tag', label: 'x' } }]);
 
     expect(seen[0]!.actor).toEqual({ subjectId: EDITOR });
     expect(seen[1]!.actor).toEqual({ subjectId: EDITOR });
@@ -366,11 +380,11 @@ describe('actor names who performed the change', () => {
     expect(seen[1]!.record!.updatedBy?.subjectId).toBe(AUTHOR);
   });
 
-  // An actorless associate()/dissociate() must not fall back to
+  // An actorless editAssociations() must not fall back to
   // record.updatedBy: that field reports whoever's last *bumping* write
   // this is, which can be a stranger to the association change. Absence
   // means unknown, never "the last editor".
-  test('an actorless associate()/dissociate() names nobody, even after an unrelated bumping edit', async () => {
+  test('an actorless editAssociations() names nobody, even after an unrelated bumping edit', async () => {
     await stack.grantType(fam(NOTE), {
       actions: ['create', 'read-any', 'update-any'],
       grantee: { kind: 'authenticated' },
@@ -381,8 +395,12 @@ describe('actor names who performed the change', () => {
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE }, includeRecords: true });
 
-    await stack.associate(note.id, [{ kind: 'tag', label: 'x' }]);
-    await stack.dissociate(note.id, [{ kind: 'tag', label: 'x' }]);
+    await stack.editAssociations(note.id, [
+      { op: 'add', association: { kind: 'tag', label: 'x' } },
+    ]);
+    await stack.editAssociations(note.id, [
+      { op: 'remove', association: { kind: 'tag', label: 'x' } },
+    ]);
 
     expect(seen[0]!.actor).toBeUndefined();
     expect(seen[1]!.actor).toBeUndefined();
@@ -445,7 +463,7 @@ describe('actor names who performed the change', () => {
 
 // Associations are never snapshotted (see docs/spec/versioning.md §
 // Version history), so these two fields are the only record, anywhere, of
-// what an associate()/dissociate() call actually moved. Both report only
+// what an editAssociations() call actually moved. Both report only
 // what is true now: `associationsAdded` the association as it now stands,
 // `associationsRemoved` the identity of what's now gone — never a value
 // that used to be there. See docs/spec/events.md § The event shape.
@@ -460,24 +478,30 @@ describe('associationsAdded/associationsRemoved report the current change', () =
     return { first, second, fileId: first.content.fileId };
   };
 
-  test('a fresh associate() reports the new association added, nothing removed', async () => {
+  test('a fresh editAssociations() reports the new association added, nothing removed', async () => {
     const note = await stack.create(NOTE, { text: 'hello' });
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE } });
 
-    await stack.associate(note.id, [{ kind: 'tag', label: 'starred' }]);
+    await stack.editAssociations(note.id, [
+      { op: 'add', association: { kind: 'tag', label: 'starred' } },
+    ]);
 
     expect(seen[0]!.associationsAdded).toEqual([{ kind: 'tag', label: 'starred' }]);
     expect(seen[0]!.associationsRemoved).toBeUndefined();
   });
 
-  test('dissociate() reports the removed association by identity, nothing added', async () => {
+  test('editAssociations() reports the removed association by identity, nothing added', async () => {
     const note = await stack.create(NOTE, { text: 'hello' });
-    await stack.associate(note.id, [{ kind: 'tag', label: 'starred' }]);
+    await stack.editAssociations(note.id, [
+      { op: 'add', association: { kind: 'tag', label: 'starred' } },
+    ]);
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE } });
 
-    await stack.dissociate(note.id, [{ kind: 'tag', label: 'starred' }]);
+    await stack.editAssociations(note.id, [
+      { op: 'remove', association: { kind: 'tag', label: 'starred' } },
+    ]);
 
     expect(seen[0]!.associationsRemoved).toEqual([{ kind: 'tag', label: 'starred' }]);
     expect(seen[0]!.associationsAdded).toBeUndefined();
@@ -489,23 +513,29 @@ describe('associationsAdded/associationsRemoved report the current change', () =
   test('re-pointing an attachment reports only the new pointer; the old one appears nowhere', async () => {
     const { first, second, fileId } = await twoUploads();
     const note = await stack.create(NOTE, { text: 'hello' });
-    await stack.associate(note.id, [
+    await stack.editAssociations(note.id, [
       {
-        kind: 'attachment',
-        label: 'embed',
-        fileId,
-        attachmentRecordId: first.id,
+        op: 'add',
+        association: {
+          kind: 'attachment',
+          label: 'embed',
+          fileId,
+          attachmentRecordId: first.id,
+        },
       },
     ]);
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE } });
 
-    await stack.associate(note.id, [
+    await stack.editAssociations(note.id, [
       {
-        kind: 'attachment',
-        label: 'embed',
-        fileId,
-        attachmentRecordId: second.id,
+        op: 'add',
+        association: {
+          kind: 'attachment',
+          label: 'embed',
+          fileId,
+          attachmentRecordId: second.id,
+        },
       },
     ]);
 
@@ -519,18 +549,23 @@ describe('associationsAdded/associationsRemoved report the current change', () =
   test('clearing a stored pointer reports the identity-only association as added', async () => {
     const { first, fileId } = await twoUploads();
     const note = await stack.create(NOTE, { text: 'hello' });
-    await stack.associate(note.id, [
+    await stack.editAssociations(note.id, [
       {
-        kind: 'attachment',
-        label: 'embed',
-        fileId,
-        attachmentRecordId: first.id,
+        op: 'add',
+        association: {
+          kind: 'attachment',
+          label: 'embed',
+          fileId,
+          attachmentRecordId: first.id,
+        },
       },
     ]);
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE } });
 
-    await stack.associate(note.id, [{ kind: 'attachment', label: 'embed', fileId }]);
+    await stack.editAssociations(note.id, [
+      { op: 'add', association: { kind: 'attachment', label: 'embed', fileId } },
+    ]);
 
     expect(seen[0]!.associationsAdded).toEqual([{ kind: 'attachment', label: 'embed', fileId }]);
   });
@@ -538,48 +573,40 @@ describe('associationsAdded/associationsRemoved report the current change', () =
   test('dissociating a pointed attachment never repeats attachmentRecordId', async () => {
     const { first, fileId } = await twoUploads();
     const note = await stack.create(NOTE, { text: 'hello' });
-    await stack.associate(note.id, [
+    await stack.editAssociations(note.id, [
       {
-        kind: 'attachment',
-        label: 'embed',
-        fileId,
-        attachmentRecordId: first.id,
+        op: 'add',
+        association: {
+          kind: 'attachment',
+          label: 'embed',
+          fileId,
+          attachmentRecordId: first.id,
+        },
       },
     ]);
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE } });
 
-    await stack.dissociate(note.id, [{ kind: 'attachment', label: 'embed', fileId }]);
+    await stack.editAssociations(note.id, [
+      { op: 'remove', association: { kind: 'attachment', label: 'embed', fileId } },
+    ]);
 
     expect(seen[0]!.associationsRemoved).toEqual([{ kind: 'attachment', label: 'embed', fileId }]);
   });
 
-  test('a mutate() change set swapping one tag for another reports both lists', async () => {
+  test('a set swapping one tag for another reports both lists', async () => {
     const note = await stack.create(NOTE, { text: 'hello' });
-    await stack.associate(note.id, [{ kind: 'tag', label: 'draft' }]);
+    await stack.editAssociations(note.id, [
+      { op: 'add', association: { kind: 'tag', label: 'draft' } },
+    ]);
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE } });
 
-    await stack.mutate(note.id, { associations: [{ kind: 'tag', label: 'published' }] });
+    await stack.setAssociations(note.id, [{ kind: 'tag', label: 'published' }]);
 
     expect(seen[0]!.ops).toEqual(['associate', 'dissociate']);
     expect(seen[0]!.associationsAdded).toEqual([{ kind: 'tag', label: 'published' }]);
     expect(seen[0]!.associationsRemoved).toEqual([{ kind: 'tag', label: 'draft' }]);
-  });
-
-  test('a mutate() change set combining associations with a bumping aspect reports both', async () => {
-    const note = await stack.create(NOTE, { text: 'hello' });
-    const { seen, handler } = collector();
-    await stack.subscribe(handler, { filter: { typeId: NOTE } });
-
-    await stack.mutate(note.id, {
-      contentPatch: { text: 'edited' },
-      associations: [{ kind: 'tag', label: 'starred' }],
-    });
-
-    expect(seen[0]!.ops).toEqual(['patch', 'associate']);
-    expect(seen[0]!.associationsAdded).toEqual([{ kind: 'tag', label: 'starred' }]);
-    expect(seen[0]!.version).toBe(2);
   });
 
   test('neither field is present on ops that carry no association change', async () => {
@@ -812,7 +839,7 @@ describe('filtering is exact', () => {
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { parentId: from.id } });
 
-    await stack.mutate(note.id, { parentId: to.id });
+    await stack.setParent(note.id, to.id);
 
     expect(seen).toHaveLength(1);
     expect(seen[0]!.ops).toEqual(['reparent']);
@@ -828,7 +855,7 @@ describe('filtering is exact', () => {
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { parentId: to.id } });
 
-    await stack.mutate(note.id, { parentId: to.id });
+    await stack.setParent(note.id, to.id);
 
     expect(seen).toHaveLength(1);
     expect(seen[0]!.parentId).toBe(to.id);
@@ -842,7 +869,7 @@ describe('filtering is exact', () => {
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { parentId: watched.id } });
 
-    await stack.mutate(note.id, { parentId: to.id });
+    await stack.setParent(note.id, to.id);
 
     expect(seen).toHaveLength(0);
   });
@@ -853,7 +880,7 @@ describe('filtering is exact', () => {
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE, parentId: null } });
 
-    await stack.mutate(note.id, { parentId: null });
+    await stack.setParent(note.id, null);
 
     expect(seen.map((c) => c.recordId)).toEqual([note.id]);
   });
@@ -864,7 +891,7 @@ describe('filtering is exact', () => {
     const { seen, handler } = collector();
     await stack.subscribe(handler, { filter: { typeId: NOTE, parentId: null } });
 
-    await stack.mutate(note.id, { parentId: to.id });
+    await stack.setParent(note.id, to.id);
 
     expect(seen).toHaveLength(1);
     expect(seen[0]!.recordId).toBe(note.id);
@@ -879,7 +906,7 @@ describe('filtering is exact', () => {
     const { seen, handler } = collector();
     await stack.subscribe(handler);
 
-    await stack.mutate(note.id, { parentId: to.id });
+    await stack.setParent(note.id, to.id);
 
     expect(seen.at(-1)).toMatchObject({ kind: 'changed', ops: ['reparent'] });
   });
@@ -892,7 +919,7 @@ describe('filtering is exact', () => {
     const to = await stack.create(NOTE, { text: 'to' });
     const note = await stack.create(NOTE, { text: 'note' }, { parentId: from.id });
     await stack.patchContent(note.id, { text: 'edited' });
-    await stack.mutate(note.id, { parentId: to.id });
+    await stack.setParent(note.id, to.id);
     const origin = collector();
     const destination = collector();
     await stack.subscribe(origin.handler, { filter: { parentId: from.id } });

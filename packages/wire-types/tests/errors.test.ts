@@ -101,6 +101,12 @@ describe('error round trip', () => {
     }
   });
 
+  it('preserves the header saying what a validation error validated', () => {
+    const err = new StackValidationError([{ path: 'baseId', message: 'bad' }], 'Invalid arguments');
+    const rebuilt = deserializeError(serializeError(err)!.body);
+    expect(rebuilt.message).toBe(err.message);
+  });
+
   it('preserves the fields an ifVersion retry loop needs', () => {
     const rebuilt = deserializeError(
       serializeError(new StackVersionConflictError('mismatch', '1hk153x0a00b', 3, 5))!.body,

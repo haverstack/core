@@ -10,27 +10,16 @@
  * markdown, which is the drift the Schema Commons' governance process exists
  * to prevent.
  *
- * Each constant is also a type handle, so `stack.create(NOTE, …)` and the
- * other typed overloads derive content types from the same literal. See
- * docs/spec/data-model.md § Type handles.
+ * Each constant is also a type handle, so `stack.collection(NOTE)` derives
+ * its content type from the same literal. See docs/spec/data-model.md
+ * § Type handles.
  *
  * Only Draft-status types are exported here. Proposed types (not yet backed
  * by a concrete intended writer) stay docs-only until they graduate.
  */
 
 import { typeHandle } from '@haverstack/core';
-import type { ReadonlyTypeSchema, Stack, StackType, TypeHandle, TypeId } from '@haverstack/core';
-
-/** A type handle plus the display name `defineType()` takes. */
-export type CommonsType<S extends ReadonlyTypeSchema = ReadonlyTypeSchema> = TypeHandle<S> & {
-  readonly name: string;
-};
-
-const commonsType = <const S extends ReadonlyTypeSchema>(
-  id: TypeId,
-  name: string,
-  schema: S,
-): CommonsType<S> => Object.freeze({ ...typeHandle(id, schema), name });
+import type { Stack, StackType, TypeHandle } from '@haverstack/core';
 
 const labeledValue = {
   kind: 'object',
@@ -40,87 +29,171 @@ const labeledValue = {
   },
 } as const;
 
-export const NOTE = commonsType('org.haverstack/note@1', 'Note', {
-  text: { kind: 'text', required: true },
-  title: { kind: 'string' },
-  format: { kind: 'string' },
+export const NOTE = typeHandle({
+  id: 'org.haverstack/note@1',
+  name: 'Note',
+  schema: {
+    text: { kind: 'text', required: true },
+    title: { kind: 'string' },
+    format: { kind: 'string' },
+  },
 });
 
-export const BOOKMARK = commonsType('org.haverstack/bookmark@1', 'Bookmark', {
-  url: { kind: 'string', required: true },
-  title: { kind: 'string' },
-  description: { kind: 'text' },
+export const BOOKMARK = typeHandle({
+  id: 'org.haverstack/bookmark@1',
+  name: 'Bookmark',
+  schema: {
+    url: { kind: 'string', required: true },
+    title: { kind: 'string' },
+    description: { kind: 'text' },
+  },
 });
 
-export const TASK = commonsType('org.haverstack/task@1', 'Task', {
-  title: { kind: 'string', required: true },
-  done: { kind: 'boolean', required: true },
-  notes: { kind: 'text' },
-  due: { kind: 'date' },
-  completedAt: { kind: 'date' },
+export const TASK = typeHandle({
+  id: 'org.haverstack/task@1',
+  name: 'Task',
+  schema: {
+    title: { kind: 'string', required: true },
+    done: { kind: 'boolean', required: true },
+    notes: { kind: 'text' },
+    due: { kind: 'date' },
+    completedAt: { kind: 'date' },
+  },
 });
 
-export const CONTACT = commonsType('org.haverstack/contact@1', 'Contact', {
-  name: { kind: 'string', required: true },
-  emails: { kind: 'array', items: labeledValue },
-  phones: { kind: 'array', items: labeledValue },
-  urls: { kind: 'array', items: labeledValue },
-  org: { kind: 'string' },
-  note: { kind: 'text' },
+export const CONTACT = typeHandle({
+  id: 'org.haverstack/contact@1',
+  name: 'Contact',
+  schema: {
+    name: { kind: 'string', required: true },
+    emails: { kind: 'array', items: labeledValue },
+    phones: { kind: 'array', items: labeledValue },
+    urls: { kind: 'array', items: labeledValue },
+    org: { kind: 'string' },
+    note: { kind: 'text' },
+  },
 });
 
-export const ARTICLE = commonsType('org.haverstack/article@1', 'Article', {
-  title: { kind: 'string', required: true },
-  text: { kind: 'text', required: true },
-  format: { kind: 'string' },
-  summary: { kind: 'text' },
-  url: { kind: 'string' },
-  author: { kind: 'string' },
-  publishedAt: { kind: 'date' },
+export const ARTICLE = typeHandle({
+  id: 'org.haverstack/article@1',
+  name: 'Article',
+  schema: {
+    title: { kind: 'string', required: true },
+    text: { kind: 'text', required: true },
+    format: { kind: 'string' },
+    summary: { kind: 'text' },
+    url: { kind: 'string' },
+    author: { kind: 'string' },
+    publishedAt: { kind: 'date' },
+  },
 });
 
-export const PLACE = commonsType('org.haverstack/place@1', 'Place', {
-  latitude: { kind: 'number', required: true },
-  longitude: { kind: 'number', required: true },
-  name: { kind: 'string' },
-  address: { kind: 'string' },
-  url: { kind: 'string' },
+export const PLACE = typeHandle({
+  id: 'org.haverstack/place@1',
+  name: 'Place',
+  schema: {
+    latitude: { kind: 'number', required: true },
+    longitude: { kind: 'number', required: true },
+    name: { kind: 'string' },
+    address: { kind: 'string' },
+    url: { kind: 'string' },
+  },
 });
 
-export const PAGE = commonsType('org.haverstack/page@1', 'Page', {
-  slug: { kind: 'string', required: true },
-  text: { kind: 'text', required: true },
-  title: { kind: 'string' },
-  format: { kind: 'string' },
-  publishedAt: { kind: 'date' },
-  collection: {
-    kind: 'object',
-    properties: {
-      typeId: { kind: 'string', required: true },
-      tag: { kind: 'string' },
-      order: { kind: 'string' },
+export const PAGE = typeHandle({
+  id: 'org.haverstack/page@1',
+  name: 'Page',
+  schema: {
+    slug: { kind: 'string', required: true },
+    text: { kind: 'text', required: true },
+    title: { kind: 'string' },
+    format: { kind: 'string' },
+    publishedAt: { kind: 'date' },
+    collection: {
+      kind: 'object',
+      properties: {
+        typeId: { kind: 'string', required: true },
+        tag: { kind: 'string' },
+        order: { kind: 'string' },
+      },
     },
   },
 });
 
-export const IMAGE = commonsType('org.haverstack/image@1', 'Image', {
-  file: { kind: 'file-ref', required: true },
-  caption: { kind: 'text' },
-  alt: { kind: 'string' },
-  capturedAt: { kind: 'date' },
+export const IMAGE = typeHandle({
+  id: 'org.haverstack/image@1',
+  name: 'Image',
+  schema: {
+    file: { kind: 'file-ref', required: true },
+    caption: { kind: 'text' },
+    alt: { kind: 'string' },
+    capturedAt: { kind: 'date' },
+  },
 });
 
-export const POST = commonsType('org.haverstack/post@1', 'Post', {
-  text: { kind: 'text', required: true },
-  format: { kind: 'string' },
-  url: { kind: 'string' },
+export const POST = typeHandle({
+  id: 'org.haverstack/post@1',
+  name: 'Post',
+  schema: {
+    text: { kind: 'text', required: true },
+    format: { kind: 'string' },
+    url: { kind: 'string' },
+  },
 });
 
-export const SITE = commonsType('org.haverstack/site@1', 'Site', {
-  title: { kind: 'string', required: true },
-  baseUrl: { kind: 'string', required: true },
-  description: { kind: 'text' },
-  handle: { kind: 'string' },
+export const SITE = typeHandle({
+  id: 'org.haverstack/site@1',
+  name: 'Site',
+  schema: {
+    title: { kind: 'string', required: true },
+    baseUrl: { kind: 'string', required: true },
+    description: { kind: 'text' },
+    handle: { kind: 'string' },
+  },
+});
+
+export const POLL = typeHandle({
+  id: 'org.haverstack/poll@1',
+  name: 'Poll',
+  schema: {
+    question: { kind: 'string', required: true },
+    options: {
+      kind: 'array',
+      required: true,
+      items: {
+        kind: 'object',
+        properties: {
+          id: { kind: 'string', required: true },
+          label: { kind: 'string', required: true },
+          startsAt: { kind: 'date' },
+          endsAt: { kind: 'date' },
+        },
+      },
+    },
+    method: { kind: 'string' },
+    scoreMax: { kind: 'number' },
+    closesAt: { kind: 'date' },
+    details: { kind: 'text' },
+  },
+});
+
+export const VOTE = typeHandle({
+  id: 'org.haverstack/vote@1',
+  name: 'Vote',
+  schema: {
+    pollId: { kind: 'record-ref', required: true },
+    choices: {
+      kind: 'array',
+      required: true,
+      items: {
+        kind: 'object',
+        properties: {
+          optionId: { kind: 'string', required: true },
+          score: { kind: 'number', required: true },
+        },
+      },
+    },
+  },
 });
 
 /**
@@ -131,7 +204,7 @@ export const SITE = commonsType('org.haverstack/site@1', 'Site', {
  */
 export const defineCommonsTypes = async (
   stack: Stack,
-  types: readonly CommonsType[],
+  types: readonly TypeHandle[],
 ): Promise<StackType[]> => {
   const defined: StackType[] = [];
   for (const type of types) {

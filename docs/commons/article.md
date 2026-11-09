@@ -39,7 +39,7 @@ await stack.defineType({
 | ------------- | -------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `title`       | `string` | yes      | The work's name. What makes it an article rather than a note.                                                                                                                                                                                                                              |
 | `text`        | `text`   | yes      | The body.                                                                                                                                                                                                                                                                                  |
-| `format`      | `string` | no       | Interpretation of `text`. Same vocabulary and defaults as `note`: `"markdown"` (default when absent), `"plain"`; unknown values render as plain.                                                                                                                                           |
+| `format`      | `string` | no       | Interpretation of `text`. Same vocabulary, default and fallback as `note`: `"markdown"` when absent, `"plain"` for an unknown value.                                                                                                                                                       |
 | `summary`     | `text`   | no       | Abstract/deck/excerpt. Authored: written or app-derived-and-saved. Captured: the source's own summary. Readers must not regenerate and write back over a present value.                                                                                                                    |
 | `url`         | `string` | no       | Canonical location of the published work. Authored drafts have none yet; captured articles always carry the source URL. Presence of `url` is what makes an article record read-compatible with `bookmark` consumers in spirit — though formally `bookmark`'s core requires it, see below.  |
 | `author`      | `string` | no       | External attribution — the byline as displayed ("Jane Doe"). **Absent means the record's `createdBy` (or the stack owner) is the author.** This is deliberately a string, not a reference: a captured work's byline is a property of the work, and its author is rarely a known principal. |
@@ -73,7 +73,8 @@ await stack.defineType({
   string is the byline as displayed, faithful to the work even if the contact is later
   renamed. Co-authorship is multiple `author` associations, with the string holding
   the joint byline ("Alice Smith and Bob Jones").
-- **Captured articles** should also carry `{ kind: 'relationship', label: 'about', … }`
+- **Captured articles** should also carry
+  `{ kind: 'relationship', label: 'about', target: { kind: 'record', recordId } }`
   associations from any notes annotating them, and may coexist with a `bookmark` record
   for the same URL (the bookmark is "I saved this link"; the article is "I captured this
   work") — apps that hold both should link them with a `relationship` labeled `capture`

@@ -43,7 +43,8 @@ await stack.defineType({
 - **Priority** is deliberately not in @1: prior-art vocabularies conflict (P1–P4,
   high/medium/low, 0–9) and most shared tasks don't carry one. Expected as a follow-up
   proposal with a single well-known string vocabulary, landing additively.
-- **Blocking relationships**: `{ kind: 'relationship', label: 'blocked-by', recordId }`.
+- **Blocking relationships**:
+  `{ kind: 'relationship', label: 'blocked-by', target: { kind: 'record', recordId } }`.
 
 ## Read-compat core
 

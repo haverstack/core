@@ -1,0 +1,112 @@
+/**
+ * @haverstack/core/wire
+ * -------------------------------------------------------
+ * The request encoding, the handshake, the token store a server issues
+ * from, and the attachment-download policy shared by both sides of a
+ * client/server connection — building a payload identically on both
+ * ends is the whole point, so this is imported by
+ * clients (e.g. adapter-api) and servers alike. The request encoding is
+ * carried here as both halves: adapter-api builds a query, and the parsers
+ * below decode it, so a server inherits the grammar rather than
+ * transcribing it. See docs/spec/wire-format.md.
+ */
+
+export {
+  buildAuthChallengePayload,
+  signAuthChallenge,
+  verifyAuthChallenge,
+  didCredentialFromKeypair,
+  base64urlEncode,
+  base64urlDecode,
+} from './auth.js';
+export type { AuthChallenge, DidCredential } from './auth.js';
+
+// No in-repo caller: a server must derive the signing origin from its own
+// configured public origin — this is the primitive it does that with.
+export { authOriginFromUrl } from './auth.js';
+
+// Thrown by authOriginFromUrl, buildAuthChallengePayload and
+// base64urlDecode above — all public, so a caller needs this to
+// distinguish malformed input from any other Error.
+export { InvalidAuthChallengeError } from './auth.js';
+
+export {
+  isSafeAttachmentContentType,
+  inferContentTypeFromFilename,
+  resolveAttachmentDownloadContentType,
+  NOSNIFF_HEADER_NAME,
+  NOSNIFF_HEADER_VALUE,
+} from './attachment-download.js';
+export type { AttachmentDownloadContentType } from './attachment-download.js';
+
+// No in-repo caller: resolveAttachmentDownloadContentType() takes
+// storedMimeType as an input rather than selecting the record itself — a
+// server must call these to pick the record a download describes and pass
+// the winner in. Contract, not internal.
+export { firstRecordedAttachment, resolveReferencedAttachment } from '../attachment-records.js';
+
+// Server-facing: bearer-token issuance and lookup, backed by its own file
+// outside the portable stack database — not a slot on StackAdapter.
+export type { StackTokenStore, TokenInfo, TokenSession } from '../types/index.js';
+
+// No in-repo caller: the parse half of the request encoding adapter-api
+// builds, so a server decodes every query-bearing route with these rather
+// than transcribing the parameter table. Contract, not internal — the
+// round trip against the builders is pinned by a test.
+export {
+  parseQueryParams,
+  parseQueryBody,
+  parseChangeParams,
+  parseJournalParams,
+  parseVersionsParams,
+  parseBlobsParams,
+  parseGetRecordParams,
+  parseDeleteParams,
+  parseDownloadParams,
+  parseAssociationParams,
+  parseIfMatch,
+  parseUploadFilename,
+  parseUnsignedInt,
+} from './request.js';
+
+// The build-side half of the fields that never travel: adapter-api refuses
+// them before encoding, so which encoding a server's content reach selects
+// never decides whether a family query widens or is refused.
+export { assertQueryTravels } from './request.js';
+export type {
+  ParsedChangeParams,
+  ParsedDownloadParams,
+  ParsedAssociationParams,
+} from './request.js';
+
+// Re-exported by @haverstack/wire-types for the response side: one wire
+// date decoding, used by both halves.
+export { parseDate } from './request.js';
+
+// No in-repo caller: the create half of the same contract, so a server
+// inherits which half of a record body it may trust rather than deciding
+// field by field. See docs/spec/wire-format.md § Records.
+export { createOptionsFromWireRecord } from './record.js';
+export type { WireCreateRequest } from './record.js';
+
+// No in-repo caller: the bodies of the remaining endpoints core specifies,
+// so a server refuses a key they do not define without keeping its own
+// list of the ones they do. See docs/spec/wire-format.md § Unrecognized input.
+export {
+  parseContentPatchBody,
+  parseParentBody,
+  parseUnlistedBody,
+  parseAssociationEditsBody,
+  parseAssociationsBody,
+  parsePermissionsBody,
+  parseAuthChallengeBody,
+  parseAuthTokenBody,
+  parseTypeBody,
+  parseMigrationBody,
+  parseInstallBody,
+} from './body.js';
+export type {
+  WireAuthChallengeRequest,
+  WireAuthTokenRequest,
+  WireMigrationRequest,
+} from './body.js';

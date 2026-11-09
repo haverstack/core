@@ -16,7 +16,7 @@ An object rather than a boolean, for the same reason [`auth`](./wire-format.md#a
 - `resume: false` is conformant. It means the server honors no cursor, so every connection is answered with a `reset` frame.
 - `records` reports whether `?include=record` is honored. `false` is conformant; the fetch fallback is the contract either way.
 
-**A client checks discovery and fails locally.** `APIAdapter.subscribeChanges()` against a server advertising no feed throws `APIAdapterCapabilityError` **without sending a request**, exactly as content and search filters do. Learning this as a 404 partway through a connection is the failure mode `auth.methods` exists to avoid.
+**A client checks discovery and fails locally.** `APIAdapter` has `subscribeChanges()` only when discovery advertises a feed, and `Stack.subscribe()` over a server advertising none is refused with `StackBadRequestError` **without sending a request** ([Change events § Where events come from](./events.md#where-events-come-from)), as a content or search filter the server has not declared is refused before one. Learning this as a 404 partway through a connection is the failure mode `auth.methods` exists to avoid.
 
 ## The endpoint
 
@@ -38,9 +38,9 @@ Last-Event-ID: <cursor>       (equivalently ?since=<cursor>)
 
 Response: `200 text/event-stream`, a stream of frames.
 
-`@haverstack/core/wire` exports `parseChangeParams()`, a conforming implementation of the params above — filter, `include` and `includeUnlisted` in one object, since a server needs the last of those before the stream opens to answer the owner-only `403`. The resume cursor is not part of it: reconciling `Last-Event-ID` against `?since=` is resumption machinery rather than request encoding.
+`@haverstack/core/wire` exports `parseChangeParams()`, a conforming implementation of the params above — the filter and `include` in one object. A server reads `filter.includeUnlisted` from it before the stream opens, to answer the owner-only `403`. The resume cursor is not part of it: reconciling `Last-Event-ID` against `?since=` is resumption machinery rather than request encoding.
 
-**Filtering is [exact, not advisory](./events.md#subscribing)**, and every param means what it means on [`GET /records`](./wire-format.md#records), so a client that loads a set there and follows it here sends the same filter to both. `baseId` is the one param `GET /records` refuses: there it is resolved client-side against registered Types, while here it is matched against each change's `typeId`, so it covers a version registered after the connection opened. A `typeId` or `baseId` filter reaches both sides of a [type change](./events.md#the-type-change-transition). `createdBySubject` and `createdByPrincipal` filter on the record's **author** — which is deliberately not in the envelope, and never needed to be: filtering happens here, where the record is in hand.
+**Filtering is [exact, not advisory](./events.md#subscribing)**, and every param means what it means on [`GET /records`](./wire-format.md#records), so a client that loads a set there and follows it here sends the same filter to both. `baseId` is matched against each change's `typeId`, as it is against each Record's there, so it covers a version registered after the connection opened. A `typeId` or `baseId` filter reaches both sides of a [type change](./events.md#the-type-change-transition). `createdBySubject` and `createdByPrincipal` filter on the record's **author** — which is deliberately not in the envelope, and never needed to be: filtering happens here, where the record is in hand.
 
 ## Frames
 
@@ -120,7 +120,7 @@ As with [the auth checklist](./wire-format.md#server-implementation-checklist), 
 - **Close on buffer overflow; never drop a frame silently.**
 - **Only the storage owner can emit.** [Exactly one process owns a stack's storage](./adapters.md#concurrency--storage-ownership), so events exist only in that process. A multi-process server needs its own fan-out from the owner; a second process subscribing to its own `Stack` sees nothing and looks fine in testing.
 - **Mint cursors in the base64url alphabet only** — a value containing a newline truncates the frame that carries it.
-- **Emit for every mutating endpoint**, not the convenient ones. The list is the exhaustive one under [Versions](./wire-format.md#versions), plus create, purge, the [association](./wire-format.md#associations) and [permission](./wire-format.md#permissions) endpoints, and a `PATCH` naming only no-bump keys. None of that second group bumps `version`, so a server that emits off its snapshot path alone silently serves no association, permission, move or listing events at all.
+- **Emit for every mutating endpoint**, not the convenient ones. The list is the exhaustive one under [Versions](./wire-format.md#versions), plus create, purge and every [no-bump write](./versioning.md#version-history). None of that second group bumps `version`, so a server that emits off its snapshot path alone silently serves no association, permission, move or listing events at all.
 
 ## Why SSE, and why not `EventSource`
 

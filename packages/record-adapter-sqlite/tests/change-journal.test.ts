@@ -26,7 +26,6 @@ const initAdapter = () =>
     create: 'exclusive',
     path: dbPath,
     ownerEntityId: 'entity-123',
-    timezone: 'UTC',
   });
 
 const makeRecord = (overrides: Partial<StackRecord> = {}): StackRecord => ({
@@ -73,12 +72,12 @@ describe('appendJournal', () => {
     const b = makeRecord();
     await adapter.createRecord(a, { journal: entry() });
     await adapter.createRecord(b, { journal: entry() });
-    await adapter.amendAssociations(
+    await adapter.editAssociations(
       a.id,
       [{ op: 'add', association: { kind: 'tag', label: 'x' } }],
       { journal: entry({ ops: ['associate'], kind: 'changed' }) },
     );
-    await adapter.amendAssociations(
+    await adapter.editAssociations(
       b.id,
       [{ op: 'add', association: { kind: 'tag', label: 'y' } }],
       { journal: entry({ ops: ['associate'], kind: 'changed' }) },
@@ -92,7 +91,7 @@ describe('appendJournal', () => {
     const adapter = await initAdapter();
     const record = makeRecord();
     await adapter.createRecord(record);
-    await adapter.amendAssociations(record.id, [
+    await adapter.editAssociations(record.id, [
       { op: 'add', association: { kind: 'tag', label: 'x' } },
     ]);
 
@@ -106,14 +105,12 @@ describe('appendJournal', () => {
     await adapter.createRecord(container);
     await adapter.createRecord(record, { journal: entry() });
 
-    await adapter.mutateRecord(
+    await adapter.setParent(record.id, container.id, {
+      journal: entry({ ops: ['reparent'], kind: 'changed', previousParentId: null }),
+    });
+    await adapter.patchContent(
       record.id,
-      { parentId: container.id },
-      { journal: entry({ ops: ['reparent'], kind: 'changed', previousParentId: null }) },
-    );
-    await adapter.mutateRecord(
-      record.id,
-      { contentPatch: { text: 'edited' } },
+      { text: 'edited' },
       { journal: entry({ ops: ['patch'], kind: 'changed' }) },
     );
 
@@ -129,7 +126,7 @@ describe('appendJournal', () => {
     await adapter.createRecord(record);
 
     const fileId = 'a'.repeat(64);
-    await adapter.amendAssociations(
+    await adapter.editAssociations(
       record.id,
       [
         {
@@ -189,13 +186,10 @@ describe('a journal entry lands in the same write as its mutation', () => {
     await adapter.createRecord(record, { journal: entry() });
 
     await expect(
-      adapter.mutateRecord(
+      adapter.patchContent(
         record.id,
-        { contentPatch: { text: 'edited' } },
-        {
-          ifVersion: 99,
-          journal: entry({ ops: ['patch'], kind: 'changed' }),
-        },
+        { text: 'edited' },
+        { ifVersion: 99, journal: entry({ ops: ['patch'], kind: 'changed' }) },
       ),
     ).rejects.toThrow();
 
@@ -212,7 +206,7 @@ describe('a purge leaves no journal rows', () => {
     const adapter = await initAdapter();
     const record = makeRecord();
     await adapter.createRecord(record, { journal: entry() });
-    await adapter.amendAssociations(
+    await adapter.editAssociations(
       record.id,
       [{ op: 'add', association: { kind: 'tag', label: 'sensitive' } }],
       { journal: entry({ ops: ['associate'], kind: 'changed' }) },
@@ -236,7 +230,7 @@ describe('a purge leaves no journal rows', () => {
     await adapter.deleteRecord(record.id, { purge: true });
 
     await expect(
-      adapter.amendAssociations(
+      adapter.editAssociations(
         record.id,
         [{ op: 'add', association: { kind: 'tag', label: 'x' } }],
         { journal: entry({ ops: ['associate'], kind: 'changed' }) },
@@ -254,7 +248,7 @@ describe('the log outlives the process that wrote it', () => {
     const adapter = await initAdapter();
     const record = makeRecord();
     await adapter.createRecord(record, { journal: entry() });
-    await adapter.amendAssociations(
+    await adapter.editAssociations(
       record.id,
       [{ op: 'add', association: { kind: 'tag', label: 'draft' } }],
       {
@@ -287,7 +281,7 @@ describe('getJournal', () => {
     const record = makeRecord();
     await adapter.createRecord(record, { journal: entry() });
     for (const label of ['a', 'b', 'c']) {
-      await adapter.amendAssociations(
+      await adapter.editAssociations(
         record.id,
         [{ op: 'add', association: { kind: 'tag', label } }],
         { journal: entry({ ops: ['associate'], kind: 'changed' }) },

@@ -10,8 +10,8 @@ import {
   StackNotFoundError,
   StackBadRequestError,
 } from '@haverstack/core';
-import { OwnerMismatchError } from '@haverstack/core/adapter';
-import type { AuthorityAssociation, StackRecord } from '@haverstack/core';
+import { FormatMismatchError, OwnerMismatchError, resolveQuery } from '@haverstack/core/adapter';
+import type { AuthorityAssociation, RecordVersion, StackRecord } from '@haverstack/core';
 
 // -------------------------------------------------------
 // Test helpers
@@ -30,12 +30,32 @@ afterEach(() => {
   rmSync(testDir, { recursive: true, force: true });
 });
 
-const initAdapter = (opts?: { timezone?: string; ownerEntityId?: string }) =>
+/**
+ * A versions row written behind the adapter's back, through a connection of
+ * its own: the state an interrupted write leaves, which no adapter call can.
+ */
+const plantVersionRow = (recordId: string, v: RecordVersion): void => {
+  const db = new DatabaseSync(dbPath);
+  db.prepare(
+    `INSERT INTO versions (record_id, version, type_id, content, updated_at, updated_by, updated_via)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    recordId,
+    v.version,
+    v.typeId,
+    JSON.stringify(v.content),
+    v.updatedAt.getTime(),
+    v.updatedBy?.subjectId ?? null,
+    v.updatedBy?.principalId ?? null,
+  );
+  db.close();
+};
+
+const initAdapter = (opts?: { ownerEntityId?: string }) =>
   NativeSQLiteRecordAdapter.open({
     create: 'exclusive',
     path: dbPath,
     ownerEntityId: opts?.ownerEntityId ?? 'entity-123',
-    timezone: opts?.timezone ?? 'America/New_York',
   });
 
 const NOTE_TYPE = {
@@ -71,11 +91,6 @@ describe('initialize', () => {
   test('sets ownerEntityId', async () => {
     const adapter = await initAdapter({ ownerEntityId: 'owner-abc' });
     expect(adapter.ownerEntityId).toBe('owner-abc');
-  });
-
-  test('sets timezone', async () => {
-    const adapter = await initAdapter({ timezone: 'Europe/London' });
-    expect(adapter.timezone).toBe('Europe/London');
   });
 
   test('throws if database already exists', async () => {
@@ -117,11 +132,10 @@ describe('open', () => {
   });
 });
 
-test('preserves ownerEntityId and timezone across reopen', async () => {
-  await initAdapter({ ownerEntityId: 'owner-abc', timezone: 'Europe/London' });
+test('preserves ownerEntityId across reopen', async () => {
+  await initAdapter({ ownerEntityId: 'owner-abc' });
   const adapter = await NativeSQLiteRecordAdapter.open({ path: dbPath });
   expect(adapter.ownerEntityId).toBe('owner-abc');
-  expect(adapter.timezone).toBe('Europe/London');
 });
 
 // -------------------------------------------------------
@@ -218,6 +232,68 @@ describe('open create modes', () => {
       expect((err as OwnerMismatchError).actual).toBe('owner-abc');
       expect((err as OwnerMismatchError).where).toContain(dbPath);
       expect(existsSync(`${dbPath}.lock`)).toBe(false);
+    },
+  );
+
+  // A store moves to a new layout only by being copied into one.
+  // See docs/spec/adapters.md § Construction.
+  test.each([
+    ['another version', 'UPDATE format SET version = 2', 2],
+    ['no version at all', 'DELETE FROM format', undefined],
+  ] as const)(
+    'a store naming %s throws FormatMismatchError and releases the lock',
+    async (_name, sql, actual) => {
+      await (await initAdapter()).close();
+      const db = new DatabaseSync(dbPath);
+      db.exec(sql);
+      db.close();
+      const err = await NativeSQLiteRecordAdapter.open({ path: dbPath }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(FormatMismatchError);
+      expect((err as FormatMismatchError).expected).toBe(1);
+      expect((err as FormatMismatchError).actual).toBe(actual);
+      expect(existsSync(`${dbPath}.lock`)).toBe(false);
+    },
+  );
+
+  test('a store in another layout is refused before anything is written to it', async () => {
+    await (await initAdapter()).close();
+    const db = new DatabaseSync(dbPath);
+    db.exec('UPDATE format SET version = 2; DROP TABLE content_index;');
+    db.close();
+    await expect(NativeSQLiteRecordAdapter.open({ path: dbPath })).rejects.toThrow(
+      FormatMismatchError,
+    );
+    const after = new DatabaseSync(dbPath);
+    const table = after
+      .prepare(`SELECT name FROM sqlite_master WHERE name = 'content_index'`)
+      .get();
+    after.close();
+    expect(table).toBeUndefined();
+  });
+
+  // A failed create leaves nothing behind, so a later open finds the store
+  // missing and creates it.
+  // See docs/spec/adapters.md § Construction.
+  test.each(['ifMissing', 'exclusive'] as const)(
+    "a create whose owner provider fails leaves nothing a later '%s' open trips on",
+    async (create) => {
+      await expect(
+        NativeSQLiteRecordAdapter.open({
+          path: dbPath,
+          create: 'ifMissing',
+          ownerEntityId: () => {
+            throw new Error('no key to hand');
+          },
+        }),
+      ).rejects.toThrow('no key to hand');
+      expect(existsSync(dbPath)).toBe(false);
+      expect(existsSync(`${dbPath}.lock`)).toBe(false);
+      const adapter = await NativeSQLiteRecordAdapter.open({
+        path: dbPath,
+        create,
+        ownerEntityId: 'owner-new',
+      });
+      expect(adapter.ownerEntityId).toBe('owner-new');
     },
   );
 
@@ -403,7 +479,7 @@ describe('records — CRUD', () => {
     const adapter = await initAdapter();
     const record = makeRecord();
     await adapter.createRecord(record);
-    const updated = await adapter.mutateRecord(record.id, { contentPatch: { text: 'Updated' } });
+    const updated = await adapter.patchContent(record.id, { text: 'Updated' });
     expect(updated.content).toEqual({ text: 'Updated' });
     expect(updated.version).toBe(2);
   });
@@ -412,7 +488,7 @@ describe('records — CRUD', () => {
     const adapter = await initAdapter();
     const record = makeRecord({ parentId: 'parent-abc' });
     await adapter.createRecord(record);
-    await adapter.mutateRecord(record.id, { contentPatch: { text: 'Updated' } });
+    await adapter.patchContent(record.id, { text: 'Updated' });
     const retrieved = await adapter.getRecord(record.id);
     expect(retrieved?.parentId).toBe('parent-abc');
   });
@@ -436,13 +512,17 @@ describe('records — CRUD', () => {
 
   test('purging deleteRecord removes version history', async () => {
     const adapter = await initAdapter();
-    const record = makeRecord();
-    await adapter.createRecord(record);
-    await adapter.saveVersion(record.id, {
-      version: 1,
-      typeId: record.typeId,
-      content: record.content,
-      updatedAt: record.updatedAt,
+    const record = makeRecord({ version: 2 });
+    await adapter.importRecord(record, {
+      versions: [
+        {
+          version: 1,
+          typeId: record.typeId,
+          content: record.content,
+          updatedAt: record.updatedAt,
+        },
+      ],
+      journal: [],
     });
     await adapter.deleteRecord(record.id, { purge: true });
     expect(await adapter.getVersions(record.id)).toEqual([]);
@@ -479,11 +559,7 @@ describe('ifVersion', () => {
   test('patchContent applies when ifVersion matches', async () => {
     const adapter = await initAdapter();
     const record = await adapter.createRecord(makeRecord());
-    const updated = await adapter.mutateRecord(
-      record.id,
-      { contentPatch: { text: 'Updated' } },
-      { ifVersion: 1 },
-    );
+    const updated = await adapter.patchContent(record.id, { text: 'Updated' }, { ifVersion: 1 });
     expect(updated.version).toBe(2);
     expect(updated.content).toEqual({ text: 'Updated' });
   });
@@ -491,10 +567,10 @@ describe('ifVersion', () => {
   test('patchContent throws StackVersionConflictError and changes nothing when stale', async () => {
     const adapter = await initAdapter();
     const record = await adapter.createRecord(makeRecord());
-    await adapter.mutateRecord(record.id, { contentPatch: { text: 'first' } }); // -> v2
+    await adapter.patchContent(record.id, { text: 'first' }); // -> v2
 
     const err = await adapter
-      .mutateRecord(record.id, { contentPatch: { text: 'second' } }, { ifVersion: 1 })
+      .patchContent(record.id, { text: 'second' }, { ifVersion: 1 })
       .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(StackVersionConflictError);
     expect((err as StackVersionConflictError).recordId).toBe(record.id);
@@ -512,19 +588,23 @@ describe('ifVersion', () => {
       makeRecord({ content: { text: 'searchable original' } }),
     );
     await adapter
-      .mutateRecord(record.id, { contentPatch: { text: 'rejected update' } }, { ifVersion: 999 })
+      .patchContent(record.id, { text: 'rejected update' }, { ifVersion: 999 })
       .catch(() => {});
 
-    const stillFindsOriginal = await adapter.queryRecords({ filter: { search: 'original' } });
+    const stillFindsOriginal = await adapter.queryRecords(
+      resolveQuery({ filter: { search: 'original' } }),
+    );
     expect(stillFindsOriginal.records.map((r) => r.id)).toEqual([record.id]);
-    const doesNotFindRejected = await adapter.queryRecords({ filter: { search: 'rejected' } });
+    const doesNotFindRejected = await adapter.queryRecords(
+      resolveQuery({ filter: { search: 'rejected' } }),
+    );
     expect(doesNotFindRejected.records).toEqual([]);
   });
 
   test('soft deleteRecord and undeleteRecord enforce ifVersion', async () => {
     const adapter = await initAdapter();
     const record = await adapter.createRecord(makeRecord());
-    await adapter.mutateRecord(record.id, { contentPatch: { text: 'v2' } }); // -> v2
+    await adapter.patchContent(record.id, { text: 'v2' }); // -> v2
 
     await expect(adapter.deleteRecord(record.id, { ifVersion: 1 })).rejects.toBeInstanceOf(
       StackVersionConflictError,
@@ -541,7 +621,7 @@ describe('ifVersion', () => {
   test('commitMigration enforces ifVersion and leaves typeId untouched on mismatch', async () => {
     const adapter = await initAdapter();
     const record = await adapter.createRecord(makeRecord({ content: { text: 'original' } }));
-    await adapter.mutateRecord(record.id, { contentPatch: { text: 'v2' } }); // -> v2
+    await adapter.patchContent(record.id, { text: 'v2' }); // -> v2
 
     await expect(
       adapter.commitMigration(
@@ -557,7 +637,7 @@ describe('ifVersion', () => {
     expect(untouched?.typeId).toBe(record.typeId);
     expect(untouched?.version).toBe(2);
     // The rejected write must not have disturbed the FTS index either.
-    const stillFindsV2 = await adapter.queryRecords({ filter: { search: 'v2' } });
+    const stillFindsV2 = await adapter.queryRecords(resolveQuery({ filter: { search: 'v2' } }));
     expect(stillFindsV2.records.map((r) => r.id)).toEqual([record.id]);
 
     const migrated = await adapter.commitMigration(
@@ -573,7 +653,7 @@ describe('ifVersion', () => {
   test('purging deleteRecord enforces ifVersion and leaves the record untouched on mismatch', async () => {
     const adapter = await initAdapter();
     const record = await adapter.createRecord(makeRecord());
-    await adapter.mutateRecord(record.id, { contentPatch: { text: 'v2' } }); // -> v2
+    await adapter.patchContent(record.id, { text: 'v2' }); // -> v2
 
     await expect(
       adapter.deleteRecord(record.id, { purge: true, ifVersion: 1 }),
@@ -588,79 +668,67 @@ describe('ifVersion', () => {
     const adapter = await initAdapter();
     const record = await adapter.createRecord(makeRecord());
 
-    await adapter.amendAssociations(record.id, [
+    await adapter.editAssociations(record.id, [
       { op: 'add', association: { kind: 'tag', label: 'x' } },
     ]);
-    await adapter.amendAssociations(record.id, [
+    await adapter.editAssociations(record.id, [
       { op: 'remove', association: { kind: 'tag', label: 'x' } },
     ]);
 
     expect((await adapter.getRecord(record.id))?.version).toBe(1);
   });
 
-  // mutateRecord's non-bumping path (opts.bumpsVersion: false — what a
-  // caller passes for an associations-only change set) re-checks
-  // ifVersion against a fresh read inside its own transaction,
-  // since there is no version-bumping UPDATE for the guard to ride in.
-  // That read can come back null if a concurrent purge lands
-  // between mutateRecord's own read and this re-check; the adapter must
-  // report that as StackNotFoundError like every other write path here,
-  // not crash on it.
-  test('mutateRecord with bumpsVersion: false reports StackNotFoundError, not a crash, for a concurrently deleted record', async () => {
+  test('a write that does not bump racing a purge reports StackNotFoundError', async () => {
     const adapter = await initAdapter();
     const record = await adapter.createRecord(makeRecord());
 
-    const logic = (
-      adapter as unknown as {
-        record: { getRecord: (id: string) => Promise<StackRecord | null> };
-      }
-    ).record;
-    const originalGetRecord = logic.getRecord.bind(logic);
-    vi.spyOn(logic, 'getRecord').mockImplementationOnce(async (id: string) => {
-      const found = await originalGetRecord(id);
-      await adapter.deleteRecord(id, { purge: true }); // races mutateRecord's own no-bump re-read
-      return found;
-    });
-
-    await expect(
-      adapter.mutateRecord(
-        record.id,
-        { associations: [{ kind: 'tag', label: 'x' }] },
-        { bumpsVersion: false, ifVersion: 1 },
-      ),
-    ).rejects.toBeInstanceOf(StackNotFoundError);
+    const [, mutated] = await Promise.allSettled([
+      adapter.deleteRecord(record.id, { purge: true }),
+      adapter.setAssociations(record.id, [{ kind: 'tag', label: 'x' }], { ifVersion: 1 }),
+    ]);
+    expect(mutated.status === 'rejected' && mutated.reason).toBeInstanceOf(StackNotFoundError);
   });
 
-  test('a permissions change set enforces ifVersion', async () => {
+  test('concurrent unguarded patches both land', async () => {
+    const adapter = await initAdapter();
+    const record = await adapter.createRecord(makeRecord({ content: { a: 0, b: 0 } }));
+
+    await Promise.all([
+      adapter.patchContent(record.id, { a: 1 }),
+      adapter.patchContent(record.id, { b: 1 }),
+    ]);
+
+    const after = await adapter.getRecord(record.id);
+    expect(after?.content).toEqual({ a: 1, b: 1 });
+    expect(after?.version).toBe(3);
+  });
+
+  test('setAccess enforces ifVersion and never bumps', async () => {
     const adapter = await initAdapter();
     const record = await adapter.createRecord(makeRecord());
 
     await expect(
-      adapter.mutateRecord(
-        record.id,
-        { permissions: [{ kind: 'anyone', label: 'read' }] },
-        { ifVersion: 99 },
-      ),
+      adapter.setAccess(record.id, [{ kind: 'anyone', label: 'read' }], { ifVersion: 99 }),
     ).rejects.toBeInstanceOf(StackVersionConflictError);
 
-    await adapter.mutateRecord(
-      record.id,
-      { permissions: [{ kind: 'anyone', label: 'read' }] },
-      { ifVersion: 1 },
-    );
-    expect((await adapter.getRecord(record.id))?.version).toBe(2);
+    await adapter.setAccess(record.id, [{ kind: 'anyone', label: 'read' }], { ifVersion: 1 });
+    expect((await adapter.getRecord(record.id))?.version).toBe(1);
   });
 
   test('restoreVersion enforces ifVersion', async () => {
     const adapter = await initAdapter();
-    const record = await adapter.createRecord(makeRecord({ content: { text: 'original' } }));
-    await adapter.saveVersion(record.id, {
-      version: 1,
-      typeId: record.typeId,
-      content: { text: 'original' },
-      updatedAt: record.updatedAt,
+    const record = makeRecord({ version: 2, content: { text: 'v2' } });
+    await adapter.importRecord(record, {
+      versions: [
+        {
+          version: 1,
+          typeId: record.typeId,
+          content: { text: 'original' },
+          updatedAt: record.updatedAt,
+        },
+      ],
+      journal: [],
     });
-    await adapter.mutateRecord(record.id, { contentPatch: { text: 'v2' } }); // -> v2
 
     await expect(adapter.restoreVersion(record.id, 1, { ifVersion: 1 })).rejects.toBeInstanceOf(
       StackVersionConflictError,
@@ -674,7 +742,7 @@ describe('ifVersion', () => {
   test('associate on a nonexistent record throws StackNotFoundError', async () => {
     const adapter = await initAdapter();
     await expect(
-      adapter.amendAssociations('nonexistent', [
+      adapter.editAssociations('nonexistent', [
         { op: 'add', association: { kind: 'tag', label: 'x' } },
       ]),
     ).rejects.toThrow(StackNotFoundError);
@@ -682,80 +750,54 @@ describe('ifVersion', () => {
 });
 
 // -------------------------------------------------------
-// ifVersion — enforced against the row actually written
+// ifVersion — checked inside the transaction that writes
 // -------------------------------------------------------
 
 /**
- * restoreVersion() and commitMigration() settle their precondition against
- * a record read before the transaction opens, because fts5Strategy.remove()
- * needs the old content still on the row. That read is not the enforcement:
- * the UPDATE carries the guard too, so a writer landing in the window loses
- * rather than being silently overwritten.
- *
- * The window is reachable from a test because both methods `await` that
- * read: calling one runs its body up to the await and hands control back
- * here with the precondition already satisfied, so the next synchronous
- * statement below lands squarely between the check and the write.
+ * Two calls guarded on the same version: whichever commits first wins, and
+ * the other sees the version it moved to.
  */
-describe('ifVersion is re-checked by the statement that writes', () => {
-  /**
-   * A second writer, on its own connection — the adapter holds a lock
-   * *file*, which only initialize()/open() consult, so this is the real
-   * race rather than a stand-in for one.
-   */
-  const bumpVersionBehindTheAdapter = (id: string): void => {
-    const other = new DatabaseSync(dbPath);
-    try {
-      other.prepare('UPDATE records SET version = version + 1 WHERE id = ?').run(id);
-    } finally {
-      other.close();
-    }
-  };
-
-  test('restoreVersion loses to a writer that lands after the precondition check', async () => {
+describe('ifVersion holds between concurrent writes', () => {
+  test('restoreVersion: one of two racing restores wins', async () => {
     const adapter = await initAdapter();
-    const record = await adapter.createRecord(makeRecord({ content: { text: 'original' } }));
-    await adapter.saveVersion(record.id, {
-      version: 1,
-      typeId: record.typeId,
-      content: { text: 'original' },
-      updatedAt: record.updatedAt,
+    const record = makeRecord({ version: 2, content: { text: 'v2' } });
+    await adapter.importRecord(record, {
+      versions: [
+        {
+          version: 1,
+          typeId: record.typeId,
+          content: { text: 'original' },
+          updatedAt: record.updatedAt,
+        },
+      ],
+      journal: [],
     });
-    await adapter.mutateRecord(record.id, { contentPatch: { text: 'v2' } }); // -> v2
 
-    const restoring = adapter.restoreVersion(record.id, 1, { ifVersion: 2 });
-    bumpVersionBehindTheAdapter(record.id); // -> v3, after the check, before the write
-
-    const err = await restoring.catch((e: unknown) => e);
+    const results = await Promise.allSettled([
+      adapter.restoreVersion(record.id, 1, { ifVersion: 2 }),
+      adapter.restoreVersion(record.id, 1, { ifVersion: 2 }),
+    ]);
+    expect(results.map((r) => r.status)).toEqual(['fulfilled', 'rejected']);
+    const err = (results[1] as PromiseRejectedResult).reason;
     expect(err).toBeInstanceOf(StackVersionConflictError);
     expect((err as StackVersionConflictError).actualVersion).toBe(3);
-
-    // And the restore left nothing behind: the content the other writer
-    // found is the content still there.
-    const after = await adapter.getRecord(record.id);
-    expect(after?.content).toEqual({ text: 'v2' });
-    expect(after?.version).toBe(3);
   });
 
-  test('commitMigration loses to a writer that lands after the precondition check', async () => {
+  test('commitMigration: one of two racing migrations wins', async () => {
     const adapter = await initAdapter();
     const record = await adapter.createRecord(makeRecord({ content: { text: 'original' } }));
 
-    const migrating = adapter.commitMigration(
-      record.id,
-      'com.example/note@2',
-      { text: 'migrated' },
-      { ifVersion: 1 },
-    );
-    bumpVersionBehindTheAdapter(record.id); // -> v2, after the check, before the write
-
-    const err = await migrating.catch((e: unknown) => e);
+    const results = await Promise.allSettled([
+      adapter.commitMigration(record.id, 'com.example/note@2', { text: 'a' }, { ifVersion: 1 }),
+      adapter.commitMigration(record.id, 'com.example/note@2', { text: 'b' }, { ifVersion: 1 }),
+    ]);
+    expect(results.map((r) => r.status)).toEqual(['fulfilled', 'rejected']);
+    const err = (results[1] as PromiseRejectedResult).reason;
     expect(err).toBeInstanceOf(StackVersionConflictError);
     expect((err as StackVersionConflictError).actualVersion).toBe(2);
 
     const after = await adapter.getRecord(record.id);
-    expect(after?.typeId).toBe(record.typeId);
-    expect(after?.content).toEqual({ text: 'original' });
+    expect(after?.content).toEqual({ text: 'a' });
   });
 
   test('a soft delete stamps deleted_at and updated_at from one timestamp', async () => {
@@ -803,7 +845,7 @@ describe('records — queries', () => {
     await adapter.createRecord(r2);
     await adapter.createRecord(r3);
     await adapter.deleteRecord(r3.id);
-    const result = await adapter.queryRecords({});
+    const result = await adapter.queryRecords(resolveQuery({}));
     expect(result.records.length).toBe(2);
   });
 
@@ -812,7 +854,7 @@ describe('records — queries', () => {
     const record = makeRecord();
     await adapter.createRecord(record);
     await adapter.deleteRecord(record.id);
-    const result = await adapter.queryRecords({ filter: { includeDeleted: true } });
+    const result = await adapter.queryRecords(resolveQuery({ filter: { includeDeleted: true } }));
     expect(result.records.some((r) => r.id === record.id)).toBe(true);
   });
 
@@ -820,28 +862,29 @@ describe('records — queries', () => {
     const adapter = await initAdapter();
     const record = makeRecord();
     await adapter.createRecord(record);
-    await adapter.mutateRecord(record.id, { unlisted: true });
+    await adapter.setUnlisted(record.id, true);
 
-    const excluded = await adapter.queryRecords({});
+    const excluded = await adapter.queryRecords(resolveQuery({}));
     expect(excluded.records.some((r) => r.id === record.id)).toBe(false);
 
-    const included = await adapter.queryRecords({ filter: { includeUnlisted: true } });
+    const included = await adapter.queryRecords(
+      resolveQuery({ filter: { includeUnlisted: true } }),
+    );
     expect(included.records.some((r) => r.id === record.id)).toBe(true);
   });
 
-  // The order clause and the cursor comparison interpolate sort.direction
-  // straight into SQL. Core's assertValidSort() is the primary guard, but
-  // the builder re-checks so a caller reaching the adapter directly cannot
-  // inject through a raw direction string.
-  test('a sort direction outside asc/desc is refused at the SQL boundary', async () => {
+  // The order clause maps the direction from a fixed pair, so even a raw
+  // string from a caller reaching the adapter directly runs as SQL text
+  // the builder wrote.
+  test('a sort direction outside asc/desc never reaches SQL text', async () => {
     const adapter = await initAdapter();
     await adapter.createRecord(makeRecord({ id: 'r1' }));
-    await expect(
-      adapter.queryRecords({
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        sort: { field: 'createdAt', direction: 'ASC, (SELECT 1)' as any },
-      }),
-    ).rejects.toThrow(StackBadRequestError);
+    const { records } = await adapter.queryRecords({
+      limit: 50,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      sort: { field: 'createdAt', direction: 'ASC, (SELECT 1)' as any },
+    });
+    expect(records.map((r) => r.id)).toEqual(['r1']);
   });
 
   test('filters by typeId', async () => {
@@ -850,7 +893,9 @@ describe('records — queries', () => {
     const taskType = makeRecord({ typeId: 'com.example/task@1' });
     await adapter.createRecord(noteType);
     await adapter.createRecord(taskType);
-    const result = await adapter.queryRecords({ filter: { typeId: 'com.example/note@1' } });
+    const result = await adapter.queryRecords(
+      resolveQuery({ filter: { typeId: 'com.example/note@1' } }),
+    );
     expect(result.records.every((r) => r.typeId === 'com.example/note@1')).toBe(true);
     expect(result.records.length).toBe(1);
   });
@@ -863,7 +908,7 @@ describe('records — queries', () => {
     await adapter.createRecord(parent);
     await adapter.createRecord(child1);
     await adapter.createRecord(other);
-    const result = await adapter.queryRecords({ filter: { parentId: 'parent' } });
+    const result = await adapter.queryRecords(resolveQuery({ filter: { parentId: 'parent' } }));
     expect(result.records.length).toBe(1);
     expect(result.records[0].parentId).toBe('parent');
   });
@@ -872,7 +917,9 @@ describe('records — queries', () => {
     const adapter = await initAdapter();
     await adapter.createRecord(makeRecord({ id: 'r1', content: { text: 'alpha', priority: 1 } }));
     await adapter.createRecord(makeRecord({ id: 'r2', content: { text: 'beta', priority: 2 } }));
-    const result = await adapter.queryRecords({ filter: { content: { priority: 1 } } });
+    const result = await adapter.queryRecords(
+      resolveQuery({ filter: { content: { priority: 1 } } }),
+    );
     expect(result.records.length).toBe(1);
     expect(result.records[0].id).toBe('r1');
   });
@@ -884,7 +931,9 @@ describe('records — queries', () => {
     const adapter = await initAdapter();
     await adapter.createRecord(makeRecord({ id: 'r1', content: { text: 'no priority set' } }));
     await adapter.createRecord(makeRecord({ id: 'r2', content: { text: 'has one', priority: 1 } }));
-    const result = await adapter.queryRecords({ filter: { content: { priority: null } } });
+    const result = await adapter.queryRecords(
+      resolveQuery({ filter: { content: { priority: null } } }),
+    );
     expect(result.records.length).toBe(1);
     expect(result.records[0].id).toBe('r1');
   });
@@ -895,7 +944,9 @@ describe('records — queries', () => {
       makeRecord({ id: 'r1', content: { text: 'explicit null', priority: null } }),
     );
     await adapter.createRecord(makeRecord({ id: 'r2', content: { text: 'has one', priority: 1 } }));
-    const result = await adapter.queryRecords({ filter: { content: { priority: null } } });
+    const result = await adapter.queryRecords(
+      resolveQuery({ filter: { content: { priority: null } } }),
+    );
     expect(result.records.length).toBe(1);
     expect(result.records[0].id).toBe('r1');
   });
@@ -908,10 +959,12 @@ describe('records — queries', () => {
     await adapter.createRecord(makeRecord({ id: 'r2', content: { text: 'undated' } }));
     await adapter.createRecord(makeRecord({ id: 'r3', content: { text: 'null', at: null } }));
 
-    const present = await adapter.queryRecords({ filter: { contentPresent: ['at'] } });
+    const present = await adapter.queryRecords(
+      resolveQuery({ filter: { contentPresent: ['at'] } }),
+    );
     expect(present.records.map((r) => r.id)).toEqual(['r1']);
 
-    const absent = await adapter.queryRecords({ filter: { content: { at: null } } });
+    const absent = await adapter.queryRecords(resolveQuery({ filter: { content: { at: null } } }));
     expect(absent.records.map((r) => r.id).sort()).toEqual(['r2', 'r3']);
   });
 
@@ -925,7 +978,9 @@ describe('records — queries', () => {
     );
     await adapter.createRecord(makeRecord({ id: 'r3', content: { text: 'empty', emails: [] } }));
 
-    const result = await adapter.queryRecords({ filter: { contentPresent: ['emails.value'] } });
+    const result = await adapter.queryRecords(
+      resolveQuery({ filter: { contentPresent: ['emails.value'] } }),
+    );
     expect(result.records.map((r) => r.id)).toEqual(['r1']);
   });
 
@@ -942,10 +997,12 @@ describe('records — queries', () => {
       makeRecord({ id: 'r4', content: { text: 'd', at: '2022', kind: 'page' } }),
     );
 
-    const result = await adapter.queryRecords({
-      filter: { contentPresent: ['at'], content: { kind: 'post' } },
-      sort: { contentField: 'text', direction: 'asc' },
-    });
+    const result = await adapter.queryRecords(
+      resolveQuery({
+        filter: { contentPresent: ['at'], content: { kind: 'post' } },
+        sort: { contentField: 'text', direction: 'asc' },
+      }),
+    );
     expect(result.records.map((r) => r.id)).toEqual(['r1', 'r2']);
   });
 
@@ -957,7 +1014,9 @@ describe('records — queries', () => {
     await adapter.createRecord(
       makeRecord({ id: 'r2', content: { text: 'plain', tags: ['todo'] } }),
     );
-    const result = await adapter.queryRecords({ filter: { content: { tags: 'starred' } } });
+    const result = await adapter.queryRecords(
+      resolveQuery({ filter: { content: { tags: 'starred' } } }),
+    );
     expect(result.records.map((r) => r.id)).toEqual(['r1']);
   });
 
@@ -969,9 +1028,11 @@ describe('records — queries', () => {
     await adapter.createRecord(
       makeRecord({ id: 'r2', content: { text: 'b', address: { city: 'Porto' } } }),
     );
-    const result = await adapter.queryRecords({
-      filter: { content: { 'address.city': 'Lisbon' } },
-    });
+    const result = await adapter.queryRecords(
+      resolveQuery({
+        filter: { content: { 'address.city': 'Lisbon' } },
+      }),
+    );
     expect(result.records.map((r) => r.id)).toEqual(['r1']);
   });
 
@@ -997,12 +1058,16 @@ describe('records — queries', () => {
         content: { text: 'grace', emails: [{ value: 'grace@example.com', label: 'home' }] },
       }),
     );
-    const byValue = await adapter.queryRecords({
-      filter: { content: { 'emails.value': 'a@work.example' } },
-    });
+    const byValue = await adapter.queryRecords(
+      resolveQuery({
+        filter: { content: { 'emails.value': 'a@work.example' } },
+      }),
+    );
     expect(byValue.records.map((r) => r.id)).toEqual(['r1']);
 
-    const byLabel = await adapter.queryRecords({ filter: { content: { 'emails.label': 'work' } } });
+    const byLabel = await adapter.queryRecords(
+      resolveQuery({ filter: { content: { 'emails.label': 'work' } } }),
+    );
     expect(byLabel.records.map((r) => r.id)).toEqual(['r1']);
   });
 
@@ -1014,14 +1079,16 @@ describe('records — queries', () => {
     await adapter.createRecord(
       makeRecord({ id: 'r2', content: { text: 'b', a: { b: { c: 8 } } } }),
     );
-    const result = await adapter.queryRecords({ filter: { content: { 'a.b.c': 7 } } });
+    const result = await adapter.queryRecords(
+      resolveQuery({ filter: { content: { 'a.b.c': 7 } } }),
+    );
     expect(result.records.map((r) => r.id)).toEqual(['r1']);
   });
 
   test('a dotted filter key is a path, never a literal field name', async () => {
     const adapter = await initAdapter();
     await adapter.createRecord(makeRecord({ id: 'r1', content: { text: 'nested', a: { b: 1 } } }));
-    const result = await adapter.queryRecords({ filter: { content: { 'a.b': 1 } } });
+    const result = await adapter.queryRecords(resolveQuery({ filter: { content: { 'a.b': 1 } } }));
     expect(result.records.map((r) => r.id)).toEqual(['r1']);
   });
 
@@ -1035,25 +1102,29 @@ describe('records — queries', () => {
     await adapter.createRecord(
       makeRecord({ id: 'r4', content: { text: 'present', address: { city: 'Lisbon' } } }),
     );
-    const result = await adapter.queryRecords({ filter: { content: { 'address.city': null } } });
+    const result = await adapter.queryRecords(
+      resolveQuery({ filter: { content: { 'address.city': null } } }),
+    );
     expect(result.records.map((r) => r.id).sort()).toEqual(['r1', 'r2', 'r3']);
   });
 
   test('a filter path descending through a scalar matches nothing', async () => {
     const adapter = await initAdapter();
     await adapter.createRecord(makeRecord({ id: 'r1', content: { text: 'a', a: 'hello' } }));
-    const result = await adapter.queryRecords({ filter: { content: { 'a.b': 'hello' } } });
+    const result = await adapter.queryRecords(
+      resolveQuery({ filter: { content: { 'a.b': 'hello' } } }),
+    );
     expect(result.records).toEqual([]);
   });
 
   test('a filter path segment carrying a reserved character is refused', async () => {
     const adapter = await initAdapter();
     await expect(
-      adapter.queryRecords({ filter: { content: { 'emails[0]': 'x' } } }),
+      adapter.queryRecords(resolveQuery({ filter: { content: { 'emails[0]': 'x' } } })),
     ).rejects.toThrow(StackBadRequestError);
-    await expect(adapter.queryRecords({ filter: { content: { 'a..b': 'x' } } })).rejects.toThrow(
-      StackBadRequestError,
-    );
+    await expect(
+      adapter.queryRecords(resolveQuery({ filter: { content: { 'a..b': 'x' } } })),
+    ).rejects.toThrow(StackBadRequestError);
   });
 
   test('two content filters both apply', async () => {
@@ -1064,9 +1135,11 @@ describe('records — queries', () => {
     await adapter.createRecord(
       makeRecord({ id: 'r2', content: { text: 'b', a: { b: 1 }, c: 'no' } }),
     );
-    const result = await adapter.queryRecords({
-      filter: { content: { 'a.b': 1, c: 'yes' } },
-    });
+    const result = await adapter.queryRecords(
+      resolveQuery({
+        filter: { content: { 'a.b': 1, c: 'yes' } },
+      }),
+    );
     expect(result.records.map((r) => r.id)).toEqual(['r1']);
   });
 
@@ -1081,7 +1154,9 @@ describe('records — queries', () => {
     await adapter.createRecord(makeRecord({ id: 'r1', content: { text: 'a', [key]: 'hit' } }));
     await adapter.createRecord(makeRecord({ id: 'r2', content: { text: 'b', other: 'miss' } }));
 
-    const result = await adapter.queryRecords({ filter: { content: { [key]: 'hit' } } });
+    const result = await adapter.queryRecords(
+      resolveQuery({ filter: { content: { [key]: 'hit' } } }),
+    );
     expect(result.records.map((r) => r.id)).toEqual(['r1']);
   });
 
@@ -1093,28 +1168,33 @@ describe('records — queries', () => {
     await adapter.createRecord(makeRecord({ id: 'r1', content: { text: 'present' } }));
 
     for (const key of ['$.', '[', '"', 'a[0', '', 'a..b', '*', '#']) {
-      await expect(adapter.queryRecords({ filter: { content: { [key]: 'x' } } })).rejects.toThrow(
-        StackBadRequestError,
-      );
+      await expect(
+        adapter.queryRecords(resolveQuery({ filter: { content: { [key]: 'x' } } })),
+      ).rejects.toThrow(StackBadRequestError);
     }
   });
 
-  // The segment cap is what keeps the generated join list inside SQLite's
-  // 64-table limit, so the longest legal path has to be executable, not
-  // merely accepted. See docs/spec/data-model.md § Nested content paths.
-  test('a path at the segment cap executes; one past it is refused', async () => {
+  // The longest legal path reaches the deepest value a write accepts, and
+  // has to execute, not merely be accepted. See docs/spec/data-model.md
+  // § Nested content paths.
+  test('a path at the segment cap reaches the deepest value; one past it is refused', async () => {
     const adapter = await initAdapter();
-    const deepest = Array.from({ length: 32 }, (_, i) => `s${i}`).join('.');
+    const segments = Array.from({ length: 33 }, (_, i) => `s${i}`);
+    const deepest = segments.join('.');
+    const nested = segments.reduceRight<unknown>((value, key) => ({ [key]: value }), 'x');
     await adapter.createRecord(makeRecord({ id: 'r1', content: { text: 'shallow' } }));
+    await adapter.createRecord(
+      makeRecord({ id: 'r2', content: { text: 'deep', ...(nested as object) } }),
+    );
 
     await expect(
-      adapter.queryRecords({ filter: { content: { [deepest]: 'x' } } }),
-    ).resolves.toMatchObject({ records: [] });
+      adapter.queryRecords(resolveQuery({ filter: { content: { [deepest]: 'x' } } })),
+    ).resolves.toMatchObject({ records: [{ id: 'r2' }] });
     await expect(
-      adapter.queryRecords({ filter: { content: { [deepest]: null } } }),
+      adapter.queryRecords(resolveQuery({ filter: { content: { [deepest]: null } } })),
     ).resolves.toMatchObject({ records: [{ id: 'r1' }] });
     await expect(
-      adapter.queryRecords({ filter: { content: { [`${deepest}.s32`]: 'x' } } }),
+      adapter.queryRecords(resolveQuery({ filter: { content: { [`${deepest}.s33`]: 'x' } } })),
     ).rejects.toThrow(StackBadRequestError);
   });
 
@@ -1128,11 +1208,15 @@ describe('records — queries', () => {
     );
     await adapter.createRecord(makeRecord({ id: 'r2', content: { text: 'b', obj: { k: 'v' } } }));
 
-    const nested = await adapter.queryRecords({
-      filter: { content: { 'a.b': '{"k":"v"}' } },
-    });
+    const nested = await adapter.queryRecords(
+      resolveQuery({
+        filter: { content: { 'a.b': '{"k":"v"}' } },
+      }),
+    );
     expect(nested.records).toEqual([]);
-    const top = await adapter.queryRecords({ filter: { content: { obj: '{"k":"v"}' } } });
+    const top = await adapter.queryRecords(
+      resolveQuery({ filter: { content: { obj: '{"k":"v"}' } } }),
+    );
     expect(top.records).toEqual([]);
   });
 
@@ -1142,7 +1226,7 @@ describe('records — queries', () => {
     await adapter.createRecord(
       makeRecord({ id: 'r2', content: { text: 'Postgres is also great' } }),
     );
-    const result = await adapter.queryRecords({ filter: { search: 'SQLite' } });
+    const result = await adapter.queryRecords(resolveQuery({ filter: { search: 'SQLite' } }));
     expect(result.records.length).toBe(1);
     expect(result.records[0].id).toBe('r1');
   });
@@ -1156,7 +1240,7 @@ describe('records — queries', () => {
     await adapter.createRecord(
       makeRecord({ id: 'r2', content: { text: 'Postgres is also great' } }),
     );
-    const result = await adapter.queryRecords({ filter: { search: '*' } });
+    const result = await adapter.queryRecords(resolveQuery({ filter: { search: '*' } }));
     expect(result.records).toEqual([]);
   });
 
@@ -1181,7 +1265,7 @@ describe('records — queries', () => {
   ])('search survives %s', async (_label, search) => {
     const adapter = await initAdapter();
     await adapter.createRecord(makeRecord({ id: 'r1', content: { text: 'SQLite is great' } }));
-    await expect(adapter.queryRecords({ filter: { search } })).resolves.toBeDefined();
+    await expect(adapter.queryRecords(resolveQuery({ filter: { search } }))).resolves.toBeDefined();
   });
 
   test('a repaired search still finds its terms', async () => {
@@ -1190,7 +1274,7 @@ describe('records — queries', () => {
     await adapter.createRecord(
       makeRecord({ id: 'r2', content: { text: 'Postgres is also great' } }),
     );
-    const result = await adapter.queryRecords({ filter: { search: 'SQLite AND' } });
+    const result = await adapter.queryRecords(resolveQuery({ filter: { search: 'SQLite AND' } }));
     expect(result.records.map((r) => r.id)).toEqual(['r1']);
   });
 
@@ -1204,9 +1288,9 @@ describe('records — queries', () => {
     vi.spyOn(execOf(adapter), 'all').mockImplementation(() => {
       throw new Error('fts5: syntax error near ""');
     });
-    await expect(adapter.queryRecords({ filter: { search: 'anything' } })).rejects.toThrow(
-      StackBadRequestError,
-    );
+    await expect(
+      adapter.queryRecords(resolveQuery({ filter: { search: 'anything' } })),
+    ).rejects.toThrow(StackBadRequestError);
   });
 
   test('a non-search query failure is not relabelled as a bad request', async () => {
@@ -1214,20 +1298,22 @@ describe('records — queries', () => {
     vi.spyOn(execOf(adapter), 'all').mockImplementation(() => {
       throw new Error('database disk image is malformed');
     });
-    await expect(adapter.queryRecords({ filter: { typeId: 'x/y@1' } })).rejects.toThrow(
-      'database disk image is malformed',
-    );
+    await expect(
+      adapter.queryRecords(resolveQuery({ filter: { typeId: 'x/y@1' } })),
+    ).rejects.toThrow('database disk image is malformed');
   });
 
   test('full-text search reflects patchContent updates (not stale index entries)', async () => {
     const adapter = await initAdapter();
     const record = makeRecord({ content: { text: 'original content here' } });
     await adapter.createRecord(record);
-    await adapter.mutateRecord(record.id, { contentPatch: { text: 'updated content here' } });
+    await adapter.patchContent(record.id, { text: 'updated content here' });
 
-    const staleSearch = await adapter.queryRecords({ filter: { search: 'original' } });
+    const staleSearch = await adapter.queryRecords(
+      resolveQuery({ filter: { search: 'original' } }),
+    );
     expect(staleSearch.records).toEqual([]);
-    const freshSearch = await adapter.queryRecords({ filter: { search: 'updated' } });
+    const freshSearch = await adapter.queryRecords(resolveQuery({ filter: { search: 'updated' } }));
     expect(freshSearch.records.map((r) => r.id)).toEqual([record.id]);
   });
 
@@ -1237,7 +1323,7 @@ describe('records — queries', () => {
     await adapter.createRecord(record);
     await adapter.deleteRecord(record.id, { purge: true });
 
-    const result = await adapter.queryRecords({ filter: { search: 'findme' } });
+    const result = await adapter.queryRecords(resolveQuery({ filter: { search: 'findme' } }));
     expect(result.records).toEqual([]);
   });
 
@@ -1248,18 +1334,22 @@ describe('records — queries', () => {
         makeRecord({ id: `r${i}`, createdAt: new Date(Date.now() + i * 1000) }),
       );
     }
-    const page1 = await adapter.queryRecords({
-      sort: { field: 'createdAt', direction: 'asc' },
-      limit: 3,
-    });
+    const page1 = await adapter.queryRecords(
+      resolveQuery({
+        sort: { field: 'createdAt', direction: 'asc' },
+        limit: 3,
+      }),
+    );
     expect(page1.records.length).toBe(3);
     expect(page1.cursor).not.toBeNull();
 
-    const page2 = await adapter.queryRecords({
-      sort: { field: 'createdAt', direction: 'asc' },
-      limit: 3,
-      cursor: page1.cursor!,
-    });
+    const page2 = await adapter.queryRecords(
+      resolveQuery({
+        sort: { field: 'createdAt', direction: 'asc' },
+        limit: 3,
+        cursor: page1.cursor!,
+      }),
+    );
     expect(page2.records.length).toBe(2);
     expect(page2.cursor).toBeNull();
   });
@@ -1267,9 +1357,9 @@ describe('records — queries', () => {
   test('malformed cursor throws StackBadRequestError', async () => {
     const adapter = await initAdapter();
     await adapter.createRecord(makeRecord({ id: 'r1' }));
-    await expect(adapter.queryRecords({ cursor: '!!!not-a-cursor!!!' })).rejects.toThrow(
-      StackBadRequestError,
-    );
+    await expect(
+      adapter.queryRecords(resolveQuery({ cursor: '!!!not-a-cursor!!!' })),
+    ).rejects.toThrow(StackBadRequestError);
   });
 
   test('cursor minted under one sort field replayed with a different sort field throws StackBadRequestError', async () => {
@@ -1277,18 +1367,22 @@ describe('records — queries', () => {
     for (let i = 0; i < 5; i++) {
       await adapter.createRecord(makeRecord({ id: `r${i}`, createdAt: new Date(i * 1000) }));
     }
-    const page1 = await adapter.queryRecords({
-      sort: { field: 'createdAt', direction: 'asc' },
-      limit: 3,
-    });
+    const page1 = await adapter.queryRecords(
+      resolveQuery({
+        sort: { field: 'createdAt', direction: 'asc' },
+        limit: 3,
+      }),
+    );
     expect(page1.cursor).not.toBeNull();
 
     await expect(
-      adapter.queryRecords({
-        sort: { field: 'version', direction: 'asc' },
-        limit: 3,
-        cursor: page1.cursor!,
-      }),
+      adapter.queryRecords(
+        resolveQuery({
+          sort: { field: 'version', direction: 'asc' },
+          limit: 3,
+          cursor: page1.cursor!,
+        }),
+      ),
     ).rejects.toThrow(StackBadRequestError);
   });
 
@@ -1297,7 +1391,9 @@ describe('records — queries', () => {
     await adapter.createRecord(makeRecord({ id: 'r1', createdAt: new Date(1000) }));
     await adapter.createRecord(makeRecord({ id: 'r2', createdAt: new Date(2000) }));
     await adapter.createRecord(makeRecord({ id: 'r3', createdAt: new Date(3000) }));
-    const result = await adapter.queryRecords({ sort: { field: 'createdAt', direction: 'desc' } });
+    const result = await adapter.queryRecords(
+      resolveQuery({ sort: { field: 'createdAt', direction: 'desc' } }),
+    );
     expect(result.records.map((r) => r.id)).toEqual(['r3', 'r2', 'r1']);
   });
 });
@@ -1334,7 +1430,9 @@ describe('file-ref indexing', () => {
       makeRecord({ id: 'r1', typeId: FILE_REF_TYPE.id, content: { coverFileId: 'file-1' } }),
     );
 
-    const result = await adapter.queryRecords({ filter: { referencesFileId: 'file-1' } });
+    const result = await adapter.queryRecords(
+      resolveQuery({ filter: { referencesFileId: 'file-1' } }),
+    );
     expect(result.records.map((r) => r.id)).toEqual(['r1']);
   });
 
@@ -1345,7 +1443,9 @@ describe('file-ref indexing', () => {
       makeRecord({ id: 'r1', typeId: STRING_TYPE.id, content: { coverFileId: 'file-1' } }),
     );
 
-    const result = await adapter.queryRecords({ filter: { referencesFileId: 'file-1' } });
+    const result = await adapter.queryRecords(
+      resolveQuery({ filter: { referencesFileId: 'file-1' } }),
+    );
     expect(result.records).toEqual([]);
   });
 
@@ -1358,11 +1458,15 @@ describe('file-ref indexing', () => {
       content: { coverFileId: 'file-1' },
     });
     await adapter.createRecord(record);
-    await adapter.mutateRecord('r1', { contentPatch: { coverFileId: 'file-2' } });
+    await adapter.patchContent('r1', { coverFileId: 'file-2' });
 
-    const oldMatch = await adapter.queryRecords({ filter: { referencesFileId: 'file-1' } });
+    const oldMatch = await adapter.queryRecords(
+      resolveQuery({ filter: { referencesFileId: 'file-1' } }),
+    );
     expect(oldMatch.records).toEqual([]);
-    const newMatch = await adapter.queryRecords({ filter: { referencesFileId: 'file-2' } });
+    const newMatch = await adapter.queryRecords(
+      resolveQuery({ filter: { referencesFileId: 'file-2' } }),
+    );
     expect(newMatch.records.map((r) => r.id)).toEqual(['r1']);
   });
 
@@ -1374,13 +1478,16 @@ describe('file-ref indexing', () => {
     );
     await adapter.deleteRecord('r1', { purge: true });
 
-    const result = await adapter.queryRecords({ filter: { referencesFileId: 'file-1' } });
+    const result = await adapter.queryRecords(
+      resolveQuery({ filter: { referencesFileId: 'file-1' } }),
+    );
     expect(result.records).toEqual([]);
   });
 
   test('deleteUnreferencedAttachmentRecords is blocked by a content-held file-ref field', async () => {
     const adapter = await initAdapter();
-    const ATTACHMENT_TYPE = 'com.example.test/_attachment@1';
+    const ATTACHMENT_FAMILY = 'com.example.test/_attachment';
+    const ATTACHMENT_TYPE = `${ATTACHMENT_FAMILY}@1`;
     await adapter.saveType(FILE_REF_TYPE);
     await adapter.createRecord(
       makeRecord({ id: 'meta1', typeId: ATTACHMENT_TYPE, content: { fileId: 'file-1' } }),
@@ -1390,13 +1497,13 @@ describe('file-ref indexing', () => {
     );
 
     await expect(
-      adapter.deleteUnreferencedAttachmentRecords('file-1', [ATTACHMENT_TYPE]),
+      adapter.deleteUnreferencedAttachmentRecords('file-1', ATTACHMENT_FAMILY),
     ).rejects.toThrow(StackConflictError);
     expect(await adapter.getRecord('meta1')).not.toBeNull();
   });
 
   // The fields content_index covers are cached per typeId (keyed off
-  // saveType()) so that syncContentIndex() doesn't re-query and re-parse the
+  // saveType()) so that ContentIndex.sync() doesn't re-query and re-parse the
   // schema on every write — this pins that redefining a type reaches the
   // cache.
   test('redefining a type via saveType updates which fields are treated as file-ref', async () => {
@@ -1405,14 +1512,16 @@ describe('file-ref indexing', () => {
     await adapter.createRecord(
       makeRecord({ id: 'r1', typeId: FILE_REF_TYPE.id, content: { coverFileId: 'file-1' } }),
     );
-    let result = await adapter.queryRecords({ filter: { referencesFileId: 'file-1' } });
+    let result = await adapter.queryRecords(
+      resolveQuery({ filter: { referencesFileId: 'file-1' } }),
+    );
     expect(result.records.map((r) => r.id)).toEqual(['r1']);
 
     // Redefine the same typeId so coverFileId is no longer a file-ref field.
     await adapter.saveType({ ...FILE_REF_TYPE, schema: STRING_TYPE.schema });
-    await adapter.mutateRecord('r1', { contentPatch: { coverFileId: 'file-1' } });
+    await adapter.patchContent('r1', { coverFileId: 'file-1' });
 
-    result = await adapter.queryRecords({ filter: { referencesFileId: 'file-1' } });
+    result = await adapter.queryRecords(resolveQuery({ filter: { referencesFileId: 'file-1' } }));
     expect(result.records).toEqual([]);
   });
 
@@ -1428,7 +1537,9 @@ describe('file-ref indexing', () => {
       makeRecord({ id: 'r1', typeId: FILE_REF_TYPE.id, content: { coverFileId: 'file-1' } }),
     );
 
-    const result = await reopened.queryRecords({ filter: { referencesFileId: 'file-1' } });
+    const result = await reopened.queryRecords(
+      resolveQuery({ filter: { referencesFileId: 'file-1' } }),
+    );
     expect(result.records.map((r) => r.id)).toEqual(['r1']);
   });
 });
@@ -1442,7 +1553,7 @@ describe('associations', () => {
     const adapter = await initAdapter();
     const record = makeRecord();
     await adapter.createRecord(record);
-    await adapter.amendAssociations(record.id, [
+    await adapter.editAssociations(record.id, [
       { op: 'add', association: { kind: 'tag', label: 'starred' } },
     ]);
     const retrieved = await adapter.getRecord(record.id);
@@ -1455,10 +1566,10 @@ describe('associations', () => {
     const adapter = await initAdapter();
     const record = makeRecord();
     await adapter.createRecord(record);
-    await adapter.amendAssociations(record.id, [
+    await adapter.editAssociations(record.id, [
       { op: 'add', association: { kind: 'tag', label: 'starred' } },
     ]);
-    await adapter.amendAssociations(record.id, [
+    await adapter.editAssociations(record.id, [
       { op: 'remove', association: { kind: 'tag', label: 'starred' } },
     ]);
     const retrieved = await adapter.getRecord(record.id);
@@ -1474,10 +1585,10 @@ describe('associations', () => {
     const adapter = await initAdapter();
     const record = makeRecord();
     await adapter.createRecord(record);
-    await adapter.amendAssociations(record.id, [
+    await adapter.editAssociations(record.id, [
       { op: 'add', association: { kind: 'tag', label: 'starred' } },
     ]);
-    await adapter.amendAssociations(record.id, [
+    await adapter.editAssociations(record.id, [
       { op: 'add', association: { kind: 'tag', label: 'starred' } },
     ]);
     const retrieved = await adapter.getRecord(record.id);
@@ -1489,7 +1600,7 @@ describe('associations', () => {
     const adapter = await initAdapter();
     const record = makeRecord();
     await adapter.createRecord(record);
-    await adapter.amendAssociations(record.id, [
+    await adapter.editAssociations(record.id, [
       { op: 'add', association: { kind: 'tag', label: 'starred' } },
     ]);
     const retrieved = await adapter.getRecord(record.id);
@@ -1499,7 +1610,7 @@ describe('associations', () => {
   test('associate on a nonexistent record throws StackNotFoundError instead of creating an orphan row', async () => {
     const adapter = await initAdapter();
     await expect(
-      adapter.amendAssociations('does-not-exist', [
+      adapter.editAssociations('does-not-exist', [
         { op: 'add', association: { kind: 'tag', label: 'starred' } },
       ]),
     ).rejects.toThrow(StackNotFoundError);
@@ -1516,7 +1627,7 @@ describe('associations', () => {
       attachmentRecordId: '1hk153x00001',
     };
 
-    await adapter.amendAssociations(record.id, [{ op: 'add', association: association }]);
+    await adapter.editAssociations(record.id, [{ op: 'add', association: association }]);
 
     expect((await adapter.getRecord(record.id))?.associations).toEqual([association]);
   });
@@ -1527,7 +1638,7 @@ describe('associations', () => {
     await adapter.createRecord(record);
     const association = { kind: 'attachment' as const, label: 'embed', fileId: 'a'.repeat(64) };
 
-    await adapter.amendAssociations(record.id, [{ op: 'add', association: association }]);
+    await adapter.editAssociations(record.id, [{ op: 'add', association: association }]);
 
     expect((await adapter.getRecord(record.id))?.associations).toEqual([association]);
   });
@@ -1539,7 +1650,7 @@ describe('associations', () => {
     const record = makeRecord();
     await adapter.createRecord(record);
     const fileId = 'a'.repeat(64);
-    await adapter.amendAssociations(record.id, [
+    await adapter.editAssociations(record.id, [
       {
         op: 'add',
         association: {
@@ -1551,7 +1662,7 @@ describe('associations', () => {
       },
     ]);
 
-    await adapter.amendAssociations(record.id, [
+    await adapter.editAssociations(record.id, [
       {
         op: 'add',
         association: {
@@ -1573,7 +1684,7 @@ describe('associations', () => {
     const record = makeRecord();
     await adapter.createRecord(record);
     const fileId = 'a'.repeat(64);
-    await adapter.amendAssociations(record.id, [
+    await adapter.editAssociations(record.id, [
       {
         op: 'add',
         association: {
@@ -1585,7 +1696,7 @@ describe('associations', () => {
       },
     ]);
 
-    await adapter.amendAssociations(record.id, [
+    await adapter.editAssociations(record.id, [
       { op: 'add', association: { kind: 'attachment', label: 'embed', fileId } },
     ]);
 
@@ -1605,7 +1716,7 @@ describe('associations', () => {
       { kind: 'external' as const, ns: 'atproto', id: 'at://did:plc:abc/app.bsky.feed.post/3k4' },
     ];
     for (const target of targets) {
-      await adapter.amendAssociations(record.id, [
+      await adapter.editAssociations(record.id, [
         { op: 'add', association: { kind: 'relationship', label: 'ref', target } },
       ]);
     }
@@ -1624,7 +1735,7 @@ describe('associations', () => {
     const adapter = await initAdapter();
     const record = makeRecord();
     await adapter.createRecord(record);
-    await adapter.amendAssociations(record.id, [
+    await adapter.editAssociations(record.id, [
       {
         op: 'add',
         association: {
@@ -1634,7 +1745,7 @@ describe('associations', () => {
         },
       },
     ]);
-    await adapter.amendAssociations(record.id, [
+    await adapter.editAssociations(record.id, [
       {
         op: 'add',
         association: {
@@ -1653,7 +1764,7 @@ describe('associations', () => {
     const adapter = await initAdapter();
     const record = makeRecord();
     await adapter.createRecord(record);
-    await adapter.amendAssociations(record.id, [
+    await adapter.editAssociations(record.id, [
       {
         op: 'add',
         association: {
@@ -1663,7 +1774,7 @@ describe('associations', () => {
         },
       },
     ]);
-    await adapter.amendAssociations(record.id, [
+    await adapter.editAssociations(record.id, [
       {
         op: 'add',
         association: {
@@ -1673,7 +1784,7 @@ describe('associations', () => {
         },
       },
     ]);
-    await adapter.amendAssociations(record.id, [
+    await adapter.editAssociations(record.id, [
       {
         op: 'remove',
         association: {
@@ -1706,7 +1817,7 @@ describe('records — relatedTo filter', () => {
     const authored = makeRecord({ id: 'rec-authored', content: { text: 'by someone' } });
     const bare = makeRecord({ id: 'rec-bare', content: { text: 'unrelated' } });
     for (const r of [series, syndicated, authored, bare]) await adapter.createRecord(r);
-    await adapter.amendAssociations(series.id, [
+    await adapter.editAssociations(series.id, [
       {
         op: 'add',
         association: {
@@ -1716,7 +1827,7 @@ describe('records — relatedTo filter', () => {
         },
       },
     ]);
-    await adapter.amendAssociations(syndicated.id, [
+    await adapter.editAssociations(syndicated.id, [
       {
         op: 'add',
         association: {
@@ -1730,7 +1841,7 @@ describe('records — relatedTo filter', () => {
         },
       },
     ]);
-    await adapter.amendAssociations(authored.id, [
+    await adapter.editAssociations(authored.id, [
       {
         op: 'add',
         association: {
@@ -1747,34 +1858,42 @@ describe('records — relatedTo filter', () => {
   test('matches a record target', async () => {
     const adapter = await initAdapter();
     await seed(adapter);
-    const result = await adapter.queryRecords({
-      filter: { relatedTo: { target: { kind: 'record', recordId: 'rec-subject' } } },
-    });
+    const result = await adapter.queryRecords(
+      resolveQuery({
+        filter: { relatedTo: { target: { kind: 'record', recordId: 'rec-subject' } } },
+      }),
+    );
     expect(ids(result)).toEqual(['rec-series']);
   });
 
   test('matches an entity target', async () => {
     const adapter = await initAdapter();
     await seed(adapter);
-    const result = await adapter.queryRecords({
-      filter: { relatedTo: { target: { kind: 'entity', entityId: 'did:key:z6MkAlice' } } },
-    });
+    const result = await adapter.queryRecords(
+      resolveQuery({
+        filter: { relatedTo: { target: { kind: 'entity', entityId: 'did:key:z6MkAlice' } } },
+      }),
+    );
     expect(ids(result)).toEqual(['rec-authored']);
   });
 
   test('an external target without an id matches the whole namespace', async () => {
     const adapter = await initAdapter();
     await seed(adapter);
-    const result = await adapter.queryRecords({
-      filter: { relatedTo: { target: { kind: 'external', ns: 'atproto' } } },
-    });
+    const result = await adapter.queryRecords(
+      resolveQuery({
+        filter: { relatedTo: { target: { kind: 'external', ns: 'atproto' } } },
+      }),
+    );
     expect(ids(result)).toEqual(['rec-syndicated']);
   });
 
   test('a bare label matches every target under it', async () => {
     const adapter = await initAdapter();
     await seed(adapter);
-    const result = await adapter.queryRecords({ filter: { relatedTo: { label: 'author' } } });
+    const result = await adapter.queryRecords(
+      resolveQuery({ filter: { relatedTo: { label: 'author' } } }),
+    );
     expect(ids(result)).toEqual(['rec-authored']);
   });
 
@@ -1783,9 +1902,11 @@ describe('records — relatedTo filter', () => {
   test('a record target does not match an entity target with the same value', async () => {
     const adapter = await initAdapter();
     await seed(adapter);
-    const result = await adapter.queryRecords({
-      filter: { relatedTo: { target: { kind: 'record', recordId: 'did:key:z6MkAlice' } } },
-    });
+    const result = await adapter.queryRecords(
+      resolveQuery({
+        filter: { relatedTo: { target: { kind: 'record', recordId: 'did:key:z6MkAlice' } } },
+      }),
+    );
     expect(result.records).toHaveLength(0);
   });
 
@@ -1795,7 +1916,7 @@ describe('records — relatedTo filter', () => {
     await seed(adapter);
     const remote = makeRecord({ id: 'rec-remote' });
     await adapter.createRecord(remote);
-    await adapter.amendAssociations(remote.id, [
+    await adapter.editAssociations(remote.id, [
       {
         op: 'add',
         association: {
@@ -1810,22 +1931,26 @@ describe('records — relatedTo filter', () => {
       },
     ]);
 
-    const local = await adapter.queryRecords({
-      filter: { relatedTo: { target: { kind: 'record', recordId: 'rec-elsewhere' } } },
-    });
+    const local = await adapter.queryRecords(
+      resolveQuery({
+        filter: { relatedTo: { target: { kind: 'record', recordId: 'rec-elsewhere' } } },
+      }),
+    );
     expect(local.records).toHaveLength(0);
 
-    const scoped = await adapter.queryRecords({
-      filter: {
-        relatedTo: {
-          target: {
-            kind: 'record',
-            recordId: 'rec-elsewhere',
-            stackUrl: 'https://alice.example/stack',
+    const scoped = await adapter.queryRecords(
+      resolveQuery({
+        filter: {
+          relatedTo: {
+            target: {
+              kind: 'record',
+              recordId: 'rec-elsewhere',
+              stackUrl: 'https://alice.example/stack',
+            },
           },
         },
-      },
-    });
+      }),
+    );
     expect(ids(scoped)).toEqual(['rec-remote']);
   });
 });
@@ -1835,13 +1960,13 @@ describe('records — attachment filter', () => {
     const both = makeRecord({ id: 'rec-both' });
     const cover = makeRecord({ id: 'rec-cover' });
     for (const r of [both, cover]) await adapter.createRecord(r);
-    await adapter.amendAssociations(both.id, [
+    await adapter.editAssociations(both.id, [
       { op: 'add', association: { kind: 'attachment', label: 'cover', fileId: 'file-1' } },
     ]);
-    await adapter.amendAssociations(both.id, [
+    await adapter.editAssociations(both.id, [
       { op: 'add', association: { kind: 'attachment', label: 'thumb', fileId: 'file-2' } },
     ]);
-    await adapter.amendAssociations(cover.id, [
+    await adapter.editAssociations(cover.id, [
       { op: 'add', association: { kind: 'attachment', label: 'cover', fileId: 'file-2' } },
     ]);
   };
@@ -1851,23 +1976,29 @@ describe('records — attachment filter', () => {
   test('a label and a fileId together match one association', async () => {
     const adapter = await initAdapter();
     await seed(adapter);
-    const result = await adapter.queryRecords({
-      filter: { attachment: { label: 'cover', fileId: 'file-2' } },
-    });
+    const result = await adapter.queryRecords(
+      resolveQuery({
+        filter: { attachment: { label: 'cover', fileId: 'file-2' } },
+      }),
+    );
     expect(ids(result)).toEqual(['rec-cover']);
   });
 
   test('a label alone matches every file under it', async () => {
     const adapter = await initAdapter();
     await seed(adapter);
-    const result = await adapter.queryRecords({ filter: { attachment: { label: 'cover' } } });
+    const result = await adapter.queryRecords(
+      resolveQuery({ filter: { attachment: { label: 'cover' } } }),
+    );
     expect(ids(result)).toEqual(['rec-both', 'rec-cover']);
   });
 
   test('a fileId alone matches every label holding it', async () => {
     const adapter = await initAdapter();
     await seed(adapter);
-    const result = await adapter.queryRecords({ filter: { attachment: { fileId: 'file-2' } } });
+    const result = await adapter.queryRecords(
+      resolveQuery({ filter: { attachment: { fileId: 'file-2' } } }),
+    );
     expect(ids(result)).toEqual(['rec-both', 'rec-cover']);
   });
 });
@@ -1876,19 +2007,18 @@ describe('records — attachment filter', () => {
 // Permissions
 // -------------------------------------------------------
 
-describe('mutateRecord — the `permissions` key', () => {
+describe('setAccess and editAccess', () => {
   test('replaces permissions', async () => {
     const adapter = await initAdapter();
     const record = makeRecord();
     await adapter.createRecord(record);
-    await adapter.mutateRecord(record.id, { permissions: [{ kind: 'anyone', label: 'read' }] });
+    await adapter.setAccess(record.id, [{ kind: 'anyone', label: 'read' }]);
     const retrieved = await adapter.getRecord(record.id);
     expect(retrieved?.permissions).toEqual([{ kind: 'anyone', label: 'read' }]);
   });
 
-  // Both fields project one table, so the only thing keeping a tag write
-  // off an ACL is the kind partition the two keys replace within.
-  test('each key replaces only its own half of the association table', async () => {
+  // Two tables, so a tag write cannot reach an ACL.
+  test('each set verb replaces only its own table', async () => {
     const adapter = await initAdapter();
     const record = makeRecord({
       associations: [{ kind: 'tag', label: 'draft' }],
@@ -1896,12 +2026,12 @@ describe('mutateRecord — the `permissions` key', () => {
     });
     await adapter.createRecord(record);
 
-    await adapter.mutateRecord(record.id, { associations: [{ kind: 'tag', label: 'reviewed' }] });
+    await adapter.setAssociations(record.id, [{ kind: 'tag', label: 'reviewed' }]);
     const afterTags = await adapter.getRecord(record.id);
     expect(afterTags?.associations).toEqual([{ kind: 'tag', label: 'reviewed' }]);
     expect(afterTags?.permissions).toEqual([{ kind: 'anyone', label: 'read' }]);
 
-    await adapter.mutateRecord(record.id, { permissions: [] });
+    await adapter.setAccess(record.id, []);
     const afterAcl = await adapter.getRecord(record.id);
     expect(afterAcl?.associations).toEqual([{ kind: 'tag', label: 'reviewed' }]);
     expect(afterAcl?.permissions).toBeUndefined();
@@ -1925,7 +2055,7 @@ describe('mutateRecord — the `permissions` key', () => {
         grantee: { kind: 'group', groupId: 'group-1', role: 'admin' },
       },
     ];
-    await adapter.mutateRecord(record.id, { permissions });
+    await adapter.setAccess(record.id, permissions);
     // Row order is the table's, not the write's: both are stored, which is
     // what the key column buys.
     expect((await adapter.getRecord(record.id))?.permissions).toEqual(
@@ -1934,60 +2064,62 @@ describe('mutateRecord — the `permissions` key', () => {
     expect((await adapter.getRecord(record.id))?.permissions).toHaveLength(2);
   });
 
-  // associate()/dissociate() key all kinds alike, which is what
-  // grantAccess()/revokeAccess() ride on.
-  test('associate/dissociate carry an authority element like any other', async () => {
-    const adapter = await initAdapter();
-    const record = makeRecord({ associations: [{ kind: 'tag', label: 'draft' }] });
-    await adapter.createRecord(record);
-
-    const grant: AuthorityAssociation = {
-      kind: 'permission',
-      label: 'read',
-      grantee: { kind: 'entity', entityId: 'did:key:z6MkMember' },
-    };
-    const granted = await adapter.amendAssociations(record.id, [{ op: 'add', association: grant }]);
-    expect(granted.permissions).toEqual([grant]);
-    expect(granted.associations).toEqual([{ kind: 'tag', label: 'draft' }]);
-
-    const revoked = await adapter.amendAssociations(record.id, [
-      { op: 'remove', association: grant },
-    ]);
-    expect(revoked.permissions).toBeUndefined();
-    expect(revoked.associations).toEqual([{ kind: 'tag', label: 'draft' }]);
-  });
-});
-
-describe('mutateRecord — the `unlisted` key', () => {
-  test('sets unlistedAt and bumps version', async () => {
+  // A grantee and a relationship target naming one entity are stored in
+  // different tables, so neither can be read back as the other.
+  test('a permission and a relationship to the same entity stay apart', async () => {
     const adapter = await initAdapter();
     const record = makeRecord();
     await adapter.createRecord(record);
-    await adapter.mutateRecord(record.id, { unlisted: true });
+    const entityId = 'did:key:z6MkMember';
+    const grant: AuthorityAssociation = {
+      kind: 'permission',
+      label: 'read',
+      grantee: { kind: 'entity', entityId },
+    };
+    await adapter.editAccess(record.id, [{ op: 'add', association: grant }]);
+
+    const related = await adapter.queryRecords(
+      resolveQuery({
+        filter: { relatedTo: { target: { kind: 'entity', entityId } } },
+      }),
+    );
+    expect(related.records.map((r) => r.id)).not.toContain(record.id);
+
+    const revoked = await adapter.editAccess(record.id, [{ op: 'remove', association: grant }]);
+    expect(revoked.permissions).toBeUndefined();
+  });
+});
+
+describe('setUnlisted', () => {
+  test('sets unlistedAt without bumping version', async () => {
+    const adapter = await initAdapter();
+    const record = makeRecord();
+    await adapter.createRecord(record);
+    await adapter.setUnlisted(record.id, true);
     const retrieved = await adapter.getRecord(record.id);
     expect(retrieved?.unlistedAt).toBeInstanceOf(Date);
-    expect(retrieved?.version).toBe(2);
+    expect(retrieved?.version).toBe(1);
   });
 
   test('clears unlistedAt on the reverse call', async () => {
     const adapter = await initAdapter();
     const record = makeRecord();
     await adapter.createRecord(record);
-    await adapter.mutateRecord(record.id, { unlisted: true });
-    await adapter.mutateRecord(record.id, { unlisted: false });
+    await adapter.setUnlisted(record.id, true);
+    await adapter.setUnlisted(record.id, false);
     const retrieved = await adapter.getRecord(record.id);
     expect(retrieved?.unlistedAt).toBeUndefined();
-    expect(retrieved?.version).toBe(3);
+    expect(retrieved?.version).toBe(1);
   });
 
   test('enforces ifVersion', async () => {
     const adapter = await initAdapter();
     const record = makeRecord();
     await adapter.createRecord(record);
-    await expect(
-      adapter.mutateRecord(record.id, { unlisted: true }, { ifVersion: 99 }),
-    ).rejects.toBeInstanceOf(StackVersionConflictError);
-    await adapter.mutateRecord(record.id, { unlisted: true }, { ifVersion: 1 });
+    await expect(adapter.setUnlisted(record.id, true, { ifVersion: 99 })).rejects.toBeInstanceOf(
+      StackVersionConflictError,
+    );
+    await adapter.setUnlisted(record.id, true, { ifVersion: 1 });
   });
 });
 
@@ -2002,7 +2134,7 @@ describe('absent fields are read by presence, not truthiness', () => {
     await adapter.createRecord(record);
     expect((await adapter.getRecord(record.id))?.parentId).toBe('');
     // And it is not at the root, which is what the filter already said.
-    const roots = await adapter.queryRecords({ filter: { parentId: null } });
+    const roots = await adapter.queryRecords(resolveQuery({ filter: { parentId: null } }));
     expect(roots.records.map((r) => r.id)).not.toContain(record.id);
   });
 
@@ -2012,7 +2144,7 @@ describe('absent fields are read by presence, not truthiness', () => {
     await adapter.createRecord(box);
     const record = makeRecord({ parentId: box.id });
     await adapter.createRecord(record);
-    await adapter.mutateRecord(record.id, { parentId: '' });
+    await adapter.setParent(record.id, '');
     expect((await adapter.getRecord(record.id))?.parentId).toBe('');
   });
 
@@ -2022,7 +2154,7 @@ describe('absent fields are read by presence, not truthiness', () => {
     await adapter.createRecord(record);
     expect((await adapter.getRecord(record.id))?.deletedAt).toEqual(new Date(0));
     // The query predicate already excluded it; now getRecord() agrees.
-    const live = await adapter.queryRecords({});
+    const live = await adapter.queryRecords(resolveQuery({}));
     expect(live.records.map((r) => r.id)).not.toContain(record.id);
   });
 
@@ -2048,17 +2180,17 @@ describe('absent fields are read by presence, not truthiness', () => {
   });
 });
 
-describe('mutateRecord — the `parentId` key', () => {
-  test('sets parent_id and bumps version', async () => {
+describe('setParent', () => {
+  test('sets parent_id without bumping version', async () => {
     const adapter = await initAdapter();
     const box = makeRecord();
     const record = makeRecord();
     await adapter.createRecord(box);
     await adapter.createRecord(record);
-    await adapter.mutateRecord(record.id, { parentId: box.id });
+    await adapter.setParent(record.id, box.id);
     const retrieved = await adapter.getRecord(record.id);
     expect(retrieved?.parentId).toBe(box.id);
-    expect(retrieved?.version).toBe(2);
+    expect(retrieved?.version).toBe(1);
   });
 
   test('null clears parent_id', async () => {
@@ -2067,10 +2199,10 @@ describe('mutateRecord — the `parentId` key', () => {
     await adapter.createRecord(box);
     const record = makeRecord({ parentId: box.id });
     await adapter.createRecord(record);
-    await adapter.mutateRecord(record.id, { parentId: null });
+    await adapter.setParent(record.id, null);
     const retrieved = await adapter.getRecord(record.id);
     expect(retrieved?.parentId).toBeUndefined();
-    expect(retrieved?.version).toBe(2);
+    expect(retrieved?.version).toBe(1);
   });
 
   test('leaves content and associations untouched', async () => {
@@ -2082,7 +2214,7 @@ describe('mutateRecord — the `parentId` key', () => {
       associations: [{ kind: 'tag', label: 'starred' }],
     });
     await adapter.createRecord(record);
-    await adapter.mutateRecord(record.id, { parentId: box.id });
+    await adapter.setParent(record.id, box.id);
     const retrieved = await adapter.getRecord(record.id);
     expect(retrieved?.content).toEqual({ text: 'hello' });
     expect(retrieved?.associations).toEqual([{ kind: 'tag', label: 'starred' }]);
@@ -2094,8 +2226,8 @@ describe('mutateRecord — the `parentId` key', () => {
     const record = makeRecord();
     await adapter.createRecord(box);
     await adapter.createRecord(record);
-    await adapter.mutateRecord(record.id, { parentId: box.id });
-    const result = await adapter.queryRecords({ filter: { parentId: box.id } });
+    await adapter.setParent(record.id, box.id);
+    const result = await adapter.queryRecords(resolveQuery({ filter: { parentId: box.id } }));
     expect(result.records.map((r) => r.id)).toEqual([record.id]);
   });
 
@@ -2105,10 +2237,10 @@ describe('mutateRecord — the `parentId` key', () => {
     const record = makeRecord();
     await adapter.createRecord(box);
     await adapter.createRecord(record);
-    await expect(
-      adapter.mutateRecord(record.id, { parentId: box.id }, { ifVersion: 99 }),
-    ).rejects.toBeInstanceOf(StackVersionConflictError);
-    await adapter.mutateRecord(record.id, { parentId: box.id }, { ifVersion: 1 });
+    await expect(adapter.setParent(record.id, box.id, { ifVersion: 99 })).rejects.toBeInstanceOf(
+      StackVersionConflictError,
+    );
+    await adapter.setParent(record.id, box.id, { ifVersion: 1 });
   });
 });
 
@@ -2117,10 +2249,9 @@ describe('mutateRecord — the `parentId` key', () => {
 // -------------------------------------------------------
 
 describe('versions', () => {
-  test('saveVersion and getVersion roundtrip', async () => {
+  test('an imported version reads back through getVersion, actors included', async () => {
     const adapter = await initAdapter();
-    const record = makeRecord();
-    await adapter.createRecord(record);
+    const record = makeRecord({ version: 2 });
     const version = {
       version: 1,
       typeId: record.typeId,
@@ -2128,7 +2259,7 @@ describe('versions', () => {
       updatedAt: new Date('2024-01-01'),
       createdBy: { subjectId: 'entity-123' },
     };
-    await adapter.saveVersion(record.id, version);
+    await adapter.importRecord(record, { versions: [version], journal: [] });
     const retrieved = await adapter.getVersion(record.id, 1);
     expect(retrieved?.content).toEqual({ text: 'original' });
     expect(retrieved?.createdBy?.subjectId).toBe('entity-123');
@@ -2139,14 +2270,14 @@ describe('versions', () => {
   // and docs/spec/versioning.md § Version history.
   test('a snapshot carries no containment, however one is handed in', async () => {
     const adapter = await initAdapter();
-    const record = makeRecord();
-    await adapter.createRecord(record);
+    const record = makeRecord({ version: 3 });
     const base = { typeId: record.typeId, content: {}, updatedAt: new Date('2024-01-01') };
-    await adapter.saveVersion(record.id, { ...base, version: 1 });
-    await adapter.saveVersion(record.id, {
-      ...base,
-      version: 2,
-      ...({ parentId: 'box-1' } as Record<string, unknown>),
+    await adapter.importRecord(record, {
+      versions: [
+        { ...base, version: 1 },
+        { ...base, version: 2, ...({ parentId: 'box-1' } as Record<string, unknown>) },
+      ],
+      journal: [],
     });
 
     expect('parentId' in (await adapter.getVersion(record.id, 1))!).toBe(false);
@@ -2158,17 +2289,23 @@ describe('versions', () => {
     const box = makeRecord();
     await adapter.createRecord(box);
     const record = makeRecord({ version: 2, parentId: box.id });
-    await adapter.createRecord(record);
-    await adapter.saveVersion(record.id, {
-      version: 1,
-      typeId: record.typeId,
-      content: { text: 'original' },
-      updatedAt: new Date('2024-01-01'),
+    await adapter.importRecord(record, {
+      versions: [
+        {
+          version: 1,
+          typeId: record.typeId,
+          content: { text: 'original' },
+          updatedAt: new Date('2024-01-01'),
+        },
+      ],
+      journal: [],
     });
     const restored = await adapter.restoreVersion(record.id, 1);
     expect(restored.content).toEqual({ text: 'original' });
     expect(restored.parentId).toBe(box.id);
-    expect((await adapter.queryRecords({ filter: { parentId: box.id } })).records).toHaveLength(1);
+    expect(
+      (await adapter.queryRecords(resolveQuery({ filter: { parentId: box.id } }))).records,
+    ).toHaveLength(1);
   });
 
   test('restoreVersion leaves a root record at the root', async () => {
@@ -2176,32 +2313,34 @@ describe('versions', () => {
     const box = makeRecord();
     await adapter.createRecord(box);
     const record = makeRecord({ version: 2 });
-    await adapter.createRecord(record);
-    await adapter.saveVersion(record.id, {
-      version: 1,
-      typeId: record.typeId,
-      content: { text: 'original' },
-      updatedAt: new Date('2024-01-01'),
+    await adapter.importRecord(record, {
+      versions: [
+        {
+          version: 1,
+          typeId: record.typeId,
+          content: { text: 'original' },
+          updatedAt: new Date('2024-01-01'),
+        },
+      ],
+      journal: [],
     });
     const restored = await adapter.restoreVersion(record.id, 1);
     expect(restored.parentId).toBeUndefined();
-    expect((await adapter.queryRecords({ filter: { parentId: null } })).records).toHaveLength(2);
+    expect(
+      (await adapter.queryRecords(resolveQuery({ filter: { parentId: null } }))).records,
+    ).toHaveLength(2);
   });
 
-  test('saveVersion throws on a (record, version) collision instead of silently dropping the snapshot', async () => {
+  // Two snapshots at one version are outside the contract; they are here
+  // only to make the engine fail after the record row is written.
+  test('an import that fails part-way leaves no row behind', async () => {
     const adapter = await initAdapter();
-    const record = makeRecord();
-    await adapter.createRecord(record);
-    const v = {
-      version: 1,
-      typeId: record.typeId,
-      content: { text: 'original' },
-      updatedAt: new Date(),
-    };
-    await adapter.saveVersion(record.id, v);
-    await expect(adapter.saveVersion(record.id, v)).rejects.toThrow(StackConflictError);
-    const versions = await adapter.getVersions(record.id);
-    expect(versions.length).toBe(1);
+    const record = makeRecord({ version: 2 });
+    const v = { version: 1, typeId: record.typeId, content: {}, updatedAt: new Date() };
+    await expect(adapter.importRecord(record, { versions: [v, v], journal: [] })).rejects.toThrow(
+      StackConflictError,
+    );
+    expect(await adapter.getRecord(record.id)).toBeNull();
   });
 
   // A versions row at the record's own current version is an orphan: no
@@ -2216,16 +2355,16 @@ describe('versions', () => {
       await adapter.createRecord(record);
       // Simulate an interrupted write: the v1 snapshot committed, but the
       // mutation that should have bumped past it never did.
-      await adapter.saveVersion(record.id, {
+      plantVersionRow(record.id, {
         version: 1,
         typeId: record.typeId,
         content: { text: 'original' },
         updatedAt: record.updatedAt,
       });
 
-      const updated = await adapter.mutateRecord(
+      const updated = await adapter.patchContent(
         record.id,
-        { contentPatch: { text: 'healed' } },
+        { text: 'healed' },
         {
           snapshot: {
             version: 1,
@@ -2251,7 +2390,7 @@ describe('versions', () => {
       const record = makeRecord({ version: 1, content: { text: 'original' } });
       await adapter.createRecord(record);
       // The orphan carries an actor trail of its own alongside its content.
-      await adapter.saveVersion(record.id, {
+      plantVersionRow(record.id, {
         version: 1,
         typeId: record.typeId,
         content: { text: 'stale' },
@@ -2259,9 +2398,9 @@ describe('versions', () => {
         updatedBy: { subjectId: 'entity-stale', principalId: 'app-stale' },
       });
 
-      await adapter.mutateRecord(
+      await adapter.patchContent(
         record.id,
-        { contentPatch: { text: 'healed' } },
+        { text: 'healed' },
         {
           snapshot: {
             version: 1,
@@ -2288,9 +2427,9 @@ describe('versions', () => {
 
       // Writer A completes first, bumping the record to v2 and legitimately
       // owning the v1 history slot.
-      await adapter.mutateRecord(
+      await adapter.patchContent(
         record.id,
-        { contentPatch: { text: 'from A' } },
+        { text: 'from A' },
         {
           snapshot: {
             version: 1,
@@ -2306,9 +2445,9 @@ describe('versions', () => {
       // history entry — the record's current version is 2, not 1 — so it
       // must be rejected outright, not treated as recoverable.
       await expect(
-        adapter.mutateRecord(
+        adapter.patchContent(
           record.id,
-          { contentPatch: { text: 'from B' } },
+          { text: 'from B' },
           {
             snapshot: {
               version: 1,
@@ -2332,15 +2471,18 @@ describe('versions', () => {
 describe('restoreVersion', () => {
   test('restores content and bumps version', async () => {
     const adapter = await initAdapter();
-    const record = makeRecord();
-    await adapter.createRecord(record);
-    await adapter.saveVersion(record.id, {
-      version: 1,
-      typeId: record.typeId,
-      content: { text: 'original' },
-      updatedAt: new Date(),
+    const record = makeRecord({ version: 2, content: { text: 'changed' } });
+    await adapter.importRecord(record, {
+      versions: [
+        {
+          version: 1,
+          typeId: record.typeId,
+          content: { text: 'original' },
+          updatedAt: new Date(),
+        },
+      ],
+      journal: [],
     });
-    await adapter.mutateRecord(record.id, { contentPatch: { text: 'changed' } });
 
     const restored = await adapter.restoreVersion(record.id, 1);
     expect(restored.content).toEqual({ text: 'original' });
@@ -2349,21 +2491,28 @@ describe('restoreVersion', () => {
 
   test('restored content is searchable and the pre-restore content is not', async () => {
     const adapter = await initAdapter();
-    const record = makeRecord({ content: { text: 'original searchable text' } });
-    await adapter.createRecord(record);
-    await adapter.saveVersion(record.id, {
-      version: 1,
-      typeId: record.typeId,
-      content: { text: 'original searchable text' },
-      updatedAt: new Date(),
+    const record = makeRecord({ version: 2, content: { text: 'changed unrelated text' } });
+    await adapter.importRecord(record, {
+      versions: [
+        {
+          version: 1,
+          typeId: record.typeId,
+          content: { text: 'original searchable text' },
+          updatedAt: new Date(),
+        },
+      ],
+      journal: [],
     });
-    await adapter.mutateRecord(record.id, { contentPatch: { text: 'changed unrelated text' } });
 
     await adapter.restoreVersion(record.id, 1);
 
-    const findsOriginal = await adapter.queryRecords({ filter: { search: 'searchable' } });
+    const findsOriginal = await adapter.queryRecords(
+      resolveQuery({ filter: { search: 'searchable' } }),
+    );
     expect(findsOriginal.records.map((r) => r.id)).toEqual([record.id]);
-    const findsChanged = await adapter.queryRecords({ filter: { search: 'unrelated' } });
+    const findsChanged = await adapter.queryRecords(
+      resolveQuery({ filter: { search: 'unrelated' } }),
+    );
     expect(findsChanged.records).toEqual([]);
   });
 
@@ -2374,22 +2523,26 @@ describe('restoreVersion', () => {
     await expect(adapter.restoreVersion(record.id, 99)).rejects.toThrow();
   });
 
-  // RecordVersion carries no `associations` field at all — associate()/
-  // dissociate() never bump, so no version ever snapshots the association
+  // RecordVersion carries no `associations` field at all — editAssociations()/
+  // editAssociations() never bump, so no version ever snapshots the association
   // set, and restoreVersion() never writes to the associations table. See
   // StackRecordAdapter.restoreVersion() and docs/spec/versioning.md
   // § Version history.
   test('restoreVersion never touches associations — the current set survives untouched', async () => {
     const adapter = await initAdapter();
-    const record = makeRecord();
-    await adapter.createRecord(record);
-    await adapter.saveVersion(record.id, {
-      version: 1,
-      typeId: record.typeId,
-      content: record.content,
-      updatedAt: new Date(),
+    const record = makeRecord({ version: 2 });
+    await adapter.importRecord(record, {
+      versions: [
+        {
+          version: 1,
+          typeId: record.typeId,
+          content: record.content,
+          updatedAt: new Date(),
+        },
+      ],
+      journal: [],
     });
-    await adapter.mutateRecord(record.id, { associations: [{ kind: 'tag', label: 'current' }] });
+    await adapter.setAssociations(record.id, [{ kind: 'tag', label: 'current' }]);
 
     const restored = await adapter.restoreVersion(record.id, 1);
     expect(restored.associations).toEqual([{ kind: 'tag', label: 'current' }]);
@@ -2400,18 +2553,19 @@ describe('restoreVersion', () => {
   // it never touches associations for any record.
   test('rolls content back while leaving associations in place', async () => {
     const adapter = await initAdapter();
-    const record = makeRecord({ content: { text: 'original' } });
-    await adapter.createRecord(record);
-    await adapter.saveVersion(record.id, {
-      version: 1,
-      typeId: record.typeId,
-      content: { text: 'original' },
-      updatedAt: new Date(),
+    const record = makeRecord({ version: 2, content: { text: 'changed' } });
+    await adapter.importRecord(record, {
+      versions: [
+        {
+          version: 1,
+          typeId: record.typeId,
+          content: { text: 'original' },
+          updatedAt: new Date(),
+        },
+      ],
+      journal: [],
     });
-    await adapter.mutateRecord(record.id, {
-      contentPatch: { text: 'changed' },
-      associations: [{ kind: 'tag', label: 'current' }],
-    });
+    await adapter.setAssociations(record.id, [{ kind: 'tag', label: 'current' }]);
 
     const restored = await adapter.restoreVersion(record.id, 1);
     expect(restored.content).toEqual({ text: 'original' });
@@ -2420,13 +2574,17 @@ describe('restoreVersion', () => {
 
   test('restores typeId from the snapshot, even when it differs from the record’s current typeId', async () => {
     const adapter = await initAdapter();
-    const record = makeRecord({ typeId: 'com.example.test/note@1' });
-    await adapter.createRecord(record);
-    await adapter.saveVersion(record.id, {
-      version: 1,
-      typeId: 'com.example.test/note@1',
-      content: { text: 'original' },
-      updatedAt: new Date(),
+    const record = makeRecord({ typeId: 'com.example.test/note@1', version: 2 });
+    await adapter.importRecord(record, {
+      versions: [
+        {
+          version: 1,
+          typeId: 'com.example.test/note@1',
+          content: { text: 'original' },
+          updatedAt: new Date(),
+        },
+      ],
+      journal: [],
     });
     await adapter.commitMigration(record.id, 'com.example.test/note@2', {
       text: 'original',
@@ -2460,13 +2618,14 @@ describe('commitMigration', () => {
 // -------------------------------------------------------
 
 describe('deleteUnreferencedAttachmentRecords', () => {
-  const ATTACHMENT_TYPE = 'com.example.test/_attachment@1';
+  const ATTACHMENT_FAMILY = 'com.example.test/_attachment';
+  const ATTACHMENT_TYPE = `${ATTACHMENT_FAMILY}@1`;
 
   test('throws StackConflictError when a record still references the file', async () => {
     const adapter = await initAdapter();
     const record = makeRecord();
     await adapter.createRecord(record);
-    await adapter.amendAssociations(record.id, [
+    await adapter.editAssociations(record.id, [
       {
         op: 'add',
         association: {
@@ -2478,7 +2637,7 @@ describe('deleteUnreferencedAttachmentRecords', () => {
     ]);
 
     await expect(
-      adapter.deleteUnreferencedAttachmentRecords('file-1', [ATTACHMENT_TYPE]),
+      adapter.deleteUnreferencedAttachmentRecords('file-1', ATTACHMENT_FAMILY),
     ).rejects.toThrow(StackConflictError);
   });
 
@@ -2488,7 +2647,7 @@ describe('deleteUnreferencedAttachmentRecords', () => {
       makeRecord({ id: 'meta1', typeId: ATTACHMENT_TYPE, content: { fileId: 'file-1' } }),
     );
 
-    const deleted = await adapter.deleteUnreferencedAttachmentRecords('file-1', [ATTACHMENT_TYPE]);
+    const deleted = await adapter.deleteUnreferencedAttachmentRecords('file-1', ATTACHMENT_FAMILY);
     // The last copy that will ever exist: after this call there is nothing
     // left to read the record's type or version back from.
     expect(deleted).toHaveLength(1);
@@ -2507,13 +2666,14 @@ describe('deleteUnreferencedAttachmentRecords', () => {
       makeRecord({ id: 'meta2', typeId: ATTACHMENT_TYPE, content: { fileId: 'shared-file' } }),
     );
 
-    const deleted = await adapter.deleteUnreferencedAttachmentRecords('shared-file', [
-      ATTACHMENT_TYPE,
-    ]);
+    const deleted = await adapter.deleteUnreferencedAttachmentRecords(
+      'shared-file',
+      ATTACHMENT_FAMILY,
+    );
     expect(deleted.map((r) => r.id).sort()).toEqual(['meta1', 'meta2']);
   });
 
-  test('deletes metadata records across every typeId it is given', async () => {
+  test('deletes metadata records at every version of the family, and only that family', async () => {
     const adapter = await initAdapter();
     const ATTACHMENT_TYPE_V2 = 'com.example.test/_attachment@2';
     await adapter.createRecord(
@@ -2522,69 +2682,41 @@ describe('deleteUnreferencedAttachmentRecords', () => {
     await adapter.createRecord(
       makeRecord({ id: 'meta2', typeId: ATTACHMENT_TYPE_V2, content: { fileId: 'file-1' } }),
     );
-
-    const deleted = await adapter.deleteUnreferencedAttachmentRecords('file-1', [
-      ATTACHMENT_TYPE,
-      ATTACHMENT_TYPE_V2,
-    ]);
-    expect(deleted.map((r) => r.id).sort()).toEqual(['meta1', 'meta2']);
-    expect(await adapter.getRecord('meta2')).toBeNull();
-  });
-
-  test('leaves a record of a typeId outside the given set intact', async () => {
-    const adapter = await initAdapter();
     await adapter.createRecord(
       makeRecord({
-        id: 'meta1',
-        typeId: 'com.example.test/_attachment@2',
+        id: 'other',
+        typeId: 'com.example.test/_attachments@1',
         content: { fileId: 'file-1' },
       }),
     );
 
-    const deleted = await adapter.deleteUnreferencedAttachmentRecords('file-1', [ATTACHMENT_TYPE]);
+    const deleted = await adapter.deleteUnreferencedAttachmentRecords('file-1', ATTACHMENT_FAMILY);
+    expect(deleted.map((r) => r.id).sort()).toEqual(['meta1', 'meta2']);
+    expect(await adapter.getRecord('meta2')).toBeNull();
+  });
+
+  test('leaves a record outside the given family intact', async () => {
+    const adapter = await initAdapter();
+    await adapter.createRecord(
+      makeRecord({
+        id: 'meta1',
+        typeId: 'com.example.test/other@1',
+        content: { fileId: 'file-1' },
+      }),
+    );
+
+    const deleted = await adapter.deleteUnreferencedAttachmentRecords('file-1', ATTACHMENT_FAMILY);
     expect(deleted).toEqual([]);
     expect(await adapter.getRecord('meta1')).not.toBeNull();
   });
 
-  // The conflict is a fact about the file, not about which metadata types
-  // happen to be defined, so the reference check still runs.
-  test('an empty typeId set still throws when the file is referenced', async () => {
+  // The conflict is a fact about the file, not about which metadata records
+  // happen to exist, so the reference check still runs.
+  test('a family holding no metadata records still throws when the file is referenced', async () => {
     const adapter = await initAdapter();
     const record = makeRecord();
     await adapter.createRecord(record);
-    await adapter.amendAssociations(record.id, [
-      {
-        op: 'add',
-        association: {
-          kind: 'attachment',
-          label: 'cover',
-          fileId: 'file-1',
-        },
-      },
-    ]);
-
-    await expect(adapter.deleteUnreferencedAttachmentRecords('file-1', [])).rejects.toThrow(
-      StackConflictError,
-    );
-    expect(await adapter.deleteUnreferencedAttachmentRecords('file-2', [])).toEqual([]);
-  });
-
-  test('returns an empty array when no metadata records exist for the file', async () => {
-    const adapter = await initAdapter();
-    const deleted = await adapter.deleteUnreferencedAttachmentRecords('nonexistent-file', [
-      ATTACHMENT_TYPE,
-    ]);
-    expect(deleted).toEqual([]);
-  });
-
-  test('rolls back and leaves the metadata record intact when the reference check fails', async () => {
-    const adapter = await initAdapter();
-    await adapter.createRecord(
-      makeRecord({ id: 'meta1', typeId: ATTACHMENT_TYPE, content: { fileId: 'file-1' } }),
-    );
-    const referencing = makeRecord({ id: 'referencing' });
-    await adapter.createRecord(referencing);
-    await adapter.amendAssociations(referencing.id, [
+    await adapter.editAssociations(record.id, [
       {
         op: 'add',
         association: {
@@ -2596,7 +2728,42 @@ describe('deleteUnreferencedAttachmentRecords', () => {
     ]);
 
     await expect(
-      adapter.deleteUnreferencedAttachmentRecords('file-1', [ATTACHMENT_TYPE]),
+      adapter.deleteUnreferencedAttachmentRecords('file-1', ATTACHMENT_FAMILY),
+    ).rejects.toThrow(StackConflictError);
+    expect(await adapter.deleteUnreferencedAttachmentRecords('file-2', ATTACHMENT_FAMILY)).toEqual(
+      [],
+    );
+  });
+
+  test('returns an empty array when no metadata records exist for the file', async () => {
+    const adapter = await initAdapter();
+    const deleted = await adapter.deleteUnreferencedAttachmentRecords(
+      'nonexistent-file',
+      ATTACHMENT_FAMILY,
+    );
+    expect(deleted).toEqual([]);
+  });
+
+  test('rolls back and leaves the metadata record intact when the reference check fails', async () => {
+    const adapter = await initAdapter();
+    await adapter.createRecord(
+      makeRecord({ id: 'meta1', typeId: ATTACHMENT_TYPE, content: { fileId: 'file-1' } }),
+    );
+    const referencing = makeRecord({ id: 'referencing' });
+    await adapter.createRecord(referencing);
+    await adapter.editAssociations(referencing.id, [
+      {
+        op: 'add',
+        association: {
+          kind: 'attachment',
+          label: 'cover',
+          fileId: 'file-1',
+        },
+      },
+    ]);
+
+    await expect(
+      adapter.deleteUnreferencedAttachmentRecords('file-1', ATTACHMENT_FAMILY),
     ).rejects.toThrow(StackConflictError);
     expect(await adapter.getRecord('meta1')).not.toBeNull();
   });
@@ -2642,20 +2809,13 @@ describe('actor attribution', () => {
       makeRecord({ createdBy: { subjectId: ACTOR }, updatedBy: { subjectId: ACTOR } }),
     );
 
-    await adapter.mutateRecord(
+    await adapter.patchContent(
       r.id,
-      { contentPatch: { text: 'v2' } },
+      { text: 'v2' },
       { actor: { subjectId: OTHER, principalId: APP } },
     );
     const read = await adapter.getRecord(r.id);
     expect([read?.updatedBy?.subjectId, read?.updatedBy?.principalId]).toEqual([OTHER, APP]);
-
-    await adapter.mutateRecord(
-      r.id,
-      { permissions: [{ kind: 'anyone', label: 'read' }] },
-      { actor: { subjectId: ACTOR } },
-    );
-    expect((await adapter.getRecord(r.id))?.updatedBy?.subjectId).toBe(ACTOR);
 
     await adapter.deleteRecord(r.id, { actor: { subjectId: OTHER } });
     expect((await adapter.getRecord(r.id))?.updatedBy?.subjectId).toBe(OTHER);
@@ -2675,22 +2835,20 @@ describe('actor attribution', () => {
     await adapter.close();
   });
 
-  // associate()/dissociate() take no ActorOptions at all — they never bump,
-  // so there is no version for an actor to be stamped on. See
+  // The writes that never bump take no ActorOptions at all: there is no
+  // version for an actor to be stamped on. See
   // docs/spec/versioning.md § Version history.
-  test('associate()/dissociate() never restamp the actor', async () => {
+  test('association writes never restamp the actor', async () => {
     const adapter = await initAdapter();
     await adapter.saveType(NOTE_TYPE);
     const r = await adapter.createRecord(
       makeRecord({ createdBy: { subjectId: ACTOR }, updatedBy: { subjectId: ACTOR } }),
     );
 
-    await adapter.amendAssociations(r.id, [
-      { op: 'add', association: { kind: 'tag', label: 'x' } },
-    ]);
+    await adapter.editAssociations(r.id, [{ op: 'add', association: { kind: 'tag', label: 'x' } }]);
     expect((await adapter.getRecord(r.id))?.updatedBy?.subjectId).toBe(ACTOR);
 
-    await adapter.amendAssociations(r.id, [
+    await adapter.editAssociations(r.id, [
       { op: 'remove', association: { kind: 'tag', label: 'x' } },
     ]);
     expect((await adapter.getRecord(r.id))?.updatedBy?.subjectId).toBe(ACTOR);
@@ -2704,7 +2862,7 @@ describe('actor attribution', () => {
       makeRecord({ createdBy: { subjectId: ACTOR }, updatedBy: { subjectId: ACTOR } }),
     );
 
-    await adapter.mutateRecord(r.id, { contentPatch: { text: 'v2' } }, {});
+    await adapter.patchContent(r.id, { text: 'v2' });
 
     const read = await adapter.getRecord(r.id);
     expect(read?.updatedBy).toBeUndefined();
@@ -2719,9 +2877,9 @@ describe('actor attribution', () => {
       makeRecord({ createdBy: { subjectId: ACTOR }, updatedBy: { subjectId: ACTOR } }),
     );
 
-    await adapter.mutateRecord(
+    await adapter.patchContent(
       r.id,
-      { contentPatch: { text: 'v2' } },
+      { text: 'v2' },
       {
         actor: { subjectId: OTHER },
         snapshot: {
@@ -2748,9 +2906,9 @@ describe('actor attribution', () => {
       makeRecord({ createdBy: { subjectId: ACTOR }, updatedBy: { subjectId: ACTOR } }),
     );
 
-    await adapter.mutateRecord(
+    await adapter.patchContent(
       r.id,
-      { contentPatch: { text: 'v2' } },
+      { text: 'v2' },
       {
         actor: { subjectId: OTHER },
         snapshot: {

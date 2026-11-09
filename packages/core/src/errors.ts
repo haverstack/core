@@ -7,10 +7,11 @@
  * subclass carries its wire discriminator as an instance `code`.
  *
  * Several errors sit deliberately outside that root (UseAfterCloseError,
- * InvalidAdapterError, OwnerMismatchError, RelayScopeError, and — in their own
- * modules — IdGenerationError and InvalidDidError): they report a local
- * programming error or an assembled topology, not a state a request can be
- * in, so no server ever responds with one.
+ * InvalidAdapterError, OwnerMismatchError, ElementSetMovedError, ScopeUnavailableError, and — in their own
+ * modules — IdGenerationError, InvalidDidError, InvalidAuthChallengeError,
+ * StoredVersionError and MisfitError): they report a local programming error, malformed
+ * local input or an assembled topology, not a state a request can be in, so
+ * no server ever responds with one.
  *
  * The `Stack` prefix is reserved for the taxonomy: a class named
  * `Stack…Error` extends StackError, and nothing else carries the prefix.
@@ -19,7 +20,7 @@
 import { baseIdOf, parseTypeId } from './schema.js';
 import type { SchemaDriftViolation } from './schema.js';
 import type { ValidationError } from './validate.js';
-import type { EntityId, MissingCapability, TypeId } from './types.js';
+import type { EntityId, MissingCapability, TypeId } from './types/index.js';
 
 /**
  * The wire-protocol discriminator vocabulary, one code per Stack-domain
@@ -40,32 +41,33 @@ export type StackErrorCode =
   | 'timeout';
 
 /**
- * Root of the Stack error taxonomy. A single `instanceof StackError` answers
- * "is this a Stack-domain error or a bug?" — the question a server's error
- * middleware asks before serializing a wire body, and one an instanceof
- * ladder answers only by exhaustion. Every subclass carries its
- * discriminator as an instance `code`, so serialization is a lookup rather
- * than a chain of class tests.
- *
- * Membership implies a wire mapping: every code has an entry in
- * WIRE_ERROR_STATUS. Errors with no wire representation (IdGenerationError,
- * InvalidDidError) deliberately stay outside this hierarchy.
- *
- * Subclassing adds no hierarchy beyond this root — notably
- * StackVersionConflictError is a sibling of StackConflictError, not a
- * subtype. See docs/spec/wire-format.md § Error responses.
+ * Root of the taxonomy: `instanceof StackError` is the one question a
+ * server's error middleware asks, and each subclass's `code` makes
+ * serialization a lookup. Every code has a WIRE_ERROR_STATUS entry.
+ * Subclasses add no hierarchy — StackVersionConflictError is a sibling of
+ * StackConflictError. See docs/spec/wire-format.md § Error responses.
  */
 export abstract class StackError extends Error {
   abstract readonly code: StackErrorCode;
 }
 
+const CONTENT_INVALID = 'Content validation failed';
+export const ARGUMENTS_INVALID = 'Invalid arguments';
+export const SCHEMA_INVALID = 'Schema validation failed';
+
+/**
+ * `header` names what was validated — record content, or the arguments a
+ * call was given — so a refusal of `editAssociations(id, [])` doesn't read as a
+ * content failure. Only the message varies: `code` is the contract.
+ */
 export class StackValidationError extends StackError {
   static readonly code = 'validation' as const;
   override readonly code = StackValidationError.code;
-  constructor(public readonly errors: ValidationError[]) {
-    super(
-      `Content validation failed:\n` + errors.map((e) => `  ${e.path}: ${e.message}`).join('\n'),
-    );
+  constructor(
+    public readonly errors: ValidationError[],
+    header: string = CONTENT_INVALID,
+  ) {
+    super(`${header}:\n` + errors.map((e) => `  ${e.path}: ${e.message}`).join('\n'));
     this.name = 'StackValidationError';
   }
 }
@@ -110,6 +112,14 @@ export class StackConflictError extends StackError {
 }
 
 /**
+ * The refusal a mutation of a soft-deleted record earns, from `Stack` or
+ * from inside an adapter's aspect write: one message, wherever it is asked.
+ * See docs/spec/versioning.md § Mutations are refused, not applied to a tombstone.
+ */
+export const softDeletedRefusal = (id: string): StackConflictError =>
+  new StackConflictError(`Record "${id}" is soft-deleted; undelete it before mutating it.`);
+
+/**
  * Thrown when an `ifVersion` precondition doesn't match a record's current
  * version. Deliberately not a StackConflictError subtype — the two have
  * different recovery stories and HTTP statuses (409 vs. 412). See
@@ -130,16 +140,10 @@ export class StackVersionConflictError extends StackError {
 }
 
 /**
- * Thrown when a request is structurally malformed — not a content-validation
- * failure, but input the adapter/server can't even interpret (e.g. an
- * undecodable pagination cursor, a malformed TypeId, search text the engine
- * cannot parse, or a typeId no definition exists for). Distinct from
- * StackValidationError, which means the request was well-formed but content
- * failed schema validation.
- *
- * Naming something absent belongs here rather than under `not_found`: a
- * request whose *type* is undefined never addressed a record, so answering
- * 404 would say a record was missing when none was asked for.
+ * A request structurally malformed — an undecodable cursor, a malformed
+ * TypeId, unparseable search text — as opposed to StackValidationError's
+ * well-formed request with invalid content. Naming an undefined type is
+ * here, not `not_found`: no record was asked for, so none is missing.
  */
 export class StackBadRequestError extends StackError {
   static readonly code = 'bad_request' as const;
@@ -147,12 +151,9 @@ export class StackBadRequestError extends StackError {
   constructor(
     message: string,
     /**
-     * Which declared capability the query asked for and the adapter lacks,
-     * or undefined when the query's own shape is what was wrong — a
-     * malformed content path is a caller error at every capability level.
-     * A client mapping this onto an error of its own reads the name from
-     * here rather than re-deriving it from the query, which is how one
-     * rule becomes two answers that can disagree.
+     * The declared capability the query needed and the adapter lacks, or
+     * undefined when the query's own shape was wrong. A client reads it from
+     * here rather than re-deriving it, so one rule has one answer.
      */
     public readonly capability?: MissingCapability,
   ) {
@@ -177,17 +178,10 @@ export class StackPayloadTooLargeError extends StackError {
 }
 
 /**
- * Thrown when a server abandons an operation for taking too long — in
- * practice a full-text search, the one query whose cost the sanitizers
- * bound the *grammar* of but not the execution of (see
- * docs/spec/data-model.md § Capability-gated filters).
- *
- * Never produced in-process: both SQLite engines run synchronously, so
- * there is nothing to interrupt from inside the call. It exists so a
- * server that bounds query time has a class to serialize, and so the app
- * catching it can tell "too expensive, narrow it and retry" from
- * StackBadRequestError's "malformed, don't bother retrying" — the distinction
- * that would be lost if a timeout reused `bad_request`.
+ * A server abandoned an operation for taking too long — in practice a
+ * full-text search. Never produced in-process; it lets an app tell "too
+ * expensive, narrow and retry" from `bad_request`'s "malformed".
+ * See docs/spec/data-model.md § Capability-gated filters.
  */
 export class StackTimeoutError extends StackError {
   static readonly code = 'timeout' as const;
@@ -214,7 +208,7 @@ export class StackSchemaDriftError extends StackError {
     super(
       `Schema drift detected for type "${typeId}": the stored schema and the new definition ` +
         `differ beyond additive evolution (new optional fields only). Bump the version instead ` +
-        `of redefining "${typeId}" in place — e.g. defineType({ id: \`${baseIdOf(typeId)}@${(parseTypeId(typeId)?.version ?? 0) + 1}\`, ... }) plus registerMigration().\n` +
+        `of redefining "${typeId}" in place — e.g. defineType({ id: \`${baseIdOf(typeId)}@${(parseTypeId(typeId)?.version ?? 0) + 1}\`, ... }) plus a migration() passed to Stack.open().\n` +
         violations.map((v) => `  ${v.path || '(root)'}: ${v.message}`).join('\n'),
     );
     this.name = 'StackSchemaDriftError';
@@ -249,10 +243,11 @@ export class InvalidAdapterError extends Error {
 }
 
 /**
- * Thrown by an adapter's open() when a plain-string `ownerEntityId` disagrees
- * with the owner the store already has. `where` names the path, URL or
- * Durable Object that was opened; `actual` is undefined when a server reports
- * no owner at all. Outside the StackError taxonomy for the same reason as
+ * Thrown when a store is not owned by the owner expected of it: by an
+ * adapter's open() given a plain-string `ownerEntityId`, and by copyStack()
+ * when the store `create` returned is not the source's owner's. `where`
+ * names the store; `actual` is undefined when a server reports no owner at
+ * all. Outside the StackError taxonomy for the same reason as
  * InvalidAdapterError. See docs/spec/adapters.md § Construction.
  */
 export class OwnerMismatchError extends Error {
@@ -263,30 +258,57 @@ export class OwnerMismatchError extends Error {
   ) {
     super(
       actual
-        ? `Cannot open ${where}: it is owned by "${actual}", but ownerEntityId "${expected}" was given.`
-        : `Cannot open ${where}: it reports no owner, but ownerEntityId "${expected}" was given.`,
+        ? `${where} is owned by "${actual}", not "${expected}".`
+        : `${where} reports no owner, not "${expected}".`,
     );
     this.name = 'OwnerMismatchError';
   }
 }
 
 /**
- * Thrown when a scoped view is asked to observe a stack whose adapter
- * relays a remote feed. Outside the StackError taxonomy for the same
- * reason UseAfterCloseError is: it reports a topology the caller assembled,
- * not a state a request can be in.
- *
- * A relayed frame is scoped by the authority that opened the feed, and a
- * narrower scope cannot re-derive that decision — a purge leaves no record
- * to check `canRead` against. Delivering anyway would break the promise
- * that a subscriber never sees what it may not read; delivering only local
- * writes would silently drop every change made elsewhere, which is the
- * failure that looks fine in testing. So it refuses.
- * See docs/spec/events.md § Permission scoping.
+ * Thrown by an adapter's open() when an existing store names a layout other
+ * than the one the adapter reads: a store moves to a new layout only by
+ * being copied into one. `actual` is undefined when the store names none.
+ * Outside the StackError taxonomy for the same reason as OwnerMismatchError.
+ * See docs/spec/adapters.md § Construction.
  */
-export class RelayScopeError extends Error {
+export class FormatMismatchError extends Error {
+  constructor(
+    public readonly expected: number,
+    public readonly actual: number | undefined,
+    public readonly where: string,
+  ) {
+    super(
+      actual === undefined
+        ? `${where} names no format version, not ${expected}.`
+        : `${where} is format version ${actual}, not ${expected}.`,
+    );
+    this.name = 'FormatMismatchError';
+  }
+}
+
+/**
+ * Thrown by an adapter's element-set write when the stored set no longer
+ * matches the `expectSet` it was handed. Outside the StackError taxonomy:
+ * Stack catches it and reads again, so no request ever answers with it.
+ * See docs/spec/versioning.md § Element-set writes compare the set they read.
+ */
+export class ElementSetMovedError extends Error {
+  constructor(public readonly recordId: string) {
+    super(`Record "${recordId}"'s set changed since it was read`);
+    this.name = 'ElementSetMovedError';
+  }
+}
+
+/**
+ * A scoped view asked of a stack that does not own its storage. A server
+ * scopes every request to the session that opened it, so such a stack is
+ * scoped by opening it with the session meant.
+ * See docs/spec/access-control.md § Enforcement: Stack.asEntity().
+ */
+export class ScopeUnavailableError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = 'RelayScopeError';
+    this.name = 'ScopeUnavailableError';
   }
 }

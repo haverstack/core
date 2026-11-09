@@ -1,22 +1,36 @@
 /**
  * A capability refusal names the capability it was refused for, on the
- * error itself. A client reporting the refusal in its own vocabulary —
- * `adapter-api` turns it into APIAdapterCapabilityError — reads that name
- * rather than re-deriving it from the query, so there is one answer to
- * which capability a query needed instead of two that can disagree.
+ * error itself. A client reporting the refusal in its own vocabulary reads
+ * that name rather than re-deriving it from the query, so there is one
+ * answer to which capability a query needed instead of two that can
+ * disagree.
  *
  * The malformed-path cases carry no name: a path no adapter could address
  * is the caller's error at every capability level, and naming one would
  * send a caller to look at a discovery entry that is not the problem.
  */
 import { describe, test, expect } from 'vitest';
-import { assertQueryCapabilities, assertSortCapability } from '../src/query-validation.js';
+import {
+  assertQueryCapabilities,
+  resolveQuery,
+  assertValidContentByType,
+  assertValidSort,
+} from '../src/query-validation.js';
 import { StackBadRequestError } from '../src/errors.js';
-import type { MissingCapability, RecordFilter, StackCapabilities } from '../src/types.js';
+import type {
+  MissingCapability,
+  QuerySort,
+  RecordFilter,
+  StackCapabilities,
+} from '../src/types/index.js';
 
 const ALL: StackCapabilities = {
-  filter: { content: 'path', contentPresent: true, search: true },
-  sort: { fields: ['createdAt', 'updatedAt', 'version'], contentField: true },
+  filter: { content: 'path', contentPresent: true, contentByType: true, search: true },
+  sort: {
+    fields: ['createdAt', 'updatedAt', 'version'],
+    contentField: true,
+    contentFieldByType: true,
+  },
   limits: { attachmentBytes: null, contentBytes: null },
 };
 
@@ -44,7 +58,10 @@ describe('a refused query names the capability it needed', () => {
   test('filter.search', () => {
     expect(
       refusalFor(() =>
-        assertQueryCapabilities({ search: 'hello' }, without({ filter: { search: false } })),
+        assertQueryCapabilities(
+          resolveQuery({ filter: { search: 'hello' } }),
+          without({ filter: { search: false } }),
+        ),
       ),
     ).toBe('filter.search');
   });
@@ -56,7 +73,9 @@ describe('a refused query names the capability it needed', () => {
     ['filter.contentPresent', { contentPresent: ['slug'] }],
   ] as [string, RecordFilter][])("reach 'none', asked for by %s", (_label, filter) => {
     expect(
-      refusalFor(() => assertQueryCapabilities(filter, without({ filter: { content: 'none' } }))),
+      refusalFor(() =>
+        assertQueryCapabilities(resolveQuery({ filter }), without({ filter: { content: 'none' } })),
+      ),
     ).toBe('filter.content');
   });
 
@@ -64,7 +83,7 @@ describe('a refused query names the capability it needed', () => {
     expect(
       refusalFor(() =>
         assertQueryCapabilities(
-          { contentPresent: ['slug'] },
+          resolveQuery({ filter: { contentPresent: ['slug'] } }),
           without({ filter: { contentPresent: false } }),
         ),
       ),
@@ -75,7 +94,7 @@ describe('a refused query names the capability it needed', () => {
     expect(
       refusalFor(() =>
         assertQueryCapabilities(
-          { content: { 'emails.value': 'a@b.c' } },
+          resolveQuery({ filter: { content: { 'emails.value': 'a@b.c' } } }),
           without({ filter: { content: 'field' } }),
         ),
       ),
@@ -85,15 +104,95 @@ describe('a refused query names the capability it needed', () => {
   test('sort.contentField', () => {
     expect(
       refusalFor(() =>
-        assertSortCapability({ contentField: 'slug' }, without({ sort: { contentField: false } })),
+        assertQueryCapabilities(
+          resolveQuery({ sort: { contentField: 'slug', direction: 'asc' } }),
+          without({ sort: { contentField: false } }),
+        ),
       ),
     ).toBe('sort.contentField');
+  });
+
+  const ARMS: RecordFilter = {
+    contentByType: { 'com.example/x@1': { content: { a: 1 } }, 'com.example/x@2': {} },
+  };
+
+  test('filter.contentByType declined', () => {
+    expect(
+      refusalFor(() =>
+        assertQueryCapabilities(
+          resolveQuery({ filter: ARMS }),
+          without({ filter: { contentByType: false } }),
+        ),
+      ),
+    ).toBe('filter.contentByType');
+  });
+
+  test("filter.contentByType against reach 'none'", () => {
+    expect(
+      refusalFor(() =>
+        assertQueryCapabilities(
+          resolveQuery({ filter: ARMS }),
+          without({ filter: { content: 'none' } }),
+        ),
+      ),
+    ).toBe('filter.content');
+  });
+
+  test("an arm's keys are gated as top-level keys are", () => {
+    const arm = (predicate: object): RecordFilter => ({
+      contentByType: { 'com.example/x@1': predicate },
+    });
+    expect(
+      refusalFor(() =>
+        assertQueryCapabilities(
+          resolveQuery({ filter: arm({ content: { 'a.b': 1 } }) }),
+          without({ filter: { content: 'field' } }),
+        ),
+      ),
+    ).toBe('filter.content');
+    expect(
+      refusalFor(() =>
+        assertQueryCapabilities(
+          resolveQuery({ filter: arm({ contentPresent: ['a'] }) }),
+          without({ filter: { contentPresent: false } }),
+        ),
+      ),
+    ).toBe('filter.contentPresent');
+  });
+
+  test('sort.contentFieldByType declined', () => {
+    const sort = {
+      contentFieldByType: { 'com.example/x@1': { field: 'a' } },
+      direction: 'asc' as const,
+    };
+    expect(
+      refusalFor(() =>
+        assertQueryCapabilities(
+          resolveQuery({ sort: sort }),
+          without({ sort: { contentFieldByType: false } }),
+        ),
+      ),
+    ).toBe('sort.contentFieldByType');
+  });
+
+  test('a declared per-Type shape takes any number of keys', () => {
+    const typeIds = Array.from({ length: 500 }, (_, i) => `com.example/x@${i + 1}`);
+    const filter = { contentByType: Object.fromEntries(typeIds.map((id) => [id, {}])) };
+    const sort = {
+      contentFieldByType: Object.fromEntries(typeIds.map((id) => [id, { field: 'a' }])),
+      direction: 'asc' as const,
+    };
+    expect(() => assertQueryCapabilities(resolveQuery({ filter }), ALL)).not.toThrow();
+    expect(() => assertQueryCapabilities(resolveQuery({ sort: sort }), ALL)).not.toThrow();
   });
 
   test('sort.fields', () => {
     expect(
       refusalFor(() =>
-        assertSortCapability({ field: 'version' }, without({ sort: { fields: [] } })),
+        assertQueryCapabilities(
+          resolveQuery({ sort: { field: 'version', direction: 'asc' } }),
+          without({ sort: { fields: [] } }),
+        ),
       ),
     ).toBe('sort.fields');
   });
@@ -106,8 +205,76 @@ describe('a query refused for its own shape names no capability', () => {
   ] as const)('a malformed content path at %s', (_label, content) => {
     expect(
       refusalFor(() =>
-        assertQueryCapabilities({ content: { 'a..b': 1 } }, without({ filter: { content } })),
+        assertQueryCapabilities(
+          resolveQuery({ filter: { content: { 'a..b': 1 } } }),
+          without({ filter: { content } }),
+        ),
       ),
     ).toBeUndefined();
+  });
+});
+
+describe('the per-Type shapes are held to a split along Types', () => {
+  test.each([
+    ['an empty map', { contentByType: {} }],
+    ['an arm keyed by something other than a TypeId', { contentByType: { note: {} } }],
+    ['an arm carrying another key', { contentByType: { 'com.example/x@1': { typeId: 'y' } } }],
+    ['an arm that is not an object', { contentByType: { 'com.example/x@1': [] } }],
+    [
+      'arms beside a top-level content filter',
+      { content: { a: 1 }, contentByType: { 'com.example/x@1': {} } },
+    ],
+    [
+      'arms beside a top-level presence filter',
+      { contentPresent: ['a'], contentByType: { 'com.example/x@1': {} } },
+    ],
+    [
+      'a malformed path in an arm',
+      { contentByType: { 'com.example/x@1': { content: { 'a..b': 1 } } } },
+    ],
+  ])('filter.contentByType refuses %s', (_label, filter) => {
+    expect(refusalFor(() => assertValidContentByType(filter as RecordFilter))).toBeUndefined();
+  });
+
+  test.each([
+    ['an empty map', {}],
+    ['a key that is not a TypeId', { note: { field: 'a' } }],
+    ['a key naming both a field and a value', { 'com.example/x@1': { field: 'a', value: 1 } }],
+    ['a nested field', { 'com.example/x@1': { field: 'a.b' } }],
+    ['a value that is not a scalar', { 'com.example/x@1': { value: [] } }],
+    ['a value that is not finite', { 'com.example/x@1': { value: Infinity } }],
+  ])('sort.contentFieldByType refuses %s', (_label, contentFieldByType) => {
+    expect(refusalFor(() => assertValidSort({ contentFieldByType } as QuerySort))).toBeUndefined();
+  });
+
+  test('a sort names one member only', () => {
+    expect(
+      refusalFor(() =>
+        assertValidSort({
+          contentField: 'a',
+          contentFieldByType: { 'com.example/x@1': { field: 'a' } },
+        } as unknown as QuerySort),
+      ),
+    ).toBeUndefined();
+  });
+
+  test('accepts a well-formed split', () => {
+    expect(() =>
+      assertValidContentByType({
+        contentByType: {
+          'com.example/x@1': { content: { 'a.b': 1 }, contentPresent: ['c'] },
+          'com.example/x@2': {},
+        },
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertValidSort({
+        contentFieldByType: {
+          'com.example/x@1': { field: 'a' },
+          'com.example/x@2': { value: 3 },
+          'com.example/x@3': { value: null },
+        },
+      }),
+    ).not.toThrow();
   });
 });

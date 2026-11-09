@@ -4,8 +4,12 @@
  * ends. See docs/spec/change-feed.md.
  */
 import { describe, test, expect, vi, afterEach } from 'vitest';
-import { APIAdapterCapabilityError, APIAdapterError, APIAdapterAuthError } from '../src/index.js';
-import type { APIAdapter } from '../src/index.js';
+import {
+  APIAdapter,
+  APIAdapterConnectionError,
+  APIAdapterError,
+  APIAdapterAuthError,
+} from '../src/index.js';
 import {
   BASE_URL,
   CHANGE_FEED,
@@ -108,28 +112,21 @@ const headersOf = (n: number): Record<string, string> =>
   requestInit(n).headers as Record<string, string>;
 
 describe('the discovery gate', () => {
-  test('refuses a server advertising no feed, without sending a request', async () => {
+  test('has no subscribeChanges() when the server advertises no feed', async () => {
     const { changes, ...noFeed } = DISCOVERY;
     void changes;
     const adapter = await openAdapter(noFeed);
-    const before = mockFetch.mock.calls.length;
-
-    await expect(adapter.subscribeChanges({}, () => {})).rejects.toBeInstanceOf(
-      APIAdapterCapabilityError,
-    );
-    // Learning this as a 404 partway through a connection is the failure
-    // discovery exists to prevent, so nothing may go out.
-    expect(mockFetch.mock.calls.length).toBe(before);
+    expect(adapter.subscribeChanges).toBeUndefined();
   });
 
-  test('names the feed as the capability that is missing', async () => {
+  // Together these are what make Stack refuse subscribe() on a feedless
+  // server: others write it, and nothing relays them (core's
+  // change-relay tests pin the refusal itself).
+  test('declares its store shared, feed or no feed', async () => {
     const { changes, ...noFeed } = DISCOVERY;
     void changes;
-    const adapter = await openAdapter(noFeed);
-
-    await expect(adapter.subscribeChanges({}, () => {})).rejects.toMatchObject({
-      capability: 'changes',
-    });
+    expect((await openAdapter(noFeed)).writers).toBe('shared');
+    expect((await openAdapter()).writers).toBe('shared');
   });
 
   test('accepts a feed that neither resumes nor includes records', async () => {
@@ -140,7 +137,7 @@ describe('the discovery gate', () => {
     const stream = feed();
     mockFetch.mockResolvedValueOnce(stream.response);
 
-    const subscription = adapter.subscribeChanges({}, () => {});
+    const subscription = adapter.subscribeChanges!({}, () => {});
     stream.write(READY);
     const stop = await subscription;
 
@@ -157,7 +154,7 @@ describe('the resume-cursor gate', () => {
     // A cursor becomes a Last-Event-ID header; one carrying a newline would
     // span the header line, so it is refused locally, not handed to fetch.
     await expect(
-      adapter.subscribeChanges({ since: 'AA3f1Q\r\nX-Injected: 1' }, () => {}),
+      adapter.subscribeChanges!({ since: 'AA3f1Q\r\nX-Injected: 1' }, () => {}),
     ).rejects.toBeInstanceOf(APIAdapterError);
     expect(mockFetch.mock.calls.length).toBe(before);
   });
@@ -170,12 +167,10 @@ describe('opening a connection', () => {
     mockFetch.mockResolvedValueOnce(stream.response);
 
     let live = false;
-    const subscription = adapter
-      .subscribeChanges({}, () => {})
-      .then((stop) => {
-        live = true;
-        return stop;
-      });
+    const subscription = adapter.subscribeChanges!({}, () => {}).then((stop) => {
+      live = true;
+      return stop;
+    });
 
     await Promise.resolve();
     // Subscribe-then-query is only gap-free if this waits for ready.
@@ -196,7 +191,7 @@ describe('opening a connection', () => {
     const stream = feed();
     mockFetch.mockResolvedValueOnce(stream.response);
 
-    const subscription = adapter.subscribeChanges(
+    const subscription = adapter.subscribeChanges!(
       {
         filter: {
           typeId: ['com.example/note@1', 'com.example/memo@1'],
@@ -229,7 +224,7 @@ describe('opening a connection', () => {
     const stream = feed();
     mockFetch.mockResolvedValueOnce(stream.response);
 
-    const subscription = adapter.subscribeChanges({ since: 'AA3f1R' }, () => {});
+    const subscription = adapter.subscribeChanges!({ since: 'AA3f1R' }, () => {});
     stream.write(READY);
     const stop = await subscription;
 
@@ -241,13 +236,13 @@ describe('opening a connection', () => {
     const adapter = await openAdapter();
     mockFetch.mockResolvedValueOnce(jsonResponse({ error: { code: 'permission' } }, 403));
 
-    await expect(adapter.subscribeChanges({}, () => {})).rejects.toThrow();
+    await expect(adapter.subscribeChanges!({}, () => {})).rejects.toThrow();
   });
 });
 
 describe('frames', () => {
   const subscribe = async (
-    opts: Parameters<APIAdapter['subscribeChanges']>[0] = {},
+    opts: Parameters<NonNullable<APIAdapter['subscribeChanges']>>[0] = {},
   ): Promise<{
     adapter: APIAdapter;
     stream: ReturnType<typeof feed>;
@@ -258,7 +253,7 @@ describe('frames', () => {
     const stream = feed();
     mockFetch.mockResolvedValueOnce(stream.response);
     const seen: RecordChange[] = [];
-    const subscription = adapter.subscribeChanges(opts, (c) => void seen.push(c));
+    const subscription = adapter.subscribeChanges!(opts, (c) => void seen.push(c));
     stream.write(READY);
     return { adapter, stream, seen, stop: await subscription };
   };
@@ -281,7 +276,7 @@ describe('frames', () => {
     stop();
   });
 
-  test('parses associationsAdded/associationsRemoved off an associate/dissociate frame', async () => {
+  test('parses associationsAdded/associationsRemoved off an editAssociations frame', async () => {
     const { stream, seen, stop } = await subscribe();
 
     stream.write(
@@ -421,7 +416,7 @@ describe('frames', () => {
     mockFetch.mockResolvedValueOnce(stream.response);
     const onReset = vi.fn();
 
-    const subscription = adapter.subscribeChanges({ onReset }, () => {});
+    const subscription = adapter.subscribeChanges!({ onReset }, () => {});
     stream.write(READY);
     const stop = await subscription;
 
@@ -439,7 +434,7 @@ describe('reconnection', () => {
     mockFetch.mockResolvedValueOnce(first.response);
 
     const seen: RecordChange[] = [];
-    const subscription = adapter.subscribeChanges({}, (c) => void seen.push(c));
+    const subscription = adapter.subscribeChanges!({}, (c) => void seen.push(c));
     first.write(READY);
     const stop = await subscription;
 
@@ -465,7 +460,7 @@ describe('reconnection', () => {
     const first = feed();
     mockFetch.mockResolvedValueOnce(first.response);
 
-    const subscription = adapter.subscribeChanges({ since: 'STALE1' }, () => {});
+    const subscription = adapter.subscribeChanges!({ since: 'STALE1' }, () => {});
     first.write(READY);
     const stop = await subscription;
 
@@ -491,7 +486,7 @@ describe('reconnection', () => {
     const first = feed();
     mockFetch.mockResolvedValueOnce(first.response);
 
-    const subscription = adapter.subscribeChanges({ since: 'STALE1' }, () => {});
+    const subscription = adapter.subscribeChanges!({ since: 'STALE1' }, () => {});
     first.write('event: ready\ndata: {"cursor":"AA\\r\\nX-Injected: 1"}\n\n');
     const stop = await subscription;
 
@@ -517,7 +512,7 @@ describe('reconnection', () => {
     mockFetch.mockResolvedValueOnce(first.response);
 
     const onError = vi.fn();
-    const subscription = adapter.subscribeChanges({ onError }, () => {});
+    const subscription = adapter.subscribeChanges!({ onError }, () => {});
     first.write(READY);
     const stop = await subscription;
 
@@ -548,7 +543,7 @@ describe('reconnection', () => {
     mockFetch.mockResolvedValueOnce(first.response);
 
     const onError = vi.fn();
-    const subscription = adapter.subscribeChanges({ onError }, () => {});
+    const subscription = adapter.subscribeChanges!({ onError }, () => {});
     first.write(READY);
     const stop = await subscription;
 
@@ -569,6 +564,44 @@ describe('reconnection', () => {
     stop();
   });
 
+  // An expired token renewed over a connection that drops is not a refused
+  // credential: the next reconnect renews again rather than ending the feed.
+  test('keeps reconnecting when renewal fails on a dropped connection', async () => {
+    vi.useFakeTimers();
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ ...DISCOVERY, auth: { methods: ['did-challenge'] } }),
+    );
+    mockFetch.mockResolvedValueOnce(jsonResponse({ nonce: 'FirstNonce1' }));
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ token: 'earned', principalId: EDITOR, subjectId: EDITOR }),
+    );
+    const credential = { did: EDITOR, sign: vi.fn().mockResolvedValue(new Uint8Array([1])) };
+    const adapter = await APIAdapter.open({ url: BASE_URL, credential });
+
+    const first = feed();
+    mockFetch.mockResolvedValueOnce(first.response);
+    const onError = vi.fn();
+    const subscription = adapter.subscribeChanges!({ onError }, () => {});
+    first.write(READY);
+    const stop = await subscription;
+
+    mockFetch.mockResolvedValueOnce(new Response(null, { status: 401 }));
+    mockFetch.mockRejectedValueOnce(new TypeError('fetch failed'));
+    const recovered = feed();
+    mockFetch.mockResolvedValueOnce(recovered.response);
+    first.end();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.waitFor(() => expect(onError).toHaveBeenCalledOnce());
+    expect(onError.mock.calls[0]![0]).toBeInstanceOf(APIAdapterConnectionError);
+
+    // discovery + handshake (2) + first + the 401 + the dropped renewal +
+    // the attempt that reaches the server again.
+    await vi.advanceTimersByTimeAsync(120_000);
+    await vi.waitFor(() => expect(mockFetch.mock.calls.length).toBe(7));
+    stop();
+  });
+
   // 503 is a server shedding load, not a verdict on the request — being
   // reconnected against is the whole point of it.
   test('keeps reconnecting after a 503 the server may recover from', async () => {
@@ -578,7 +611,7 @@ describe('reconnection', () => {
     mockFetch.mockResolvedValueOnce(first.response);
 
     const onError = vi.fn();
-    const subscription = adapter.subscribeChanges({ onError }, () => {});
+    const subscription = adapter.subscribeChanges!({ onError }, () => {});
     first.write(READY);
     const stop = await subscription;
 
@@ -606,7 +639,7 @@ describe('reconnection', () => {
     const stream = feed();
     mockFetch.mockResolvedValueOnce(stream.response);
 
-    const subscription = adapter.subscribeChanges({}, () => {});
+    const subscription = adapter.subscribeChanges!({}, () => {});
     stream.write(READY);
     const stop = await subscription;
 

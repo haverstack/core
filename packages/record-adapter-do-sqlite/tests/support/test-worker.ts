@@ -7,21 +7,31 @@
  * each StackRecordAdapter method needs its own exposed method here.
  */
 import { DurableObject } from 'cloudflare:workers';
-import type { OwnerMismatchError } from '@haverstack/core/adapter';
+import type {
+  AdapterQuery,
+  ElementWriteOptions,
+  OwnerMismatchError,
+  Reach,
+  RecordHistory,
+} from '@haverstack/core/adapter';
 import { DoSQLiteRecordAdapter } from '../../src/index.js';
 import type {
   StackRecord,
-  StackQuery,
   AssociationEdit,
-  RecordChangeSet,
+  AuthorityAssociation,
+  DataAssociation,
   RecordVersion,
   StackType,
   TypeId,
+  BaseId,
   FileId,
   ActorOptions,
 } from '@haverstack/core';
 
 type MutationOpts = { ifVersion?: number; snapshot?: RecordVersion } & ActorOptions;
+type AspectOpts = { ifVersion?: number };
+type DataOpts = ElementWriteOptions<DataAssociation>;
+type AccessOpts = ElementWriteOptions<AuthorityAssociation>;
 
 export class TestRecordAdapterDO extends DurableObject {
   private adapter!: DoSQLiteRecordAdapter;
@@ -32,7 +42,6 @@ export class TestRecordAdapterDO extends DurableObject {
     this.ready = ctx.blockConcurrencyWhile(async () => {
       this.adapter = await DoSQLiteRecordAdapter.open(ctx.storage, {
         ownerEntityId: 'entity-test',
-        timezone: 'America/New_York',
       });
     });
   }
@@ -82,7 +91,7 @@ export class TestRecordAdapterDO extends DurableObject {
 
   async patchContent(id: string, patch: Record<string, unknown | null>, opts?: MutationOpts) {
     await this.ready;
-    return this.adapter.mutateRecord(id, { contentPatch: patch }, opts);
+    return this.adapter.patchContent(id, patch, opts);
   }
 
   async deleteRecord(id: string, opts?: { purge?: boolean } & MutationOpts) {
@@ -95,9 +104,14 @@ export class TestRecordAdapterDO extends DurableObject {
     return this.adapter.undeleteRecord(id, opts);
   }
 
-  async mutateRecord(id: string, changes: RecordChangeSet, opts?: MutationOpts) {
+  async setParent(id: string, parentId: string | null, opts?: AspectOpts) {
     await this.ready;
-    return this.adapter.mutateRecord(id, changes, opts);
+    return this.adapter.setParent(id, parentId, opts);
+  }
+
+  async setUnlisted(id: string, unlisted: boolean, opts?: AspectOpts) {
+    await this.ready;
+    return this.adapter.setUnlisted(id, unlisted, opts);
   }
 
   async restoreVersion(id: string, version: number, opts?: MutationOpts) {
@@ -115,14 +129,19 @@ export class TestRecordAdapterDO extends DurableObject {
     return this.adapter.commitMigration(id, toTypeId, content, opts);
   }
 
-  async queryRecords(query: StackQuery) {
+  async queryRecords(query: AdapterQuery) {
     await this.ready;
     return this.adapter.queryRecords(query);
   }
 
-  async deleteUnreferencedAttachmentRecords(fileId: FileId, metadataTypeIds: TypeId[]) {
+  async queryReadable(query: AdapterQuery, reach: Reach) {
     await this.ready;
-    return this.adapter.deleteUnreferencedAttachmentRecords(fileId, metadataTypeIds);
+    return this.adapter.queryReadable(query, reach);
+  }
+
+  async deleteUnreferencedAttachmentRecords(fileId: FileId, metadataBaseId: BaseId) {
+    await this.ready;
+    return this.adapter.deleteUnreferencedAttachmentRecords(fileId, metadataBaseId);
   }
 
   async getVersions(id: string) {
@@ -135,9 +154,14 @@ export class TestRecordAdapterDO extends DurableObject {
     return this.adapter.getVersion(id, version);
   }
 
-  async saveVersion(id: string, version: RecordVersion) {
+  async getJournal(id: string) {
     await this.ready;
-    return this.adapter.saveVersion(id, version);
+    return this.adapter.getJournal(id);
+  }
+
+  async importRecord(record: StackRecord, history: RecordHistory) {
+    await this.ready;
+    return this.adapter.importRecord(record, history);
   }
 
   async saveType(type: StackType) {
@@ -155,9 +179,24 @@ export class TestRecordAdapterDO extends DurableObject {
     return this.adapter.listTypes();
   }
 
-  async amendAssociations(recordId: string, changes: AssociationEdit[]) {
+  async editAssociations(id: string, edits: AssociationEdit[], opts?: DataOpts) {
     await this.ready;
-    return this.adapter.amendAssociations(recordId, changes);
+    return this.adapter.editAssociations(id, edits, opts);
+  }
+
+  async setAssociations(id: string, associations: DataAssociation[], opts?: DataOpts) {
+    await this.ready;
+    return this.adapter.setAssociations(id, associations, opts);
+  }
+
+  async editAccess(id: string, edits: AssociationEdit[], opts?: AccessOpts) {
+    await this.ready;
+    return this.adapter.editAccess(id, edits, opts);
+  }
+
+  async setAccess(id: string, permissions: AuthorityAssociation[], opts?: AccessOpts) {
+    await this.ready;
+    return this.adapter.setAccess(id, permissions, opts);
   }
 }
 

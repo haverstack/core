@@ -16,9 +16,12 @@ import {
   createOptionsFromWireRecord,
 } from '@haverstack/core/wire';
 import type { WireCreateRequest, TokenSession } from '@haverstack/core/wire';
-import type { StackQuery, StackRecord } from '@haverstack/core';
-import type { SubscribeChangesOptions } from '@haverstack/core/adapter';
+import { Stack } from '@haverstack/core';
+import { MemoryAdapter } from '@haverstack/core/testing';
+import type { StackRecord, SubscribeOptions } from '@haverstack/core';
+import type { PlainQuery } from '@haverstack/core/adapter';
 import { serializeRecord } from '@haverstack/wire-types';
+import { resolveQuery } from '@haverstack/core/adapter';
 
 /**
  * The request encoding, exercised as a round trip: a query goes out through
@@ -54,12 +57,12 @@ useFetchMock();
  * takes GET /records' search params, true takes POST /records/query's JSON
  * body.
  */
-async function roundTrip(query: StackQuery, reachesContent = false): Promise<StackQuery> {
+async function roundTrip(query: PlainQuery, reachesContent = false): Promise<PlainQuery> {
   mockFetch.mockResolvedValueOnce(jsonResponse(discovery(reachesContent)));
   const adapter = await APIAdapter.open({ url: BASE_URL, token: 'test-token' });
 
   mockFetch.mockResolvedValueOnce(jsonResponse(EMPTY_PAGE));
-  await adapter.queryRecords(query);
+  await adapter.queryRecords(resolveQuery(query));
 
   const [url, init] = mockFetch.mock.calls[1] as [string, RequestInit];
   return reachesContent
@@ -69,7 +72,7 @@ async function roundTrip(query: StackQuery, reachesContent = false): Promise<Sta
 
 /** The same, for GET /changes' params. */
 async function roundTripChanges(
-  opts: SubscribeChangesOptions,
+  opts: SubscribeOptions,
 ): Promise<ReturnType<typeof parseChangeParams>> {
   mockFetch.mockResolvedValueOnce(jsonResponse(discovery(false)));
   const adapter = await APIAdapter.open({ url: BASE_URL, token: 'test-token' });
@@ -88,7 +91,7 @@ async function roundTripChanges(
       { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
     ),
   );
-  const unsubscribe = await adapter.subscribeChanges(opts, () => {});
+  const unsubscribe = await adapter.subscribeChanges!(opts, () => {});
   unsubscribe();
 
   const [url] = mockFetch.mock.calls[1] as [string];
@@ -100,7 +103,7 @@ async function roundTripChanges(
 // -------------------------------------------------------
 
 describe('GET /records round trip', () => {
-  const cases: Array<[string, StackQuery]> = [
+  const cases: Array<[string, PlainQuery]> = [
     ['empty query', {}],
     ['single typeId', { filter: { typeId: 'com.example/note@1' } }],
     ['typeId array', { filter: { typeId: ['com.example/note@1', 'com.example/note@2'] } }],
@@ -219,7 +222,7 @@ describe('GET /records round trip', () => {
   ];
 
   test.each(cases)('%s survives the round trip', async (_name, query) => {
-    expect(await roundTrip(query)).toEqual(query);
+    expect(await roundTrip(query)).toEqual(resolveQuery(query));
   });
 });
 
@@ -228,7 +231,7 @@ describe('GET /records round trip', () => {
 // -------------------------------------------------------
 
 describe('POST /records/query round trip', () => {
-  const cases: Array<[string, StackQuery]> = [
+  const cases: Array<[string, PlainQuery]> = [
     ['empty query', {}],
     ['native fields', { filter: { typeId: 'com.example/note@1', tags: ['starred'] } }],
     ['root records', { filter: { parentId: null } }],
@@ -246,7 +249,7 @@ describe('POST /records/query round trip', () => {
   ];
 
   test.each(cases)('%s survives the round trip', async (_name, query) => {
-    expect(await roundTrip(query, true)).toEqual(query);
+    expect(await roundTrip(query, true)).toEqual(resolveQuery(query));
   });
 
   // filter.content has no URL-param encoding on either side, by design:
@@ -256,7 +259,7 @@ describe('POST /records/query round trip', () => {
     mockFetch.mockResolvedValueOnce(jsonResponse(discovery(true)));
     const adapter = await APIAdapter.open({ url: BASE_URL, token: 'test-token' });
     mockFetch.mockResolvedValueOnce(jsonResponse(EMPTY_PAGE));
-    await adapter.queryRecords({ filter: { content: { status: 'open' } } });
+    await adapter.queryRecords(resolveQuery({ filter: { content: { status: 'open' } } }));
 
     const [url, init] = mockFetch.mock.calls[1] as [string, RequestInit];
     expect(url).toBe(`${BASE_URL}/records/query`);
@@ -269,7 +272,7 @@ describe('POST /records/query round trip', () => {
 // -------------------------------------------------------
 
 describe('GET /changes round trip', () => {
-  const cases: Array<[string, SubscribeChangesOptions]> = [
+  const cases: Array<[string, SubscribeOptions]> = [
     ['no options', {}],
     ['single typeId', { filter: { typeId: 'com.example/note@1' } }],
     ['typeId array', { filter: { typeId: ['com.example/note@1', 'com.example/note@2'] } }],
@@ -278,18 +281,20 @@ describe('GET /changes round trip', () => {
     ['entityId', { filter: { createdBy: { subjectId: 'did:key:zAlice' } } }],
     ['kinds', { filter: { kinds: ['created', 'removed'] } }],
     ['includeRecords', { includeRecords: true }],
-    ['includeUnlisted', { includeUnlisted: true }],
+    ['baseId', { filter: { baseId: ['com.example/note', 'com.example/memo'] } }],
+    ['includeUnlisted', { filter: { includeUnlisted: true } }],
     [
       'everything at once',
       {
         filter: {
           typeId: 'com.example/note@1',
+          baseId: 'com.example/note',
           parentId: null,
           createdBy: { subjectId: 'did:key:zAlice' },
           kinds: ['created', 'changed', 'removed', 'purged'],
+          includeUnlisted: true,
         },
         includeRecords: true,
-        includeUnlisted: true,
       },
     ],
   ];
@@ -298,7 +303,6 @@ describe('GET /changes round trip', () => {
     expect(await roundTripChanges(opts)).toEqual({
       filter: opts.filter ?? {},
       includeRecords: opts.includeRecords ?? false,
-      includeUnlisted: opts.includeUnlisted ?? false,
     });
   });
 });
@@ -322,7 +326,8 @@ async function roundTripCreate(
   await adapter.createRecord(record);
 
   const [, init] = mockFetch.mock.calls[1] as [string, RequestInit];
-  return createOptionsFromWireRecord(JSON.parse(init.body as string), session, OWNER);
+  const server = await Stack.open(await MemoryAdapter.open({ ownerEntityId: OWNER }));
+  return createOptionsFromWireRecord(JSON.parse(init.body as string), server.asActor(session));
 }
 
 const OWNER = 'did:key:zOwner';

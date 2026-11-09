@@ -37,16 +37,18 @@ const change = (overrides: Partial<RecordChange> = {}): RecordChange => ({
 
 const discovery = (overrides: Partial<DiscoveryResponse> = {}): DiscoveryResponse => ({
   version: WIRE_PROTOCOL_VERSION,
-  entityId: OWNER,
+  ownerEntityId: OWNER,
   capabilities: {
     filter: {
       content: 'path',
       contentPresent: true,
+      contentByType: true,
       search: true,
     },
     sort: {
       fields: ['createdAt'],
       contentField: true,
+      contentFieldByType: true,
     },
     limits: {
       attachmentBytes: null,

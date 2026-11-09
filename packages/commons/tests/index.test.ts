@@ -1,5 +1,5 @@
 import { describe, test, expect, expectTypeOf, beforeEach } from 'vitest';
-import { Stack, isCompatible } from '@haverstack/core';
+import { Stack, StackValidationError, isCompatible } from '@haverstack/core';
 import type { ContentOf, TypeSchema } from '@haverstack/core';
 import { MemoryAdapter } from '@haverstack/core/testing';
 import {
@@ -13,16 +13,18 @@ import {
   IMAGE,
   POST,
   SITE,
+  POLL,
+  VOTE,
   defineCommonsTypes,
 } from '../src/index.js';
 
-const ALL = [NOTE, BOOKMARK, TASK, CONTACT, ARTICLE, PLACE, PAGE, IMAGE, POST, SITE];
+const ALL = [NOTE, BOOKMARK, TASK, CONTACT, ARTICLE, PLACE, PAGE, IMAGE, POST, SITE, POLL, VOTE];
 
 let adapter: MemoryAdapter;
 let stack: Stack;
 
 beforeEach(async () => {
-  adapter = await MemoryAdapter.open({ ownerEntityId: 'owner-123', timezone: 'UTC' });
+  adapter = await MemoryAdapter.open({ ownerEntityId: 'owner-123' });
   stack = await Stack.open(adapter);
 });
 
@@ -82,6 +84,34 @@ describe('read-compat cores', () => {
       title: { kind: 'string', required: true },
       baseUrl: { kind: 'string', required: true },
     },
+    [POLL.id]: {
+      question: { kind: 'string', required: true },
+      options: {
+        kind: 'array',
+        required: true,
+        items: {
+          kind: 'object',
+          properties: {
+            id: { kind: 'string', required: true },
+            label: { kind: 'string', required: true },
+          },
+        },
+      },
+    },
+    [VOTE.id]: {
+      pollId: { kind: 'record-ref', required: true },
+      choices: {
+        kind: 'array',
+        required: true,
+        items: {
+          kind: 'object',
+          properties: {
+            optionId: { kind: 'string', required: true },
+            score: { kind: 'number', required: true },
+          },
+        },
+      },
+    },
   };
 
   test('every schema satisfies its documented read-compat core', () => {
@@ -95,6 +125,36 @@ describe('IMAGE', () => {
   test('file is a required file-ref field, schema-enforced', async () => {
     const defined = await defineCommonsTypes(stack, [IMAGE]);
     expect(defined[0].schema.file).toEqual({ kind: 'file-ref', required: true });
+  });
+});
+
+describe('POLL and VOTE', () => {
+  test('a ballot without a poll is refused at write time', async () => {
+    await defineCommonsTypes(stack, [VOTE]);
+    await expect(
+      stack.create(VOTE.id, { choices: [{ optionId: 'a', score: 1 }] }),
+    ).rejects.toBeInstanceOf(StackValidationError);
+  });
+
+  test("a poll's ballots are one content query on pollId", async () => {
+    await defineCommonsTypes(stack, [POLL, VOTE]);
+    const poll = await stack.collection(POLL).create({
+      question: 'Lunch?',
+      options: [
+        { id: 'a', label: 'Tacos' },
+        { id: 'b', label: 'Ramen' },
+      ],
+    });
+    const other = await stack.collection(POLL).create({
+      question: 'Dinner?',
+      options: [{ id: 'a', label: 'Pizza' }],
+    });
+    const votes = stack.collection(VOTE);
+    await votes.create({ pollId: poll.id, choices: [{ optionId: 'b', score: 1 }] });
+    await votes.create({ pollId: other.id, choices: [{ optionId: 'a', score: 1 }] });
+
+    const { records } = await votes.query({ filter: { content: { pollId: poll.id } } });
+    expect(records.map((r) => r.content.choices)).toEqual([[{ optionId: 'b', score: 1 }]]);
   });
 });
 
@@ -118,13 +178,14 @@ describe('typed handles', () => {
 
   test('typed create and get round-trip through the constant', async () => {
     await defineCommonsTypes(stack, [TASK]);
-    const created = await stack.create(TASK, { title: 'Write tests', done: false });
+    const tasks = stack.collection(TASK);
+    const created = await tasks.create({ title: 'Write tests', done: false });
     expectTypeOf(created.content.done).toEqualTypeOf<boolean>();
 
-    const read = await stack.get(TASK, created.id);
+    const read = await tasks.get(created.id);
     expect(read?.content).toEqual({ title: 'Write tests', done: false });
 
     // @ts-expect-error a required field is missing
-    await expect(stack.create(TASK, { title: 'No done flag' })).rejects.toThrow();
+    await expect(tasks.create({ title: 'No done flag' })).rejects.toThrow();
   });
 });
