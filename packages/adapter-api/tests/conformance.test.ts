@@ -236,7 +236,7 @@ describe('auth handshake fixtures', () => {
     )!;
     const DELEGATED_DISCOVERY = {
       ...DISCOVERY,
-      auth: { methods: ['did-challenge', 'ucan-delegation'] },
+      auth: { methods: ['did-challenge'], delegations: ['ucan/dlg@1.0.0'] },
     };
     const delegatedCredential = async () => ({
       ...didCredentialFromKeypair(await generateDidKeypair()),

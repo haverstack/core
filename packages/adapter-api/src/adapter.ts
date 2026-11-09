@@ -64,7 +64,7 @@ import {
   supportsHead,
   WIRE_ERROR_STATUS,
   supportsDidChallenge,
-  supportsUcanDelegation,
+  supportsDelegation,
   CHANGE_FRAME_READY,
   CHANGE_FRAME_RECORD,
   CHANGE_FRAME_RESET,
@@ -353,10 +353,10 @@ export class APIAdapter implements StackAdapter {
             'credential has no handshake to perform against it.',
         );
       }
-      if (opts.credential.delegation && !supportsUcanDelegation(discovery)) {
+      if (opts.credential.delegation && !supportsDelegation(discovery)) {
         throw new APIAdapterAuthUnsupportedError(
-          `Server at "${baseUrl}" does not advertise the "ucan-delegation" auth method; a ` +
-            'credential carrying a delegation cannot act for its subject there.',
+          `Server at "${baseUrl}" does not accept "ucan/dlg@1.0.0" delegations; a ` +
+            'credential carrying one cannot act for its subject there.',
         );
       }
       token = (await performHandshake(baseUrl, opts.credential)).token;

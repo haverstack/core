@@ -108,6 +108,7 @@ export class ScopeAuthority {
         subject === null
           ? Promise.resolve(new Map())
           : loadRosterRoles((q) => this.stack.query(q), subject),
+      families: async () => new Set((await this.stack.listTypes()).map((t) => baseIdOf(t.id))),
       reach: (verb, snapshot) => this.buildReach(verb, snapshot),
     });
   }
@@ -209,11 +210,10 @@ export class ScopeAuthority {
    * reaches no further than a grant naming the principal could.
    * See docs/spec/access-control.md § Signed delegations.
    */
-  private async familiesDelegated(verb: ReachVerb): Promise<BaseId[]> {
+  private async familiesDelegated(verb: ReachVerb, snapshot: AuthoritySnapshot): Promise<BaseId[]> {
     const delegation = this.delegation;
     if (!delegation) return [];
-    const families = new Set((await this.stack.listTypes()).map((t) => baseIdOf(t.id)));
-    return [...families].filter(
+    return [...(await snapshot.families())].filter(
       (family) => !UNGRANTABLE_SYSTEM_TYPES.has(family) && delegation.allows(verb, family),
     );
   }
@@ -238,7 +238,7 @@ export class ScopeAuthority {
                 own ? [any, own] : [any],
                 snapshot,
               )),
-              ...(await this.familiesDelegated(verb)),
+              ...(await this.familiesDelegated(verb, snapshot)),
             ]),
           ],
         };

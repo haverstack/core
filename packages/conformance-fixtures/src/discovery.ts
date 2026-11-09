@@ -123,11 +123,12 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
   {
     name: 'discovery-advertises-delegated-auth',
     description:
-      'A server whose handshake accepts a signed delegation chain lists "ucan-delegation" beside ' +
-      '"did-challenge", which it extends: the same two endpoints, with `delegation` allowed on ' +
-      'POST /auth/token. A client holding a delegation checks for it at open(), since a server ' +
-      'without it refuses the field as unrecognized input — see docs/spec/wire-format.md ' +
-      '§ Advertising it.',
+      'A server whose handshake accepts a signed delegation chain names the formats it accepts ' +
+      'in `auth.delegations`, by envelope tag. It modifies "did-challenge" rather than being a ' +
+      'way to earn a token of its own: the same two endpoints, with `delegation` allowed on ' +
+      'POST /auth/token. A client holding a delegation checks for its format at open(), since ' +
+      'a server without it refuses the field as unrecognized input — see ' +
+      'docs/spec/wire-format.md § Advertising it.',
     method: 'GET',
     path: '/.well-known/stack',
     responseStatus: 200,
@@ -151,7 +152,7 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
           contentBytes: 1048576,
         },
       },
-      auth: { methods: ['did-challenge', 'ucan-delegation'] },
+      auth: { methods: ['did-challenge'], delegations: ['ucan/dlg@1.0.0'] },
     },
   },
   {

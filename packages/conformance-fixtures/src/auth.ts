@@ -129,7 +129,7 @@ export const authTokenFixtures: ConformanceFixture<
       'A handshake carrying `delegation` — a UCAN chain, base64url envelopes root first, from a ' +
       'subject to the DID that signs — issues a token acting for that subject. The signature ' +
       'proves the principal; the chain, signed by the subject, is the only way a subject reaches ' +
-      'the session, so a client never names one. A server advertising "ucan-delegation" ' +
+      'the session, so a client never names one. A server listing "ucan/dlg@1.0.0" in `auth.delegations` ' +
       'validates the chain (signatures, alignment, time bounds, revocation), requires it to end ' +
       'at `did` and begin elsewhere, keeps it with the token to validate again on every request, ' +
       "and caps the token at the chain's earliest expiry.",

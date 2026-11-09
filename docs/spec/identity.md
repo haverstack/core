@@ -203,7 +203,9 @@ Token issuance is not an out-of-band secret handoff, and the handshake that repl
 
 1. Client requests a nonce for its DID: `POST /auth/challenge { did }` → server responds `{ nonce, expiresAt }`.
 2. Client signs a domain-separated payload binding the server's origin, its DID and the nonce — `buildAuthChallengePayload()` builds it, `signAuthChallenge()` signs it — and sends the signature back: `POST /auth/token { did, nonce, signature }`.
-3. Server verifies against the payload it builds itself (`verifyAuthChallenge()` — for `did:key` this requires no lookup at all; the public key is decoded from the DID string. Any other DID verifies only through a `verifyDid` callback the server supplies, which resolves that method's current keys, and is otherwise refused) and, on success, calls `StackTokenStore.createToken({ subjectId: did })` and returns the bearer token.
+3. Server verifies the signature against the payload it builds itself, with `verifyAuthChallenge()`, and, on success, calls `StackTokenStore.createToken({ subjectId: did })` and returns the bearer token.
+
+**Which keys a server authenticates is one answer.** Without help, `verifyAuthChallenge()` verifies an Ed25519 `did:key`, which needs no lookup since the public key is decoded from the DID string, and refuses any other DID. A server may supply a `verifyDid` callback, which then decides every DID. A server accepting [signed delegations](./access-control.md#signed-delegations) passes `@haverstack/ucan`'s `verifyDidKey()`, so it authenticates exactly the key types it accepts as issuers: Ed25519, P-256 and secp256k1.
 
 `@haverstack/core/wire` supplies both halves of steps 2 and 3 and runs no server; a server implementation brings the endpoints, nonce storage and single-use enforcement.
 

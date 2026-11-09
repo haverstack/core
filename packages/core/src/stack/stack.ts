@@ -74,6 +74,7 @@ import type {
   RecordId,
   Actor,
   SignedDelegation,
+  TokenSession,
   ActorOptions,
   ChangeActor,
   RecordChange,
@@ -367,14 +368,15 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Whether the owner has revoked the signed delegation `cid` names: a live
-   * `_revocation` Record holds it. A server passes this as a chain
-   * validator's revocation check. See docs/spec/access-control.md
-   * § Revoking a delegation.
+   * Whether the signed delegation `cid` names is revoked: a live
+   * `_revocation` Record names it, written by the owner or by one of
+   * `issuers`, the identities that issued it or any delegation upstream of
+   * it in its chain. A server passes this as a chain validator's
+   * revocation check. See docs/spec/access-control.md § Revoking a delegation.
    */
-  async isDelegationRevoked(cid: string): Promise<boolean> {
+  async isDelegationRevoked(cid: string, issuers: readonly EntityId[] = []): Promise<boolean> {
     this.assertOpen();
-    return isRevokedCid(this, cid);
+    return isRevokedCid(this, cid, issuers);
   }
 
   get capabilities(): StackCapabilities {
@@ -402,6 +404,14 @@ export class Stack implements StackClient {
   asActor(actor: Actor, opts: { delegation?: SignedDelegation } = {}): ScopedStack {
     const { subjectId, principalId = subjectId } = normalizeActor(actor)!;
     const { delegation } = opts;
+    // A session issued on a chain carries authority only through it; passed
+    // without one, it would quietly act with less than it was issued.
+    if ((actor as TokenSession).delegationChain && !delegation) {
+      throw new StackBadRequestError(
+        'This session was issued on a delegation chain: validate it and pass the result as ' +
+          '{ delegation }.',
+      );
+    }
     if (delegation) {
       if (principalId === subjectId) {
         throw new StackBadRequestError(

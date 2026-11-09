@@ -59,7 +59,7 @@ export const AUTH_PAYLOAD_LABEL = 'haverstack-auth-v1';
  * newline-delimited payload, so the charset is what keeps a nonce from
  * spanning fields. base64url, hex and UUID all satisfy it.
  */
-const NONCE_FORMAT = /^[A-Za-z0-9_-]+$/;
+export const NONCE_FORMAT = /^[A-Za-z0-9_-]+$/;
 
 export type AuthChallenge = {
   /** The server's own public origin, e.g. "https://stack.example.com". */
@@ -123,10 +123,11 @@ export const signAuthChallenge = async (
 ): Promise<Uint8Array> => signWithDid(privateKey, buildAuthChallengePayload(challenge));
 
 /**
- * Verifies a signature by a DID core cannot decode itself: one whose keys
- * live in a DID document or log rather than in the DID string. Whatever
- * implements it resolves the DID's current keys and checks the signature
- * against them. See docs/spec/identity.md § Authentication: challenge–response.
+ * Verifies a signature by a DID: whatever key types and DID methods its
+ * implementer accepts, resolving a method whose keys live in a document or
+ * log rather than in the DID string. `@haverstack/ucan`'s verifyDidKey()
+ * covers every did:key UCAN accepts.
+ * See docs/spec/identity.md § Authentication: challenge–response.
  */
 export type DidSignatureVerifier = (
   did: string,
@@ -138,8 +139,10 @@ export type DidSignatureVerifier = (
  * Verify a challenge signature. Answers only "this signature was made by
  * the key behind this DID, for this origin and nonce" — whether the nonce
  * was ever issued, is unexpired, and has not already been spent is the
- * server's to track, and all three matter. A did:key is verified here; any
- * other DID only through `verifyDid`, and is otherwise refused.
+ * server's to track, and all three matter. `verifyDid`, when given, is the
+ * one answer for every DID, so a server checks exactly the keys it accepts
+ * elsewhere; without it, an Ed25519 did:key is verified here and any other
+ * DID is refused.
  */
 export const verifyAuthChallenge = async (
   challenge: AuthChallenge,
@@ -148,9 +151,8 @@ export const verifyAuthChallenge = async (
 ): Promise<boolean> => {
   const payload = buildAuthChallengePayload(challenge);
   try {
-    if (!isValidDidKey(challenge.did)) {
-      return opts.verifyDid ? await opts.verifyDid(challenge.did, signature, payload) : false;
-    }
+    if (opts.verifyDid) return await opts.verifyDid(challenge.did, signature, payload);
+    if (!isValidDidKey(challenge.did)) return false;
     return await verifyDidSignature(challenge.did, signature, payload);
   } catch {
     // A DID whose key can't be decoded verifies nothing — a false answer,

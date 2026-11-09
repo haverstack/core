@@ -102,7 +102,8 @@ describe('revoking through the stack', () => {
       cmd: '/haverstack/record',
     });
     const chain = [root.bytes, leaf.bytes];
-    const isRevoked = (cid: string) => stack.isDelegationRevoked(cid);
+    const isRevoked = (cid: string, issuers: readonly string[]) =>
+      stack.isDelegationRevoked(cid, issuers);
 
     await expect(
       acceptDelegation(chain, device.did, { now: NOW, isRevoked }),
@@ -117,5 +118,35 @@ describe('revoking through the stack', () => {
     await expect(
       acceptDelegation(chain, device.did, { now: NOW, isRevoked }),
     ).resolves.toBeDefined();
+  });
+
+  // Whoever granted the authority can withdraw it, not only the owner.
+  it("the subject who signed revokes their own delegation; a stranger's revocation counts for nothing", async () => {
+    const owner = makeSigner();
+    const member = makeSigner();
+    const stranger = makeSigner();
+    const app = makeSigner();
+    const stack = await Stack.open(await MemoryAdapter.open({ ownerEntityId: owner.did }));
+    for (const who of [member, stranger]) {
+      await stack.grantType('_revocation', {
+        actions: ['create'],
+        grantee: { kind: 'entity', entityId: who.did },
+      });
+    }
+    const d = await issue(member, { audience: app.did, cmd: '/haverstack/record' });
+    const isRevoked = (cid: string, issuers: readonly string[]) =>
+      stack.isDelegationRevoked(cid, issuers);
+
+    await stack.asEntity(stranger.did).create('_revocation@1', { cid: d.cid });
+    await expect(
+      acceptDelegation([d.bytes], app.did, { now: NOW, isRevoked }),
+    ).resolves.toBeDefined();
+
+    await stack.asEntity(member.did).create('_revocation@1', { cid: d.cid });
+    await expect(
+      acceptDelegation([d.bytes], app.did, { now: NOW, isRevoked }),
+    ).rejects.toMatchObject({
+      code: 'revoked',
+    });
   });
 });

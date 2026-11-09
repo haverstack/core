@@ -10,6 +10,7 @@
 import { base58btc } from 'multiformats/bases/base58';
 import { UcanError } from './errors.js';
 import type { SignatureAlgorithm } from './varsig.js';
+import { verifySignature } from './signature.js';
 
 export type IssuerKey = {
   alg: SignatureAlgorithm;
@@ -54,4 +55,25 @@ export const didKeyFromPublicKey = (alg: SignatureAlgorithm, publicKey: Uint8Arr
     throw new UcanError('malformed', `${alg} public key must be ${type.length} bytes.`);
   }
   return `did:key:${base58btc.encode(Uint8Array.from([...type.prefix, ...publicKey]))}`;
+};
+
+/**
+ * Verify a signature by any did:key UCAN accepts: Ed25519, P-256 or
+ * secp256k1. The same check every signature in this package makes, shaped
+ * as core's `DidSignatureVerifier`, so a server accepting delegations
+ * passes it to the handshake as `verifyDid` and authenticates exactly the
+ * keys it accepts as issuers. Any other DID, or a key that fails to
+ * decode, verifies nothing.
+ */
+export const verifyDidKey = async (
+  did: string,
+  signature: Uint8Array,
+  payload: Uint8Array,
+): Promise<boolean> => {
+  try {
+    const key = parseDidKey(did);
+    return key !== null && verifySignature(key.alg, key.publicKey, signature, payload);
+  } catch {
+    return false;
+  }
 };

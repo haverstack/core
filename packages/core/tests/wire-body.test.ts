@@ -85,15 +85,25 @@ describe('parseAuthTokenBody', () => {
     );
   });
 
-  test('reads a delegation chain of base64url envelopes, and leaves it absent when not sent', () => {
+  test('reads a delegation chain of base64url envelopes when the server accepts one', () => {
     const delegated = { ...body, delegation: ['glhA', 'gl-_'] };
-    expect(parseAuthTokenBody(delegated)).toEqual(delegated);
-    expect(parseAuthTokenBody(body)).not.toHaveProperty('delegation');
+    expect(parseAuthTokenBody(delegated, { delegation: true })).toEqual(delegated);
+    expect(parseAuthTokenBody(body, { delegation: true })).not.toHaveProperty('delegation');
+  });
+
+  // A server that doesn't advertise delegations must not issue an
+  // undelegated token for a request asking to act for someone.
+  test('a delegation is unrecognized input unless the server accepts one', () => {
+    expect(() => parseAuthTokenBody({ ...body, delegation: ['glhA'] })).toThrow(
+      new StackBadRequestError('Unknown key in auth token body: delegation'),
+    );
   });
 
   test('a delegation must be a non-empty array of base64url strings', () => {
     for (const delegation of [[], 'glhA', ['gl+/'], [1], null]) {
-      expect(pathOf(() => parseAuthTokenBody({ ...body, delegation }))).toBe('delegation');
+      expect(pathOf(() => parseAuthTokenBody({ ...body, delegation }, { delegation: true }))).toBe(
+        'delegation',
+      );
     }
   });
 

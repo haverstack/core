@@ -215,7 +215,7 @@ await stack.revokeType('com.example/comment', {
 ### What a grant covers
 
 - **No wildcard `baseId`**: there is no `*` or catch-all. Every grant is opt-in per type. Adding a new type never implicitly inherits existing grants — it starts default-deny.
-- **Some system types can't be granted at all**: `grantType()` refuses `_grant`, `_config`, `_app`, `_install` and `_revocation`. Each would hand the grantee the machinery the model rests on — minting their own grants, rewriting stack ownership, registering an app card claiming a DID that isn't theirs (see [App](./identity.md#app)), approving an app's install (see [App installs](./apps.md#the-_install-record)), or deciding which delegations the stack honors (see [Revoking a delegation](#revoking-a-delegation)). Other reserved types (`_attachment`, `_entity`, `_group`) stay grantable. The refusal is enforced [again at evaluation](#refused-at-the-write-and-again-at-evaluation): a `_grant` Record naming one of these families confers nothing, however it came to exist.
+- **Some system types can't be granted at all**: `grantType()` refuses `_grant`, `_config`, `_app` and `_install`. Each would hand the grantee the machinery the model rests on — minting their own grants, rewriting stack ownership, registering an app card claiming a DID that isn't theirs (see [App](./identity.md#app)), or approving an app's install (see [App installs](./apps.md#the-_install-record)). Other reserved types (`_attachment`, `_entity`, `_group`) stay grantable. The refusal is enforced [again at evaluation](#refused-at-the-write-and-again-at-evaluation): a `_grant` Record naming one of these families confers nothing, however it came to exist.
 - **A `_grant` Record is only writable by the owner acting alone.** Refusing grants _on_ `_grant` closes one route to authority; record-level `write` on a grant Record is another, reaching the same escalation by editing what an existing grant confers — its `actions`, `baseId`, or `grantee` — rather than by minting a fresh one. So `ScopedStack` refuses every write verb — `patchContent()`, `setParent()`, `setUnlisted()`, `editAssociations()`, `setAssociations()`, `editAccess()`, `setAccess()`, `delete()`, `undelete()` and `restoreVersion()` — on any `_grant` Record with `StackPermissionError`, whatever the Record's own `permissions` say, and delegation does not carry it (see [Delegation](#delegation-principal-and-subject)). Nothing legitimate is lost: `grantType()` and `revokeType()` live on `Stack`, never on `StackClient`, so a scoped caller has no business writing one. An `_install` Record is fenced on the same terms, since it decides which grants exist ([App installs § The `_install` record](./apps.md#the-_install-record)).
 - **`commitMigration()` is owner-acting-alone, and no grant substitutes for it.** Moving a Record between type families is not something record-level `write` or an `update` grant confers, in any combination: `ScopedStack.commitMigration()` refuses every requester but the owner acting alone, delegation included. The one exception is an installed app migrating within the families its install claims, to a version the owner approved — see [App installs § Migrating an installed app's types](./apps.md#migrating-an-installed-apps-types). This mirrors the bulk path — `migrateAll()` lives on `Stack` and is absent from `StackClient` for the same reason `grantType()`/`revokeType()` are — so the per-record verb carries the restriction the family-wide one already had, instead of introducing a grant model beside it.
 
@@ -303,6 +303,8 @@ const session = await tokens.lookupToken(bearer); // { subjectId, principalId }
 const scoped = stack.asActor(session);
 ```
 
+A session a delegated token names also carries the `delegationChain` it was issued on, and the server passes the chain's validated result beside it as `{ delegation }` ([Signed delegations](#signed-delegations)). `asActor()` refuses such a session without one, with `StackBadRequestError`, rather than letting it act with less authority than it was issued.
+
 Both identities are DIDs, so a positional pair would leave nothing to catch a swap — and a swapped pair is undetectable in the undelegated case, where the two are equal. It would surface only once delegation is in use, as authority no longer fenced by the app's grants and every write attributed to the app rather than the person it acted for. Naming both fields removes the order to get wrong.
 
 **Unconditional owner access splits across both identities**, rather than belonging to one. It answers _what data is reachable_ against the subject — an owner subject passes every record-level permission check — and _who may exercise a privileged verb_ against the principal. So an app delegated for the owner reaches what the owner can, on the types it was granted, and still cannot purge, manage a group, or decide who else sees a Record.
@@ -319,7 +321,6 @@ Read in the other direction, an **owner principal** acting for someone else — 
 | The `restoreVersion()` reference-gate exemption               | The gate resolves against the subject, whose reach a restore would widen                                             |
 | Setting an `_app` card's `did` or `appId`                     | Names who may speak as what — the owner's trust decision, not a reach lent to a subject holding record-level `write` |
 | Writing a `_grant` Record                                     | The Record _is_ authority; deciding it is the owner's call, and no scoped caller writes one legitimately             |
-| Writing a `_revocation` Record                                | Decides which signed delegations the stack honors: the owner's call, as for a grant                                  |
 | Claiming the owner's own DID on an `_entity` card             | `ownerProfile` adopts whichever card holds it, so the stack's own profile is not a reach lent to a subject           |
 | The owner's exemption from the `_attachment@1` create refusal | The refusal fences a guessed `fileId`, and the uploader clause that would then match resolves against the subject    |
 
@@ -364,7 +365,7 @@ A subject can name the software acting for it by signing a delegation, rather th
 **It counts on the principal's side, beside grants naming the principal.** For each verb, the families a delegation allows join those the principal's direct grants convey, in the fence a [reach](#reach) carries. It is the standing a direct grant gives, conferred by the person the app acts for instead of by the owner, and it changes nothing else:
 
 - **The subject's side is untouched,** so the intersection holds: a delegation lends the principal no reach its subject lacks, the bound an app riding its user's identity already has.
-- **Ungrantable families stay out.** A delegation never admits `_grant`, `_config`, `_app`, `_install` or `_revocation`, whatever it allows, since a signature reaches no further than a grant could.
+- **Ungrantable families stay out.** A delegation never admits `_grant`, `_config`, `_app` or `_install`, whatever it allows, since a signature reaches no further than a grant could.
 - **No privileged verb rides on it.** Resharing, `_group` management and the verbs in the table above ask for standing, not a grant, and a delegation is neither.
 
 **Its verbs are the grant actions without the suffix:** `create`, `read`, `update` and `delete`, since `-own` and `-any` mean the same on the principal's side. As UCAN commands they are `/haverstack/record/create`, `/haverstack/record/read`, `/haverstack/record/update` and `/haverstack/record/delete`, each invoked with `{ baseId }` for a delegation's policy to constrain.
@@ -378,21 +379,23 @@ A subject can name the software acting for it by signing a delegation, rather th
 
 ### Revoking a delegation
 
-**The owner revokes a delegation by writing a `_revocation` Record naming it.** Its content is the delegation's CID, the one UCAN fixes for every token (CIDv1, DAG-CBOR, SHA-256, base58btc, so it begins `zdpu`):
+**Whoever grants authority can withdraw it.** A delegation is revoked by a `_revocation` Record naming it, written by the stack owner or by an identity that issued it or any delegation upstream of it in its chain, which is who UCAN lets revoke. Its content is the delegation's CID, the one UCAN fixes for every token (CIDv1, DAG-CBOR, SHA-256, base58btc, so it begins `zdpu`):
 
 ```ts
 type RevocationContent = { cid: string };
 ```
 
-A delegation is refused while a live `_revocation` names it, and `Stack.isDelegationRevoked(cid)` answers that. A server passes it to chain validation as the revocation check, at `/auth/token` and on every request a delegated token makes, so revoking takes effect on the next request. Every link of a chain is checked, so revoking a delegation also cuts off everything delegated from it.
+**The writer is read from `createdBy`**, which a scoped write always stamps from the session and an unscoped one, the owner's own, leaves absent. A revocation whose writer is neither the owner nor an upstream issuer confers nothing, so it is not refused at the write: a stack can't tell which chains a CID belongs to until one is presented.
 
-It is the [same model as a grant](#listing-and-revoking), held to the same rules:
+A delegation is refused while a live `_revocation` naming it counts, and `Stack.isDelegationRevoked(cid, issuers)` answers that, where `issuers` are the identities upstream of it in the chain being checked. A server passes it to chain validation as the revocation check, at `/auth/token` and on every request a delegated token makes, so revoking takes effect on the next request. Every link of a chain is checked, so revoking a delegation also cuts off everything delegated from it.
 
-- **Recoverable.** Deleting the Record lifts the refusal and `undelete()` restores it, as for the other authority family. Unlisted ones count, since listing decides nothing about authority.
-- **The owner's alone.** `_revocation` is [ungrantable](#what-a-grant-covers), only the owner acting alone writes one, and no delegation carries that.
+It is an ordinary family, held to the [same model as a grant](#listing-and-revoking):
+
+- **Who may write one is the owner's grant to make.** A subject who signs delegations needs `create` on `_revocation` to take them back here; a default grant gives it to everyone, which is safe because a revocation only counts for its own writer's delegations.
+- **Recoverable.** Deleting the Record lifts the refusal and `undelete()` restores it, as for a grant, by whoever may delete it. Unlisted ones count, since listing decides nothing about authority.
 - **Fixed to one delegation.** `cid` is [immutable](./data-model.md#immutable-fields): refusing a different delegation is a new Record, so lifting one refusal never happens silently by editing it into another.
 
-**This is the stack's refusal, not the issuer's.** UCAN also defines revocations its issuers sign and gossip, which are permanent; those are not accepted here, because that format is not final and a revocation, once exchanged between stacks, has to stay readable forever. A delegation's issuer limits it with `exp` instead.
+**Revocations stay in the stack that holds them.** UCAN also defines revocations its issuers sign and pass between parties, which are permanent; those are not accepted, because that format is not final and a revocation exchanged between stacks has to stay readable forever. An issuer revokes in each stack its delegation is used, and limits it with `exp` everywhere else.
 
 ### Reach
 
@@ -456,7 +459,7 @@ Each [write verb](./data-model.md#mutations) moves one aspect, and passes exactl
 | `setParent`                              | the same, plus read access to the destination                                                                            |
 | `editAccess`, `setAccess`, `setUnlisted` | owner or the Record's creator, holding [read](#write-implies-read), asked of both sides of a delegation                  |
 
-The family fences apply to every verb alike, `create()` included — asked of the Record it would make — whatever the table says: a `_group` Record is writable only by an admin or the owner — its roster is its associations, so on a group the association verbs carry the admin gate — a `_grant`, `_install` or `_revocation` Record only by the owner acting alone, and an `_app` card's `did`/`appId`, like an `_entity` card naming the owner's own DID, only by the owner acting alone (see [Identity § DID bindings](./identity.md#did-bindings)). A content fence is asked of the content a write would leave, by whichever verb writes it — `create()`, `patchContent()`, `restoreVersion()` and `commitMigration()` alike — and compared value-wise, so re-sending a value the Record already holds claims nothing.
+The family fences apply to every verb alike, `create()` included — asked of the Record it would make — whatever the table says: a `_group` Record is writable only by an admin or the owner — its roster is its associations, so on a group the association verbs carry the admin gate — a `_grant` or `_install` Record only by the owner acting alone, and an `_app` card's `did`/`appId`, like an `_entity` card naming the owner's own DID, only by the owner acting alone (see [Identity § DID bindings](./identity.md#did-bindings)). A content fence is asked of the content a write would leave, by whichever verb writes it — `create()`, `patchContent()`, `restoreVersion()` and `commitMigration()` alike — and compared value-wise, so re-sending a value the Record already holds claims nothing.
 
 **No call can combine gates**, so none can bootstrap its own authority: widening access cannot satisfy the read check on a destination, and naming oneself `admin` in a roster cannot satisfy the admin check the same write must pass. A caller who means to do several of these does each one, and is held to each gate in turn.
 

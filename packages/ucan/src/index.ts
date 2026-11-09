@@ -9,7 +9,13 @@
 
 export { UcanError, type UcanErrorCode } from './errors.js';
 export { encodeVarsigHeader, decodeVarsigHeader, type SignatureAlgorithm } from './varsig.js';
-export { parseDidKey, didKeyFromPublicKey, stripFragment, type IssuerKey } from './did-key.js';
+export {
+  parseDidKey,
+  didKeyFromPublicKey,
+  stripFragment,
+  verifyDidKey,
+  type IssuerKey,
+} from './did-key.js';
 export { verifySignature } from './signature.js';
 export { isValidCommand, commandCovers } from './command.js';
 export {

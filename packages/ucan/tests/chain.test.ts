@@ -105,6 +105,15 @@ describe('validateChain', () => {
     const root = await issue(alice, { audience: app.did });
     const leaf = await issue(app, { subject: alice.did });
     expect(await codeOf([root, leaf], { isRevoked: (cid) => cid === root.cid })).toBe('revoked');
+    const asked: [string, readonly string[]][] = [];
+    await codeOf([root, leaf], {
+      now: NOW,
+      isRevoked: (cid, issuers) => (asked.push([cid, issuers]), false),
+    });
+    expect(asked).toEqual([
+      [root.cid, [alice.did]],
+      [leaf.cid, [alice.did, app.did]],
+    ]);
   });
 
   it('resolves non-did:key issuers through resolveKey, and refuses them without it', async () => {

@@ -150,10 +150,10 @@ export type AttachmentContent = {
 };
 
 /**
- * Content for _revocation records: the stack owner's refusal of one signed
- * delegation, named by its CID. Refused while a live record names it;
- * deleting the record lifts the refusal. See docs/spec/access-control.md
- * § Revoking a delegation.
+ * Content for _revocation records: a refusal of one signed delegation,
+ * named by its CID. It counts when its writer is the stack owner or an
+ * issuer upstream in the delegation's chain; deleting it lifts the
+ * refusal. See docs/spec/access-control.md § Revoking a delegation.
  */
 export type RevocationContent = {
   /** The delegation's CID: CIDv1, DAG-CBOR, SHA-256, base58btc (`zdpu...`). */
@@ -182,6 +182,6 @@ export const SYSTEM_TYPES = {
   CONFIG: '_config',
   /** An owner's approval of an app's manifest. See InstallContent. */
   INSTALL: '_install',
-  /** An owner's refusal of a signed delegation. See RevocationContent. */
+  /** A refusal of a signed delegation. See RevocationContent. */
   REVOCATION: '_revocation',
 } as const;

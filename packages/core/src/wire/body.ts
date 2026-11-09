@@ -20,6 +20,7 @@
 import { ARGUMENTS_INVALID, StackBadRequestError, StackValidationError } from '../errors.js';
 import type { DefineTypeOptions } from '../stack/client.js';
 import { assertKnownKeys, validateAssociation } from '../associations/validation.js';
+import { NONCE_FORMAT } from './auth.js';
 import type { AppManifest } from '../install.js';
 import type {
   AssociationEdit,
@@ -106,19 +107,25 @@ export function parseAuthChallengeBody(body: unknown): WireAuthChallengeRequest 
 
 /**
  * Parse a `POST /auth/token` body. A subject is never named here: it comes
- * only from a signed `delegation`, so a `subjectId` key is refused rather
- * than read as a request the handshake cannot grant. Whether the chain
- * verifies is the server's `invalid_delegation`, not a parse failure.
+ * only from a signed `delegation`, which a server accepts only when it
+ * advertises delegations and says so with `{ delegation: true }`; otherwise
+ * the key is unrecognized input like any other. Whether a chain verifies
+ * is the server's `invalid_delegation`, not a parse failure.
+ * See docs/spec/wire-format.md § The handshake.
  */
-export function parseAuthTokenBody(body: unknown): WireAuthTokenRequest {
+export function parseAuthTokenBody(
+  body: unknown,
+  opts: { delegation?: boolean } = {},
+): WireAuthTokenRequest {
   const label = 'auth token body';
-  const b = requireKnownBody(body, ['did', 'nonce', 'signature', 'delegation'], label);
+  const keys = ['did', 'nonce', 'signature', ...(opts.delegation ? ['delegation'] : [])];
+  const b = requireKnownBody(body, keys, label);
   const delegation = b.delegation;
   if (delegation !== undefined) {
     if (
       !Array.isArray(delegation) ||
       delegation.length === 0 ||
-      !delegation.every((d) => typeof d === 'string' && BASE64URL.test(d))
+      !delegation.every((d) => typeof d === 'string' && NONCE_FORMAT.test(d))
     ) {
       fieldError('delegation', 'delegation must be a non-empty array of base64url strings');
     }
@@ -130,8 +137,6 @@ export function parseAuthTokenBody(body: unknown): WireAuthTokenRequest {
     ...(delegation !== undefined && { delegation: delegation as string[] }),
   };
 }
-
-const BASE64URL = /^[A-Za-z0-9_-]+$/;
 
 // -------------------------------------------------------
 // PATCH /records/:id/content, PATCH /entity/content

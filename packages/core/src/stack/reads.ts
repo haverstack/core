@@ -152,11 +152,21 @@ export async function loadInstallRecords(
 }
 
 /**
- * Whether a live `_revocation` names `cid`, unlisted included. A deleted
- * one refuses nothing, as a deleted `_grant` grants nothing. Takes the
- * unscoped Stack, as findAppCardByDid().
+ * Whether a live `_revocation` names `cid` and was written by someone it
+ * counts for: the owner, an unscoped write (which is the owner's), or one
+ * of `issuers`. Unlisted ones count; a deleted one refuses nothing, as a
+ * deleted `_grant` grants nothing. Takes the unscoped Stack, as
+ * findAppCardByDid(). See docs/spec/access-control.md § Revoking a delegation.
  */
-export async function isRevokedCid(stack: Stack, cid: string): Promise<boolean> {
+export async function isRevokedCid(
+  stack: Stack,
+  cid: string,
+  issuers: readonly EntityId[],
+): Promise<boolean> {
+  const counts = (record: StackRecord): boolean => {
+    const writer = record.createdBy?.subjectId;
+    return writer === undefined || writer === stack.ownerEntityId || issuers.includes(writer);
+  };
   const match = await findFirstMatch(
     (q) => stack.query(q),
     {
@@ -166,7 +176,7 @@ export async function isRevokedCid(stack: Stack, cid: string): Promise<boolean> 
         ...(filtersContent(stack.capabilities) && { content: { cid } }),
       },
     },
-    (r) => (r.content as RevocationContent).cid === cid,
+    (r) => (r.content as RevocationContent).cid === cid && counts(r),
   );
   return match !== undefined;
 }

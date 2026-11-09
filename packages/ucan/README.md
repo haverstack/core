@@ -55,7 +55,7 @@ authorizes(chain, '/haverstack/record/read', { baseId: 'commons/note' }); // tru
 - **Signatures:** Ed25519, P-256 and secp256k1, as UCAN requires. Ed25519 is verified under strict RFC 8032 rules, and ECDSA only in low-S compact form, so a token has one valid signature and one CID. Non-`did:key` issuers resolve through the `resolveKey` option.
 - **Principal alignment:** the first delegation is issued by its subject, and each later one by the previous audience, ignoring DID fragments.
 - **Time bounds:** every link's `nbf` and `exp`, with 60 seconds of clock skew by default.
-- **Revocation:** each link's CID against the `isRevoked` option.
+- **Revocation:** each link's CID against the `isRevoked` option, which also receives the issuers upstream of that link, who may revoke it.
 
 `authorizes()` then asks whether every link's command proves the one invoked and every link's policy accepts the arguments.
 
@@ -84,8 +84,10 @@ Haverstack's commands mirror its grant actions: `/haverstack/record/create`, `/h
 ```ts
 import { acceptDelegation } from '@haverstack/ucan';
 
-// The owner revokes a delegation by writing a `_revocation` Record naming its CID.
-const isRevoked = (cid: string) => stack.isDelegationRevoked(cid);
+// A delegation's issuer, or the owner, revokes it by writing a `_revocation` Record
+// naming its CID.
+const isRevoked = (cid: string, issuers: readonly string[]) =>
+  stack.isDelegationRevoked(cid, issuers);
 
 // At /auth/token, after the handshake signature verified for `did`:
 const accepted = await acceptDelegation(chain, did, { isRevoked });

@@ -27,8 +27,13 @@ export type ChainOptions = {
   clockSkew?: number;
   /** The key behind a DID that isn't a did:key, or null if it can't be resolved. */
   resolveKey?: (did: string) => Promise<IssuerKey | null>;
-  /** Whether a delegation, named by CID, has been revoked. */
-  isRevoked?: (cid: string) => boolean | Promise<boolean>;
+  /**
+   * Whether a delegation, named by CID, has been revoked by someone entitled
+   * to: `issuers` are the identities that issued it and every delegation
+   * upstream of it, root first, any of whom may revoke it, as UCAN
+   * Revocation has it.
+   */
+  isRevoked?: (cid: string, issuers: readonly string[]) => boolean | Promise<boolean>;
 };
 
 export type ValidChain = {
@@ -68,8 +73,10 @@ export const validateChain = async (
 
   let notBefore: number | undefined;
   let expiresAt: number | null = null;
+  const issuers: string[] = [];
   for (let i = 0; i < chain.length; i++) {
     const link = chain[i]!;
+    issuers.push(stripFragment(link.iss));
     if (link.sub === null) {
       throw new UcanError('misaligned', 'Powerline delegations (sub: null) are not accepted.');
     }
@@ -102,7 +109,7 @@ export const validateChain = async (
     if (!verifySignature(link.alg, key.publicKey, link.signature, link.signedBytes)) {
       throw new UcanError('signature', `Delegation ${link.cid} has an invalid signature.`);
     }
-    if (await options.isRevoked?.(link.cid)) {
+    if (await options.isRevoked?.(link.cid, [...issuers])) {
       throw new UcanError('revoked', `Delegation ${link.cid} has been revoked.`);
     }
 
