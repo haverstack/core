@@ -23,7 +23,7 @@ const delegation = await issueDelegation({
   issuer: credential, // { did, sign }
   audience: appDid,
   subject: credential.did,
-  cmd: '/haverstack/read',
+  cmd: '/haverstack/record/read',
   pol: [['like', '.baseId', 'commons/*']],
   exp: Math.floor(Date.now() / 1000) + 3600,
 });
@@ -46,7 +46,7 @@ chain.subject; // whose authority the chain carries
 chain.audience; // who may act under it
 chain.expiresAt; // the earliest exp, or null
 
-authorizes(chain, '/haverstack/read', { baseId: 'commons/note' }); // true
+authorizes(chain, '/haverstack/record/read', { baseId: 'commons/note' }); // true
 ```
 
 `validateChain()` takes the chain root first and checks:
@@ -73,7 +73,7 @@ const scoped = stack.asActor(
 );
 ```
 
-Haverstack's commands mirror its grant actions: `/haverstack/create`, `/haverstack/read`, `/haverstack/update` and `/haverstack/delete`, each with `{ baseId }` as the arguments a policy constrains. `/haverstack` covers all four. The delegation counts on the app's side of the stack's permission check, beside grants naming the app, and never reaches further than the subject's own grants. See [Access control § Signed delegations](../../docs/spec/access-control.md#signed-delegations).
+Haverstack's commands mirror its grant actions: `/haverstack/record/create`, `/haverstack/record/read`, `/haverstack/record/update` and `/haverstack/record/delete`, each with `{ baseId }` as the arguments a policy constrains. `/haverstack/record` covers all four and will never cover more, so delegating it can't later grant something new. The delegation counts on the app's side of the stack's permission check, beside grants naming the app, and never reaches further than the subject's own grants. See [Access control § Signed delegations](../../docs/spec/access-control.md#signed-delegations).
 
 `signedDelegation()` answers from the chain as it was validated. A server holding a session across requests validates the chain again on each, so expiry and revocation take effect.
 

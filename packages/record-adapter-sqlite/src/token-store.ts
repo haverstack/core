@@ -53,7 +53,7 @@ export class NativeTokenStore implements StackTokenStore {
 
   createToken(
     actor: Actor,
-    opts?: { label?: string; expiresAt?: Date },
+    opts?: Parameters<StackTokenStore['createToken']>[1],
   ): Promise<{ id: string; token: string }> {
     return this.tokens.createToken(actor, opts);
   }

@@ -82,7 +82,7 @@ describe('issue and decode', () => {
   it.each(ALGS)('round-trips a %s delegation that verifies', async (alg) => {
     const issuer = makeSigner(alg);
     const d = await issue(issuer, {
-      cmd: '/haverstack/read',
+      cmd: '/haverstack/record/read',
       pol: [['==', '.baseId', 'note']],
       exp: 2e9,
     });
@@ -90,7 +90,7 @@ describe('issue and decode', () => {
     expect(decoded).toMatchObject({
       iss: issuer.did,
       sub: issuer.did,
-      cmd: '/haverstack/read',
+      cmd: '/haverstack/record/read',
       exp: 2e9,
       alg,
       cid: d.cid,
@@ -136,12 +136,12 @@ describe('issue and decode', () => {
 
   it('refuses a tampered payload', async () => {
     const issuer = makeSigner();
-    const d = await issue(issuer, { cmd: '/haverstack/read' });
+    const d = await issue(issuer, { cmd: '/haverstack/record/read' });
     const [sig, sigPayload] = dagCbor.decode(d.bytes) as [
       Uint8Array,
       Record<string, { cmd: string }>,
     ];
-    sigPayload[DELEGATION_TAG].cmd = '/haverstack';
+    sigPayload[DELEGATION_TAG].cmd = '/haverstack/record';
     const tampered = await decodeDelegation(dagCbor.encode([sig, sigPayload]));
     expect(await codeOf(validateChain([tampered]))).toBe('signature');
   });

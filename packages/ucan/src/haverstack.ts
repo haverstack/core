@@ -2,11 +2,11 @@
  * Haverstack's commands
  * -------------------------------------------------------
  * A delegation reaches a stack's records through four commands, one per
- * grant action: `/haverstack/create`, `/haverstack/read`,
- * `/haverstack/update` and `/haverstack/delete`, each invoked with the
- * family it acts on as `{ baseId }`, which `pol` may constrain. `/haverstack`
- * proves all four. There is no `-own`/`-any` split, since on the principal's
- * side of a request the two mean the same thing.
+ * grant action, all under `/haverstack/record`: `create`, `read`, `update`
+ * and `delete`, each invoked with the family it acts on as `{ baseId }`.
+ * The set is closed, so a delegation of `/haverstack/record` never gains a
+ * verb it wasn't signed for. There is no `-own`/`-any` split, since on the
+ * principal's side of a request the two mean the same thing.
  * See docs/spec/access-control.md § Signed delegations.
  */
 
@@ -16,9 +16,10 @@ import { decodeDelegation } from './delegation.js';
 import { stripFragment } from './did-key.js';
 import { UcanError } from './errors.js';
 
-export const HAVERSTACK_COMMAND = '/haverstack';
+/** Proves every record verb, and only those. */
+export const RECORD_COMMAND = '/haverstack/record';
 
-export const haverstackCommand = (verb: DelegatedVerb): string => `${HAVERSTACK_COMMAND}/${verb}`;
+export const recordCommand = (verb: DelegatedVerb): string => `${RECORD_COMMAND}/${verb}`;
 
 /**
  * What a validated chain lets its audience do for its subject, in the form
@@ -29,7 +30,7 @@ export const haverstackCommand = (verb: DelegatedVerb): string => `${HAVERSTACK_
 export const signedDelegation = (chain: ValidChain): SignedDelegation => ({
   subjectId: chain.subject,
   principalId: chain.audience,
-  allows: (verb, baseId) => authorizes(chain, haverstackCommand(verb), { baseId }),
+  allows: (verb, baseId) => authorizes(chain, recordCommand(verb), { baseId }),
 });
 
 export type AcceptedDelegation = {

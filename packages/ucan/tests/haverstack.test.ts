@@ -27,7 +27,7 @@ describe('signedDelegation', () => {
   it('lets an app its subject delegated to act for them, within the delegation', async () => {
     const d = await issue(member, {
       audience: app.did,
-      cmd: '/haverstack/create',
+      cmd: '/haverstack/record/create',
       pol: [['==', '.baseId', 'com.example.test/comment']],
     });
     const delegation = signedDelegation(await validateChain([d], { now: NOW }));
@@ -41,13 +41,13 @@ describe('signedDelegation', () => {
     });
   });
 
-  it('covers every verb under /haverstack', async () => {
-    const d = await issue(member, { audience: app.did, cmd: '/haverstack' });
+  it('covers every verb under /haverstack/record', async () => {
+    const d = await issue(member, { audience: app.did, cmd: '/haverstack/record' });
     const { allows } = signedDelegation(await validateChain([d], { now: NOW }));
     for (const verb of ['create', 'read', 'update', 'delete'] as const) {
       expect(allows(verb, 'com.example.test/note')).toBe(true);
     }
-    const narrow = await issue(member, { audience: app.did, cmd: '/haverstack/read' });
+    const narrow = await issue(member, { audience: app.did, cmd: '/haverstack/record/read' });
     const read = signedDelegation(await validateChain([narrow], { now: NOW }));
     expect(read.allows('read', 'x')).toBe(true);
     expect(read.allows('update', 'x')).toBe(false);
@@ -61,7 +61,7 @@ describe('acceptDelegation', () => {
   it('reports the subject, the earliest expiry and the delegation for the key that authenticated', async () => {
     const root = await issue(member, {
       audience: app.did,
-      cmd: '/haverstack/read',
+      cmd: '/haverstack/record/read',
       exp: NOW + 600,
     });
     const accepted = await acceptDelegation([root.bytes], app.did, { now: NOW });

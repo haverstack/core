@@ -143,26 +143,26 @@ describe('authorizes', () => {
   it('requires every link to prove the command and accept the arguments', async () => {
     const alice = makeSigner();
     const app = makeSigner();
-    const root = await issue(alice, { audience: app.did, cmd: '/haverstack' });
+    const root = await issue(alice, { audience: app.did, cmd: '/haverstack/record' });
     const leaf = await issue(app, {
       subject: alice.did,
-      cmd: '/haverstack/read',
+      cmd: '/haverstack/record/read',
       pol: [['like', '.baseId', 'commons/*']],
     });
     const chain = await validateChain([root, leaf], { now: NOW });
-    expect(authorizes(chain, '/haverstack/read', { baseId: 'commons/note' })).toBe(true);
-    expect(authorizes(chain, '/haverstack/read', { baseId: 'private/diary' })).toBe(false);
-    expect(authorizes(chain, '/haverstack/update', { baseId: 'commons/note' })).toBe(false);
-    expect(authorizes(chain, '/haverstacked/read', { baseId: 'commons/note' })).toBe(false);
+    expect(authorizes(chain, '/haverstack/record/read', { baseId: 'commons/note' })).toBe(true);
+    expect(authorizes(chain, '/haverstack/record/read', { baseId: 'private/diary' })).toBe(false);
+    expect(authorizes(chain, '/haverstack/record/update', { baseId: 'commons/note' })).toBe(false);
+    expect(authorizes(chain, '/haverstack/recorded/read', { baseId: 'commons/note' })).toBe(false);
   });
 
   it('lets a narrower root bound a broader leaf', async () => {
     const alice = makeSigner();
     const app = makeSigner();
-    const root = await issue(alice, { audience: app.did, cmd: '/haverstack/read' });
+    const root = await issue(alice, { audience: app.did, cmd: '/haverstack/record/read' });
     const leaf = await issue(app, { subject: alice.did, cmd: '/' });
     const chain = await validateChain([root, leaf], { now: NOW });
-    expect(authorizes(chain, '/haverstack/read', {})).toBe(true);
-    expect(authorizes(chain, '/haverstack/delete', {})).toBe(false);
+    expect(authorizes(chain, '/haverstack/record/read', {})).toBe(true);
+    expect(authorizes(chain, '/haverstack/record/delete', {})).toBe(false);
   });
 });

@@ -30,7 +30,7 @@ describe('iso-ucan interop', () => {
         iss: signer,
         aud: audience,
         sub: signer.did,
-        cmd: '/haverstack/read',
+        cmd: '/haverstack/record/read',
         pol: [['==', '.baseId', 'note']],
         exp: NOW + 60,
       } as never);
@@ -38,7 +38,7 @@ describe('iso-ucan interop', () => {
       expect(d.cid).toBe(iso.cid.toString(base58btc));
       const chain = await validateChain([d], { now: NOW });
       expect(chain.audience).toBe(audience);
-      expect(authorizes(chain, '/haverstack/read', { baseId: 'note' })).toBe(true);
+      expect(authorizes(chain, '/haverstack/record/read', { baseId: 'note' })).toBe(true);
     },
   );
 
@@ -46,14 +46,14 @@ describe('iso-ucan interop', () => {
     'issues a %s delegation iso-ucan accepts',
     async (alg) => {
       const issuer = makeSigner(alg);
-      const d = await issue(issuer, { cmd: '/haverstack/read', exp: NOW + 60 });
+      const d = await issue(issuer, { cmd: '/haverstack/record/read', exp: NOW + 60 });
       const iso = await IsoDelegation.from({
         bytes: d.bytes,
         now: NOW,
         verifierResolver: new Resolver({ ...eddsa, ...ecdsa }),
       } as never);
       expect(iso.cid.toString(base58btc)).toBe(d.cid);
-      expect(iso.cmd).toBe('/haverstack/read');
+      expect(iso.cmd).toBe('/haverstack/record/read');
     },
   );
 });

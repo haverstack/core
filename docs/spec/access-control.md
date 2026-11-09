@@ -366,7 +366,12 @@ A subject can name the software acting for it by signing a delegation, rather th
 - **Ungrantable families stay out.** A delegation never admits `_grant`, `_config`, `_app` or `_install`, whatever it allows, since a signature reaches no further than a grant could.
 - **No privileged verb rides on it.** Resharing, `_group` management and the verbs in the table above ask for standing, not a grant, and a delegation is neither.
 
-**Its verbs are the grant actions without the suffix:** `create`, `read`, `update` and `delete`, since `-own` and `-any` mean the same on the principal's side. As UCAN commands they are `/haverstack/create`, `/haverstack/read`, `/haverstack/update` and `/haverstack/delete`, each invoked with `{ baseId }` for a delegation's policy to constrain, and `/haverstack` proves all four.
+**Its verbs are the grant actions without the suffix:** `create`, `read`, `update` and `delete`, since `-own` and `-any` mean the same on the principal's side. As UCAN commands they are `/haverstack/record/create`, `/haverstack/record/read`, `/haverstack/record/update` and `/haverstack/record/delete`, each invoked with `{ baseId }` for a delegation's policy to constrain.
+
+**Delegations people already hold never widen.** A UCAN command proves every command nested under it, including ones defined later, so the vocabulary is fixed in two ways:
+
+- **The set under `/haverstack/record` is closed.** It proves exactly those four verbs, now and later; any other verb Haverstack defines goes under another path, so delegating `/haverstack/record` never grants something its signer didn't see. Delegating `/haverstack`, or `/`, covers whatever is defined beneath it in future, which UCAN says of `/` and which a signer should read the same way here.
+- **Arguments only describe.** A later version may invoke these commands with more than `{ baseId }`, but an added argument says more precisely which call is being made and never adds to what a verb can do, so a policy that ignores it allows nothing new. A policy over an argument a server doesn't send selects `null` and fails, so it denies rather than allows.
 
 **Time bounds and revocation stay with the delegation.** Core reads `allows()` as it is handed; a caller holding a delegation across requests revalidates it on each, so an expired or revoked one is never passed in.
 

@@ -24,6 +24,9 @@ describe('delegation fixtures', () => {
     const accepted = await acceptDelegation([decode(AUTH_FIXTURE_DELEGATION)], AUTH_FIXTURE_DID);
     expect(accepted.subjectId).toBe(AUTH_FIXTURE_SUBJECT_DID);
     expect(accepted.expiresAt).toBeNull();
+    for (const verb of ['create', 'read', 'update', 'delete'] as const) {
+      expect(accepted.delegation.allows(verb, 'com.example/note')).toBe(true);
+    }
     expect((fixture.responseBody as { subjectId: string }).subjectId).toBe(
       AUTH_FIXTURE_SUBJECT_DID,
     );
