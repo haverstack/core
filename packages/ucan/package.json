@@ -41,6 +41,7 @@
     "multiformats": "^14.0.5"
   },
   "devDependencies": {
+    "@haverstack/conformance-fixtures": "workspace:^",
     "@types/node": "^22.0.0",
     "iso-signatures": "0.7.0",
     "iso-ucan": "3.0.0",

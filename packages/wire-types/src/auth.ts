@@ -21,11 +21,26 @@ export type DiscoveryAuth = {
 /** The challenge–response handshake of docs/spec/wire-format.md § Authentication. */
 export const AUTH_METHOD_DID_CHALLENGE = 'did-challenge';
 
-export type AuthMethod = typeof AUTH_METHOD_DID_CHALLENGE;
+/**
+ * The handshake accepting a signed UCAN delegation chain, so the key that
+ * authenticates may act for the subject who delegated to it.
+ * See docs/spec/wire-format.md § The handshake.
+ */
+export const AUTH_METHOD_UCAN_DELEGATION = 'ucan-delegation';
+
+export type AuthMethod = typeof AUTH_METHOD_DID_CHALLENGE | typeof AUTH_METHOD_UCAN_DELEGATION;
 
 /** Whether a server advertises the DID challenge–response handshake. */
 export function supportsDidChallenge(discovery: { auth?: DiscoveryAuth }): boolean {
   return discovery.auth?.methods?.includes(AUTH_METHOD_DID_CHALLENGE) ?? false;
+}
+
+/** Whether a server's handshake accepts a signed delegation chain. */
+export function supportsUcanDelegation(discovery: { auth?: DiscoveryAuth }): boolean {
+  return (
+    supportsDidChallenge(discovery) &&
+    (discovery.auth?.methods?.includes(AUTH_METHOD_UCAN_DELEGATION) ?? false)
+  );
 }
 
 /**
@@ -42,11 +57,10 @@ export type WireAuthChallengeResponse = {
 };
 
 /**
- * POST /auth/token response. Both identities are always present, and this
- * endpoint always reports them equal — a handshake proves key possession,
- * which says nothing about whom that key may act for. The pair is reported
- * anyway so an issuance path that does delegate needs no new shape.
- * See docs/spec/wire-format.md § Authentication.
+ * POST /auth/token response. Both identities are always present. They are
+ * equal unless the request carried a delegation the server verified: a
+ * handshake proves key possession, which says nothing about whom that key
+ * may act for. See docs/spec/wire-format.md § The session a token names.
  */
 export type WireAuthTokenResponse = {
   token: string;
@@ -66,7 +80,8 @@ export type WireAuthErrorCode =
   | 'invalid_did'
   | 'unknown_nonce'
   | 'expired_nonce'
-  | 'invalid_signature';
+  | 'invalid_signature'
+  | 'invalid_delegation';
 
 export type WireAuthError = {
   error: {
@@ -82,6 +97,7 @@ export const WIRE_AUTH_ERROR_STATUS: Record<WireAuthErrorCode, number> = {
   unknown_nonce: 401,
   expired_nonce: 401,
   invalid_signature: 401,
+  invalid_delegation: 401,
 };
 
 /** Codes a fresh handshake can resolve. Anything else is fatal to retry. */

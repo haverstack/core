@@ -63,7 +63,9 @@ export type {
 } from './auth.js';
 export {
   AUTH_METHOD_DID_CHALLENGE,
+  AUTH_METHOD_UCAN_DELEGATION,
   supportsDidChallenge,
+  supportsUcanDelegation,
   WIRE_AUTH_ERROR_STATUS,
   isWireAuthError,
   isRetryableAuthError,

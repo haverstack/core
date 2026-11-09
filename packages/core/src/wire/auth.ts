@@ -172,6 +172,12 @@ export const verifyAuthChallenge = async (
 export type DidCredential = {
   did: string;
   sign: (payload: Uint8Array) => Promise<Uint8Array>;
+  /**
+   * A delegation chain from `subjectId` to `did`, root first, to act for
+   * that subject. Sent with every handshake, so a renewed session acts for
+   * the same subject. See docs/spec/wire-format.md § The handshake.
+   */
+  delegation?: { subjectId: string; chain: Uint8Array[] };
 };
 
 /**

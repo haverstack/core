@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { Stack, StackPermissionError } from '@haverstack/core';
 import { MemoryAdapter } from '@haverstack/core/testing';
-import { signedDelegation, validateChain } from '../src/index.js';
+import { acceptDelegation, signedDelegation, UcanError, validateChain } from '../src/index.js';
 import { issue, makeSigner, NOW } from './helpers.js';
 
 const NOTE = 'com.example.test/note@1';
@@ -51,5 +51,39 @@ describe('signedDelegation', () => {
     const read = signedDelegation(await validateChain([narrow], { now: NOW }));
     expect(read.allows('read', 'x')).toBe(true);
     expect(read.allows('update', 'x')).toBe(false);
+  });
+});
+
+describe('acceptDelegation', () => {
+  const member = makeSigner();
+  const app = makeSigner();
+
+  it('reports the subject, the earliest expiry and the delegation for the key that authenticated', async () => {
+    const root = await issue(member, {
+      audience: app.did,
+      cmd: '/haverstack/read',
+      exp: NOW + 600,
+    });
+    const accepted = await acceptDelegation([root.bytes], app.did, { now: NOW });
+    expect(accepted.subjectId).toBe(member.did);
+    expect(accepted.expiresAt).toEqual(new Date((NOW + 600) * 1000));
+    expect(accepted.delegation).toMatchObject({ subjectId: member.did, principalId: app.did });
+    expect(accepted.delegation.allows('read', 'x')).toBe(true);
+  });
+
+  it('refuses a chain delegated to a different key', async () => {
+    const root = await issue(member, { audience: makeSigner().did });
+    await expect(acceptDelegation([root.bytes], app.did, { now: NOW })).rejects.toThrow(UcanError);
+  });
+
+  it('refuses a key delegating to itself', async () => {
+    const root = await issue(app, { audience: app.did });
+    await expect(acceptDelegation([root.bytes], app.did, { now: NOW })).rejects.toThrow(UcanError);
+  });
+
+  it('refuses bytes that are not a delegation', async () => {
+    await expect(acceptDelegation([Uint8Array.of(1, 2, 3)], app.did)).rejects.toMatchObject({
+      code: 'malformed',
+    });
   });
 });

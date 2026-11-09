@@ -83,6 +83,26 @@ describe('NativeTokenStore', () => {
     });
   });
 
+  // The chain travels with the session so a server can validate it again
+  // on each request; an undelegated token carries none.
+  test('a token keeps the delegation chain it was issued on', async () => {
+    const store = await NativeTokenStore.open({ path: tokenPath });
+    const chain = [Uint8Array.of(0x82, 0, 255), Uint8Array.of(1, 2, 3, 4)];
+    const { token } = await store.createToken(
+      { subjectId: 'subject-did', principalId: 'app-did' },
+      { delegationChain: chain },
+    );
+    expect(await store.lookupToken(token)).toEqual({
+      principalId: 'app-did',
+      subjectId: 'subject-did',
+      delegationChain: chain,
+    });
+    expect((await store.listTokens())[0]!.delegationChain).toEqual(chain);
+
+    const plain = await store.createToken({ subjectId: 'subject-did' });
+    expect(await store.lookupToken(plain.token)).not.toHaveProperty('delegationChain');
+  });
+
   test('lookupToken returns null for an invalid token', async () => {
     const store = await NativeTokenStore.open({ path: tokenPath });
     expect(await store.lookupToken('not-a-real-token')).toBeNull();

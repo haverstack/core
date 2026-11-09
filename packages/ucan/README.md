@@ -77,6 +77,32 @@ Haverstack's commands mirror its grant actions: `/haverstack/create`, `/haversta
 
 `signedDelegation()` answers from the chain as it was validated. A server holding a session across requests validates the chain again on each, so expiry and revocation take effect.
 
+## Serving a delegated session
+
+`acceptDelegation()` is what a server runs at `POST /auth/token` when the request carries a `delegation`, and again on each request the resulting token makes:
+
+```ts
+import { acceptDelegation } from '@haverstack/ucan';
+
+// At /auth/token, after the handshake signature verified for `did`:
+const accepted = await acceptDelegation(chain, did, { isRevoked });
+await tokens.createToken(
+  { subjectId: accepted.subjectId, principalId: did },
+  { expiresAt: accepted.expiresAt ?? undefined, delegationChain: chain },
+);
+
+// On each request a delegated token makes:
+const session = await tokens.lookupToken(bearer);
+if (session?.delegationChain) {
+  const { delegation } = await acceptDelegation(session.delegationChain, session.principalId, {
+    isRevoked,
+  });
+  scoped = stack.asActor(session, { delegation });
+}
+```
+
+It requires the chain to end at the key that authenticated and to begin at another identity, and throws a `UcanError` otherwise; answer that with `invalid_delegation` at `/auth/token` and with 401 on any other request. See [Wire format § The handshake](../../docs/spec/wire-format.md#the-handshake).
+
 ## Readings of the spec
 
 Where the UCAN specs are ambiguous or leave a choice, this package takes the following, pinned by its tests:

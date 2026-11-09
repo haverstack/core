@@ -62,6 +62,9 @@ export const performHandshake = async (
     did: credential.did,
     nonce: challenge.nonce,
     signature: base64urlEncode(signature),
+    ...(credential.delegation && {
+      delegation: credential.delegation.chain.map(base64urlEncode),
+    }),
   });
   if (!tokenRes.ok) {
     const err = await handshakeError(tokenRes, '/auth/token');
@@ -75,5 +78,19 @@ export const performHandshake = async (
     }
     throw err;
   }
-  return successBody<WireAuthTokenResponse>(tokenRes, 'POST', '/auth/token');
+  const session = await successBody<WireAuthTokenResponse>(tokenRes, 'POST', '/auth/token');
+  // A delegated session for anyone but the subject that signed, or through
+  // anyone but this key, is not the session asked for: acting on it would
+  // write as the wrong person.
+  const { delegation } = credential;
+  if (
+    delegation &&
+    (session.principalId !== credential.did || session.subjectId !== delegation.subjectId)
+  ) {
+    throw new APIAdapterError(
+      `POST /auth/token issued a session for ${session.subjectId} through ${session.principalId}; ` +
+        `asked for ${delegation.subjectId} through ${credential.did}.`,
+    );
+  }
+  return session;
 };

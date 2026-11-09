@@ -282,6 +282,9 @@ importers:
         specifier: ^14.0.5
         version: 14.0.5
     devDependencies:
+      '@haverstack/conformance-fixtures':
+        specifier: workspace:^
+        version: link:../conformance-fixtures
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.17

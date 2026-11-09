@@ -204,7 +204,10 @@ export const TOKENS_SCHEMA_SQL = `
     subject_id   TEXT NOT NULL,
     label        TEXT,
     created_at   INTEGER NOT NULL,
-    expires_at   INTEGER
+    expires_at   INTEGER,
+    -- The signed delegation chain a delegated token was issued on: a JSON
+    -- array of base64url envelopes, root first. Null when undelegated.
+    delegation_chain TEXT
   ) STRICT;
 `;
 

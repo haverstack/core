@@ -85,6 +85,18 @@ describe('parseAuthTokenBody', () => {
     );
   });
 
+  test('reads a delegation chain of base64url envelopes, and leaves it absent when not sent', () => {
+    const delegated = { ...body, delegation: ['glhA', 'gl-_'] };
+    expect(parseAuthTokenBody(delegated)).toEqual(delegated);
+    expect(parseAuthTokenBody(body)).not.toHaveProperty('delegation');
+  });
+
+  test('a delegation must be a non-empty array of base64url strings', () => {
+    for (const delegation of [[], 'glhA', ['gl+/'], [1], null]) {
+      expect(pathOf(() => parseAuthTokenBody({ ...body, delegation }))).toBe('delegation');
+    }
+  });
+
   test('each field is required, and must be a string', () => {
     for (const key of ['did', 'nonce', 'signature'] as const) {
       const { [key]: _, ...rest } = body;

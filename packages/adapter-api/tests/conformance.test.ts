@@ -7,7 +7,13 @@
  * the documented response. See that package for the fixture data itself.
  */
 import { describe, test, expect } from 'vitest';
-import { APIAdapter, APIAdapterAuthError, APIAdapterHandshakeError } from '../src/index.js';
+import {
+  APIAdapter,
+  APIAdapterAuthError,
+  APIAdapterAuthUnsupportedError,
+  APIAdapterError,
+  APIAdapterHandshakeError,
+} from '../src/index.js';
 import {
   BASE_URL,
   DISCOVERY,
@@ -50,6 +56,8 @@ import {
   AUTH_FIXTURE_PAYLOAD,
   AUTH_FIXTURE_SIGNATURE,
   AUTH_FIXTURE_FOREIGN_SIGNATURE,
+  AUTH_FIXTURE_DELEGATION,
+  AUTH_FIXTURE_SUBJECT_DID,
 } from '@haverstack/conformance-fixtures';
 import type { AssociationEdit, StackType } from '@haverstack/core';
 import type { WireAuthError, WireVersionsResponse } from '@haverstack/wire-types';
@@ -221,6 +229,64 @@ describe('auth handshake fixtures', () => {
       );
     });
   }
+
+  describe('a delegated handshake', () => {
+    const delegatedFixture = authTokenFixtures.find(
+      (f) => f.name === 'auth-token-issues-delegated-token',
+    )!;
+    const DELEGATED_DISCOVERY = {
+      ...DISCOVERY,
+      auth: { methods: ['did-challenge', 'ucan-delegation'] },
+    };
+    const delegatedCredential = async () => ({
+      ...didCredentialFromKeypair(await generateDidKeypair()),
+      delegation: {
+        subjectId: AUTH_FIXTURE_SUBJECT_DID,
+        chain: [base64urlDecode(AUTH_FIXTURE_DELEGATION)],
+      },
+    });
+    // The fixture's session, issued to this test's own key rather than the fixture DID.
+    const sessionFor = (did: string, subjectId = AUTH_FIXTURE_SUBJECT_DID) => ({
+      ...(delegatedFixture.responseBody as object),
+      principalId: did,
+      subjectId,
+    });
+
+    test('sends the chain as the fixture documents it', async () => {
+      const credential = await delegatedCredential();
+      mockFetch.mockResolvedValueOnce(jsonResponse(DELEGATED_DISCOVERY));
+      mockFetch.mockResolvedValueOnce(jsonResponse(challengeFixture.responseBody));
+      mockFetch.mockResolvedValueOnce(jsonResponse(sessionFor(credential.did)));
+
+      await APIAdapter.open({ url: BASE_URL, credential });
+      const [, tokenInit] = mockFetch.mock.calls[2] as [string, RequestInit];
+      const sent = JSON.parse(tokenInit.body as string) as Record<string, unknown>;
+      expect(Object.keys(sent).sort()).toEqual(Object.keys(delegatedFixture.requestBody!).sort());
+      expect(sent.delegation).toEqual(delegatedFixture.requestBody!.delegation);
+    });
+
+    test('is refused before signing by a server that does not advertise it', async () => {
+      mockFetch.mockResolvedValueOnce(
+        jsonResponse({ ...DISCOVERY, auth: { methods: ['did-challenge'] } }),
+      );
+      const err = await APIAdapter.open({
+        url: BASE_URL,
+        credential: await delegatedCredential(),
+      }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(APIAdapterAuthUnsupportedError);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    test('refuses a session for anyone but the subject that signed', async () => {
+      const credential = await delegatedCredential();
+      mockFetch.mockResolvedValueOnce(jsonResponse(DELEGATED_DISCOVERY));
+      mockFetch.mockResolvedValueOnce(jsonResponse(challengeFixture.responseBody));
+      mockFetch.mockResolvedValueOnce(jsonResponse(sessionFor(credential.did, credential.did)));
+      const err = await APIAdapter.open({ url: BASE_URL, credential }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(APIAdapterError);
+      expect(err).not.toBeInstanceOf(APIAdapterHandshakeError);
+    });
+  });
 
   test('APIAdapter performs the documented handshake and uses the token it earns', async () => {
     const credential = didCredentialFromKeypair(await generateDidKeypair());

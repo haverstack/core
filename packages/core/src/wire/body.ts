@@ -85,7 +85,13 @@ function requiredObject(
 // -------------------------------------------------------
 
 export type WireAuthChallengeRequest = { did: string };
-export type WireAuthTokenRequest = { did: string; nonce: string; signature: string };
+export type WireAuthTokenRequest = {
+  did: string;
+  nonce: string;
+  signature: string;
+  /** A signed delegation chain to `did`, root first: base64url UCAN envelopes. */
+  delegation?: string[];
+};
 
 /**
  * Parse a `POST /auth/challenge` body. Whether `did` is a DID this server
@@ -99,19 +105,33 @@ export function parseAuthChallengeBody(body: unknown): WireAuthChallengeRequest 
 }
 
 /**
- * Parse a `POST /auth/token` body. The three fields are the only client
- * input the signing payload takes, so a fourth — a `subjectId`, say — is
- * refused rather than read as a request the handshake cannot grant.
+ * Parse a `POST /auth/token` body. A subject is never named here: it comes
+ * only from a signed `delegation`, so a `subjectId` key is refused rather
+ * than read as a request the handshake cannot grant. Whether the chain
+ * verifies is the server's `invalid_delegation`, not a parse failure.
  */
 export function parseAuthTokenBody(body: unknown): WireAuthTokenRequest {
   const label = 'auth token body';
-  const b = requireKnownBody(body, ['did', 'nonce', 'signature'], label);
+  const b = requireKnownBody(body, ['did', 'nonce', 'signature', 'delegation'], label);
+  const delegation = b.delegation;
+  if (delegation !== undefined) {
+    if (
+      !Array.isArray(delegation) ||
+      delegation.length === 0 ||
+      !delegation.every((d) => typeof d === 'string' && BASE64URL.test(d))
+    ) {
+      fieldError('delegation', 'delegation must be a non-empty array of base64url strings');
+    }
+  }
   return {
     did: requiredString(b, 'did', label),
     nonce: requiredString(b, 'nonce', label),
     signature: requiredString(b, 'signature', label),
+    ...(delegation !== undefined && { delegation: delegation as string[] }),
   };
 }
+
+const BASE64URL = /^[A-Za-z0-9_-]+$/;
 
 // -------------------------------------------------------
 // PATCH /records/:id/content, PATCH /entity/content

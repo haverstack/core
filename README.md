@@ -74,7 +74,24 @@ const session = await tokens.lookupToken(bearer); // { subjectId, principalId }
 const scoped = stack.asActor(session);
 ```
 
-The delegation itself — "this app acts for Bob" — is asserted by you when the token is issued, not by the app: proving key possession proves who the app _is_ and nothing about whom it may speak for. An app that could name its own subject would be choosing its own authority.
+The delegation itself — "this app acts for Bob" — is never the app's to claim: proving key possession proves who the app _is_ and nothing about whom it may speak for, and an app that could name its own subject would be choosing its own authority. Either you assert it when the token is issued, or Bob signs it. A signed delegation is a UCAN chain from Bob to the app's key, which `@haverstack/ucan` issues and the app's credential carries through the handshake:
+
+```ts
+const credential = {
+  ...didCredentialFromKeypair(appKeypair),
+  delegation: { subjectId: bobDid, chain: [delegation.bytes] },
+};
+```
+
+A server checks the chain on every request and passes it on, so Bob's grants still bound what the app reaches:
+
+```ts
+const session = await tokens.lookupToken(bearer);
+const accepted = session.delegationChain
+  ? await acceptDelegation(session.delegationChain, session.principalId, { isRevoked })
+  : undefined;
+const scoped = stack.asActor(session, { delegation: accepted?.delegation });
+```
 
 **You don't do this for software you didn't choose.** An app someone else uses to reach your stack — a visitor's own client posting a comment — authenticates as _them_, and is bounded by what you granted people, typically a default grant. You grant types to people, never to every client they might be running. See [Identity § App](./docs/spec/identity.md#app) for both postures and [Access control § Delegation](./docs/spec/access-control.md#delegation-principal-and-subject) for what each identity governs; the handshake itself is [Wire format § Authentication](./docs/spec/wire-format.md#authentication).
 

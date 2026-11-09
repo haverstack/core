@@ -12,6 +12,13 @@ import type { EntityId, Actor } from './ids.js';
  */
 export type TokenSession = Actor & {
   principalId: EntityId;
+  /**
+   * The signed delegation chain, root first, a delegated token was issued
+   * on. The server validates it again on each request, so expiry and
+   * revocation reach a live token. See docs/spec/wire-format.md § The
+   * session a token names.
+   */
+  delegationChain?: Uint8Array[];
 };
 
 export type TokenInfo = TokenSession & {
@@ -24,14 +31,15 @@ export type TokenInfo = TokenSession & {
 /**
  * Bearer-token issuance and lookup for servers — standalone, not a slot on
  * StackAdapter. createToken() trusts its caller: the handshake verifies the
- * principal's DID first, and a differing `subjectId` is asserted by the
- * owner out of band. Store tokens outside the portable stack file.
+ * principal's DID first, and a differing `subjectId` comes from a signed
+ * delegation the server verified, or is asserted by the owner out of band.
+ * Store tokens outside the portable stack file.
  * See docs/spec/wire-format.md § Authentication.
  */
 export interface StackTokenStore {
   createToken(
     actor: Actor,
-    opts?: { label?: string; expiresAt?: Date },
+    opts?: { label?: string; expiresAt?: Date; delegationChain?: Uint8Array[] },
   ): Promise<{
     id: string;
     token: string;

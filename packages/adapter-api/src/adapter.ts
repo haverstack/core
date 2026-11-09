@@ -64,6 +64,7 @@ import {
   supportsHead,
   WIRE_ERROR_STATUS,
   supportsDidChallenge,
+  supportsUcanDelegation,
   CHANGE_FRAME_READY,
   CHANGE_FRAME_RECORD,
   CHANGE_FRAME_RESET,
@@ -350,6 +351,12 @@ export class APIAdapter implements StackAdapter {
         throw new APIAdapterAuthUnsupportedError(
           `Server at "${baseUrl}" does not advertise the "did-challenge" auth method; a DID ` +
             'credential has no handshake to perform against it.',
+        );
+      }
+      if (opts.credential.delegation && !supportsUcanDelegation(discovery)) {
+        throw new APIAdapterAuthUnsupportedError(
+          `Server at "${baseUrl}" does not advertise the "ucan-delegation" auth method; a ` +
+            'credential carrying a delegation cannot act for its subject there.',
         );
       }
       token = (await performHandshake(baseUrl, opts.credential)).token;
