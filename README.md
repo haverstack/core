@@ -95,6 +95,7 @@ This is a monorepo. Packages are published to npm under the `@haverstack` scope.
 | [`@haverstack/adapter-api`](./packages/adapter-api)                           | HTTP adapter for remote stack servers                                             |
 | [`@haverstack/commons`](./packages/commons)                                   | Canonical Schema Commons type definitions (`note`, `task`, `contact`, ...)        |
 | [`@haverstack/wire-types`](./packages/wire-types)                             | HTTP wire types, error mapping and serialization — for server implementers        |
+| [`@haverstack/ucan`](./packages/ucan)                                         | UCAN 1.0 delegations: issue, decode and validate a chain — opt-in                 |
 | [`@haverstack/conformance-fixtures`](./packages/conformance-fixtures)         | Request/response fixtures a server can test its wire implementation against       |
 | [`@haverstack/adapter-conformance`](./packages/adapter-conformance)           | Runnable vitest suite an adapter implementation can test itself against           |
 

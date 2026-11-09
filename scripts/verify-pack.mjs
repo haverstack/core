@@ -64,6 +64,7 @@ const EXPECTATIONS = {
   '@haverstack/adapter-api': [['.', ['APIAdapter']]],
   '@haverstack/commons': [['.', ['NOTE', 'defineCommonsTypes']]],
   '@haverstack/conformance-fixtures': [['.', ['discoveryFixtures', 'allConformanceFixtures']]],
+  '@haverstack/ucan': [['.', ['issueDelegation', 'decodeDelegation', 'validateChain']]],
 };
 
 /** Packages that must NOT appear in the installed tree at all. */
