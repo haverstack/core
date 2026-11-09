@@ -17,11 +17,13 @@ Each finding was checked against the code and spec as they stand on this branch.
 
 **Decision:** `add(field, value)` and `derive(field, fn)` are the two steps that produce a value for the target. Both are typed by it: `field` is one of the target's top-level fields, and `value` (or `fn`'s return) is that field's write type, `ContentOf<T>[K]`. At runtime, `migration()` refuses a later step that renames, maps or drops a field an `add` or `derive` produced.
 
+`migration()`'s third argument becomes a function that receives the steps, already typed by both handles, and returns the list. The top-level `rename`, `map`, `add`, `drop` and `derive` exports are deleted. The [prototype](#prototype-results) showed that standalone steps can't be typed by the target reliably.
+
 ```ts
-migration(BookV1, Book, [
+migration(BookV1, Book, ({ derive }) => [
   derive('status', (c) => (c.status === 'done' ? 'finished' : c.status)),
-  //                                                          ^^^^^^^^ string is not assignable to
-  //                                     'want' | 'reading' | 'finished' | 'abandoned'
+  //                                                          ^^^^^^^^
+  // TS2322: Type 'string' is not assignable to type '"want" | "reading" | "finished" | "abandoned"'.
 ]);
 ```
 
@@ -30,17 +32,66 @@ migration(BookV1, Book, [
 - **28 is confirmed.** `DeriveStep.derive` returns `unknown` (`migration-steps.ts`), while its input is already typed `StoredContentOf<F>` through `migration()`'s parameter. The output is the half that reaches validation. Typing it makes the compiler require a total mapping, so the record in 27 can't be produced by a typed migration.
 - **One rule for both producing steps.** `add`'s value is checked at module load against the target's declaration today (`fieldOrigins()`, "set to a value the target refuses"). Typing it too means `add` and `derive` follow the same rule, instead of `derive` being typed as an exception. It also catches a misspelled target field at compile time, which today is caught only by the module-load check (finding 20's leftover).
 - **Why "final".** Steps run in order, so a field produced early could be renamed or remapped later, and then its type at the end isn't the type the step was checked against. Nothing is lost by refusing that: `derive('a', …)` followed by `rename('a', 'b')` is `derive('b', …)`, and a `map` after an `add` or `derive` can be folded into it. Type and runtime then state the same rule: a produced field is written once, by the step that produces it.
+- **Why a builder, and only a builder.** The steps get their types from the two handles, and the builder is where both handles are known. All five steps come from it, not just the two typed ones, so a migration has one way to name its steps. Keeping the top-level exports as well would mean two spellings, and only one of them type-checked. The list is still data: `migration()` calls the function once, and what it returns is the same frozen list `fieldOrigins()` checks and a collection reads.
 - `rename`, `map` and `drop` name source fields at a point in the list, so they stay plain strings checked by `migration()`. Typing them would need the list's running state in the type, for a check that already fires when the module loads.
 
-**Rejected:** allowing `map` from free text into an enum. `carryProblem()` refuses it because free text can hold any value, and the read side's `UnlistedValue` doesn't change that. A carried value is written by `migrateAll()`, and the target's enum would refuse it.
+**Rejected:**
+
+- **Standalone `add`/`derive` that infer the target from the array.** See the prototype: the result depended on how the callback was written.
+- **Allowing `map` from free text into an enum.** `carryProblem()` refuses it because free text can hold any value, and the read side's `UnlistedValue` doesn't change that. A carried value is written by `migrateAll()`, and the target's enum would refuse it.
+
+### Prototype results
+
+The prototype checked both shapes against core's real `ContentOf`/`StoredContentOf` with `tsc` 5 (`strict`), using a `@1` with free-text `status` and a `@2` with an enum `status`, a required boolean `pinned` and an optional `rating`.
+
+**Standalone steps don't work.** `derive<F, T, K>(field: K, fn: (c: F) => T[K])`, with `F` and `T` inferred from the `migration()` array they sit in, accepted a callback with a parameter that returns a conditional (`(c) => c.status === 'done' ? 'finished' : 'want'`). It rejected `(_c) => 'want'` and `() => 'want'`: TypeScript checks those before `T` is inferred, so `'want'` widens to `string`. Neither `NoInfer` on the callback's return nor a `const` type parameter changed that. Whether a correct migration compiled depended on how its callback was written, so this shape was dropped.
+
+**The builder works.** With the handles fixed by `migration()`'s first two arguments, the steps are ordinary methods:
+
+```ts
+type Steps<F, T> = {
+  rename(from: string, to: string): RenameStep;
+  map(field: string, values: Readonly<Record<string, string>>): MapStep;
+  drop(field: string): DropStep;
+  add<K extends keyof T & string>(field: K, value: T[K]): AddStep;
+  derive<K extends keyof T & string>(field: K, fn: (content: F) => T[K]): DeriveStep;
+};
+
+declare function migration<F extends ReadonlyTypeSchema, T extends ReadonlyTypeSchema>(
+  from: TypeHandle<F>,
+  to: TypeHandle<T>,
+  steps: (s: Steps<StoredContentOf<F>, ContentOf<T>>) => readonly MigrationStep[],
+): Migration<StoredContentOf<F>, StoredContentOf<T>>;
+```
+
+| Case                                                            | Result                                                                                                            |
+| --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `derive('status', (c) => cond ? 'finished' : 'want')`           | compiles                                                                                                          |
+| `derive('status', () => 'want')`, `(_c) => 'want'`              | compiles                                                                                                          |
+| a `switch` body; a named function; an annotated `(c: V1C) => …` | compiles                                                                                                          |
+| `derive('rating', (c) => c.pages)`, optional target             | compiles (`undefined` allowed)                                                                                    |
+| `(s) => [s.derive(…), s.add(…)]`, no destructuring              | compiles                                                                                                          |
+| the reading list's `(c) => … : c.status`                        | TS2322, one line: `Type 'string' is not assignable to type '"want" \| "reading" \| "finished"'`                   |
+| `derive('stauts', …)`                                           | TS2345, one line: `Argument of type '"stauts"' is not assignable to parameter of type '"status" \| "title" \| …'` |
+| `add('pinned', 'yes')`                                          | TS2345, one line: `Argument of type 'string' is not assignable to parameter of type 'boolean'`                    |
+| `derive('status', () => undefined)`, required target            | TS2322, one line                                                                                                  |
+| `(c) => c.titel`                                                | TS2551, one line, ending `Did you mean 'title'?`                                                                  |
+
+**Two details the issue must keep:**
+
+- **The steps return the untyped step types** (`AddStep`, `DeriveStep`), and the list is `readonly MigrationStep[]`. The prototype first returned `DeriveStep<F, T, K>` and typed the list as a union over the target's fields. A misspelled field then gave a second error: five lines, printing the expanded content types. The builder's parameters already enforce everything, so the list needs no type of its own.
+- **If a step's return type ever mentions `K`, wrap it in `NoInfer<K>`.** Otherwise `K` is inferred from the list's contextual type as well as from `field`, and widens to every key of the target. That is how the standalone shape got `K = "status" | "title" | … | "pinned"`.
+
+`Migration`'s own type parameters and `migrate()` are unchanged. A hand-assembled `Migration` (no origins, every field read as derived) is unaffected.
 
 **Actions:**
 
-- [ ] Core: `MigrationStep<From, To>`, with `add` and `derive` generic over the target field so they infer from `migration()`'s contextual type, as `derive`'s input does now. Prototype the inference first. If a standalone `derive(...)` call can't pick up `To` from the array context, say so in the issue before changing the shape.
+- [ ] Core: `migration(from, to, steps)` takes `(s: Steps<StoredContentOf<F>, ContentOf<T>>) => readonly MigrationStep[]` as above, calls it once, and freezes the result. Export the `Steps` type. Delete the top-level `rename`, `map`, `add`, `drop` and `derive` exports.
 - [ ] Core: `fieldOrigins()` refuses a `rename`, `map` or `drop` of a field an earlier `add` or `derive` produced, naming both steps.
-- [ ] Type tests: a `derive` returning a non-total enum mapping, an `add` with a wrong value type, and either step naming a field the target lacks all fail to compile; `undefined` from `derive` compiles only for an optional target field.
-- [ ] Tests: each refused sequence (`derive` then `rename`, `add` then `map`, `derive` then `drop`).
-- [ ] Spec, `data-model.md § Migration steps`: the typing rule, and the new refusal in the list `migration()` checks.
+- [ ] Type tests: every row of the prototype table, so each error stays one line.
+- [ ] Tests: each refused sequence (`derive` then `rename`, `add` then `map`, `derive` then `drop`). Move `collection.test.ts`, `stack.test.ts` and `type-handle.test.ts` off the `migration-steps.js` imports onto the builder.
+- [ ] Spec, `data-model.md § Type migrations` (the example) and `§ Migration steps`: the builder, the typing rule, and the new refusal in the list `migration()` checks.
+- [ ] Root `README.md` and `packages/core/README.md`: the `migration()` example.
 - [ ] Reading list: `schema.ts`'s `derive` becomes total (e.g. a `switch` with a fallback), and the 27 demo writes its bad record untyped.
 - [ ] Changeset: `minor` for `@haverstack/core`.
 
@@ -153,7 +204,7 @@ Annotating the callback, as the reading list does, is still needed when the lite
 
 ## No change
 
-- **31. Single-element edits are wordy.** One edit shape for associations and access is the consistency the round-two design paid for, and verbosity is an acceptable cost. Builders would also clash with names that already exist: `add` is exported from core as a migration step, so edit builders would need a second vocabulary for the same words.
+- **31. Single-element edits are wordy.** One edit shape for associations and access is the consistency the round-two design paid for, and verbosity is an acceptable cost. Builders would also be a second spelling of the same edit, the kind of duplication A removes from migration steps.
 - **34. `collection(Book)` loses the interface name.** Already settled in CONCLUSIONS-2: naming is the app's job, `Collection<BookContent>` on the field is how it sticks, and the README's `Library` shows it. Inference can't produce a name the app declares after the handle.
 - **36. A collection can't open a version with no migration into it.** Working as designed (`§ Type handles`). A test simulating a newer build opens a second `Stack` with that build's migrations, which is also what a real newer build does.
 
