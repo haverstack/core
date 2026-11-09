@@ -51,6 +51,7 @@ import type {
 } from '@haverstack/core';
 import { OwnerMismatchError, filtersContent } from '@haverstack/core/adapter';
 import type { AdapterQuery, BlobInfo, BlobsQuery, StackAdapter } from '@haverstack/core/adapter';
+import { contentDispositionFilename } from '@haverstack/core/wire';
 import type { DidCredential } from '@haverstack/core/wire';
 import {
   isWireError,
@@ -851,8 +852,7 @@ export class APIAdapter implements StackAdapter {
     if (appId) params.set('appId', appId);
     const headers: Record<string, string> = { 'Content-Type': mimeType };
     if (filename) {
-      headers['Content-Disposition'] =
-        `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`;
+      headers['Content-Disposition'] = `attachment; ${contentDispositionFilename(filename)}`;
     }
     return this.requestRecord('POST', withParams('/attachments', params), undefined, {
       bytes: data,

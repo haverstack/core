@@ -3,8 +3,13 @@ import {
   isSafeAttachmentContentType,
   inferContentTypeFromFilename,
   resolveAttachmentDownloadContentType,
+  attachmentContentDisposition,
   FORCED_CONTENT_TYPE,
 } from '../src/wire/attachment-download.js';
+import {
+  contentDispositionFilename,
+  parseContentDispositionFilename,
+} from '../src/wire/content-disposition.js';
 import { firstRecordedAttachment, resolveReferencedAttachment } from '../src/attachment-records.js';
 
 // -------------------------------------------------------
@@ -303,4 +308,57 @@ describe('resolveReferencedAttachment', () => {
   test('no records means nothing to resolve', () => {
     expect(resolveReferencedAttachment([], { attachmentRecordId: '1hk153x00001' })).toBeUndefined();
   });
+});
+
+// -------------------------------------------------------
+// attachmentContentDisposition
+// -------------------------------------------------------
+
+describe('attachmentContentDisposition', () => {
+  test('with no filename, the disposition stands alone', () => {
+    expect(attachmentContentDisposition({ forced: true })).toBe('attachment');
+    expect(attachmentContentDisposition({ forced: false })).toBe('inline');
+    expect(attachmentContentDisposition({ forced: false, filename: '' })).toBe('inline');
+  });
+
+  test('a filename never changes the disposition', () => {
+    expect(attachmentContentDisposition({ forced: true, filename: 'a.png' })).toMatch(
+      /^attachment;/,
+    );
+    expect(attachmentContentDisposition({ forced: false, filename: 'a.png' })).toMatch(/^inline;/);
+  });
+
+  test('a plain name appears in both forms', () => {
+    expect(attachmentContentDisposition({ forced: true, filename: 'payload.html' })).toBe(
+      `attachment; filename="payload.html"; filename*=UTF-8''payload.html`,
+    );
+  });
+
+  test.each([
+    ["a\"; filename*=UTF-8''evil.html", "a_; filename*=UTF-8''evil.html"],
+    ['line\r\nSet-Cookie: x=1', 'line__Set-Cookie: x=1'],
+    ['back\\slash', 'back_slash'],
+    ['café.png', 'caf_.png'],
+    ['party🎉.png', 'party_.png'],
+  ])('%j cannot escape the quoted fallback', (filename, fallback) => {
+    const header = attachmentContentDisposition({ forced: true, filename });
+    expect(header).not.toMatch(/[\r\n]/);
+    const [, quoted, ext] = /^attachment; filename="([^"]*)"; filename\*=UTF-8''(\S+)$/.exec(
+      header,
+    )!;
+    expect(quoted).toBe(fallback);
+    expect(ext).toMatch(/^[A-Za-z0-9%._~-]+$/);
+    expect(decodeURIComponent(ext)).toBe(filename);
+  });
+});
+
+describe('contentDispositionFilename', () => {
+  test.each(['photo.png', "it's (a) *note*!.txt", 'café.png', 'a"b\\c.txt', 'line\r\nbreak'])(
+    '%j survives the round trip through parseContentDispositionFilename()',
+    (filename) => {
+      expect(
+        parseContentDispositionFilename(`attachment; ${contentDispositionFilename(filename)}`),
+      ).toBe(filename);
+    },
+  );
 });

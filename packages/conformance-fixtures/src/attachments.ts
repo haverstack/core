@@ -28,7 +28,7 @@ export const attachmentDownloadFixtures: AttachmentDownloadFixture[] = [
     name: 'attachment-download-contenttype-param-safe-passes-through',
     description: 'A safe ?contentType is served as given.',
     path: '/attachments/933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d?contentType=image/png',
-    responseHeaders: { 'Content-Type': 'image/png', ...NOSNIFF },
+    responseHeaders: { 'Content-Type': 'image/png', 'Content-Disposition': 'inline', ...NOSNIFF },
   },
   {
     name: 'attachment-download-contenttype-param-dangerous-forced',
@@ -45,20 +45,26 @@ export const attachmentDownloadFixtures: AttachmentDownloadFixture[] = [
   {
     name: 'attachment-download-filename-extension-safe-passes-through',
     description:
-      'With no ?contentType, a safe type inferred from the ?filename extension is served as given.',
+      'With no ?contentType, a safe type inferred from the ?filename extension is served as ' +
+      'given, inline, with the filename named in both forms.',
     path: '/attachments/933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d?filename=photo.png',
-    responseHeaders: { 'Content-Type': 'image/png', ...NOSNIFF },
+    responseHeaders: {
+      'Content-Type': 'image/png',
+      'Content-Disposition': `inline; filename="photo.png"; filename*=UTF-8''photo.png`,
+      ...NOSNIFF,
+    },
   },
   {
     name: 'attachment-download-filename-extension-dangerous-forced',
     description:
       'With no ?contentType, a dangerous type inferred from the ?filename extension must ' +
       'still be forced — otherwise `?filename=payload.html` is an unhardened path into the ' +
-      'same XSS this policy exists to prevent.',
+      'same XSS this policy exists to prevent. The filename still names the download, ' +
+      'under the forced disposition.',
     path: '/attachments/933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d?filename=payload.html',
     responseHeaders: {
       'Content-Type': 'application/octet-stream',
-      'Content-Disposition': 'attachment',
+      'Content-Disposition': `attachment; filename="payload.html"; filename*=UTF-8''payload.html`,
       ...NOSNIFF,
     },
   },
@@ -66,9 +72,9 @@ export const attachmentDownloadFixtures: AttachmentDownloadFixture[] = [
     name: 'attachment-download-stored-mimetype-safe-passes-through',
     description:
       'With no query params, a safe stored _attachment@1 mimeType is served as given. Assumes ' +
-      'an _attachment@1 record exists for "fileId": "933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d" with "mimeType": "image/png".',
+      'an _attachment@1 record exists for "fileId": "933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d" with "mimeType": "image/png" and no "filename".',
     path: '/attachments/933f0f80dc48c9e7d885c2f665caca88a709dbbba35e93a17c2cc30ebb963f0d',
-    responseHeaders: { 'Content-Type': 'image/png', ...NOSNIFF },
+    responseHeaders: { 'Content-Type': 'image/png', 'Content-Disposition': 'inline', ...NOSNIFF },
   },
   {
     name: 'attachment-download-stored-mimetype-dangerous-forced',
@@ -76,7 +82,7 @@ export const attachmentDownloadFixtures: AttachmentDownloadFixture[] = [
       'With no query params, a dangerous stored mimeType must still be forced: a lying ' +
       'or dishonest _attachment@1 record must not reach the response header unforced just ' +
       'because it came from storage rather than a query param. Assumes an _attachment@1 record ' +
-      'exists for "fileId": "0c313c16bde1bf6c37ad8f2d64caa1eda306cb566a19f9bf74a94e69ca46a737" with "mimeType": "text/html".',
+      'exists for "fileId": "0c313c16bde1bf6c37ad8f2d64caa1eda306cb566a19f9bf74a94e69ca46a737" with "mimeType": "text/html" and no "filename", so the forced disposition names none.',
     path: '/attachments/0c313c16bde1bf6c37ad8f2d64caa1eda306cb566a19f9bf74a94e69ca46a737',
     responseHeaders: {
       'Content-Type': 'application/octet-stream',
@@ -91,7 +97,11 @@ export const attachmentDownloadFixtures: AttachmentDownloadFixture[] = [
       'back to application/octet-stream — already the safe default, so unforced in the sense ' +
       'that nothing needed overriding, but nosniff is still present.',
     path: '/attachments/55e6bec88d703985030c5822286b105ead73d7bb8ffa1927a28a69e3acd0ba2a',
-    responseHeaders: { 'Content-Type': 'application/octet-stream', ...NOSNIFF },
+    responseHeaders: {
+      'Content-Type': 'application/octet-stream',
+      'Content-Disposition': 'inline',
+      ...NOSNIFF,
+    },
   },
 ];
 
@@ -137,7 +147,7 @@ export const attachmentUploadFixtures: AttachmentUploadFixture[] = [
       'hex hash of the request body.',
     requestHeaders: {
       'Content-Type': 'text/plain',
-      'Content-Disposition': "attachment; filename*=UTF-8''hello.txt",
+      'Content-Disposition': `attachment; filename="hello.txt"; filename*=UTF-8''hello.txt`,
     },
     requestBodyBytes: HELLO_BYTES,
     responseStatus: 200,
@@ -165,7 +175,7 @@ export const attachmentUploadFixtures: AttachmentUploadFixture[] = [
       'appId. See docs/spec/wire-format.md § Upload.',
     requestHeaders: {
       'Content-Type': 'text/plain',
-      'Content-Disposition': "attachment; filename*=UTF-8''hello.txt",
+      'Content-Disposition': `attachment; filename="hello.txt"; filename*=UTF-8''hello.txt`,
     },
     appId: 'com.example.myapp',
     requestBodyBytes: HELLO_BYTES,

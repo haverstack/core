@@ -777,18 +777,78 @@ describe('commitMigration() for an installed app', () => {
 
   test('the app acting for someone else, or a key not linked to the install, is refused', async () => {
     const note = await installForMigration();
+    for (const entityId of [PERSON, OTHER_DID]) {
+      await stack.grantType('com.example.notes/note', {
+        actions: ['read-any', 'update-any'],
+        grantee: { kind: 'entity', entityId },
+      });
+    }
     await expect(
       stack
         .asActor({ principalId: APP_DID, subjectId: PERSON })
         .commitMigration(note.id, NOTE_2, { text: 'hello' }),
     ).rejects.toThrow(StackPermissionError);
-    await stack.grantType('com.example.notes/note', {
-      actions: ['read-any', 'update-any'],
-      grantee: { kind: 'entity', entityId: OTHER_DID },
-    });
     await expect(
       stack.asEntity(OTHER_DID).commitMigration(note.id, NOTE_2, { text: 'hello' }),
     ).rejects.toThrow(StackPermissionError);
+  });
+
+  test('restoring a snapshot from another of its families passes the same gate', async () => {
+    const MEMO_1 = 'com.example.notes/memo@1';
+    await install(
+      manifest({
+        types: [
+          manifest().types[0]!,
+          { id: MEMO_1, name: 'Memo', schema: { text: { kind: 'text' } } },
+        ],
+        requests: [
+          ...MIGRATING,
+          { baseId: 'com.example.notes/memo', actions: ['read-any', 'update-any'] },
+        ],
+      }),
+    );
+    const note = await stack.create(NOTE_1, { text: 'hello' });
+    await stack.commitMigration(note.id, MEMO_1, { text: 'hello' });
+    const restored = await stack.asEntity(APP_DID).restoreVersion(note.id, 1);
+    expect(restored.typeId).toBe(NOTE_1);
+    await stack.commitMigration(note.id, MEMO_1, { text: 'again' });
+    await stack.grantType('com.example.notes/memo', {
+      actions: ['read-any', 'update-any'],
+      grantee: { kind: 'entity', entityId: PERSON },
+    });
+    await expect(
+      stack.asActor({ principalId: APP_DID, subjectId: PERSON }).restoreVersion(note.id, 1),
+    ).rejects.toThrow(StackPermissionError);
+    expect((await stack.get(note.id))!.typeId).toBe(MEMO_1);
+  });
+
+  test('a soft-deleted record refuses a restore with a conflict, across families or within one', async () => {
+    const MEMO_1 = 'com.example.notes/memo@1';
+    await install(
+      manifest({
+        types: [
+          manifest().types[0]!,
+          NOTE_2_TYPE,
+          { id: MEMO_1, name: 'Memo', schema: { text: { kind: 'text' } } },
+        ],
+        requests: [
+          ...MIGRATING,
+          { baseId: 'com.example.notes/memo', actions: ['read-any', 'update-any'] },
+        ],
+      }),
+    );
+    const across = await stack.create(NOTE_1, { text: 'hello' });
+    await stack.commitMigration(across.id, MEMO_1, { text: 'hello' });
+    await stack.delete(across.id);
+    await expect(stack.asEntity(APP_DID).restoreVersion(across.id, 1)).rejects.toThrow(
+      StackConflictError,
+    );
+    const within = await stack.create(NOTE_1, { text: 'hello' });
+    await stack.commitMigration(within.id, NOTE_2, { text: 'hello', pinned: false });
+    await stack.delete(within.id);
+    await expect(stack.asEntity(APP_DID).restoreVersion(within.id, 1)).rejects.toThrow(
+      StackConflictError,
+    );
   });
 
   test('an uninstalled app may no longer migrate', async () => {
