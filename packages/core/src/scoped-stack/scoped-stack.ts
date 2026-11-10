@@ -65,10 +65,10 @@ import type {
   Unsubscribe,
 } from '../types/index.js';
 import {
-  StackConflictError,
   StackNotFoundError,
   StackPermissionError,
   StackValidationError,
+  softDeletedRefusal,
 } from '../errors.js';
 import { assertAssociationEdits } from '../associations/validation.js';
 import { addsOf, associationEqual } from '../associations/identity.js';
@@ -881,11 +881,11 @@ export class ScopedStack implements StackClient {
   }
 
   /**
-   * Re-runs the reference-creation checks against the snapshot, so a
-   * restore can't re-convey access to a file the subject can no longer
-   * reach today. Only the owner acting alone is exempt: under delegation
-   * the checks resolve against the subject, which is whose reach the
-   * restore would widen. See docs/spec/versioning.md § Restore semantics.
+   * The write gate, then every check the snapshot's content owes: the
+   * migration gate when it comes from another family, the family's owner
+   * fields, and the file-reference gate, so a restore cannot re-convey a
+   * file the subject no longer reaches. See docs/spec/versioning.md
+   * § Restore semantics.
    */
   async restoreVersion(
     id: RecordId,
@@ -894,31 +894,27 @@ export class ScopedStack implements StackClient {
   ): Promise<StackRecord> {
     const snapshot = this.#authority.snapshot();
     const record = await this.requireUpdatable(id, { expect: opts }, snapshot);
-    if (!this.#authority.ownerActingAlone) {
-      const target = await this.stack.getVersion(id, version);
-      if (target) {
-        // A rollback moving a reserved value is the same trust decision a
-        // content patch reserves to the owner, reached by another route.
-        this.requireOwnerFields(
-          record.typeId,
-          record.content as Record<string, unknown>,
-          target.content as Record<string, unknown>,
-        );
-        await this.requireFileRefAccess(target.typeId, target.content, snapshot);
-        // Content's file refs are the only reference a restore can put
-        // back: containment and associations are not on a snapshot at all,
-        // so a restore never introduces either — see
-        // docs/spec/versioning.md § Restore semantics.
+    const target = await this.stack.getVersion(id, version);
+    if (target) {
+      if (baseIdOf(target.typeId) !== baseIdOf(record.typeId)) {
+        await this.requireMigration(record, target.typeId, snapshot);
       }
+      this.requireOwnerFields(
+        target.typeId,
+        record.content as Record<string, unknown>,
+        target.content as Record<string, unknown>,
+      );
+      // File refs are the only reference a snapshot carries: containment
+      // and associations are not on one at all.
+      await this.requireFileRefAccess(target.typeId, target.content, snapshot);
     }
     return this.stack.restoreVersion(id, version, { ...opts, ...this.actor });
   }
 
   /**
-   * Commit a per-record migration: the owner acting alone, or an installed
-   * app within its own families (requireInstallMigration()). Ordinary write
-   * access is not consent to move a record between families.
-   * See docs/spec/access-control.md § What a grant covers.
+   * The write gate, then the migration gate, then the checks the new
+   * content owes, as a create would. See docs/spec/access-control.md
+   * § What a grant covers.
    */
   async commitMigration(
     id: RecordId,
@@ -926,42 +922,37 @@ export class ScopedStack implements StackClient {
     content: Record<string, unknown>,
     opts: IfVersionOptions = {},
   ): Promise<StackRecord> {
-    if (!this.#authority.ownerActingAlone) {
-      const snapshot = this.#authority.snapshot();
-      const record = await this.requireInstallMigration(id, toTypeId, snapshot);
-      this.requireOwnerFields(toTypeId, record.content, content);
-      // The new content is a fresh set of file references, so an app is held
-      // to the gate create() applies; otherwise a migration could point one
-      // of its records at any attachment and read the bytes through it.
-      await this.requireFileRefAccess(toTypeId, content, snapshot);
-    }
+    const snapshot = this.#authority.snapshot();
+    const record = await this.requireUpdatable(id, {}, snapshot);
+    await this.requireMigration(record, toTypeId, snapshot);
+    this.requireOwnerFields(toTypeId, record.content, content);
+    // The new content is a fresh set of file references, held to the gate
+    // create() applies.
+    await this.requireFileRefAccess(toTypeId, content, snapshot);
     return this.stack.commitMigration(id, toTypeId, content, { ...opts, ...this.actor });
   }
 
   /**
-   * Refuse a migration this request may not commit as an installed app —
-   * see ScopeAuthority.installMayMigrate(). The tombstone refusal comes
-   * only once authority is settled, as every mutating verb asks it: the
-   * owner may migrate a tombstone; an app sees it without content.
-   * See docs/spec/apps.md § Migrating an installed app's types.
+   * Refuse migrating `record` to `toTypeId` unless this request is the owner
+   * acting alone, or an installed app within its own families migrating a
+   * live record — see ScopeAuthority.installMayMigrate(). commitMigration()
+   * and a cross-family restore ask it after the write gate.
+   * See docs/spec/access-control.md § What a grant covers.
    */
-  private async requireInstallMigration(
-    id: RecordId,
+  private async requireMigration(
+    record: StackRecord,
     toTypeId: TypeId,
     snapshot: AuthoritySnapshot,
-  ): Promise<StackRecord> {
-    const record = await this.stack.get(id, { includeDeleted: true });
-    if (!record || !(await this.#authority.installMayMigrate(record, toTypeId, snapshot))) {
+  ): Promise<void> {
+    if (this.#authority.ownerActingAlone) return;
+    if (!(await this.#authority.installMayMigrate(record, toTypeId, snapshot))) {
       throw new StackPermissionError(
-        'Only the stack owner, or an installed app within the type families it defines, may commit a migration',
+        `Only the stack owner, or an installed app within the type families it defines, may migrate a record to ${toTypeId}`,
       );
     }
-    if (record.deletedAt) {
-      throw new StackConflictError(
-        `Record "${id}" is soft-deleted; undelete it before migrating it.`,
-      );
-    }
-    return record;
+    // The install arm's own condition, asked once authority is settled: an
+    // app reads a soft-deleted record as a tombstone, with nothing to migrate.
+    if (record.deletedAt) throw softDeletedRefusal(record.id);
   }
 
   /**

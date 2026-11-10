@@ -1824,7 +1824,9 @@ describe('putAttachmentWithMetadata', () => {
     expect(init.method).toBe('POST');
     const headers = init.headers as Record<string, string>;
     expect(headers['Content-Type']).toBe('image/png');
-    expect(headers['Content-Disposition']).toBe("attachment; filename*=UTF-8''photo.png");
+    expect(headers['Content-Disposition']).toBe(
+      `attachment; filename="photo.png"; filename*=UTF-8''photo.png`,
+    );
   });
 
   // The upload is a mutation like any other: it creates the _attachment@1
