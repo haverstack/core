@@ -29,30 +29,22 @@ export type MapStep = {
 };
 export type AddStep = { readonly op: 'add'; readonly field: string; readonly value: unknown };
 export type DropStep = { readonly op: 'drop'; readonly field: string };
-/**
- * `derive` is a method so a step typed on one handle's content fits a list
- * of untyped ones, as `Migration.migrate` does.
- */
-export type DeriveStep<F = Record<string, unknown>> = {
+export type DeriveStep = {
   readonly op: 'derive';
   readonly field: string;
-  derive(content: F): unknown;
+  readonly derive: (content: Record<string, unknown>) => unknown;
 };
 
-/** One step of a migration, typed on the content stored at its `from`. */
-export type MigrationStep<F = Record<string, unknown>> =
-  | RenameStep
-  | MapStep
-  | AddStep
-  | DropStep
-  | DeriveStep<F>;
+/** One step of a migration. */
+export type MigrationStep = RenameStep | MapStep | AddStep | DropStep | DeriveStep;
 
 /**
  * The steps `migration()` hands its `steps` function, typed by both handles:
  * `F` is the content stored at `from`, `T` the content written at `to`.
  * `add` and `derive` produce a target field, so each takes one of `T`'s
- * fields and that field's write type; `rename`, `map` and `drop` name a
- * field at a point in the list, which `migration()` checks when it runs.
+ * fields and that field's write type, and no later step may name it.
+ * `rename`, `map` and `drop` name a field at a point in the list, which
+ * `migration()` checks when it runs.
  * See docs/spec/data-model.md § Migration steps.
  */
 export type Steps<F, T> = {
@@ -66,11 +58,11 @@ export type Steps<F, T> = {
   readonly map: (field: string, values: Readonly<Record<string, string>>) => MapStep;
   /** Remove a field. */
   readonly drop: (field: string) => DropStep;
-  /** Set a target field to a constant. */
-  readonly add: <K extends keyof T & string>(field: K, value: T[K]) => AddStep;
+  /** Set a target field to a constant, replacing what it held. */
+  readonly add: <K extends keyof T & string>(field: K, value: Exclude<T[K], undefined>) => AddStep;
   /**
    * Set a target field to what `fn` computes from the record as stored at
-   * `from`; `undefined` leaves it absent. The one opaque step: a field it
+   * `from`, replacing what it held; `undefined` leaves it absent. The one opaque step: a field it
    * produces does not translate across versions.
    */
   readonly derive: <K extends keyof T & string>(field: K, fn: (content: F) => T[K]) => DeriveStep;
@@ -87,7 +79,7 @@ export const stepBuilder: Steps<Record<string, unknown>, Record<string, unknown>
     Object.freeze({ op: 'derive', field, derive: fn }),
 });
 
-const describe = (step: MigrationStep<never>): string => {
+const describe = (step: MigrationStep): string => {
   switch (step.op) {
     case 'rename':
       return `rename("${step.from}", "${step.to}")`;
@@ -285,7 +277,7 @@ const carryProblem = (
  * docs/spec/data-model.md § Migration steps.
  */
 export const fieldOrigins = (
-  steps: readonly MigrationStep<never>[],
+  steps: readonly MigrationStep[],
   from: ReadonlyTypeSchema,
   to: ReadonlyTypeSchema,
 ): FieldOrigins | string => {
@@ -294,19 +286,15 @@ export const fieldOrigins = (
   );
   const removed = new Set<string>();
   // A step that produces a field is typed by the target's declaration of
-  // it, which only holds if no later step reshapes what it produced.
+  // it, which only holds if no later step touches what it produced.
   const producedBy = new Map<string, string>();
   for (const step of steps) {
     const at = describe(step);
     const named = step.op === 'rename' ? step.from : step.field;
-    if (step.op === 'add' || step.op === 'derive') {
-      producedBy.set(step.field, at);
-    } else {
-      if (!current.has(named)) return `${at}: "${named}" is not a field at this point`;
-      const producer = producedBy.get(named);
-      if (producer)
-        return `${at}: "${named}" is produced by ${producer}, which sets its final value`;
-    }
+    const producer = producedBy.get(named);
+    if (producer) return `${at}: "${named}" is produced by ${producer}, which sets its final value`;
+    if (step.op === 'add' || step.op === 'derive') producedBy.set(step.field, at);
+    else if (!current.has(named)) return `${at}: "${named}" is not a field at this point`;
     switch (step.op) {
       case 'rename':
         if (current.has(step.to)) return `${at}: "${step.to}" is already a field at this point`;
@@ -324,8 +312,6 @@ export const fieldOrigins = (
         break;
       }
       case 'add':
-        if (current.has(step.field))
-          return `${at}: "${step.field}" is already a field at this point`;
         if (step.value === undefined) return `${at}: an added field needs a value`;
         current.set(step.field, { kind: 'constant', value: step.value });
         break;

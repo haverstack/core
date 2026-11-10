@@ -440,21 +440,21 @@ A migration is a list of steps, applied in order to a copy of the stored content
 
 Steps name top-level fields. A nested change is a `derive` of the field that holds it.
 
-**The steps come from a builder `migration()` passes**, `Steps<StoredContentOf<F>, ContentOf<T>>` for handles of schemas `F` and `T`; there is no other way to name one. The builder is where both handles are known. `migration()` calls `steps` once and freezes the list it returns, so a migration is still data.
+**The steps come from a builder `migration()` passes**, `Steps<StoredContentOf<F>, ContentOf<T>>` for handles of schemas `F` and `T`. It is the only step constructor core exports, because it is where both handles are known; a step object written by hand is a `MigrationStep` the compiler does not check against either handle. `migration()` calls `steps` once and freezes the list it returns, so a migration is still data.
 
-**A step that produces a field is typed by the target.** `add` and `derive` produce a value for a target field, so `field` is one of `to`'s top-level fields and `value`, or what `fn` returns, is that field's write type, `ContentOf<T>[field]`. A `derive` from free text into an enum therefore compiles only if it maps every value, and a misspelled target field does not compile. The type a producing step is checked against holds only for the field's final value, so no later step may rename, map or drop a field an `add` or `derive` produced. Nothing is lost: `derive('a', …)` then `rename('a', 'b')` is `derive('b', …)`, and a `map` after an `add` or `derive` folds into it. `rename`, `map` and `drop` name a field at a point in the list, so they take plain strings, checked when `migration()` runs.
+**A step that produces a field is typed by the target, and sets its final value.** `add` and `derive` produce a value for a target field, so `field` is one of `to`'s top-level fields and what `fn` returns is that field's write type, `ContentOf<T>[field]`; `add`'s `value` is the same type without `undefined`, since an added field needs a value. A `derive` from free text into an enum therefore compiles only if it maps every value, and a misspelled target field does not compile. A producing step replaces whatever the field held at that point, and that type holds only for the field's final value, so no later step may name a field an `add` or `derive` produced — another `add` or `derive` included. Nothing is lost: `derive('a', …)` then `rename('a', 'b')` is `derive('b', …)`, and a `map`, `add` or `derive` after a producing step folds into it. `rename`, `map` and `drop` name a field at a point in the list, so they take plain strings, checked when `migration()` runs.
 
 **Steps are declared rather than written as a function so that core can read them.** Each says what became of a field, which is what lets a [collection](#type-handles) carry a content filter or sort across versions (see [Content queries across versions](#content-queries-across-versions)). `derive` is the one opaque step. It covers what the others cannot — a change of kind, a split, a value computed from other fields — and a field it produces does not translate. A stored enum may hold a value the source handle does not list, so `map` keeps an unlisted value rather than losing it, and `derive`'s function is typed on `StoredContentOf` the source handle.
 
 **`migration()` checks the steps against both schemas** and throws `StackMigrationError` naming the step or field at fault:
 
-- a `rename`, `map` or `drop` of a field that is not there at that point in the list, or a `rename` or `add` onto one that is;
-- a `rename`, `map` or `drop` of a field an earlier `add` or `derive` produced;
+- a `rename`, `map` or `drop` of a field that is not there at that point in the list, or a `rename` onto one that is;
+- any step naming a field an earlier `add` or `derive` produced;
 - a field left at the end that `to` does not declare — drop or rename it;
 - a field `to` requires that no step produces and `from` does not carry;
 - a carried field — unchanged, renamed or mapped — that `to` declares in a way its stored values could fail: a different kind (an `enum`, `string` or `text` into `string` or `text` aside), optional into required, an open container into a declared one, or an enum value, after any `map`, that `to`'s enum does not list. Containers are compared field by field;
 - a `map` of a field that is not an `enum`, `string` or `text`, or an array of one;
-- an `add` whose value `to`'s declaration of the field refuses.
+- an `add` with no value, or one `to`'s declaration of the field refuses.
 
 The compiler checks what `derive`'s function is declared to return; what it returns is known only when it runs, so validation against the target Type when `migrateAll()` or `commitMigration()` writes it stays the backstop.
 

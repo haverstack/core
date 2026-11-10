@@ -189,7 +189,7 @@ export const typeHandle = <const S extends ReadonlyTypeSchema>({
 export type Migration<From = Record<string, unknown>, To = Record<string, unknown>> = {
   readonly from: TypeId;
   readonly to: TypeId;
-  readonly steps: readonly MigrationStep<From>[];
+  readonly steps: readonly MigrationStep[];
   migrate(content: From): To;
 };
 

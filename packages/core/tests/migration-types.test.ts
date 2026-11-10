@@ -100,6 +100,16 @@ migration(V1, V2, ({ add, derive }) => [derive('stauts', () => 'want'), add('pin
     snippet: `
 migration(V1, V2, ({ add, derive }) => [derive('status', () => 'want'), add('pinned', 'yes')]);`,
   },
+  'add() of undefined, which sets no value': {
+    code: 2345,
+    message: `Argument of type 'undefined' is not assignable to parameter of type 'number'.`,
+    snippet: `
+migration(V1, V2, ({ add, derive }) => [
+  derive('status', () => 'want'),
+  add('pinned', false),
+  add('rating', undefined),
+]);`,
+  },
   'derive() of undefined into a required field': {
     code: 2322,
     message: `Type 'undefined' is not assignable to type '"want" | "reading" | "finished"'.`,

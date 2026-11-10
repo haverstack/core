@@ -333,20 +333,15 @@ describe('migration()', () => {
       );
     });
 
-    test('a step onto a field that is already there', () => {
+    test('a rename onto a field that is already there', () => {
       refused(
         same,
         ({ rename }) => [rename('title', 'count')],
         'rename("title", "count"): "count" is already a field at this point',
       );
-      refused(
-        same,
-        ({ add }) => [add('title', 'x')],
-        'add("title", …): "title" is already a field at this point',
-      );
     });
 
-    test('a step reshaping a field an add() or derive() produced', () => {
+    test('any step touching a field an add() or derive() produced', () => {
       refused(
         same,
         ({ derive, rename }) => [derive('title', () => 'x'), rename('title', 'name')],
@@ -362,6 +357,24 @@ describe('migration()', () => {
         ({ derive, drop }) => [derive('count', () => 1), drop('count')],
         'drop("count"): "count" is produced by derive("count", …), which sets its final value',
       );
+      refused(
+        same,
+        ({ add, derive }) => [add('title', 'x'), derive('title', () => 'y')],
+        'derive("title", …): "title" is produced by add("title", …), which sets its final value',
+      );
+      refused(
+        same,
+        ({ derive }) => [derive('title', () => 'x'), derive('title', () => 'y')],
+        'derive("title", …): "title" is produced by derive("title", …), which sets its final value',
+      );
+    });
+
+    test('an add() or derive() replaces a field the source carries', () => {
+      const m = migration(V1, handle(2, V1.schema, V1.id), ({ add, derive }) => [
+        add('title', 'Untitled'),
+        derive('count', (c) => (c.count ?? 0) + 1),
+      ]);
+      expect(m.migrate({ title: 'Dune', count: 1 })).toEqual({ title: 'Untitled', count: 2 });
     });
 
     test('a field the target does not declare', () => {

@@ -45,6 +45,30 @@ describe('fieldOrigins()', () => {
       values: { a: 'c', b: 'c', d: 'e' },
     });
   });
+
+  test('reads a field an add() or derive() replaced by its new origin', () => {
+    const result = origins(
+      [add('a', 'k'), derive('b', () => 'v')],
+      { a: { kind: 'string' }, b: { kind: 'string' } },
+      { a: { kind: 'string' }, b: { kind: 'string' } },
+    );
+    expect(result.get('a')).toEqual({ kind: 'constant', value: 'k' });
+    expect(result.get('b')).toEqual({ kind: 'derived' });
+  });
+
+  test('refuses any step after the one that produced its field', () => {
+    const schema = { s: status(['a', 'b']) };
+    for (const [producer, later] of [
+      [add('s', 'a'), map('s', { a: 'b' })],
+      [add('s', 'a'), derive('s', () => 'b')],
+      [derive('s', () => 'a'), rename('s', 't')],
+      [derive('s', () => 'a'), drop('s')],
+    ] as const) {
+      expect(fieldOrigins([producer, later], schema, schema)).toMatch(
+        /: "s" is produced by (add|derive)\("s", …\), which sets its final value$/,
+      );
+    }
+  });
 });
 
 describe('composeOrigins()', () => {
