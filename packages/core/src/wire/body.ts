@@ -20,7 +20,7 @@
 import { ARGUMENTS_INVALID, StackBadRequestError, StackValidationError } from '../errors.js';
 import type { DefineTypeOptions } from '../stack/client.js';
 import { assertKnownKeys, validateAssociation } from '../associations/validation.js';
-import { NONCE_FORMAT } from './auth.js';
+import { BASE64URL } from './auth.js';
 import type { AppManifest } from '../install.js';
 import type {
   AssociationEdit,
@@ -91,7 +91,7 @@ export type WireAuthTokenRequest = {
   nonce: string;
   signature: string;
   /** A signed delegation chain to `did`, root first: base64url UCAN envelopes. */
-  delegation?: string[];
+  delegationChain?: string[];
 };
 
 /**
@@ -107,34 +107,37 @@ export function parseAuthChallengeBody(body: unknown): WireAuthChallengeRequest 
 
 /**
  * Parse a `POST /auth/token` body. A subject is never named here: it comes
- * only from a signed `delegation`, which a server accepts only when it
- * advertises delegations and says so with `{ delegation: true }`; otherwise
- * the key is unrecognized input like any other. Whether a chain verifies
+ * only from a signed `delegationChain`, which a server accepts only when it
+ * advertises delegations and says so with `{ delegations: true }`;
+ * otherwise the key is unrecognized input like any other. Whether a chain verifies
  * is the server's `invalid_delegation`, not a parse failure.
  * See docs/spec/wire-format.md § The handshake.
  */
 export function parseAuthTokenBody(
   body: unknown,
-  opts: { delegation?: boolean } = {},
+  opts: { delegations?: boolean } = {},
 ): WireAuthTokenRequest {
   const label = 'auth token body';
-  const keys = ['did', 'nonce', 'signature', ...(opts.delegation ? ['delegation'] : [])];
+  const keys = ['did', 'nonce', 'signature', ...(opts.delegations ? ['delegationChain'] : [])];
   const b = requireKnownBody(body, keys, label);
-  const delegation = b.delegation;
-  if (delegation !== undefined) {
+  const chain = b.delegationChain;
+  if (chain !== undefined) {
     if (
-      !Array.isArray(delegation) ||
-      delegation.length === 0 ||
-      !delegation.every((d) => typeof d === 'string' && NONCE_FORMAT.test(d))
+      !Array.isArray(chain) ||
+      chain.length === 0 ||
+      !chain.every((d) => typeof d === 'string' && BASE64URL.test(d))
     ) {
-      fieldError('delegation', 'delegation must be a non-empty array of base64url strings');
+      fieldError(
+        'delegationChain',
+        'delegationChain must be a non-empty array of base64url strings',
+      );
     }
   }
   return {
     did: requiredString(b, 'did', label),
     nonce: requiredString(b, 'nonce', label),
     signature: requiredString(b, 'signature', label),
-    ...(delegation !== undefined && { delegation: delegation as string[] }),
+    ...(chain !== undefined && { delegationChain: chain as string[] }),
   };
 }
 

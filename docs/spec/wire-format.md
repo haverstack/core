@@ -86,7 +86,7 @@ A server whose handshake also accepts a [signed delegation](#the-handshake) name
 "auth": { "methods": ["did-challenge"], "delegations": ["ucan/dlg@1.0.0"] }
 ```
 
-`delegations` is not a method: it modifies `did-challenge`, the same two endpoints with `delegation` allowed on `/auth/token`, so `methods` keeps meaning the ways a token is earned. It names formats rather than saying yes, so a later delegation format arrives as another entry and a client asks for the one it holds. A server that doesn't list a client's format refuses the field as [unrecognized input](#unrecognized-input), so the client checks at `open()` instead of finding out from a 400.
+`delegations` is not a method: it modifies `did-challenge`, the same two endpoints with `delegationChain` allowed on `/auth/token`, so `methods` keeps meaning the ways a token is earned. It names formats rather than saying yes, so a later delegation format arrives as another entry and a client asks for the one it holds. A server that doesn't list a client's format refuses the field as [unrecognized input](#unrecognized-input), so the client checks at `open()` instead of finding out from a 400.
 
 Absent `auth` means only whatever issuance scheme was arranged out of band. A client holding a DID credential then learns at `open()` that there is nothing to perform, rather than discovering it as a 404 partway through a handshake. It is an object rather than a boolean because issuance is the surface most likely to grow another entry — a consent flow (below) arrives here.
 
@@ -102,14 +102,14 @@ POST /auth/token       { "did": "did:key:z6Mk...", "nonce": "k7Qm2Zx...", "signa
 
 Both are unauthenticated — they are how a token is obtained. `signature` is base64url.
 
-**A token request may carry a delegation.** On a server listing `ucan/dlg@1.0.0` in `auth.delegations`, `/auth/token` also takes `delegation`: a [UCAN Delegation 1.0](./access-control.md#signed-delegations) chain from a subject to `did`, as base64url envelopes, root first. The token it issues acts for that subject:
+**A token request may carry a delegation.** On a server listing `ucan/dlg@1.0.0` in `auth.delegations`, `/auth/token` also takes `delegationChain`: a [UCAN Delegation 1.0](./access-control.md#signed-delegations) chain from a subject to `did`, as base64url envelopes, root first. The token it issues acts for that subject:
 
 ```
-POST /auth/token       { "did": "did:key:z6Mk...", "nonce": "...", "signature": "...", "delegation": ["glhA..."] }
+POST /auth/token       { "did": "did:key:z6Mk...", "nonce": "...", "signature": "...", "delegationChain": ["glhA..."] }
                      → { "token": "...", "expiresAt": "...", "principalId": "did:key:z6Mk...", "subjectId": "did:key:z6Mt..." }
 ```
 
-The signature proves the principal and the chain, signed by the subject, proves the binding; a client never names a subject itself. The server validates the chain as `@haverstack/ucan`'s `acceptDelegation()` does: every link's signature, alignment from subject to `did`, time bounds and revocation, a chain ending at `did` and beginning at another identity. It authenticates `did` with the same key types it accepts as issuers, passing `verifyDidKey()` as the handshake's `verifyDid`, so a P-256 or secp256k1 key that can be delegated to can also sign in. It then issues a token no longer-lived than the chain's earliest expiry and keeps the chain with it ([below](#the-session-a-token-names)). A chain that fails any of that is `invalid_delegation`. The chain is not part of the signed payload, and needn't be: a delegation is addressed to `did`, so presenting one with a handshake for that key confers nothing the key didn't already hold.
+The signature proves the principal and the chain, signed by the subject, proves the binding; a client never names a subject itself. The server validates the chain as `@haverstack/ucan`'s `acceptDelegation()` does: every link's signature, alignment from subject to `did`, time bounds and revocation, a chain ending at `did` and beginning at another identity. It authenticates `did` exactly as it resolves issuers, passing `didVerifier({ resolveKey })` as the handshake's `verifyDid`, so any key that can be delegated to can also sign in. It then issues a token no longer-lived than the chain's earliest expiry and keeps the chain with it ([below](#the-session-a-token-names)). A chain that fails any of that is `invalid_delegation`. The chain is not part of the signed payload, and needn't be: a delegation is addressed to `did`, so presenting one with a handshake for that key confers nothing the key didn't already hold.
 
 **The nonce.** Opaque to the client, but restricted to unreserved base64url characters (`A-Za-z0-9_-`), because it lands in a newline-delimited signing payload where an unconstrained value could span fields. Its lifetime is the server's to choose and it is returned rather than assumed, so no client has to guess; **it MUST be single-use and bound to the DID it was issued for.** A nonce redeemable twice is a replayable signature, and one redeemable by a different DID proves nothing about either.
 
@@ -136,13 +136,13 @@ Two rules follow, and a server that skips either has a conformance gap rather th
 
 Handshake failures carry their own vocabulary, deliberately outside [`WireErrorCode`](#wire-error-body): no Stack operation has begun, so none of them is a `StackError` and none has a class to reconstruct — the same reason `InvalidDidError` stays outside that hierarchy.
 
-| Code                 | Status | Meaning                                                                  | Retryable |
-| -------------------- | ------ | ------------------------------------------------------------------------ | --------- |
-| `invalid_did`        | 400    | `did` is not a well-formed DID, or not one this server can verify        | No        |
-| `unknown_nonce`      | 401    | Never issued, or already spent                                           | Yes       |
-| `expired_nonce`      | 401    | Past `expiresAt`                                                         | Yes       |
-| `invalid_signature`  | 401    | Does not verify against the payload                                      | No        |
-| `invalid_delegation` | 401    | `delegation` does not validate, or is not from another identity to `did` | No        |
+| Code                 | Status | Meaning                                                                       | Retryable |
+| -------------------- | ------ | ----------------------------------------------------------------------------- | --------- |
+| `invalid_did`        | 400    | `did` is not a well-formed DID, or not one this server can verify             | No        |
+| `unknown_nonce`      | 401    | Never issued, or already spent                                                | Yes       |
+| `expired_nonce`      | 401    | Past `expiresAt`                                                              | Yes       |
+| `invalid_signature`  | 401    | Does not verify against the payload                                           | No        |
+| `invalid_delegation` | 401    | `delegationChain` does not validate, or is not from another identity to `did` | No        |
 
 ```json
 { "error": { "code": "expired_nonce", "message": "Challenge has expired" } }
@@ -175,7 +175,7 @@ Two more sit in code this spec doesn't reach but a server does: `createdBy` [mus
 
 ### The session a token names
 
-A token resolves to **two** identities — the principal that authenticated and the subject it acts for (see [Access control § Delegation](./access-control.md#delegation-principal-and-subject)). `/auth/token` reports both, and **reports them equal unless the request carried a delegation that validated**: proving key possession proves the principal and says nothing whatever about whom that key may act for. A client can't add a field naming its subject — an app that could would be choosing its own authority, and containment would evaporate. What it can add is the subject's own signature over the binding, which is what `delegation` is.
+A token resolves to **two** identities — the principal that authenticated and the subject it acts for (see [Access control § Delegation](./access-control.md#delegation-principal-and-subject)). `/auth/token` reports both, and **reports them equal unless the request carried a delegation that validated**: proving key possession proves the principal and says nothing whatever about whom that key may act for. A client can't add a field naming its subject — an app that could would be choosing its own authority, and containment would evaporate. What it can add is the subject's own signature over the binding, which is what `delegationChain` is.
 
 **A delegated session carries its chain.** The token store keeps it, `lookupToken()` returns it as `delegationChain`, and on each request the server validates it again and passes the result to `asActor(session, { delegation })`, where it counts on the principal's side of the intersection as a [signed delegation](./access-control.md#signed-delegations).
 

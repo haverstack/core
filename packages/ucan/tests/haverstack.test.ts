@@ -67,7 +67,11 @@ describe('acceptDelegation', () => {
     const accepted = await acceptDelegation([root.bytes], app.did, { now: NOW });
     expect(accepted.subjectId).toBe(member.did);
     expect(accepted.expiresAt).toEqual(new Date((NOW + 600) * 1000));
-    expect(accepted.delegation).toMatchObject({ subjectId: member.did, principalId: app.did });
+    expect(accepted.delegation).toMatchObject({
+      subjectId: member.did,
+      principalId: app.did,
+      chain: [root.bytes],
+    });
     expect(accepted.delegation.allows('read', 'x')).toBe(true);
   });
 

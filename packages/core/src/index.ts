@@ -116,7 +116,7 @@ export type {
   VersionsQuery,
   Actor,
   ActorOptions,
-  DelegatedVerb,
+  RecordVerb,
   SignedDelegation,
   ChangeKind,
   ChangeOp,

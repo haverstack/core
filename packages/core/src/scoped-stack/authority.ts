@@ -32,7 +32,6 @@ import {
   queryAllPages,
 } from '../stack/reads.js';
 import { AuthoritySnapshot } from './authority-snapshot.js';
-import type { ReachVerb } from './authority-snapshot.js';
 import { SYSTEM_TYPES } from '../types/index.js';
 import type {
   Actor,
@@ -47,6 +46,7 @@ import type {
   InstallContent,
   QueryResult,
   Reach,
+  RecordVerb,
   SignedDelegation,
   StackRecord,
   TypeId,
@@ -71,12 +71,25 @@ type GrantSide = typeof SUBJECT_SIDE | typeof PRINCIPAL_SIDE;
  * the one reaching the subject's own Records in it, and the permission bit
  * reaching one Record. See docs/spec/access-control.md § Reach.
  */
-const VERBS: Record<ReachVerb, { any: GrantAction; own?: GrantAction; bit?: 'read' | 'write' }> = {
+const VERBS: Record<RecordVerb, { any: GrantAction; own?: GrantAction; bit?: 'read' | 'write' }> = {
   create: { any: 'create' },
   read: { any: 'read-any', own: 'read-own', bit: 'read' },
   update: { any: 'update-any', own: 'update-own', bit: 'write' },
   delete: { any: 'delete-any', own: 'delete-own', bit: 'write' },
 };
+
+const RECORD_VERBS = Object.keys(VERBS) as RecordVerb[];
+
+/**
+ * Families a signed delegation never reaches: those whose Records are
+ * authority, granting it or withdrawing it, so no delegation can widen its
+ * own reach or lift a revocation. See docs/spec/access-control.md
+ * § Signed delegations.
+ */
+const UNDELEGABLE_FAMILIES: ReadonlySet<string> = new Set([
+  ...UNGRANTABLE_SYSTEM_TYPES,
+  SYSTEM_TYPES.REVOCATION,
+]);
 
 const ANYONE: AuthorityAssociation = { kind: 'anyone', label: 'read' };
 
@@ -206,16 +219,25 @@ export class ScopeAuthority {
 
   /**
    * The families the subject's signed delegation lets the principal `verb`,
-   * among those the stack defines. Never an ungrantable family: a signature
-   * reaches no further than a grant naming the principal could.
-   * See docs/spec/access-control.md § Signed delegations.
+   * among those the stack defines. Its verbs are read as `-any` grant
+   * actions through grantConveys(), so it conveys what a grant naming the
+   * principal would, write-implies-read included, and never a family that
+   * governs authority. See docs/spec/access-control.md § Signed delegations.
    */
-  private async familiesDelegated(verb: ReachVerb, snapshot: AuthoritySnapshot): Promise<BaseId[]> {
+  private async familiesDelegated(
+    verb: RecordVerb,
+    snapshot: AuthoritySnapshot,
+  ): Promise<BaseId[]> {
     const delegation = this.delegation;
     if (!delegation) return [];
-    return [...(await snapshot.families())].filter(
-      (family) => !UNGRANTABLE_SYSTEM_TYPES.has(family) && delegation.allows(verb, family),
-    );
+    const action = VERBS[verb].any;
+    return [...(await snapshot.families())].filter((family) => {
+      if (UNDELEGABLE_FAMILIES.has(family)) return false;
+      const actions = RECORD_VERBS.filter((v) => delegation.allows(v, family)).map(
+        (v) => VERBS[v].any,
+      );
+      return grantConveys(actions, action);
+    });
   }
 
   /**
@@ -225,7 +247,7 @@ export class ScopeAuthority {
    * the subject reaches what grants and permissions give it, an owner
    * subject everything. See docs/spec/access-control.md § Reach.
    */
-  private async buildReach(verb: ReachVerb, snapshot: AuthoritySnapshot): Promise<Reach> {
+  private async buildReach(verb: RecordVerb, snapshot: AuthoritySnapshot): Promise<Reach> {
     const { any, own, bit } = VERBS[verb];
     const reach: Reach = this.principalUnbounded
       ? {}
@@ -285,7 +307,11 @@ export class ScopeAuthority {
   }
 
   /** Whether this request may `verb` the Record: its reach, asked of one Record. */
-  async may(verb: ReachVerb, record: ReachedRecord, snapshot: AuthoritySnapshot): Promise<boolean> {
+  async may(
+    verb: RecordVerb,
+    record: ReachedRecord,
+    snapshot: AuthoritySnapshot,
+  ): Promise<boolean> {
     return inReach(record, await snapshot.reach(verb));
   }
 
@@ -294,7 +320,7 @@ export class ScopeAuthority {
    * reaches the Record, for a refusal that says which side lacked the verb.
    */
   async subjectMay(
-    verb: ReachVerb,
+    verb: RecordVerb,
     record: ReachedRecord,
     snapshot: AuthoritySnapshot,
   ): Promise<boolean> {

@@ -240,10 +240,7 @@ describe('auth handshake fixtures', () => {
     };
     const delegatedCredential = async () => ({
       ...didCredentialFromKeypair(await generateDidKeypair()),
-      delegation: {
-        subjectId: AUTH_FIXTURE_SUBJECT_DID,
-        chain: [base64urlDecode(AUTH_FIXTURE_DELEGATION)],
-      },
+      delegationChain: [base64urlDecode(AUTH_FIXTURE_DELEGATION)],
     });
     // The fixture's session, issued to this test's own key rather than the fixture DID.
     const sessionFor = (did: string, subjectId = AUTH_FIXTURE_SUBJECT_DID) => ({
@@ -262,7 +259,7 @@ describe('auth handshake fixtures', () => {
       const [, tokenInit] = mockFetch.mock.calls[2] as [string, RequestInit];
       const sent = JSON.parse(tokenInit.body as string) as Record<string, unknown>;
       expect(Object.keys(sent).sort()).toEqual(Object.keys(delegatedFixture.requestBody!).sort());
-      expect(sent.delegation).toEqual(delegatedFixture.requestBody!.delegation);
+      expect(sent.delegationChain).toEqual(delegatedFixture.requestBody!.delegationChain);
     });
 
     test('is refused before signing by a server that does not advertise it', async () => {
@@ -277,7 +274,7 @@ describe('auth handshake fixtures', () => {
       expect(mockFetch).toHaveBeenCalledTimes(1);
     });
 
-    test('refuses a session for anyone but the subject that signed', async () => {
+    test('refuses a session that ignored the chain', async () => {
       const credential = await delegatedCredential();
       mockFetch.mockResolvedValueOnce(jsonResponse(DELEGATED_DISCOVERY));
       mockFetch.mockResolvedValueOnce(jsonResponse(challengeFixture.responseBody));

@@ -48,6 +48,7 @@ import type {
   FileId,
   QueryResult,
   Reach,
+  RecordVerb,
   RecordChange,
   RecordId,
   RecordVersion,
@@ -109,7 +110,7 @@ import type { AppManifest, InstallRequestResult } from '../install.js';
 import { ScopeAuthority } from './authority.js';
 import { familyPolicy, ownerFieldRefusal } from './family-policy.js';
 import { ScopedSubscription } from './subscription.js';
-import type { AuthoritySnapshot, ReachVerb } from './authority-snapshot.js';
+import type { AuthoritySnapshot } from './authority-snapshot.js';
 import type {
   BackdatableCreateRecordOptions,
   CollectAttachmentGarbageOptions,
@@ -293,7 +294,7 @@ export class ScopedStack implements StackClient {
    */
   private async requireVerb(
     id: string,
-    verb: ReachVerb,
+    verb: RecordVerb,
     opts: { fenceGrantRecord: boolean; expect?: ExpectationOptions },
     snapshot: AuthoritySnapshot,
   ): Promise<StackRecord> {
@@ -309,7 +310,7 @@ export class ScopedStack implements StackClient {
   /** requireVerb()'s gate, asked of a record already found in its family. */
   private async gateVerb(
     record: StackRecord,
-    verb: ReachVerb,
+    verb: RecordVerb,
     fenceGrantRecord: boolean,
     snapshot: AuthoritySnapshot,
   ): Promise<void> {

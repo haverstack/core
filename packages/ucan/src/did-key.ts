@@ -58,22 +58,21 @@ export const didKeyFromPublicKey = (alg: SignatureAlgorithm, publicKey: Uint8Arr
 };
 
 /**
- * Verify a signature by any did:key UCAN accepts: Ed25519, P-256 or
- * secp256k1. The same check every signature in this package makes, shaped
- * as core's `DidSignatureVerifier`, so a server accepting delegations
- * passes it to the handshake as `verifyDid` and authenticates exactly the
- * keys it accepts as issuers. Any other DID, or a key that fails to
+ * The one answer to whether a DID signed something: a did:key of any type
+ * UCAN accepts, or any other DID whose key `resolveKey` finds. validateChain()
+ * resolves issuers the same way, so a server passing the same `resolveKey`
+ * to both authenticates as principals exactly the identities it accepts as
+ * issuers. Shaped as core's `DidSignatureVerifier`, the handshake's
+ * `verifyDid`. A DID that can't be resolved, or a key that fails to
  * decode, verifies nothing.
  */
-export const verifyDidKey = async (
-  did: string,
-  signature: Uint8Array,
-  payload: Uint8Array,
-): Promise<boolean> => {
-  try {
-    const key = parseDidKey(did);
-    return key !== null && verifySignature(key.alg, key.publicKey, signature, payload);
-  } catch {
-    return false;
-  }
-};
+export const didVerifier =
+  (options: { resolveKey?: (did: string) => Promise<IssuerKey | null> } = {}) =>
+  async (did: string, signature: Uint8Array, payload: Uint8Array): Promise<boolean> => {
+    try {
+      const key = parseDidKey(did) ?? (await options.resolveKey?.(stripFragment(did))) ?? null;
+      return key !== null && verifySignature(key.alg, key.publicKey, signature, payload);
+    } catch {
+      return false;
+    }
+  };

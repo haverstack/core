@@ -188,6 +188,14 @@ import type { Collection } from '../collection.js';
  * empty id is refused rather than stored as a name for nobody.
  * See docs/spec/data-model.md § Actor.
  */
+/** Whether two encoded delegation chains are the same bytes, link for link. */
+function sameChain(a: readonly Uint8Array[], b: readonly Uint8Array[]): boolean {
+  return (
+    a.length === b.length &&
+    a.every((link, i) => link.length === b[i]!.length && link.every((byte, j) => byte === b[i]![j]))
+  );
+}
+
 function normalizeActor(actor: Actor | undefined): Actor | undefined {
   if (!actor) return undefined;
   for (const field of ['subjectId', 'principalId'] as const) {
@@ -374,7 +382,7 @@ export class Stack implements StackClient {
    * it in its chain. A server passes this as a chain validator's
    * revocation check. See docs/spec/access-control.md § Revoking a delegation.
    */
-  async isDelegationRevoked(cid: string, issuers: readonly EntityId[] = []): Promise<boolean> {
+  async isDelegationRevoked(cid: string, issuers: readonly EntityId[]): Promise<boolean> {
     this.assertOpen();
     return isRevokedCid(this, cid, issuers);
   }
@@ -401,15 +409,21 @@ export class Stack implements StackClient {
    * verified widens what the principal's side admits, and must name this
    * very pair. See docs/spec/access-control.md § Signed delegations.
    */
-  asActor(actor: Actor, opts: { delegation?: SignedDelegation } = {}): ScopedStack {
+  asActor(actor: Actor | TokenSession, opts: { delegation?: SignedDelegation } = {}): ScopedStack {
     const { subjectId, principalId = subjectId } = normalizeActor(actor)!;
     const { delegation } = opts;
-    // A session issued on a chain carries authority only through it; passed
-    // without one, it would quietly act with less than it was issued.
-    if ((actor as TokenSession).delegationChain && !delegation) {
+    // A session issued on a chain carries authority only through it, and
+    // only through the delegation verified from that very chain.
+    const chain = 'delegationChain' in actor ? actor.delegationChain : undefined;
+    if (chain && !delegation) {
       throw new StackBadRequestError(
         'This session was issued on a delegation chain: validate it and pass the result as ' +
           '{ delegation }.',
+      );
+    }
+    if (chain && delegation && !sameChain(chain, delegation.chain)) {
+      throw new StackBadRequestError(
+        'The signed delegation was verified from a different chain than the session carries.',
       );
     }
     if (delegation) {

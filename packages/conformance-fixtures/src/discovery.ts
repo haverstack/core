@@ -125,7 +125,7 @@ export const discoveryFixtures: ConformanceFixture<undefined, DiscoveryResponse>
     description:
       'A server whose handshake accepts a signed delegation chain names the formats it accepts ' +
       'in `auth.delegations`, by envelope tag. It modifies "did-challenge" rather than being a ' +
-      'way to earn a token of its own: the same two endpoints, with `delegation` allowed on ' +
+      'way to earn a token of its own: the same two endpoints, with `delegationChain` allowed on ' +
       'POST /auth/token. A client holding a delegation checks for its format at open(), since ' +
       'a server without it refuses the field as unrecognized input — see ' +
       'docs/spec/wire-format.md § Advertising it.',

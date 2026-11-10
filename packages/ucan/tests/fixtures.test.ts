@@ -20,7 +20,7 @@ const decode = (b64: string) => new Uint8Array(Buffer.from(b64, 'base64url'));
 describe('delegation fixtures', () => {
   it('the delegated-token fixture carries a chain from its subject to the fixture DID', async () => {
     const fixture = authTokenFixtures.find((f) => f.name === 'auth-token-issues-delegated-token')!;
-    expect(fixture.requestBody!.delegation).toEqual([AUTH_FIXTURE_DELEGATION]);
+    expect(fixture.requestBody!.delegationChain).toEqual([AUTH_FIXTURE_DELEGATION]);
     const accepted = await acceptDelegation([decode(AUTH_FIXTURE_DELEGATION)], AUTH_FIXTURE_DID);
     expect(accepted.subjectId).toBe(AUTH_FIXTURE_SUBJECT_DID);
     expect(accepted.expiresAt).toBeNull();

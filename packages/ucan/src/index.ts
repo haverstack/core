@@ -13,7 +13,7 @@ export {
   parseDidKey,
   didKeyFromPublicKey,
   stripFragment,
-  verifyDidKey,
+  didVerifier,
   type IssuerKey,
 } from './did-key.js';
 export { verifySignature } from './signature.js';

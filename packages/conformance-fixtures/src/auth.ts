@@ -106,7 +106,7 @@ export const authTokenFixtures: ConformanceFixture<
       "that payload includes the server's own public origin, which is what stops a signature " +
       'made for one server being redeemed at another. principalId and subjectId are both ' +
       'reported and are equal here: a handshake proves key possession, which says nothing about ' +
-      'whom that key may act for. Only a signed `delegation` makes them differ — see ' +
+      'whom that key may act for. Only a signed `delegationChain` makes them differ — see ' +
       'auth-token-issues-delegated-token.',
     method: 'POST',
     path: '/auth/token',
@@ -126,7 +126,7 @@ export const authTokenFixtures: ConformanceFixture<
   {
     name: 'auth-token-issues-delegated-token',
     description:
-      'A handshake carrying `delegation` — a UCAN chain, base64url envelopes root first, from a ' +
+      'A handshake carrying `delegationChain` — a UCAN chain, base64url envelopes root first, from a ' +
       'subject to the DID that signs — issues a token acting for that subject. The signature ' +
       'proves the principal; the chain, signed by the subject, is the only way a subject reaches ' +
       'the session, so a client never names one. A server listing "ucan/dlg@1.0.0" in `auth.delegations` ' +
@@ -139,7 +139,7 @@ export const authTokenFixtures: ConformanceFixture<
       did: AUTH_FIXTURE_DID,
       nonce: AUTH_FIXTURE_NONCE,
       signature: AUTH_FIXTURE_SIGNATURE,
-      delegation: [AUTH_FIXTURE_DELEGATION],
+      delegationChain: [AUTH_FIXTURE_DELEGATION],
     },
     responseStatus: 200,
     responseBody: {
@@ -162,7 +162,7 @@ export const authTokenFixtures: ConformanceFixture<
       did: AUTH_FIXTURE_DID,
       nonce: AUTH_FIXTURE_NONCE,
       signature: AUTH_FIXTURE_SIGNATURE,
-      delegation: [AUTH_FIXTURE_FOREIGN_DELEGATION],
+      delegationChain: [AUTH_FIXTURE_FOREIGN_DELEGATION],
     },
     responseStatus: 401,
     responseBody: {

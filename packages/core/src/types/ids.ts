@@ -48,8 +48,11 @@ export type Actor = {
   principalId?: EntityId;
 };
 
-/** A record verb a signed delegation can authorize: the grant actions, without `-own`/`-any`. */
-export type DelegatedVerb = 'create' | 'read' | 'update' | 'delete';
+/**
+ * What a request can do to a Record: the grant actions without `-own`/`-any`.
+ * Each builds its own reach, and a signed delegation authorizes them by name.
+ */
+export type RecordVerb = 'create' | 'read' | 'update' | 'delete';
 
 /**
  * What a subject's signed delegation lets one principal do. Whoever
@@ -60,6 +63,8 @@ export type DelegatedVerb = 'create' | 'read' | 'update' | 'delete';
 export type SignedDelegation = {
   subjectId: EntityId;
   principalId: EntityId;
+  /** The encoded chain it was verified from, root first, which a session's chain must match. */
+  chain: readonly Uint8Array[];
   /** Whether the principal may `verb` Records of the family `baseId` for its subject. */
-  allows: (verb: DelegatedVerb, baseId: BaseId) => boolean;
+  allows: (verb: RecordVerb, baseId: BaseId) => boolean;
 };

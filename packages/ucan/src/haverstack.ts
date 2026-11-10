@@ -10,7 +10,7 @@
  * See docs/spec/access-control.md § Signed delegations.
  */
 
-import type { DelegatedVerb, SignedDelegation } from '@haverstack/core';
+import type { RecordVerb, SignedDelegation } from '@haverstack/core';
 import { authorizes, validateChain, type ChainOptions, type ValidChain } from './chain.js';
 import { decodeDelegation } from './delegation.js';
 import { stripFragment } from './did-key.js';
@@ -19,7 +19,7 @@ import { UcanError } from './errors.js';
 /** Proves every record verb, and only those. */
 export const RECORD_COMMAND = '/haverstack/record';
 
-export const recordCommand = (verb: DelegatedVerb): string => `${RECORD_COMMAND}/${verb}`;
+export const recordCommand = (verb: RecordVerb): string => `${RECORD_COMMAND}/${verb}`;
 
 /**
  * What a validated chain lets its audience do for its subject, in the form
@@ -30,6 +30,7 @@ export const recordCommand = (verb: DelegatedVerb): string => `${RECORD_COMMAND}
 export const signedDelegation = (chain: ValidChain): SignedDelegation => ({
   subjectId: chain.subject,
   principalId: chain.audience,
+  chain: chain.delegations.map((d) => d.bytes),
   allows: (verb, baseId) => authorizes(chain, recordCommand(verb), { baseId }),
 });
 

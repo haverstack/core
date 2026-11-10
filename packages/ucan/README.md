@@ -79,17 +79,18 @@ Haverstack's commands mirror its grant actions: `/haverstack/record/create`, `/h
 
 ## Serving a delegated session
 
-`acceptDelegation()` is what a server runs at `POST /auth/token` when the request carries a `delegation`, and again on each request the resulting token makes:
+`acceptDelegation()` is what a server runs at `POST /auth/token` when the request carries a `delegationChain`, and again on each request the resulting token makes:
 
 ```ts
-import { acceptDelegation } from '@haverstack/ucan';
+import { acceptDelegation, didVerifier } from '@haverstack/ucan';
 
 // A delegation's issuer, or the owner, revokes it by writing a `_revocation` Record
 // naming its CID.
 const isRevoked = (cid: string, issuers: readonly string[]) =>
   stack.isDelegationRevoked(cid, issuers);
 
-// At /auth/token, after the handshake signature verified for `did`:
+// At /auth/token, after verifyAuthChallenge(challenge, signature, { verifyDid: didVerifier() })
+// verified the signature for `did`, so it authenticates the same keys chains accept:
 const accepted = await acceptDelegation(chain, did, { isRevoked });
 await tokens.createToken(
   { subjectId: accepted.subjectId, principalId: did },

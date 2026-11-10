@@ -353,7 +353,7 @@ export class APIAdapter implements StackAdapter {
             'credential has no handshake to perform against it.',
         );
       }
-      if (opts.credential.delegation && !supportsDelegation(discovery)) {
+      if (opts.credential.delegationChain && !supportsDelegation(discovery)) {
         throw new APIAdapterAuthUnsupportedError(
           `Server at "${baseUrl}" does not accept "ucan/dlg@1.0.0" delegations; a ` +
             'credential carrying one cannot act for its subject there.',

@@ -55,11 +55,11 @@ export class InvalidAuthChallengeError extends Error {
 export const AUTH_PAYLOAD_LABEL = 'haverstack-auth-v1';
 
 /**
- * A server-issued nonce is opaque, but not arbitrary — it lands in a
- * newline-delimited payload, so the charset is what keeps a nonce from
- * spanning fields. base64url, hex and UUID all satisfy it.
+ * Unreserved base64url characters, nothing else: how a nonce, a signature
+ * or an encoded delegation travels. For a nonce it is also what keeps one
+ * from spanning fields of a newline-delimited payload.
  */
-export const NONCE_FORMAT = /^[A-Za-z0-9_-]+$/;
+export const BASE64URL = /^[A-Za-z0-9_-]+$/;
 
 export type AuthChallenge = {
   /** The server's own public origin, e.g. "https://stack.example.com". */
@@ -102,7 +102,7 @@ export const buildAuthChallengePayload = (challenge: AuthChallenge): Uint8Array 
   if (!isValidDid(challenge.did)) {
     throw new InvalidAuthChallengeError(`Not a valid DID: "${challenge.did}"`);
   }
-  if (!NONCE_FORMAT.test(challenge.nonce)) {
+  if (!BASE64URL.test(challenge.nonce)) {
     throw new InvalidAuthChallengeError(
       'Nonce must be a non-empty string of unreserved base64url characters.',
     );
@@ -175,11 +175,11 @@ export type DidCredential = {
   did: string;
   sign: (payload: Uint8Array) => Promise<Uint8Array>;
   /**
-   * A delegation chain from `subjectId` to `did`, root first, to act for
-   * that subject. Sent with every handshake, so a renewed session acts for
-   * the same subject. See docs/spec/wire-format.md § The handshake.
+   * A delegation chain to `did`, root first, to act for the subject at its
+   * root. Sent with every handshake, so a renewed session acts for the same
+   * subject. See docs/spec/wire-format.md § The handshake.
    */
-  delegation?: { subjectId: string; chain: Uint8Array[] };
+  delegationChain?: Uint8Array[];
 };
 
 /**
@@ -203,7 +203,7 @@ export const base64urlEncode = (bytes: Uint8Array): string => {
 };
 
 export const base64urlDecode = (encoded: string): Uint8Array => {
-  if (!NONCE_FORMAT.test(encoded)) {
+  if (!BASE64URL.test(encoded)) {
     throw new InvalidAuthChallengeError('Not valid base64url.');
   }
   const padded = encoded.replace(/-/g, '+').replace(/_/g, '/');

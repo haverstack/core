@@ -79,7 +79,7 @@ The delegation itself — "this app acts for Bob" — is never the app's to clai
 ```ts
 const credential = {
   ...didCredentialFromKeypair(appKeypair),
-  delegation: { subjectId: bobDid, chain: [delegation.bytes] },
+  delegationChain: [delegation.bytes],
 };
 ```
 
