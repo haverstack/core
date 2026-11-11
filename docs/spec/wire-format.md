@@ -671,7 +671,7 @@ An optional `?appId=` query param carries the writing app's reverse-DNS identifi
 POST /attachments?appId=com.example.myapp
 Authorization: Bearer <token>
 Content-Type: image/png
-Content-Disposition: attachment; filename*=UTF-8''photo.png
+Content-Disposition: attachment; filename="photo.png"; filename*=UTF-8''photo.png
 
 <binary data>
 ```
@@ -720,6 +720,8 @@ GET /attachments/<fileId>?contentType=image/png&filename=photo.png
 `@haverstack/core/wire` exports the canonical implementation of this resolution and policy — `resolveAttachmentDownloadContentType()`, `isSafeAttachmentContentType()`, `inferContentTypeFromFilename()`, and the `NOSNIFF_HEADER_NAME`/`NOSNIFF_HEADER_VALUE` constants — so server implementations share one safe-list rather than each re-deriving it.
 
 The filename in `Content-Disposition` is taken from `?filename` if given, else the requester's own `_attachment@1` record (if one exists), falling back to the first record's filename otherwise — `resolveReferencedAttachment()`, exported from `@haverstack/core/wire`, applies those last two steps.
+
+**The filename is encoded by core, not by each side.** It is text a requester or an uploader chose, written into a header, so one function encodes it in both directions: `contentDispositionFilename()` in `@haverstack/core/wire` gives a quoted ASCII `filename` with every control, non-ASCII, `"` and `\` character replaced by `_`, beside the exact name as an RFC 8187 `filename*`. `APIAdapter` sends it on an upload, `parseContentDispositionFilename()` reads it back preferring `filename*`, and `attachmentContentDisposition()` puts it on a download behind the disposition: `attachment` when the type was forced and `inline` otherwise. Every download carries one, the bare disposition when there is no filename. A filename never changes the disposition, so it cannot turn a forced download back into an inline one.
 
 **A download names a `fileId`, not a reference to one**, so an association's [`attachmentRecordId`](./attachments.md#naming-the-upload-a-reference-came-from) has no place in this resolution: the request carries no record, and a query parameter naming one would be an existence oracle for record ids the requester cannot read. A client holding the association resolves the name it wants from the same helper and sends it as `?filename`, which is what that parameter is for.
 

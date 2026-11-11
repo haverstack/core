@@ -22,6 +22,8 @@
  * string the safe-list read would otherwise differ.
  */
 
+import { contentDispositionFilename } from './content-disposition.js';
+
 /** MIME types that pass through unforced, regardless of source. */
 const SAFE_EXACT_TYPES = new Set(['application/pdf', 'text/plain', 'application/octet-stream']);
 
@@ -146,4 +148,17 @@ export function resolveAttachmentDownloadContentType(input: {
   return isSafeAttachmentContentType(candidate)
     ? { contentType: candidate, forced: false }
     : { contentType: FORCED_CONTENT_TYPE, forced: true };
+}
+
+/**
+ * The `Content-Disposition` a download is served with: `attachment` when
+ * the type was forced and `inline` otherwise, then the filename when there
+ * is one. Forcing alone decides the disposition, so a filename cannot turn
+ * a forced download inline. See docs/spec/wire-format.md § Download.
+ */
+export function attachmentContentDisposition(opts: { filename?: string; forced: boolean }): string {
+  const disposition = opts.forced ? 'attachment' : 'inline';
+  return opts.filename
+    ? `${disposition}; ${contentDispositionFilename(opts.filename)}`
+    : disposition;
 }

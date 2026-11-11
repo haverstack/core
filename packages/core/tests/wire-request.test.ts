@@ -1,3 +1,4 @@
+import { parseContentDispositionFilename } from '../src/wire/content-disposition.js';
 import { describe, test, expect } from 'vitest';
 import {
   parseQueryParams,
@@ -11,7 +12,6 @@ import {
   parseDownloadParams,
   parseAssociationParams,
   parseIfMatch,
-  parseUploadFilename,
   parseUnsignedInt,
   parseDate,
   assertQueryTravels,
@@ -456,29 +456,39 @@ describe('parseIfMatch', () => {
   });
 });
 
-describe('parseUploadFilename', () => {
+describe('parseContentDispositionFilename', () => {
   test('an absent header yields no filename', () => {
-    expect(parseUploadFilename(undefined)).toBeUndefined();
+    expect(parseContentDispositionFilename(undefined)).toBeUndefined();
   });
 
-  test('the RFC 5987 extended form wins over the plain one', () => {
+  test('a filename* in another charset falls back to the plain form', () => {
     expect(
-      parseUploadFilename(`attachment; filename="fallback.txt"; filename*=UTF-8''caf%C3%A9.txt`),
+      parseContentDispositionFilename(
+        `attachment; filename="plain.txt"; filename*=ISO-8859-1''caf%E9.txt`,
+      ),
+    ).toBe('plain.txt');
+  });
+
+  test('the RFC 8187 extended form wins over the plain one', () => {
+    expect(
+      parseContentDispositionFilename(
+        `attachment; filename="fallback.txt"; filename*=UTF-8''caf%C3%A9.txt`,
+      ),
     ).toBe('café.txt');
   });
 
   test('the plain quoted form is the fallback', () => {
-    expect(parseUploadFilename('attachment; filename="report.pdf"')).toBe('report.pdf');
+    expect(parseContentDispositionFilename('attachment; filename="report.pdf"')).toBe('report.pdf');
   });
 
   test('malformed percent-encoding falls back rather than throwing', () => {
-    expect(parseUploadFilename(`attachment; filename="ok.txt"; filename*=UTF-8''%E0%A4%A`)).toBe(
-      'ok.txt',
-    );
+    expect(
+      parseContentDispositionFilename(`attachment; filename="ok.txt"; filename*=UTF-8''%E0%A4%A`),
+    ).toBe('ok.txt');
   });
 
   test('a header naming no filename yields none', () => {
-    expect(parseUploadFilename('attachment')).toBeUndefined();
+    expect(parseContentDispositionFilename('attachment')).toBeUndefined();
   });
 });
 

@@ -34,9 +34,14 @@ export {
   isSafeAttachmentContentType,
   inferContentTypeFromFilename,
   resolveAttachmentDownloadContentType,
+  attachmentContentDisposition,
   NOSNIFF_HEADER_NAME,
   NOSNIFF_HEADER_VALUE,
 } from './attachment-download.js';
+export {
+  contentDispositionFilename,
+  parseContentDispositionFilename,
+} from './content-disposition.js';
 export type { AttachmentDownloadContentType } from './attachment-download.js';
 
 // No in-repo caller: resolveAttachmentDownloadContentType() takes
@@ -65,7 +70,6 @@ export {
   parseDownloadParams,
   parseAssociationParams,
   parseIfMatch,
-  parseUploadFilename,
   parseUnsignedInt,
 } from './request.js';
 

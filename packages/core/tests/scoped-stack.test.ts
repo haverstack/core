@@ -907,6 +907,84 @@ describe('ScopedStack — versions', () => {
     expect(restored.content.text).toBe('old');
   });
 
+  describe('restoreVersion of a snapshot from another family is a migration', () => {
+    const SECRET = 'com.example.test/secret@1';
+
+    async function migratedOutOf(typeId: string, content: Record<string, unknown>) {
+      const record = await stack.create(typeId, content);
+      await stack.commitMigration(record.id, NOTE, { text: 'now a note' });
+      await stack.grantType(fam(NOTE), {
+        actions: ['read-any', 'update-any'],
+        grantee: { kind: 'entity', entityId: MEMBER },
+      });
+      return record;
+    }
+
+    test('write access in the current family does not move a record back', async () => {
+      await stack.defineType({ id: SECRET, name: 'Secret', schema: { text: { kind: 'text' } } });
+      const record = await migratedOutOf(SECRET, { text: 'hidden' });
+      await expect(stack.asEntity(MEMBER).restoreVersion(record.id, 1)).rejects.toThrow(
+        StackPermissionError,
+      );
+      expect((await stack.get(record.id))!.typeId).toBe(NOTE);
+    });
+
+    test('a _grant snapshot cannot be restored into authority by a grantee', async () => {
+      const grant = await stack.grantType(fam(NOTE), {
+        actions: ['create'],
+        grantee: { kind: 'entity', entityId: MEMBER },
+      });
+      await stack.commitMigration(grant.id, NOTE, { text: 'withdrawn' });
+      await stack.grantType(fam(NOTE), {
+        actions: ['read-any', 'update-any'],
+        grantee: { kind: 'entity', entityId: MEMBER },
+      });
+      await expect(stack.asEntity(MEMBER).restoreVersion(grant.id, 1)).rejects.toThrow(
+        StackPermissionError,
+      );
+      expect((await stack.get(grant.id))!.typeId).toBe(NOTE);
+    });
+
+    test('a delegated owner subject is held to it too', async () => {
+      await stack.defineType({ id: SECRET, name: 'Secret', schema: { text: { kind: 'text' } } });
+      const record = await migratedOutOf(SECRET, { text: 'hidden' });
+      await expect(
+        stack.asActor({ principalId: MEMBER, subjectId: OWNER }).restoreVersion(record.id, 1),
+      ).rejects.toThrow(StackPermissionError);
+    });
+
+    test('the owner acting alone restores across families', async () => {
+      await stack.defineType({ id: SECRET, name: 'Secret', schema: { text: { kind: 'text' } } });
+      const record = await migratedOutOf(SECRET, { text: 'hidden' });
+      const restored = await stack.asEntity(OWNER).restoreVersion(record.id, 1);
+      expect(restored.typeId).toBe(SECRET);
+    });
+
+    test('a restore across versions within the family is an ordinary write', async () => {
+      const NOTE_2 = 'com.example.test/note@2';
+      await stack.defineType({ id: NOTE_2, name: 'Note', schema: { text: { kind: 'text' } } });
+      const record = await stack.create(NOTE, { text: 'first' });
+      await stack.commitMigration(record.id, NOTE_2, { text: 'migrated' });
+      await stack.grantType(fam(NOTE), {
+        actions: ['read-any', 'update-any'],
+        grantee: { kind: 'entity', entityId: MEMBER },
+      });
+      const restored = await stack.asEntity(MEMBER).restoreVersion(record.id, 1);
+      expect(restored.typeId).toBe(NOTE);
+    });
+
+    test('a write-holder still restores within the family', async () => {
+      const record = await stack.create(NOTE, { text: 'first' });
+      await stack.patchContent(record.id, { text: 'second' });
+      await stack.grantType(fam(NOTE), {
+        actions: ['read-any', 'update-any'],
+        grantee: { kind: 'entity', entityId: MEMBER },
+      });
+      const restored = await stack.asEntity(MEMBER).restoreVersion(record.id, 1);
+      expect(restored.content.text).toBe('first');
+    });
+  });
+
   // history is the mutate/recovery surface, not a read surface — a
   // plain reader (read access but no write) must be denied, matching
   // patchContent()/editAssociations()'s gate exactly.
@@ -2635,11 +2713,13 @@ describe('ScopedStack.commitMigration', () => {
     });
   });
 
-  test('anonymous requester cannot migrate a record', async () => {
+  test('a requester who cannot read the record is answered as for a missing one', async () => {
     const record = await stack.create(COMMENT, { text: 'hello' });
-    await expect(
-      stack.asEntity(null).commitMigration(record.id, COMMENT_V2, { text: 'hello', title: '' }),
-    ).rejects.toThrow(StackPermissionError);
+    for (const scoped of [stack.asEntity(null), stack.asEntity(STRANGER)]) {
+      await expect(
+        scoped.commitMigration(record.id, COMMENT_V2, { text: 'hello', title: '' }),
+      ).rejects.toThrow(StackNotFoundError);
+    }
   });
 
   test('throws StackNotFoundError for a missing record', async () => {
@@ -2783,6 +2863,10 @@ describe('ScopedStack.commitMigration', () => {
   // the same rule deleteAttachment() and a reshare apply.
   test('an owner principal acting on behalf of a subject cannot migrate', async () => {
     const record = await stack.create(COMMENT, { text: 'hello' });
+    await stack.grantType(fam(COMMENT), {
+      actions: ['read-any', 'update-any'],
+      grantee: { kind: 'entity', entityId: MEMBER },
+    });
 
     await expect(
       stack

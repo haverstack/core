@@ -1,5 +1,11 @@
 # @haverstack/commons
 
+## 0.43.0
+
+### Minor Changes
+
+- [#491](https://github.com/haverstack/core/pull/491) [`7dd8019`](https://github.com/haverstack/core/commit/7dd8019d93b8be86204c2fcfb6bf13c3384be486) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Export `POLL` and `VOTE`, the `org.haverstack/poll@1` and `org.haverstack/vote@1` types, now Draft.
+
 ## 0.42.0
 
 ### Minor Changes

@@ -877,23 +877,3 @@ export function parseIfMatch(header: string | undefined): number | undefined {
   const unquoted = /^"(.*)"$/.exec(trimmed)?.[1] ?? trimmed;
   return parseUnsignedInt(unquoted, 'If-Match');
 }
-
-/**
- * Read an upload's filename from its `Content-Disposition`. Prefers the
- * RFC 5987 extended form (`filename*=UTF-8''name.txt`), which is what a
- * client carrying a non-ASCII name sends, and falls back to the plain
- * quoted form. See docs/spec/wire-format.md § Upload.
- */
-export function parseUploadFilename(header: string | undefined): string | undefined {
-  if (!header) return undefined;
-  const extended = /filename\*\s*=\s*[^']*'[^']*'([^;]+)/i.exec(header);
-  if (extended) {
-    try {
-      return decodeURIComponent(extended[1].trim());
-    } catch {
-      // Malformed percent-encoding — fall through to the plain form.
-    }
-  }
-  const plain = /filename\s*=\s*"([^"]+)"/i.exec(header);
-  return plain ? plain[1] : undefined;
-}
