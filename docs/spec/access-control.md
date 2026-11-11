@@ -303,7 +303,7 @@ const session = await tokens.lookupToken(bearer); // { subjectId, principalId }
 const scoped = stack.asActor(session);
 ```
 
-A session a delegated token names also carries the `delegationChain` it was issued on, and the server passes the chain's validated result beside it as `{ delegation }` ([Signed delegations](#signed-delegations)). `asActor()` refuses such a session without one, with `StackBadRequestError`, rather than letting it act with less authority than it was issued.
+A delegated token's session also carries the `delegationChain` it was issued on, and passes through the same way: the stack validates the chain itself ([Signed delegations](#signed-delegations)).
 
 Both identities are DIDs, so a positional pair would leave nothing to catch a swap — and a swapped pair is undetectable in the undelegated case, where the two are equal. It would surface only once delegation is in use, as authority no longer fenced by the app's grants and every write attributed to the app rather than the person it acted for. Naming both fields removes the order to get wrong.
 
@@ -353,6 +353,8 @@ On the principal's side of the intersection, **`-own` and `-any` mean the same t
 
 **Only a grant naming the principal directly, or its subject's [signed delegation](#signed-delegations), counts on its side.** Neither a default grant nor a group-targeted one satisfies the principal half — both would let an app be named by someone other than the owner or the person it acts for (by nobody at all, or by any admin of a granted group), and containment rests on one of those two having named it. Both still count on the **subject's** side, where they mean what they ordinarily do. See [Type-level grants](#type-level-grants).
 
+**On the principal's side, no family that governs authority is reached**, by a grant naming the principal or by a signed delegation: `_grant`, `_config`, `_app`, `_install` and [`_revocation`](#revoking-a-delegation). Grants already refuse the first four. `_revocation` is grantable, so people can take back what they signed, but an app acting for someone and reaching it could lift a revocation of its own chain or a sibling's. The owner's own software is the exception every rule here makes, its side being unbounded.
+
 Two consequences worth stating plainly rather than leaving to be discovered:
 
 - **Per-app isolation on a shared type is not offered.** Two apps both granted `commons/note@1` for the same person see the same notes. Containment is per type — an app reaches only the types the owner granted it — which is what keeps shared commons types interoperable by default.
@@ -360,15 +362,17 @@ Two consequences worth stating plainly rather than leaving to be discovered:
 
 ### Signed delegations
 
-A subject can name the software acting for it by signing a delegation, rather than leaving the binding to the owner. `asActor(actor, { delegation })` takes one as data: a `SignedDelegation` naming the actor's subject and principal and carrying the encoded `chain` it was verified from, whose `allows(verb, baseId)` answers which record verbs it lets the principal perform on which families. Core verifies no signature. Whoever accepted the delegation did, which is what `@haverstack/ucan` does for UCAN Delegation 1.0.
+A subject can name the software acting for it by signing a delegation, rather than leaving the binding to the owner. **A session carries it as a `delegationChain`**: the encoded chain, root first, on the wire, on a credential and in the token store alike. The stack validates it, through the `verifyDelegation` callback it was opened with (`@haverstack/ucan`'s `delegationVerifier()` for UCAN Delegation 1.0), so core holds no signature code and no server re-implements the rule.
 
-**Names keep the two forms apart.** The encoded chain is a `delegationChain` wherever it travels or is stored, on the wire, on a credential and on a [session](#serving-requests); a `delegation` is only ever the verified `SignedDelegation`. `asActor()` refuses, with `StackBadRequestError`, a delegation naming a different pair, one given for an undelegated actor, a session carrying a `delegationChain` without one, and one verified from a different chain than the session carries.
+**The stack validates the chain, on every operation.** `asActor(session)` takes a session carrying one as it takes any other, and refuses one only when the stack has no verifier (`ScopeUnavailableError`) or the actor is undelegated (`StackBadRequestError`). Each operation that reaches Records then validates the chain in its authority snapshot, with the stack's own revocation check, and requires it to run from the session's subject to its principal. A chain that fails, because it is malformed, badly signed, expired or revoked, throws `DelegationRefusedError`, outside the `StackError` taxonomy, which a server answers with 401. So expiry and revocation reach a session already in hand without the server doing anything. A subscription holds its snapshot for its life, so it validates again when a `_revocation` Record changes and once the chain's earliest expiry passes, reporting the refusal through `onError`. `Stack.verifyDelegationChain(chain, principalId)` is the same check alone, for `/auth/token` to run before it issues a token.
 
 **It counts on the principal's side, beside grants naming the principal.** For each verb, the families a delegation allows join those the principal's direct grants convey, in the fence a [reach](#reach) carries. It is the standing a direct grant gives, conferred by the person the app acts for instead of by the owner, and it is evaluated as one: each verb it allows on a family is read as that verb's `-any` action, and the set goes through the same check a grant's actions do, so [write implies read](#write-implies-read) holds and an `update` or `delete` counts only beside `read`. It changes nothing else:
 
 - **The subject's side is untouched,** so the intersection holds: a delegation lends the principal no reach its subject lacks, the bound an app riding its user's identity already has.
-- **Families that govern authority stay out.** A delegation never admits `_grant`, `_config`, `_app`, `_install` or [`_revocation`](#revoking-a-delegation), whatever it allows. The first four are ungrantable, and a signature reaches no further than a grant could; `_revocation` is grantable to people, but a delegation reaching it could lift a revocation of its own chain or a sibling's, so no delegation widens or restores the authority delegations rest on.
+- **Families that govern authority stay out,** as for [any principal acting for someone](#delegation-principal-and-subject).
 - **No privileged verb rides on it.** Resharing, `_group` management and the verbs in the table above ask for standing, not a grant, and a delegation is neither.
+
+**A delegation's reach is read against the families the stack defines.** A policy can match families by pattern (`commons/*`), so what it allows is a question asked of each family rather than a list it carries, and a reach must still be data an adapter can apply. An operation lists the defined families once; a subscription lists them again when a Record of a family defined since arrives, since defining a Type emits no change of its own.
 
 **Its verbs are the grant actions without the suffix:** `create`, `read`, `update` and `delete`, since `-own` and `-any` mean the same on the principal's side. As UCAN commands they are `/haverstack/record/create`, `/haverstack/record/read`, `/haverstack/record/update` and `/haverstack/record/delete`, each invoked with `{ baseId }` for a delegation's policy to constrain.
 
@@ -376,8 +380,6 @@ A subject can name the software acting for it by signing a delegation, rather th
 
 - **The set under `/haverstack/record` is closed.** It proves exactly those four verbs, now and later; any other verb Haverstack defines goes under another path, so delegating `/haverstack/record` never grants something its signer didn't see. Delegating `/haverstack`, or `/`, covers whatever is defined beneath it in future, which UCAN says of `/` and which a signer should read the same way here.
 - **Arguments only describe.** A later version may invoke these commands with more than `{ baseId }`, but an added argument says more precisely which call is being made and never adds to what a verb can do, so a policy that ignores it allows nothing new. A policy over an argument a server doesn't send selects `null` and fails, so it denies rather than allows.
-
-**Time bounds and revocation stay with the delegation.** Core reads `allows()` as it is handed; a caller holding a delegation across requests revalidates it on each, so an expired or revoked one is never passed in.
 
 ### Revoking a delegation
 
@@ -387,13 +389,13 @@ A subject can name the software acting for it by signing a delegation, rather th
 type RevocationContent = { cid: string };
 ```
 
-**The writer is read from `createdBy`**, which a scoped write always stamps from the session and an unscoped one, the owner's own, leaves absent. A revocation whose writer is neither the owner nor an upstream issuer confers nothing, so it is not refused at the write: a stack can't tell which chains a CID belongs to until one is presented.
+**A revocation counts for whom its writer may speak.** The writer is read from `createdBy`, which a scoped write always stamps from the session and an unscoped one, the owner's own, leaves absent. A revocation counts when that writer is the owner or an issuer upstream of the delegation it names, and otherwise does nothing. It is not refused at the write, since a stack can't tell which chains a CID belongs to until one is presented; it is simply never counted.
 
-A delegation is refused while a live `_revocation` naming it counts, and `Stack.isDelegationRevoked(cid, issuers)` answers that, where `issuers` are the identities upstream of it in the chain being checked. A server passes it to chain validation as the revocation check, at `/auth/token` and on every request a delegated token makes, so revoking takes effect on the next request. Every link of a chain is checked, so revoking a delegation also cuts off everything delegated from it.
+A delegation is refused while a live `_revocation` naming it counts, and `Stack.isDelegationRevoked(cid, issuers)` answers that, where `issuers` are the identities upstream of it in the chain being checked. The stack hands it to its verifier as the revocation check on every validation, so revoking takes effect on the next operation. Every link of a chain is checked, so revoking a delegation also cuts off everything delegated from it.
 
-**It is the one family whose Records withdraw authority** rather than grant it. Every other authority Record conveys something while live and nothing once deleted; a live `_revocation` takes a delegation away and a deleted one gives it back. It is also the one that accepts writes it may never count, for the reason above. Otherwise it is held to the [same model as a grant](#listing-and-revoking):
+**It is the one family whose Records withdraw authority.** Every other authority Record conveys something while live and nothing once deleted; a live `_revocation` takes a delegation away and a deleted one gives it back. It is not a kind of `_grant`, because it grants nothing to anyone, and a `_grant` that meant its opposite under some field would make every grant check ask which kind it holds. Nor is it kept with the tokens, which stay outside the portable stack: a revocation has to move with the stack when it changes hosts, or a delegation the issuer withdrew would work again there. Otherwise it is held to the [same model as a grant](#listing-and-revoking):
 
-- **Who may write one is the owner's grant to make.** A subject who signs delegations needs `create` on `_revocation` to take them back here; a default grant gives it to everyone, which is safe because a revocation only counts for its own writer's delegations. It is a person's own act: no [delegation](#signed-delegations) reaches the family.
+- **Who may write one is the owner's grant to make.** A subject who signs delegations needs `create` on `_revocation` to take them back here; a default grant gives it to everyone, which is safe because a revocation only counts for its own writer's delegations. It is a person's own act: no principal acting for someone else reaches the family.
 - **Recoverable.** Deleting the Record lifts the refusal and `undelete()` restores it, as for a grant, by whoever may delete it. Unlisted ones count, since listing decides nothing about authority.
 - **Fixed to one delegation.** `cid` is [immutable](./data-model.md#immutable-fields): refusing a different delegation is a new Record, so lifting one refusal never happens silently by editing it into another.
 

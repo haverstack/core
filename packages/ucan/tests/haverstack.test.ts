@@ -1,20 +1,25 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { Stack, StackPermissionError } from '@haverstack/core';
+import { DelegationRefusedError, Stack, StackPermissionError } from '@haverstack/core';
 import { MemoryAdapter } from '@haverstack/core/testing';
-import { acceptDelegation, signedDelegation, UcanError, validateChain } from '../src/index.js';
-import { issue, makeSigner, NOW } from './helpers.js';
+import { delegationVerifier } from '../src/index.js';
+import { issue, makeSigner } from './helpers.js';
 
 const NOTE = 'com.example.test/note@1';
 const COMMENT = 'com.example.test/comment@1';
 
-describe('signedDelegation', () => {
+const openStack = async (ownerDid: string) =>
+  Stack.open(await MemoryAdapter.open({ ownerEntityId: ownerDid }), {
+    verifyDelegation: delegationVerifier(),
+  });
+
+describe('a stack opened with delegationVerifier()', () => {
   const owner = makeSigner();
   const member = makeSigner();
   const app = makeSigner();
   let stack: Stack;
 
   beforeEach(async () => {
-    stack = await Stack.open(await MemoryAdapter.open({ ownerEntityId: owner.did }));
+    stack = await openStack(owner.did);
     for (const id of [NOTE, COMMENT]) {
       await stack.defineType({ id, name: id, schema: { text: { kind: 'text' } } });
       await stack.grantType(id.split('@')[0]!, {
@@ -30,65 +35,75 @@ describe('signedDelegation', () => {
       cmd: '/haverstack/record/create',
       pol: [['==', '.baseId', 'com.example.test/comment']],
     });
-    const delegation = signedDelegation(await validateChain([d], { now: NOW }));
-    const view = stack.asActor({ subjectId: member.did, principalId: app.did }, { delegation });
-
+    const view = stack.asActor({
+      subjectId: member.did,
+      principalId: app.did,
+      delegationChain: [d.bytes],
+    });
     const record = await view.create(COMMENT, { text: 'hi' });
     expect(record.createdBy).toEqual({ subjectId: member.did, principalId: app.did });
     await expect(view.create(NOTE, { text: 'hi' })).rejects.toThrow(StackPermissionError);
-    await expect(view.query({ filter: { typeId: COMMENT } })).resolves.toMatchObject({
-      records: [],
-    });
   });
 
-  it('covers every verb under /haverstack/record', async () => {
-    const d = await issue(member, { audience: app.did, cmd: '/haverstack/record' });
-    const { allows } = signedDelegation(await validateChain([d], { now: NOW }));
-    for (const verb of ['create', 'read', 'update', 'delete'] as const) {
-      expect(allows(verb, 'com.example.test/note')).toBe(true);
-    }
-    const narrow = await issue(member, { audience: app.did, cmd: '/haverstack/record/read' });
-    const read = signedDelegation(await validateChain([narrow], { now: NOW }));
-    expect(read.allows('read', 'x')).toBe(true);
-    expect(read.allows('update', 'x')).toBe(false);
-  });
-});
-
-describe('acceptDelegation', () => {
-  const member = makeSigner();
-  const app = makeSigner();
-
-  it('reports the subject, the earliest expiry and the delegation for the key that authenticated', async () => {
-    const root = await issue(member, {
-      audience: app.did,
-      cmd: '/haverstack/record/read',
-      exp: NOW + 600,
-    });
-    const accepted = await acceptDelegation([root.bytes], app.did, { now: NOW });
-    expect(accepted.subjectId).toBe(member.did);
-    expect(accepted.expiresAt).toEqual(new Date((NOW + 600) * 1000));
-    expect(accepted.delegation).toMatchObject({
+  it('reports the subject and earliest expiry for the key that authenticated', async () => {
+    const d = await issue(member, { audience: app.did, cmd: '/haverstack/record', exp: 2e9 });
+    const verified = await stack.verifyDelegationChain([d.bytes], app.did);
+    expect(verified).toMatchObject({
       subjectId: member.did,
       principalId: app.did,
-      chain: [root.bytes],
+      expiresAt: new Date(2e9 * 1000),
     });
-    expect(accepted.delegation.allows('read', 'x')).toBe(true);
+    for (const verb of ['create', 'read', 'update', 'delete'] as const) {
+      expect(verified.allows(verb, 'com.example.test/note')).toBe(true);
+    }
   });
 
-  it('refuses a chain delegated to a different key', async () => {
-    const root = await issue(member, { audience: makeSigner().did });
-    await expect(acceptDelegation([root.bytes], app.did, { now: NOW })).rejects.toThrow(UcanError);
+  it('refuses a chain to another key, a key delegating to itself, and bytes that are no chain', async () => {
+    const toOther = await issue(member, { audience: makeSigner().did });
+    await expect(stack.verifyDelegationChain([toOther.bytes], app.did)).rejects.toThrow(
+      DelegationRefusedError,
+    );
+    const self = await issue(app, { audience: app.did });
+    await expect(stack.verifyDelegationChain([self.bytes], app.did)).rejects.toThrow(
+      DelegationRefusedError,
+    );
+    await expect(stack.verifyDelegationChain([Uint8Array.of(1, 2, 3)], app.did)).rejects.toThrow(
+      DelegationRefusedError,
+    );
   });
 
-  it('refuses a key delegating to itself', async () => {
-    const root = await issue(app, { audience: app.did });
-    await expect(acceptDelegation([root.bytes], app.did, { now: NOW })).rejects.toThrow(UcanError);
-  });
-
-  it('refuses bytes that are not a delegation', async () => {
-    await expect(acceptDelegation([Uint8Array.of(1, 2, 3)], app.did)).rejects.toMatchObject({
-      code: 'malformed',
+  // Expiry and revocation reach a view already in hand: each operation
+  // validates the chain again, so a server can't forget to.
+  it('refuses every operation of a held view once its chain expires', async () => {
+    const soon = Math.floor(Date.now() / 1000) + 61;
+    const d = await issue(member, { audience: app.did, cmd: '/haverstack/record', exp: soon });
+    const view = stack.asActor({
+      subjectId: member.did,
+      principalId: app.did,
+      delegationChain: [d.bytes],
     });
+    await expect(view.query({ filter: { typeId: COMMENT } })).resolves.toBeDefined();
+    const realNow = Date.now;
+    Date.now = () => (soon + 120) * 1000;
+    try {
+      await expect(view.query({ filter: { typeId: COMMENT } })).rejects.toThrow(
+        DelegationRefusedError,
+      );
+    } finally {
+      Date.now = realNow;
+    }
+  });
+
+  it('a session whose chain names another subject is refused', async () => {
+    const d = await issue(member, { audience: app.did, cmd: '/haverstack/record' });
+    const view = stack.asActor({
+      subjectId: makeSigner().did,
+      principalId: app.did,
+      delegationChain: [d.bytes],
+    });
+    await expect(view.query({ filter: { typeId: COMMENT } })).rejects.toThrow(
+      DelegationRefusedError,
+    );
   });
 });
 
@@ -98,7 +113,7 @@ describe('revoking through the stack', () => {
     const member = makeSigner();
     const app = makeSigner();
     const device = makeSigner();
-    const stack = await Stack.open(await MemoryAdapter.open({ ownerEntityId: owner.did }));
+    const stack = await openStack(owner.did);
     const root = await issue(member, { audience: app.did, cmd: '/haverstack/record' });
     const leaf = await issue(app, {
       audience: device.did,
@@ -106,22 +121,14 @@ describe('revoking through the stack', () => {
       cmd: '/haverstack/record',
     });
     const chain = [root.bytes, leaf.bytes];
-    const isRevoked = (cid: string, issuers: readonly string[]) =>
-      stack.isDelegationRevoked(cid, issuers);
 
-    await expect(
-      acceptDelegation(chain, device.did, { now: NOW, isRevoked }),
-    ).resolves.toBeDefined();
+    await expect(stack.verifyDelegationChain(chain, device.did)).resolves.toBeDefined();
     const revocation = await stack.create('_revocation@1', { cid: root.cid });
-    await expect(
-      acceptDelegation(chain, device.did, { now: NOW, isRevoked }),
-    ).rejects.toMatchObject({
-      code: 'revoked',
-    });
+    await expect(stack.verifyDelegationChain(chain, device.did)).rejects.toThrow(
+      DelegationRefusedError,
+    );
     await stack.delete(revocation.id);
-    await expect(
-      acceptDelegation(chain, device.did, { now: NOW, isRevoked }),
-    ).resolves.toBeDefined();
+    await expect(stack.verifyDelegationChain(chain, device.did)).resolves.toBeDefined();
   });
 
   // Whoever granted the authority can withdraw it, not only the owner.
@@ -130,7 +137,7 @@ describe('revoking through the stack', () => {
     const member = makeSigner();
     const stranger = makeSigner();
     const app = makeSigner();
-    const stack = await Stack.open(await MemoryAdapter.open({ ownerEntityId: owner.did }));
+    const stack = await openStack(owner.did);
     for (const who of [member, stranger]) {
       await stack.grantType('_revocation', {
         actions: ['create'],
@@ -138,19 +145,77 @@ describe('revoking through the stack', () => {
       });
     }
     const d = await issue(member, { audience: app.did, cmd: '/haverstack/record' });
-    const isRevoked = (cid: string, issuers: readonly string[]) =>
-      stack.isDelegationRevoked(cid, issuers);
 
     await stack.asEntity(stranger.did).create('_revocation@1', { cid: d.cid });
-    await expect(
-      acceptDelegation([d.bytes], app.did, { now: NOW, isRevoked }),
-    ).resolves.toBeDefined();
+    await expect(stack.verifyDelegationChain([d.bytes], app.did)).resolves.toBeDefined();
 
     await stack.asEntity(member.did).create('_revocation@1', { cid: d.cid });
-    await expect(
-      acceptDelegation([d.bytes], app.did, { now: NOW, isRevoked }),
-    ).rejects.toMatchObject({
-      code: 'revoked',
+    await expect(stack.verifyDelegationChain([d.bytes], app.did)).rejects.toThrow(
+      DelegationRefusedError,
+    );
+  });
+
+  it('revoking reaches a subscription already open', async () => {
+    const owner = makeSigner();
+    const member = makeSigner();
+    const app = makeSigner();
+    const stack = await openStack(owner.did);
+    await stack.defineType({ id: NOTE, name: 'Note', schema: { text: { kind: 'text' } } });
+    await stack.grantType('com.example.test/note', {
+      actions: ['read-any'],
+      grantee: { kind: 'entity', entityId: member.did },
     });
+    const d = await issue(member, { audience: app.did, cmd: '/haverstack/record' });
+    const seen: string[] = [];
+    const errors: unknown[] = [];
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+    await stack
+      .asActor({ subjectId: member.did, principalId: app.did, delegationChain: [d.bytes] })
+      .subscribe((change) => void seen.push(change.recordId), {
+        onError: (err) => void errors.push(err),
+      });
+    const before = await stack.create(NOTE, { text: 'before' });
+    await settle();
+    await stack.create('_revocation@1', { cid: d.cid });
+    await stack.create(NOTE, { text: 'after' });
+    await settle();
+    expect(seen).toEqual([before.id]);
+    expect(errors.some((e) => e instanceof DelegationRefusedError)).toBe(true);
+  });
+
+  // A subscription holds its snapshot for its life, so expiry has to be
+  // checked against the time, not left to the next operation.
+  it('expiry reaches a subscription already open', async () => {
+    const owner = makeSigner();
+    const member = makeSigner();
+    const app = makeSigner();
+    const stack = await openStack(owner.did);
+    await stack.defineType({ id: NOTE, name: 'Note', schema: { text: { kind: 'text' } } });
+    await stack.grantType('com.example.test/note', {
+      actions: ['read-any'],
+      grantee: { kind: 'entity', entityId: member.did },
+    });
+    const soon = Math.floor(Date.now() / 1000) + 61;
+    const d = await issue(member, { audience: app.did, cmd: '/haverstack/record', exp: soon });
+    const seen: string[] = [];
+    const errors: unknown[] = [];
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+    await stack
+      .asActor({ subjectId: member.did, principalId: app.did, delegationChain: [d.bytes] })
+      .subscribe((change) => void seen.push(change.recordId), {
+        onError: (err) => void errors.push(err),
+      });
+    const before = await stack.create(NOTE, { text: 'before' });
+    await settle();
+    const realNow = Date.now;
+    Date.now = () => (soon + 120) * 1000;
+    try {
+      await stack.create(NOTE, { text: 'after' });
+      await settle();
+    } finally {
+      Date.now = realNow;
+    }
+    expect(seen).toEqual([before.id]);
+    expect(errors.some((e) => e instanceof DelegationRefusedError)).toBe(true);
   });
 });

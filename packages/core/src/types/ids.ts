@@ -55,16 +55,25 @@ export type Actor = {
 export type RecordVerb = 'create' | 'read' | 'update' | 'delete';
 
 /**
- * What a subject's signed delegation lets one principal do. Whoever
- * accepted the delegation verified it; core takes the result as data and
- * reads it on the principal's side only.
+ * What a delegation verifier reports of a chain it accepted: whom it acts
+ * for, through whom, until when, and what it lets the principal do.
  * See docs/spec/access-control.md § Signed delegations.
  */
-export type SignedDelegation = {
+export type VerifiedDelegation = {
   subjectId: EntityId;
   principalId: EntityId;
-  /** The encoded chain it was verified from, root first, which a session's chain must match. */
-  chain: readonly Uint8Array[];
+  /** The chain's earliest expiry, or null if no link expires. */
+  expiresAt: Date | null;
   /** Whether the principal may `verb` Records of the family `baseId` for its subject. */
   allows: (verb: RecordVerb, baseId: BaseId) => boolean;
 };
+
+/**
+ * Validates an encoded delegation chain, root first, throwing to refuse it.
+ * Core supplies the revocation check, so the stack's own `_revocation`
+ * Records always apply. `@haverstack/ucan`'s delegationVerifier() is one.
+ */
+export type DelegationVerifier = (
+  chain: readonly Uint8Array[],
+  check: { isRevoked: (cid: string, issuers: readonly EntityId[]) => Promise<boolean> },
+) => Promise<VerifiedDelegation>;

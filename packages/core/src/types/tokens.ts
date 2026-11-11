@@ -18,7 +18,7 @@ export type TokenSession = Actor & {
    * revocation reach a live token. See docs/spec/wire-format.md § The
    * session a token names.
    */
-  delegationChain?: Uint8Array[];
+  delegationChain?: readonly Uint8Array[];
 };
 
 export type TokenInfo = TokenSession & {
@@ -38,8 +38,8 @@ export type TokenInfo = TokenSession & {
  */
 export interface StackTokenStore {
   createToken(
-    actor: Actor,
-    opts?: { label?: string; expiresAt?: Date; delegationChain?: Uint8Array[] },
+    session: Actor & Pick<TokenSession, 'delegationChain'>,
+    opts?: { label?: string; expiresAt?: Date },
   ): Promise<{
     id: string;
     token: string;

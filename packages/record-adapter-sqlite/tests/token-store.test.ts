@@ -88,10 +88,11 @@ describe('NativeTokenStore', () => {
   test('a token keeps the delegation chain it was issued on', async () => {
     const store = await NativeTokenStore.open({ path: tokenPath });
     const chain = [Uint8Array.of(0x82, 0, 255), Uint8Array.of(1, 2, 3, 4)];
-    const { token } = await store.createToken(
-      { subjectId: 'subject-did', principalId: 'app-did' },
-      { delegationChain: chain },
-    );
+    const { token } = await store.createToken({
+      subjectId: 'subject-did',
+      principalId: 'app-did',
+      delegationChain: chain,
+    });
     expect(await store.lookupToken(token)).toEqual({
       principalId: 'app-did',
       subjectId: 'subject-did',

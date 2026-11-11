@@ -73,8 +73,9 @@ import type {
   InstallContent,
   RecordId,
   Actor,
-  SignedDelegation,
+  DelegationVerifier,
   TokenSession,
+  VerifiedDelegation,
   ActorOptions,
   ChangeActor,
   RecordChange,
@@ -91,6 +92,7 @@ import {
   ElementSetMovedError,
   UseAfterCloseError,
   ScopeUnavailableError,
+  DelegationRefusedError,
   InvalidAdapterError,
   StackConflictError,
   StackMigrationError,
@@ -188,14 +190,6 @@ import type { Collection } from '../collection.js';
  * empty id is refused rather than stored as a name for nobody.
  * See docs/spec/data-model.md § Actor.
  */
-/** Whether two encoded delegation chains are the same bytes, link for link. */
-function sameChain(a: readonly Uint8Array[], b: readonly Uint8Array[]): boolean {
-  return (
-    a.length === b.length &&
-    a.every((link, i) => link.length === b[i]!.length && link.every((byte, j) => byte === b[i]![j]))
-  );
-}
-
 function normalizeActor(actor: Actor | undefined): Actor | undefined {
   if (!actor) return undefined;
   for (const field of ['subjectId', 'principalId'] as const) {
@@ -278,6 +272,7 @@ export class Stack implements StackClient {
     private readonly adapter: StackAdapter,
     private readonly idTimestampSkewMsValue: number | null,
     private readonly migrations: MigrationRegistry,
+    private readonly delegationVerifier: DelegationVerifier | undefined,
   ) {
     if (adapter.listBlobs) {
       this.listBlobs = async (query) => {
@@ -337,6 +332,7 @@ export class Stack implements StackClient {
       adapter,
       opts.idTimestampSkewMs === undefined ? DEFAULT_ID_TIMESTAMP_SKEW_MS : opts.idTimestampSkewMs,
       new MigrationRegistry(opts.migrations ?? []),
+      opts.verifyDelegation,
     );
     for (const type of systemTypeDefinitions()) await stack.defineType(type);
     if (opts.ownerProfile) {
@@ -405,40 +401,63 @@ export class Stack implements StackClient {
   /**
    * Scope to an Actor — a delegated app acting for its user, or a
    * TokenSession as StackTokenStore.lookupToken() returns it, which is what
-   * a server should pass at its request boundary. A delegation the caller
-   * verified widens what the principal's side admits, and must name this
-   * very pair. See docs/spec/access-control.md § Signed delegations.
+   * a server should pass at its request boundary. A session carrying a
+   * delegation chain needs a stack opened with `verifyDelegation`, and every
+   * operation of the view validates the chain again.
+   * See docs/spec/access-control.md § Signed delegations.
    */
-  asActor(actor: Actor | TokenSession, opts: { delegation?: SignedDelegation } = {}): ScopedStack {
+  asActor(actor: Actor | TokenSession): ScopedStack {
     const { subjectId, principalId = subjectId } = normalizeActor(actor)!;
-    const { delegation } = opts;
-    // A session issued on a chain carries authority only through it, and
-    // only through the delegation verified from that very chain.
     const chain = 'delegationChain' in actor ? actor.delegationChain : undefined;
-    if (chain && !delegation) {
-      throw new StackBadRequestError(
-        'This session was issued on a delegation chain: validate it and pass the result as ' +
-          '{ delegation }.',
-      );
-    }
-    if (chain && delegation && !sameChain(chain, delegation.chain)) {
-      throw new StackBadRequestError(
-        'The signed delegation was verified from a different chain than the session carries.',
-      );
-    }
-    if (delegation) {
+    if (chain) {
       if (principalId === subjectId) {
         throw new StackBadRequestError(
-          'A signed delegation applies only to a principal acting for someone else.',
+          'A delegation chain applies only to a principal acting for someone else.',
         );
       }
-      if (delegation.subjectId !== subjectId || delegation.principalId !== principalId) {
-        throw new StackBadRequestError(
-          'The signed delegation names a different subject or principal than the actor.',
+      if (!this.delegationVerifier) {
+        throw new ScopeUnavailableError(
+          'This session carries a delegation chain, and this stack was opened without ' +
+            '`verifyDelegation` to validate one.',
         );
       }
     }
-    return this.scope(principalId, subjectId, delegation ?? null);
+    return this.scope(principalId, subjectId, chain ?? null);
+  }
+
+  /**
+   * Validate a delegation chain presented by the key that authenticated as
+   * `principalId`: what a server runs at `/auth/token` before issuing a
+   * delegated token, and what every operation of a delegated view runs
+   * again. Revocation is this stack's own `_revocation` Records. Throws
+   * DelegationRefusedError unless the chain ends at `principalId` and
+   * begins at someone else. See docs/spec/access-control.md § Signed delegations.
+   */
+  async verifyDelegationChain(
+    chain: readonly Uint8Array[],
+    principalId: EntityId,
+  ): Promise<VerifiedDelegation> {
+    this.assertOpen();
+    if (!this.delegationVerifier) {
+      throw new DelegationRefusedError('This stack was opened without `verifyDelegation`.');
+    }
+    let verified: VerifiedDelegation;
+    try {
+      verified = await this.delegationVerifier(chain, {
+        isRevoked: (cid, issuers) => this.isDelegationRevoked(cid, issuers),
+      });
+    } catch (cause) {
+      throw new DelegationRefusedError('The delegation chain does not validate.', { cause });
+    }
+    if (verified.principalId !== principalId) {
+      throw new DelegationRefusedError(
+        'The delegation chain is not to the key that authenticated.',
+      );
+    }
+    if (verified.subjectId === principalId) {
+      throw new DelegationRefusedError('A key needs no delegation to act as itself.');
+    }
+    return verified;
   }
 
   /**
@@ -450,7 +469,7 @@ export class Stack implements StackClient {
   private scope(
     principalId: EntityId | null,
     subjectId: EntityId | null,
-    delegation: SignedDelegation | null = null,
+    delegationChain: readonly Uint8Array[] | null = null,
   ): ScopedStack {
     this.assertOpen();
     const queryReadable = this.adapter.queryReadable?.bind(this.adapter);
@@ -472,7 +491,7 @@ export class Stack implements StackClient {
       stack: this,
       principalId,
       subjectId,
-      delegation,
+      delegationChain,
       idTimestampSkewMs: this.idTimestampSkewMsValue,
       adapter: this.adapter,
       changes: this.changes,

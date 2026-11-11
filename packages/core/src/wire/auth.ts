@@ -125,8 +125,8 @@ export const signAuthChallenge = async (
 /**
  * Verifies a signature by a DID: whatever key types and DID methods its
  * implementer accepts, resolving a method whose keys live in a document or
- * log rather than in the DID string. `@haverstack/ucan`'s verifyDidKey()
- * covers every did:key UCAN accepts.
+ * log rather than in the DID string. `@haverstack/ucan`'s didVerifier()
+ * covers every did:key UCAN accepts, and any DID its `resolveKey` finds.
  * See docs/spec/identity.md § Authentication: challenge–response.
  */
 export type DidSignatureVerifier = (

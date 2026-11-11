@@ -44,7 +44,6 @@ import type {
   BlobsQuery,
   DataAssociation,
   EntityId,
-  SignedDelegation,
   FileId,
   QueryResult,
   Reach,
@@ -134,8 +133,8 @@ export type ScopedStackInit = {
   stack: Stack;
   principalId: EntityId | null;
   subjectId: EntityId | null;
-  /** A verified delegation from the subject to the principal, if the request carries one. */
-  delegation: SignedDelegation | null;
+  /** The delegation chain the session carries, validated in each operation's snapshot. */
+  delegationChain: readonly Uint8Array[] | null;
   idTimestampSkewMs: number | null;
   /**
    * Bytes-storage primitive for putAttachment(), which composes bytes with
@@ -182,7 +181,7 @@ export class ScopedStack implements StackClient {
       init.stack,
       init.principalId,
       init.subjectId,
-      init.delegation,
+      init.delegationChain,
       init.queryReadable,
     );
     this.idTimestampSkewMs = init.idTimestampSkewMs;

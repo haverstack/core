@@ -31,8 +31,8 @@ export class SharedTokenLogic {
   }
 
   async createToken(
-    actor: Actor,
-    opts: { label?: string; expiresAt?: Date; delegationChain?: Uint8Array[] } = {},
+    session: Actor & Pick<TokenSession, 'delegationChain'>,
+    opts: { label?: string; expiresAt?: Date } = {},
   ): Promise<{ id: string; token: string }> {
     const id = randomBytes(8).toString('hex');
     const token = randomBytes(32).toString('hex');
@@ -44,12 +44,14 @@ export class SharedTokenLogic {
         tokenHash,
         // Stored rather than left null for an undelegated token, so a
         // reader never has to know which column stands in for the other.
-        actor.principalId ?? actor.subjectId,
-        actor.subjectId,
+        session.principalId ?? session.subjectId,
+        session.subjectId,
         opts.label ?? null,
         toMs(new Date()),
         opts.expiresAt ? toMs(opts.expiresAt) : null,
-        opts.delegationChain ? JSON.stringify(opts.delegationChain.map(base64urlEncode)) : null,
+        session.delegationChain
+          ? JSON.stringify(session.delegationChain.map((link) => base64urlEncode(link)))
+          : null,
       ],
     );
     return { id, token };

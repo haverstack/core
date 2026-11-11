@@ -59,55 +59,34 @@ authorizes(chain, '/haverstack/record/read', { baseId: 'commons/note' }); // tru
 
 `authorizes()` then asks whether every link's command proves the one invoked and every link's policy accepts the arguments.
 
-## Acting for a subject in a stack
+## Serving delegated sessions
 
-`signedDelegation()` turns a validated chain into what `Stack.asActor()` takes, so a server can let an app act for the person who delegated to it:
-
-```ts
-import { signedDelegation, validateChain } from '@haverstack/ucan';
-
-const chain = await validateChain(delegations);
-const scoped = stack.asActor(
-  { subjectId: chain.subject, principalId: chain.audience },
-  { delegation: signedDelegation(chain) },
-);
-```
-
-Haverstack's commands mirror its grant actions: `/haverstack/record/create`, `/haverstack/record/read`, `/haverstack/record/update` and `/haverstack/record/delete`, each with `{ baseId }` as the arguments a policy constrains. `/haverstack/record` covers all four and will never cover more, so delegating it can't later grant something new. The delegation counts on the app's side of the stack's permission check, beside grants naming the app, and never reaches further than the subject's own grants. See [Access control § Signed delegations](../../docs/spec/access-control.md#signed-delegations).
-
-`signedDelegation()` answers from the chain as it was validated. A server holding a session across requests validates the chain again on each, so expiry and revocation take effect.
-
-## Serving a delegated session
-
-`acceptDelegation()` is what a server runs at `POST /auth/token` when the request carries a `delegationChain`, and again on each request the resulting token makes:
+A server opens its stack with `delegationVerifier()`. The stack then validates the chain a session carries on every operation, with its own revocations, so a server never handles a verified delegation itself:
 
 ```ts
-import { acceptDelegation, didVerifier } from '@haverstack/ucan';
+import { delegationVerifier, didVerifier } from '@haverstack/ucan';
 
-// A delegation's issuer, or the owner, revokes it by writing a `_revocation` Record
-// naming its CID.
-const isRevoked = (cid: string, issuers: readonly string[]) =>
-  stack.isDelegationRevoked(cid, issuers);
+const resolveKey = undefined; // or a resolver for DID methods other than did:key
+const stack = await Stack.open(adapter, { verifyDelegation: delegationVerifier({ resolveKey }) });
+const verifyDid = didVerifier({ resolveKey });
 
-// At /auth/token, after verifyAuthChallenge(challenge, signature, { verifyDid: didVerifier() })
-// verified the signature for `did`, so it authenticates the same keys chains accept:
-const accepted = await acceptDelegation(chain, did, { isRevoked });
+// At POST /auth/token, when the body carries a delegationChain:
+if (!(await verifyAuthChallenge(challenge, signature, { verifyDid }))) throw unauthorized();
+const { subjectId, expiresAt } = await stack.verifyDelegationChain(chain, did);
 await tokens.createToken(
-  { subjectId: accepted.subjectId, principalId: did },
-  { expiresAt: accepted.expiresAt ?? undefined, delegationChain: chain },
+  { subjectId, principalId: did, delegationChain: chain },
+  { expiresAt: expiresAt ?? undefined },
 );
 
-// On each request a delegated token makes:
-const session = await tokens.lookupToken(bearer);
-if (session?.delegationChain) {
-  const { delegation } = await acceptDelegation(session.delegationChain, session.principalId, {
-    isRevoked,
-  });
-  scoped = stack.asActor(session, { delegation });
-}
+// On each request:
+const scoped = stack.asActor(await tokens.lookupToken(bearer));
 ```
 
-It requires the chain to end at the key that authenticated and to begin at another identity, and throws a `UcanError` otherwise; answer that with `invalid_delegation` at `/auth/token` and with 401 on any other request. See [Wire format § The handshake](../../docs/spec/wire-format.md#the-handshake).
+Answer `DelegationRefusedError` with `invalid_delegation` at `/auth/token` and with 401 on any other request. Passing the same `resolveKey` to both means a server authenticates as principals exactly the identities it accepts as issuers.
+
+Haverstack's commands mirror its grant actions: `/haverstack/record/create`, `/haverstack/record/read`, `/haverstack/record/update` and `/haverstack/record/delete`, each with `{ baseId }` as the arguments a policy constrains. `/haverstack/record` covers all four and will never cover more, so delegating it can't later grant something new. The delegation counts on the app's side of the stack's permission check, beside grants naming the app, and never reaches further than the subject's own grants. A did:key link's signature is checked once and remembered by CID, so revalidating on every operation costs only the time bounds and the revocation check.
+
+A delegation's issuer, or the owner, revokes it by writing a `_revocation` Record naming its CID. See [Access control § Signed delegations](../../docs/spec/access-control.md#signed-delegations).
 
 ## Readings of the spec
 

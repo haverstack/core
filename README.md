@@ -83,16 +83,11 @@ const credential = {
 };
 ```
 
-A server checks the chain on every request and passes it on, so Bob's grants still bound what the app reaches:
+A server opens its stack with `@haverstack/ucan`'s `delegationVerifier()`, and the stack checks the chain a session carries on every operation, so Bob's grants still bound what the app reaches and a revoked or expired delegation stops working at once:
 
 ```ts
-const isRevoked = (cid: string, issuers: readonly string[]) =>
-  stack.isDelegationRevoked(cid, issuers);
-const session = await tokens.lookupToken(bearer);
-const accepted = session.delegationChain
-  ? await acceptDelegation(session.delegationChain, session.principalId, { isRevoked })
-  : undefined;
-const scoped = stack.asActor(session, { delegation: accepted?.delegation });
+const stack = await Stack.open(adapter, { verifyDelegation: delegationVerifier() });
+const scoped = stack.asActor(await tokens.lookupToken(bearer));
 ```
 
 To revoke a delegation, its issuer or you write a `_revocation` Record naming its CID; deleting the Record lifts it again. Grant `create` on `_revocation` to the people whose delegations you honor, so they can take theirs back. See [Access control § Revoking a delegation](./docs/spec/access-control.md#revoking-a-delegation).

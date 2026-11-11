@@ -12,7 +12,12 @@
 import { groupRoleFromAssociations, readCompanions, roleSatisfies } from '../access.js';
 import { inReach } from '../adapter/reach.js';
 import type { ReachedRecord } from '../adapter/reach.js';
-import { StackError, StackNotFoundError, StackPermissionError } from '../errors.js';
+import {
+  DelegationRefusedError,
+  StackError,
+  StackNotFoundError,
+  StackPermissionError,
+} from '../errors.js';
 import {
   UNGRANTABLE_SYSTEM_TYPES,
   grantConveys,
@@ -47,7 +52,7 @@ import type {
   QueryResult,
   Reach,
   RecordVerb,
-  SignedDelegation,
+  VerifiedDelegation,
   StackRecord,
   TypeId,
 } from '../types/index.js';
@@ -81,12 +86,13 @@ const VERBS: Record<RecordVerb, { any: GrantAction; own?: GrantAction; bit?: 're
 const RECORD_VERBS = Object.keys(VERBS) as RecordVerb[];
 
 /**
- * Families a signed delegation never reaches: those whose Records are
- * authority, granting it or withdrawing it, so no delegation can widen its
- * own reach or lift a revocation. See docs/spec/access-control.md
- * § Signed delegations.
+ * Families a principal acting for someone else never reaches, by grant or
+ * by delegation: their Records are authority, granting it or withdrawing
+ * it, so no app can widen its reach or lift a revocation. Grants already
+ * refuse all but `_revocation`. See docs/spec/access-control.md
+ * § Delegation: principal and subject.
  */
-const UNDELEGABLE_FAMILIES: ReadonlySet<string> = new Set([
+const AUTHORITY_FAMILIES: ReadonlySet<string> = new Set([
   ...UNGRANTABLE_SYSTEM_TYPES,
   SYSTEM_TYPES.REVOCATION,
 ]);
@@ -100,8 +106,8 @@ export class ScopeAuthority {
     readonly principalId: EntityId | null,
     /** Whom this request acts for and attributes writes to — see ScopedStack.subjectId. */
     readonly subjectId: EntityId | null,
-    /** The subject's verified delegation to the principal, read on the principal's side. */
-    private readonly delegation: SignedDelegation | null,
+    /** The delegation chain the session carries, read on the principal's side. */
+    private readonly delegationChain: readonly Uint8Array[] | null,
     /** Stack.query() within a reach — see ScopedStack.query(). */
     private readonly queryReadable: (split: SplitQuery, reach: Reach) => Promise<QueryResult>,
   ) {}
@@ -122,8 +128,26 @@ export class ScopeAuthority {
           ? Promise.resolve(new Map())
           : loadRosterRoles((q) => this.stack.query(q), subject),
       families: async () => new Set((await this.stack.listTypes()).map((t) => baseIdOf(t.id))),
+      delegation: () => this.verifyDelegation(),
       reach: (verb, snapshot) => this.buildReach(verb, snapshot),
     });
+  }
+
+  /**
+   * The session's delegation, validated now: once per operation, so expiry
+   * and revocation reach a view held across requests. Null when the
+   * session carries none. See docs/spec/access-control.md § Signed delegations.
+   */
+  private async verifyDelegation(): Promise<VerifiedDelegation | null> {
+    if (!this.delegationChain) return null;
+    const verified = await this.stack.verifyDelegationChain(
+      this.delegationChain,
+      this.principalId!,
+    );
+    if (verified.subjectId !== this.subjectId) {
+      throw new DelegationRefusedError('The delegation chain is from a different subject.');
+    }
+    return verified;
   }
 
   /** Whether a delegated app is acting for someone other than itself. */
@@ -218,21 +242,19 @@ export class ScopeAuthority {
   }
 
   /**
-   * The families the subject's signed delegation lets the principal `verb`,
-   * among those the stack defines. Its verbs are read as `-any` grant
-   * actions through grantConveys(), so it conveys what a grant naming the
-   * principal would, write-implies-read included, and never a family that
-   * governs authority. See docs/spec/access-control.md § Signed delegations.
+   * The families the session's delegation lets the principal `verb`. Each
+   * verb it allows reads as that verb's `-any` action through
+   * grantConveys(), so it conveys what a grant naming the principal would.
+   * See docs/spec/access-control.md § Signed delegations.
    */
   private async familiesDelegated(
     verb: RecordVerb,
     snapshot: AuthoritySnapshot,
   ): Promise<BaseId[]> {
-    const delegation = this.delegation;
+    const delegation = await snapshot.delegation();
     if (!delegation) return [];
     const action = VERBS[verb].any;
     return [...(await snapshot.families())].filter((family) => {
-      if (UNDELEGABLE_FAMILIES.has(family)) return false;
       const actions = RECORD_VERBS.filter((v) => delegation.allows(v, family)).map(
         (v) => VERBS[v].any,
       );
@@ -248,6 +270,9 @@ export class ScopeAuthority {
    * subject everything. See docs/spec/access-control.md § Reach.
    */
   private async buildReach(verb: RecordVerb, snapshot: AuthoritySnapshot): Promise<Reach> {
+    // Validated even where the principal's side reads nothing from it, so a
+    // revoked or expired chain ends the session whoever its principal is.
+    await snapshot.delegation();
     const { any, own, bit } = VERBS[verb];
     const reach: Reach = this.principalUnbounded
       ? {}
@@ -262,7 +287,7 @@ export class ScopeAuthority {
               )),
               ...(await this.familiesDelegated(verb, snapshot)),
             ]),
-          ],
+          ].filter((family) => !AUTHORITY_FAMILIES.has(family)),
         };
     const subject = this.subjectId;
     if (subject === this.stack.ownerEntityId) return reach;

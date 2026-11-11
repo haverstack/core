@@ -57,9 +57,20 @@ const issuerKey = async (did: string, options: ChainOptions): Promise<IssuerKey>
 };
 
 /** Validate a chain given root first: the subject's own delegation, then each one it led to. */
-export const validateChain = async (
+export const validateChain = (
   chain: readonly Delegation[],
   options: ChainOptions = {},
+): Promise<ValidChain> => checkChain(chain, options, null);
+
+/**
+ * validateChain(), remembering in `verified` the CIDs whose signatures it
+ * checked against a did:key, whose key never changes. A key resolved any
+ * other way is checked every time, since its DID's keys can rotate.
+ */
+export const checkChain = async (
+  chain: readonly Delegation[],
+  options: ChainOptions,
+  verified: Set<string> | null,
 ): Promise<ValidChain> => {
   if (chain.length === 0) throw new UcanError('misaligned', 'A delegation chain cannot be empty.');
   const now = options.now ?? Math.floor(Date.now() / 1000);
@@ -99,15 +110,18 @@ export const validateChain = async (
       throw new UcanError('expired', `Delegation ${link.cid} expired at ${link.exp}.`);
     }
 
-    const key = await issuerKey(link.iss, options);
-    if (key.alg !== link.alg) {
-      throw new UcanError(
-        'signature',
-        `Delegation ${link.cid} is signed with the wrong algorithm.`,
-      );
-    }
-    if (!verifySignature(link.alg, key.publicKey, link.signature, link.signedBytes)) {
-      throw new UcanError('signature', `Delegation ${link.cid} has an invalid signature.`);
+    if (!verified?.has(link.cid)) {
+      const key = await issuerKey(link.iss, options);
+      if (key.alg !== link.alg) {
+        throw new UcanError(
+          'signature',
+          `Delegation ${link.cid} is signed with the wrong algorithm.`,
+        );
+      }
+      if (!verifySignature(link.alg, key.publicKey, link.signature, link.signedBytes)) {
+        throw new UcanError('signature', `Delegation ${link.cid} has an invalid signature.`);
+      }
+      if (parseDidKey(link.iss)) verified?.add(link.cid);
     }
     if (await options.isRevoked?.(link.cid, [...issuers])) {
       throw new UcanError('revoked', `Delegation ${link.cid} has been revoked.`);
