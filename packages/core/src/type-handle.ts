@@ -14,8 +14,8 @@
 import { StackBadRequestError, StackMigrationError } from './errors.js';
 import { lineageProblem, parseTypeId } from './schema.js';
 import type { BaseId, ScalarFieldKind, TypeId } from './types/index.js';
-import { applySteps, fieldOrigins, recordOrigins, stepBuilder } from './migration-steps.js';
-import type { MigrationStep, Steps } from './migration-steps.js';
+import { applyFields, fieldOrigins, migrationBuilder, recordOrigins } from './migration-fields.js';
+import type { DeclaredFields, MigrationBuilder } from './migration-fields.js';
 
 // -------------------------------------------------------
 // Schema literal types
@@ -181,29 +181,27 @@ export const typeHandle = <const S extends ReadonlyTypeSchema>({
 
 /**
  * A step from one version of a type to another, passed to `Stack.open()`
- * and typed on both versions' content. `steps` is what a collection reads
- * to carry a content query across versions; `migrate` applies them, and is
- * a method so a typed migration fits a list of untyped ones. See
- * docs/spec/data-model.md § Type migrations.
+ * and typed on both versions' content. `migrate` is a method so a typed
+ * migration fits a list of untyped ones. See docs/spec/data-model.md
+ * § Type migrations.
  */
 export type Migration<From = Record<string, unknown>, To = Record<string, unknown>> = {
   readonly from: TypeId;
   readonly to: TypeId;
-  readonly steps: readonly MigrationStep[];
   migrate(content: From): To;
 };
 
 /**
- * Build the migration from `from` to `to` out of the steps `steps` returns
- * from a builder typed by both handles. The list is checked against both
- * schemas here, so a step the target would refuse fails before any record
- * is written. Within a family, `to` must name `from` as its `migratesFrom`.
- * See docs/spec/data-model.md § Migration steps.
+ * Build the migration from `from` to `to` out of the fields `declare`
+ * returns from a builder typed by both handles. The declaration is checked
+ * against both schemas here, so a field the target would refuse fails
+ * before any record is written. Within a family, `to` must name `from` as
+ * its `migratesFrom`. See docs/spec/data-model.md § Migration fields.
  */
 export const migration = <F extends ReadonlyTypeSchema, T extends ReadonlyTypeSchema>(
   from: TypeHandle<F>,
   to: TypeHandle<T>,
-  steps: (s: Steps<StoredContentOf<F>, ContentOf<T>>) => readonly MigrationStep[],
+  declare: (builder: MigrationBuilder<StoredContentOf<F>, ContentOf<T>>) => DeclaredFields,
 ): Migration<StoredContentOf<F>, StoredContentOf<T>> => {
   const refuse = (problem: string) =>
     new StackMigrationError(`Cannot migrate "${from.id}" to "${to.id}": ${problem}.`);
@@ -212,16 +210,16 @@ export const migration = <F extends ReadonlyTypeSchema, T extends ReadonlyTypeSc
       `"${to.id}" migrates from ${to.migratesFrom ? `"${to.migratesFrom}"` : 'nothing'}`,
     );
   }
-  const frozen = Object.freeze([
-    ...steps(stepBuilder as unknown as Steps<StoredContentOf<F>, ContentOf<T>>),
-  ]);
-  const origins = fieldOrigins(frozen, from.schema, to.schema);
+  const fields = declare(
+    migrationBuilder as unknown as MigrationBuilder<StoredContentOf<F>, ContentOf<T>>,
+  );
+  const origins = fieldOrigins(fields, from.schema, to.schema);
   if (typeof origins === 'string') throw refuse(origins);
   const built = Object.freeze({
     from: from.id,
     to: to.id,
-    steps: frozen,
-    migrate: (content: Record<string, unknown>) => applySteps(frozen, content),
+    migrate: (content: Record<string, unknown>) =>
+      applyFields(fields, from.schema, to.schema, content),
   }) as unknown as Migration<StoredContentOf<F>, StoredContentOf<T>>;
   recordOrigins(built, origins);
   return built;

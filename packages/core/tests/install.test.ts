@@ -866,7 +866,11 @@ describe('commitMigration() for an installed app', () => {
 describe("migrateAll({ sweep: 'listed' })", () => {
   test('migrates live, listed records and counts the deleted ones it passed over', async () => {
     stack = await Stack.open(await MemoryAdapter.open({ ownerEntityId: OWNER }), {
-      migrations: [migration(NOTE_1_TYPE, NOTE_2_TYPE, ({ add }) => [add('pinned', false)])],
+      migrations: [
+        migration(NOTE_1_TYPE, NOTE_2_TYPE, ({ fields, constant }) =>
+          fields({ pinned: constant(false) }),
+        ),
+      ],
     });
     await stack.defineType(NOTE_1_TYPE);
     await stack.defineType(NOTE_2_TYPE);

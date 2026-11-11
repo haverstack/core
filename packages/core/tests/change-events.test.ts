@@ -251,7 +251,9 @@ describe('every record emits, including the ones a query hides', () => {
       schema: NoteV1.schema,
       migratesFrom: NoteV1,
     });
-    stack = await Stack.open(adapter, { migrations: [migration(NoteV1, NoteV2, () => [])] });
+    stack = await Stack.open(adapter, {
+      migrations: [migration(NoteV1, NoteV2, ({ fields }) => fields({}))],
+    });
     await stack.defineType(NoteV2);
     const ids = [];
     for (let i = 0; i < 3; i++) ids.push((await stack.create(NOTE, { text: `n${i}` })).id);

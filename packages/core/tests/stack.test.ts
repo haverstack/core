@@ -76,7 +76,9 @@ const NoteV2 = typeHandle({
   schema: { text: { kind: 'text', required: true }, title: { kind: 'string' } },
   migratesFrom: NoteV1,
 });
-const noteV1ToV2 = migration(NoteV1, NoteV2, ({ add }) => [add('title', '')]);
+const noteV1ToV2 = migration(NoteV1, NoteV2, ({ fields, constant }) =>
+  fields({ title: constant('') }),
+);
 
 const EntityV1 = typeHandle({
   id: '_entity@1',
@@ -232,7 +234,7 @@ describe('Stack.open', () => {
       });
       const s = await Stack.open(emptyAdapter, {
         ownerProfile: { name: 'Jane Smith' },
-        migrations: [migration(EntityV1, EntityV2, () => [])],
+        migrations: [migration(EntityV1, EntityV2, ({ fields }) => fields({}))],
       });
       await s.defineType(EntityV2);
       await s.migrateAll('_entity');
@@ -305,7 +307,7 @@ describe('Stack.open', () => {
         },
         migratesFrom: EntityV1,
       });
-      await reopenWith(migration(EntityV1, EntityV2, () => []));
+      await reopenWith(migration(EntityV1, EntityV2, ({ fields }) => fields({})));
       await stack.defineType(EntityV2);
       const created = await stack.create('_entity@1', { did: 'did:key:x', name: 'X' });
       await stack.migrateAll('_entity');
@@ -2071,7 +2073,7 @@ describe("presentAt: 'latest' (explicit in-memory migration)", () => {
     });
     await reopenWith(
       noteV1ToV2,
-      migration(NoteV2, NoteV3, ({ add }) => [add('pinned', false)]),
+      migration(NoteV2, NoteV3, ({ fields, constant }) => fields({ pinned: constant(false) })),
     );
     await stack.defineType(NoteV3);
 
@@ -2089,7 +2091,9 @@ describe("presentAt: 'latest' (explicit in-memory migration)", () => {
 
 describe('Stack.open({ migrations })', () => {
   test('refuses two migrations from the same TypeId', async () => {
-    const again = migration(NoteV1, NoteV2, ({ add }) => [add('title', 'again')]);
+    const again = migration(NoteV1, NoteV2, ({ fields, constant }) =>
+      fields({ title: constant('again') }),
+    );
     await expect(Stack.open(adapter, { migrations: [noteV1ToV2, again] })).rejects.toThrow(
       StackMigrationError,
     );
@@ -2101,9 +2105,9 @@ describe('Stack.open({ migrations })', () => {
       [NOTE_V1, 'com.example.test/note'],
       ['note', NOTE_V2],
     ]) {
-      await expect(
-        Stack.open(adapter, { migrations: [{ from, to, steps: [], migrate }] }),
-      ).rejects.toThrow(StackMigrationError);
+      await expect(Stack.open(adapter, { migrations: [{ from, to, migrate }] })).rejects.toThrow(
+        StackMigrationError,
+      );
     }
   });
 
@@ -2111,7 +2115,7 @@ describe('Stack.open({ migrations })', () => {
     const migrate = (c: Record<string, unknown>) => c;
     for (const to of [NOTE_V1, 'com.example.test/note@0']) {
       await expect(
-        Stack.open(adapter, { migrations: [{ from: NOTE_V1, to, steps: [], migrate }] }),
+        Stack.open(adapter, { migrations: [{ from: NOTE_V1, to, migrate }] }),
       ).rejects.toThrow(StackMigrationError);
     }
   });
@@ -2122,9 +2126,9 @@ describe('Stack.open({ migrations })', () => {
     await expect(
       Stack.open(adapter, {
         migrations: [
-          { from: NOTE_V1, to: NOTE_V2, steps: [], migrate },
-          { from: NOTE_V2, to: other, steps: [], migrate },
-          { from: other, to: NOTE_V1, steps: [], migrate },
+          { from: NOTE_V1, to: NOTE_V2, migrate },
+          { from: NOTE_V2, to: other, migrate },
+          { from: other, to: NOTE_V1, migrate },
         ],
       }),
     ).rejects.toThrow(`The migrations passed form a cycle through "${NOTE_V1}".`);
@@ -2134,7 +2138,7 @@ describe('Stack.open({ migrations })', () => {
     const Other = typeHandle({ id: 'com.example.other/note@1', name: 'Other', schema: {} });
     await stack.defineType(Other);
     const note = await stack.create(NOTE_V1, { text: 'hi' });
-    await reopenWith(migration(NoteV1, Other, ({ drop }) => [drop('text')]));
+    await reopenWith(migration(NoteV1, Other, ({ fields, drop }) => fields({ text: drop() })));
     await stack.migrateAll(fam(NOTE_V1));
     expect((await stack.get(note.id))?.typeId).toBe(Other.id);
   });
@@ -2176,7 +2180,7 @@ describe('migrateAll', () => {
     });
     await reopenWith(
       noteV1ToV2,
-      migration(NoteV2, NoteV3, () => []),
+      migration(NoteV2, NoteV3, ({ fields }) => fields({})),
     );
     await stack.defineType(NoteV3);
     const v1 = await stack.create(NOTE_V1, { text: 'one' });
@@ -2237,7 +2241,9 @@ describe('migrateAll', () => {
       // The compiler checks derive() against what the function claims to
       // return; validation at write time checks what it actually returns.
       migrations: [
-        migration(NoteV1, NoteV2, ({ derive }) => [derive('text', () => 42 as unknown as string)]),
+        migration(NoteV1, NoteV2, ({ fields, derive }) =>
+          fields({ text: derive(() => 42 as unknown as string) }),
+        ),
       ],
     });
     await buggyStack.defineType(NoteV1);
@@ -2281,7 +2287,9 @@ describe('migrateAll', () => {
       migratesFrom: EntityV1,
     });
     await reopenWith(
-      migration(EntityV1, EntityV2, ({ derive }) => [derive('did', () => 'did:key:zHijacked')]),
+      migration(EntityV1, EntityV2, ({ fields, derive }) =>
+        fields({ did: derive(() => 'did:key:zHijacked') }),
+      ),
     );
     await stack.defineType(EntityV2);
     const card = await stack.create('_entity@1', { did: 'did:key:zAlice', name: 'Alice' });
@@ -2301,10 +2309,10 @@ describe('migrateAll', () => {
       migratesFrom: NoteV2,
     });
     expect(() =>
-      migration(NoteV2, NoteV3, ({ derive }) => [
+      migration(NoteV2, NoteV3, ({ fields, derive }) =>
         // An untyped caller can name any field.
-        derive('__proto__' as 'text', () => 'polluted'),
-      ]),
+        fields({ ['__proto__' as 'text']: derive(() => 'polluted') }),
+      ),
     ).toThrow(StackMigrationError);
   });
 
@@ -2315,7 +2323,11 @@ describe('migrateAll', () => {
       schema: { ...EntityV1.schema, pronouns: { kind: 'string' } },
       migratesFrom: EntityV1,
     });
-    await reopenWith(migration(EntityV1, EntityV2, ({ add }) => [add('pronouns', 'they/them')]));
+    await reopenWith(
+      migration(EntityV1, EntityV2, ({ fields, constant }) =>
+        fields({ pronouns: constant('they/them') }),
+      ),
+    );
     await stack.defineType(EntityV2);
     const card = await stack.create('_entity@1', { did: 'did:key:zAlice', name: 'Alice' });
 

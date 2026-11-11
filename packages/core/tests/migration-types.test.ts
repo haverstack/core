@@ -4,9 +4,9 @@ import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 
 // What the compiler says about a migration is part of its contract: a
-// mistake in a step is one error, on one line, naming the field or type at
-// fault. Each case is compiled against core's source under the package's
-// own compiler options, never run.
+// mistake in a declaration is one error, naming the field or type at fault.
+// Each case is compiled against core's source under the package's own
+// compiler options, never run.
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -21,6 +21,8 @@ const V1 = typeHandle({
     title: { kind: 'string', required: true },
     status: { kind: 'string', required: true },
     pages: { kind: 'number' },
+    archived: { kind: 'boolean' },
+    tags: { kind: 'array', items: { kind: 'enum', values: ['a', 'b'] } },
   },
 });
 const V2 = typeHandle({
@@ -28,103 +30,127 @@ const V2 = typeHandle({
   name: 'Book',
   migratesFrom: V1,
   schema: {
-    title: { kind: 'string', required: true },
+    name: { kind: 'string', required: true },
     status: { kind: 'enum', values: ['want', 'reading', 'finished'], required: true },
     pinned: { kind: 'boolean', required: true },
     rating: { kind: 'number' },
+    tags: { kind: 'array', items: { kind: 'enum', values: ['x', 'b'] } },
   },
 });
 type V1C = StoredContentOf<typeof V1.schema>;
 `;
 
-const compiles: Record<string, string> = {
-  'derive() with a total conditional': `
-migration(V1, V2, ({ add, derive }) => [
-  derive('status', (c) => (c.status === 'done' ? 'finished' : 'want')),
-  add('pinned', false),
-]);`,
-  'derive() returning a constant': `
-migration(V1, V2, ({ add, derive }) => [derive('status', () => 'want'), add('pinned', false)]);
-migration(V1, V2, ({ add, derive }) => [derive('status', (_c) => 'want'), add('pinned', false)]);`,
-  'derive() with a switch body, a named function or an annotated parameter': `
-migration(V1, V2, ({ add, derive }) => [
-  derive('status', (c) => {
-    switch (c.status) {
-      case 'done':
-        return 'finished';
-      case 'reading':
-        return 'reading';
-      default:
-        return 'want';
-    }
+/** A declaration of V2's fields around `status`, each case's subject. */
+const around = (status: string, rest = '') => `
+migration(V1, V2, ({ fields, field, constant, derive, drop }) =>
+  fields({
+    name: field('title'),
+    status: ${status},
+    pinned: constant(false),
+    archived: drop(),${rest}
   }),
-  add('pinned', false),
-]);
+);`;
+
+const compiles: Record<string, string> = {
+  'derive() with a total conditional': around(
+    `derive((c) => (c.status === 'done' ? 'finished' : 'want'))`,
+  ),
+  'derive() returning a constant':
+    around(`derive(() => 'want')`) + around(`derive((_c) => 'want')`),
+  'derive() with a switch body, a named function or an annotated parameter': `
 function statusOf(c: V1C) {
   return c.status === 'done' ? ('finished' as const) : ('want' as const);
 }
-migration(V1, V2, ({ add, derive }) => [derive('status', statusOf), add('pinned', false)]);
-migration(V1, V2, ({ add, derive }) => [
-  derive('status', (c: V1C) => (c.status === 'done' ? 'finished' : 'want')),
-  add('pinned', false),
-]);`,
-  'derive() into an optional field, which may be undefined': `
-migration(V1, V2, ({ add, derive }) => [
-  derive('status', () => 'want'),
-  add('pinned', false),
-  derive('rating', (c) => c.pages),
-]);`,
+${around(`derive((c) => {
+      switch (c.status) {
+        case 'done':
+          return 'finished';
+        default:
+          return 'want';
+      }
+    })`)}
+${around('derive(statusOf)')}
+${around(`derive((c: V1C) => (c.status === 'done' ? 'finished' : 'want'))`)}`,
+  'derive() into an optional field, which may be undefined': around(
+    `constant('want')`,
+    `\n    rating: derive((c) => c.pages),`,
+  ),
+  'field() mapping into the target enum': around(
+    `constant('want')`,
+    `\n    tags: field('tags', { a: 'x' }),`,
+  ),
   'the builder used without destructuring': `
-migration(V1, V2, (s) => [s.derive('status', () => 'want'), s.add('pinned', false)]);`,
+migration(V1, V2, (b) =>
+  b.fields({ name: b.field('title'), status: b.constant('want'), pinned: b.constant(false), archived: b.drop() }),
+);`,
 };
 
-const refuses: Record<string, { code: number; message: string; snippet: string }> = {
+// A message that prints a content type is matched by pattern, since the
+// order TypeScript prints a union's members in is not stable across
+// programs. A message with no line break is one line.
+const refuses: Record<string, { code: number; message: string | RegExp; snippet: string }> = {
   'derive() of free text into an enum': {
     code: 2322,
     message: `Type 'string' is not assignable to type '"want" | "reading" | "finished"'.`,
-    snippet: `
-migration(V1, V2, ({ add, derive }) => [
-  derive('status', (c) => (c.status === 'done' ? 'finished' : c.status)),
-  add('pinned', false),
-]);`,
+    snippet: around(`derive((c) => (c.status === 'done' ? 'finished' : c.status))`),
   },
-  'derive() of a field the target does not declare': {
-    code: 2345,
-    message: `Argument of type '"stauts"' is not assignable to parameter of type '"title" | "status" | "pinned" | "rating"'.`,
-    snippet: `
-migration(V1, V2, ({ add, derive }) => [derive('stauts', () => 'want'), add('pinned', false)]);`,
+  'a field the target does not declare': {
+    code: 2561,
+    message:
+      /^Object literal may only specify known properties, but 'stauts' does not exist in type 'MigrationFields<[^\n]*>'\. Did you mean to write 'status'\?$/,
+    snippet: around(`constant('want')`, `\n    stauts: constant('want'),`),
   },
-  "add() of a value the target's field refuses": {
+  "a constant the target's field refuses": {
     code: 2345,
     message: `Argument of type 'string' is not assignable to parameter of type 'boolean'.`,
-    snippet: `
-migration(V1, V2, ({ add, derive }) => [derive('status', () => 'want'), add('pinned', 'yes')]);`,
+    snippet: around(`constant('want')`).replace('constant(false)', `constant('yes')`),
   },
-  'add() of undefined, which sets no value': {
+  'constant() of undefined, which is no constant': {
     code: 2345,
     message: `Argument of type 'undefined' is not assignable to parameter of type 'number'.`,
-    snippet: `
-migration(V1, V2, ({ add, derive }) => [
-  derive('status', () => 'want'),
-  add('pinned', false),
-  add('rating', undefined),
-]);`,
+    snippet: around(`constant('want')`, `\n    rating: constant(undefined),`),
   },
   'derive() of undefined into a required field': {
     code: 2322,
     message: `Type 'undefined' is not assignable to type '"want" | "reading" | "finished"'.`,
-    snippet: `
-migration(V1, V2, ({ add, derive }) => [derive('status', () => undefined), add('pinned', false)]);`,
+    snippet: around(`derive(() => undefined)`),
   },
   'derive() reading a field the source does not declare': {
     code: 2551,
-    message: `Property 'titel' does not exist on type '{ title: string; status: string; pages?: number | undefined; }'. Did you mean 'title'?`,
-    snippet: `
-migration(V1, V2, ({ add, derive }) => [
-  derive('status', () => 'want'),
-  derive('title', (c) => c.titel),
-  add('pinned', false),
-]);`,
+    message:
+      /^Property 'titel' does not exist on type '{ title: string; [^\n]* }'\. Did you mean 'title'\?$/,
+    snippet: around(`derive((c) => c.titel)`),
+  },
+  'field() reading a field the source does not declare': {
+    code: 2345,
+    message: `Argument of type '"titel"' is not assignable to parameter of type '"title" | "status" | "pages" | "archived" | "tags"'.`,
+    snippet: around(`constant('want')`).replace(`field('title')`, `field('titel')`),
+  },
+  "field() mapping to a value the target's enum does not list": {
+    code: 2322,
+    message: `Type '"y"' is not assignable to type '"b" | "x"'.`,
+    snippet: around(`constant('want')`, `\n    tags: field('tags', { a: 'y' }),`),
+  },
+  'anything but drop() for a field the target does not declare': {
+    code: 2345,
+    message: `Argument of type 'true' is not assignable to parameter of type 'never'.`,
+    snippet: around(`constant('want')`).replace('archived: drop()', 'archived: constant(true)'),
+  },
+  'a required field the source cannot carry, left undeclared': {
+    code: 2345,
+    message:
+      /^Argument of type '[^\n]*' is not assignable to parameter of type 'MigrationFields<[^\n]*>'\.\n {2}Property 'pinned' is missing in type '[^\n]*' but required in type '[^\n]*'\.$/,
+    snippet: around(`constant('want')`).replace('pinned: constant(false),', ''),
+  },
+  'drop() of a required field': {
+    code: 2322,
+    message: `Type 'Origin<undefined>' is not assignable to type 'Origin<"want" | "reading" | "finished">'.\n  Type 'undefined' is not assignable to type '"want" | "reading" | "finished"'.`,
+    snippet: around('drop()'),
+  },
+  'an origin the builder did not make': {
+    code: 2353,
+    message: `Object literal may only specify known properties, and 'kind' does not exist in type 'Origin<"want" | "reading" | "finished">'.`,
+    snippet: around(`{ kind: 'constant', value: 'want' }`),
   },
 };
 
@@ -164,12 +190,15 @@ beforeAll(() => {
   }
 }, 60_000);
 
-describe('migration() steps, to the compiler', () => {
+describe('migration() fields, to the compiler', () => {
   test.each(Object.keys(compiles))('compiles: %s', (name) => {
     expect(diagnostics.get(name)).toEqual([]);
   });
 
-  test.each(Object.entries(refuses))('refuses, in one error on one line: %s', (name, expected) => {
-    expect(diagnostics.get(name)).toEqual([{ code: expected.code, message: expected.message }]);
+  test.each(Object.entries(refuses))('refuses, in one error: %s', (name, expected) => {
+    const found = diagnostics.get(name)!;
+    expect(found.map((d) => d.code)).toEqual([expected.code]);
+    if (typeof expected.message === 'string') expect(found[0].message).toBe(expected.message);
+    else expect(found[0].message).toMatch(expected.message);
   });
 });

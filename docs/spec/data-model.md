@@ -393,19 +393,20 @@ Reserved, library-defined types: `_config@1` ([Stack initialization](../spec.md#
 
 A Type's defining app is the only serious writer of its own types, so migration is **explicit and owner-driven**, not a side effect of a read or an unrelated write. Disk state changes version only via a deliberate `migrateAll()` pass or a per-record `commitMigration()` call — the invariant is that a Record's `typeId` never moves except through one of these two, so `query({ filter: { typeId } })` and grants targeting a type never silently miss not-yet-migrated records.
 
-An app builds one migration per step between adjacent Type versions with `migration(from, to, steps)`, where `steps` returns the list of [steps](#migration-steps) from a builder typed by both handles, and passes them all to `Stack.open()`. The library composes them into a full migration graph, so an app that only knows about v3 doesn't need to know that v1 ever existed.
+An app builds one migration per step between adjacent Type versions with `migration(from, to, declare)`, where `declare` returns where each of `to`'s fields comes from — its [migration fields](#migration-fields) — from a builder typed by both handles, and passes them all to `Stack.open()`. The library composes them into a full migration graph, so an app that only knows about v3 doesn't need to know that v1 ever existed.
 
 ```ts
-const noteV1ToV2 = migration(NoteV1, NoteV2, ({ add }) => [add('title', '')]);
-const noteV2ToV3 = migration(NoteV2, NoteV3, ({ rename, add }) => [
-  rename('body', 'text'),
-  add('pinned', false),
-]);
+const noteV1ToV2 = migration(NoteV1, NoteV2, ({ fields, constant }) =>
+  fields({ title: constant('') }),
+);
+const noteV2ToV3 = migration(NoteV2, NoteV3, ({ fields, field, constant }) =>
+  fields({ text: field('body'), pinned: constant(false) }),
+);
 
 const stack = await Stack.open(adapter, { migrations: [noteV1ToV2, noteV2ToV3] });
 ```
 
-`migration()` takes two [type handles](#type-handles) and checks its steps against both schemas when it runs (see [Migration steps](#migration-steps)). Within a family it refuses a `to` whose `migratesFrom` is not `from.id`, so a step cannot be paired with the wrong handle.
+`migration()` takes two [type handles](#type-handles) and checks its fields against both schemas when it runs (see [Migration fields](#migration-fields)). Within a family it refuses a `to` whose `migratesFrom` is not `from.id`, so a step cannot be paired with the wrong handle.
 
 **Lineage stays inside a family; a migration can leave it.** `migratesFrom` names an earlier version of the same family, and `typeHandle()` and `defineType()` refuse anything else with `StackBadRequestError`. A step whose `from` and `to` are in different families has no lineage to check, so `migration()` builds it from the two handles alone. This is how an app's own type moves into a shared one — a [commons](../commons/README.md) type, say — without the shared handle naming every family that has ever migrated into it. A migration is a separate value from either handle: a handle is data a manifest carries over the wire, and may be shared by apps that do not run its family's migrations.
 
@@ -426,35 +427,43 @@ The migration registry is **per-stack-instance** and lives in memory — differe
 
 **Stale-writer behavior.** A Record whose version this app instance can't reconcile — older than what it was passed _and_ not bridged by a migration path, or newer than anything it has ever `defineType()`'d — is an explicit error (`StackMigrationError`) under `presentAt: 'latest'`, not a silent pass-through. This covers both directions of "the same app at two versions" meeting via a shared stack. Reading the Record as stored (the default, no `presentAt`) always succeeds regardless — the stale-writer signal only fires when the app explicitly asks for the migrated view and the library can't honestly provide one.
 
-#### Migration steps
+#### Migration fields
 
-A migration is a list of steps, applied in order to a copy of the stored content. A field no step names is carried over as it is. The vocabulary is named after what Rails, Prisma, Avro and Cambria already call these operations:
+A migration declares where each of the target's top-level fields comes from. A field it does not name is carried over as it is.
 
-| Step                | Effect                                                                                                         |
-| ------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `rename(from, to)`  | moves a field's value to a new name                                                                            |
-| `map(field, table)` | replaces each value `table` lists with its mapping and keeps any other; an array is mapped element-wise        |
-| `add(field, value)` | sets a field to a constant                                                                                     |
-| `drop(field)`       | removes a field                                                                                                |
-| `derive(field, fn)` | sets a field to `fn(content)`, where `content` is the record as stored at `from`; `undefined` leaves it absent |
+| Origin                 | The field holds                                                                                                      |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `field(source)`        | the value of the source field `source`, under the target's name                                                      |
+| `field(source, table)` | that value with each value `table` lists replaced by its mapping, keeping any other; an array is mapped element-wise |
+| `constant(value)`      | `value`                                                                                                              |
+| `derive(fn)`           | `fn(content)`, where `content` is the record as stored at `from`; `undefined` leaves the field absent                |
+| `drop()`               | no value                                                                                                             |
 
-Steps name top-level fields. A nested change is a `derive` of the field that holds it.
+Origins name top-level fields. A nested change is a `derive` of the field that holds it.
 
-**The steps come from a builder `migration()` passes**, `Steps<StoredContentOf<F>, ContentOf<T>>` for handles of schemas `F` and `T`. It is the only step constructor core exports, because it is where both handles are known; a step object written by hand is a `MigrationStep` the compiler does not check against either handle. `migration()` calls `steps` once and freezes the list it returns, so a migration is still data.
+**Every origin reads the record as stored.** No origin sees another's result, so a declaration has no order and names each field once, as an object's keys do: there is no running state for a later origin to disturb. Two fields swap as `{ a: field('b'), b: field('a') }`. A field the target does not declare is removed, so the source's names are free for the target to reuse.
 
-**A step that produces a field is typed by the target, and sets its final value.** `add` and `derive` produce a value for a target field, so `field` is one of `to`'s top-level fields and what `fn` returns is that field's write type, `ContentOf<T>[field]`; `add`'s `value` is the same type without `undefined`, since an added field needs a value. A `derive` from free text into an enum therefore compiles only if it maps every value, and a misspelled target field does not compile. A producing step replaces whatever the field held at that point, and that type holds only for the field's final value, so no later step may name a field an `add` or `derive` produced — another `add` or `derive` included. Nothing is lost: `derive('a', …)` then `rename('a', 'b')` is `derive('b', …)`, and a `map`, `add` or `derive` after a producing step folds into it. `rename`, `map` and `drop` name a field at a point in the list, so they take plain strings, checked when `migration()` runs.
+**The declaration comes from a builder `migration()` passes**, `MigrationBuilder<StoredContentOf<F>, ContentOf<T>>` for handles of schemas `F` and `T`: `migration()` calls `declare` once with it, and `declare` returns `fields({ … })`. The builder is where both handles are known, so each origin is typed by the field it is declared for:
 
-**Steps are declared rather than written as a function so that core can read them.** Each says what became of a field, which is what lets a [collection](#type-handles) carry a content filter or sort across versions (see [Content queries across versions](#content-queries-across-versions)). `derive` is the one opaque step. It covers what the others cannot — a change of kind, a split, a value computed from other fields — and a field it produces does not translate. A stored enum may hold a value the source handle does not list, so `map` keeps an unlisted value rather than losing it, and `derive`'s function is typed on `StoredContentOf` the source handle.
+- a key is one of the target's top-level fields, or one of the source's that the target does not declare, and the only origin such a field takes is `drop()`;
+- `field(source)` names one of the source's fields, and `table`'s values are the target field's values, element-wise for an array;
+- `constant(value)` takes the target field's write type, `ContentOf<T>[field]`, without `undefined`;
+- what `derive(fn)` returns is the target field's write type, and `fn` reads `StoredContentOf` the source handle, since a stored enum may hold a value the source does not list. A `derive` from free text into an enum therefore compiles only if it maps every value;
+- a field the target requires and the source does not declare must be named.
 
-**`migration()` checks the steps against both schemas** and throws `StackMigrationError` naming the step or field at fault:
+An origin is opaque: its brand exists only in the types, so a value the builder did not make does not compile where an origin is expected. `fields()` takes the declaration as an argument rather than as a returned object, because TypeScript checks a misspelled key against an argument and not against a callback's return value.
 
-- a `rename`, `map` or `drop` of a field that is not there at that point in the list, or a `rename` onto one that is;
-- any step naming a field an earlier `add` or `derive` produced;
-- a field left at the end that `to` does not declare — drop or rename it;
-- a field `to` requires that no step produces and `from` does not carry;
-- a carried field — unchanged, renamed or mapped — that `to` declares in a way its stored values could fail: a different kind (an `enum`, `string` or `text` into `string` or `text` aside), optional into required, an open container into a declared one, or an enum value, after any `map`, that `to`'s enum does not list. Containers are compared field by field;
-- a `map` of a field that is not an `enum`, `string` or `text`, or an array of one;
-- an `add` with no value, or one `to`'s declaration of the field refuses.
+**Origins are declared rather than written as a function so that core can read them.** Each says what became of a field, which is what lets a [collection](#type-handles) carry a content filter or sort across versions (see [Content queries across versions](#content-queries-across-versions)). `derive` is the one opaque origin. It covers what the others cannot — a change of kind, a split, a value computed from other fields — and a field it produces does not translate. A stored enum may hold a value the source handle does not list, so `field(source, table)` keeps an unlisted value rather than losing it.
+
+**`migration()` checks the declaration against both schemas** and throws `StackMigrationError` naming the field at fault. These are what a caller the compiler cannot see would get wrong, and what the types cannot say:
+
+- a key neither Type declares, or an origin other than `drop()` for a field the target does not declare;
+- a `field()` naming a field the source does not declare;
+- a field the source declares and the target does not, that no `field()` reads and the declaration does not `drop()` — so no field is lost by omission;
+- a field `to` requires that nothing produces;
+- a field carried, whether undeclared or through `field()`, that `to` declares in a way its stored values could fail: a different kind (an `enum`, `string` or `text` into `string` or `text` aside), optional into required, an open container into a declared one, or an enum value, after any mapping, that `to`'s enum does not list. Containers are compared field by field;
+- a mapping of a field that is not an `enum`, `string` or `text`, or an array of one;
+- a `constant()`, or a `drop()`, that `to`'s declaration of the field refuses.
 
 The compiler checks what `derive`'s function is declared to return; what it returns is known only when it runs, so validation against the target Type when `migrateAll()` or `commitMigration()` writes it stays the backstop.
 
@@ -494,17 +503,17 @@ The derived types are a convenience over [runtime validation](#types), which sta
 
 #### Content queries across versions
 
-**A collection rewrites a content filter or sort into each older version's shape.** The adapter matches and orders content as stored, before any record is migrated, so a predicate written in the handle's shape would silently miss a record whose field a migration renamed or remapped, and misplace it in a sort. Core composes the [steps](#migration-steps) between each older version and the handle into what became of each of the handle's top-level fields — a field of that version, its values possibly remapped; a constant; or something derived — and rewrites the query into one arm per version: [`filter.contentByType`](#content-by-type) for a filter and `sort.contentFieldByType` for a sort. Each key translates by its top-level field, and the rest of its path is kept, since steps reach top-level fields only:
+**A collection rewrites a content filter or sort into each older version's shape.** The adapter matches and orders content as stored, before any record is migrated, so a predicate written in the handle's shape would silently miss a record whose field a migration renamed or remapped, and misplace it in a sort. Core composes the [migration fields](#migration-fields) between each older version and the handle into what became of each of the handle's top-level fields — a field of that version, its values possibly remapped; a constant; or something derived — and rewrites the query into one arm per version: [`filter.contentByType`](#content-by-type) for a filter and `sort.contentFieldByType` for a sort. Each key translates by its top-level field, and the rest of its path is kept, since origins reach top-level fields only:
 
-| Step on the path | Filter                                                                                       | Sort                                                  |
-| ---------------- | -------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| `rename`         | translated: the path renamed in the older arm                                                | translated: the field per typeId                      |
-| `map`            | translated: the value replaced by the older value that maps to it                            | **narrowed** — remapped values don't keep their order |
-| `add`            | decided in core: the constant is matched against the key, which keeps or drops the older arm | translated: the constant per typeId                   |
-| `drop`           | nothing to translate: the handle does not declare the field                                  | nothing to translate                                  |
-| `derive`         | narrowed                                                                                     | narrowed                                              |
+| Origin on the path     | Filter                                                                                       | Sort                                                  |
+| ---------------------- | -------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| `field(source)`        | translated: the path renamed in the older arm                                                | translated: the field per typeId                      |
+| `field(source, table)` | translated: the value replaced by the older value that maps to it                            | **narrowed** — remapped values don't keep their order |
+| `constant(value)`      | decided in core: the constant is matched against the key, which keeps or drops the older arm | translated: the constant per typeId                   |
+| `drop()`               | decided in core, as the constant "no value"                                                  | translated, as the constant "no value"                |
+| `derive(fn)`           | narrowed                                                                                     | narrowed                                              |
 
-A field the handle declares optional and no step produces is read under its own name, since a migration carries every field no step names — an older version may have gained it in place — and a name a step removed is the constant "no value". A `map` keeps a value it does not list, so more than one older value can arrive as the one a key asks for: `map('status', { done: 'finished' })` carries an unlisted `finished` through as well as remapping `done`. An arm matches one value per path, so it asks for a mapped value first, and each other source becomes a residual the first page probes for, as it probes a narrowed version: a match sets `skipped.older`. One such key per arm is split this way; a second narrows the version. A key no older value maps to drops the older arm, as a constant that does not match does. A key on a field the handle does not declare, which only an untyped caller can write, is narrowed. **A narrowed version is left out of the query**; a dropped arm is left out too, but only because no record there can match. Newer versions stay out of reach either way: the handle cannot represent them.
+A field the handle declares and no origin names is read under its own name, since a migration carries every field it does not name — an older version may have gained it in place — and a source field the target does not declare is the constant "no value". A mapping keeps a value it does not list, so more than one older value can arrive as the one a key asks for: `field('status', { done: 'finished' })` carries an unlisted `finished` through as well as remapping `done`. An arm matches one value per path, so it asks for a mapped value first, and each other source becomes a residual the first page probes for, as it probes a narrowed version: a match sets `skipped.older`. One such key per arm is split this way; a second narrows the version. A key no older value maps to drops the older arm, as a constant that does not match does. A key on a field the handle does not declare, which only an untyped caller can write, is narrowed. **A narrowed version is left out of the query**; a dropped arm is left out too, but only because no record there can match. Newer versions stay out of reach either way: the handle cannot represent them.
 
 Records at an older version arrive migrated, as on an unfiltered page, and a sort orders them as their migrated values would order, since a carried field keeps its kind. The first page fixes which versions the query spans, and its cursor carries them: a later page queries the same arms and sort without listing types again, so a version defined mid-pagination cannot change what a cursor resumes. When no older version is left in, the query is sent as a plain `content` filter or `contentField` sort on the handle's `typeId`, which every adapter reaching content answers. An adapter declaring [`filter.contentByType`](./adapters.md#adapter-capabilities) `false` — or `sort.contentFieldByType` `false`, for a content sort — gets that query, with every older version narrowed.
 

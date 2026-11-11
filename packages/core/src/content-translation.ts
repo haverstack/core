@@ -13,7 +13,7 @@
 import { matchesContent } from './content-match.js';
 import { sortConstant } from './adapter/sort.js';
 import { parseContentFilterKey } from './query-validation.js';
-import type { FieldOrigin, FieldOrigins } from './migration-steps.js';
+import type { FieldOrigin, FieldOrigins } from './migration-fields.js';
 import type { ContentArm, ContentSortKey, ScalarFieldKind } from './types/index.js';
 
 /** No record at the version can match, so its arm is dropped without a skip. */
