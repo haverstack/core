@@ -42,12 +42,11 @@ type V1C = StoredContentOf<typeof V1.schema>;
 
 /** A declaration of V2's fields around `status`, each case's subject. */
 const around = (status: string, rest = '') => `
-migration(V1, V2, ({ fields, field, constant, derive }) =>
+migration(V1, V2, ({ fields, field, constant, derive, absent }) =>
   fields({
     name: field('title'),
     status: ${status},
-    pinned: constant(false),
-    ${rest}
+    pinned: constant(false),${rest.includes('rating:') ? '' : '\n    rating: absent(),'}${rest}
   }),
 );`;
 
@@ -81,7 +80,12 @@ ${around(`derive((c: V1C) => (c.status === 'done' ? 'finished' : 'want'))`)}`,
   ),
   'the builder used without destructuring': `
 migration(V1, V2, (b) =>
-  b.fields({ name: b.field('title'), status: b.constant('want'), pinned: b.constant(false) }),
+  b.fields({
+    name: b.field('title'),
+    status: b.constant('want'),
+    pinned: b.constant(false),
+    rating: b.absent(),
+  }),
 );`,
 };
 
@@ -158,10 +162,13 @@ const refuses: Record<string, { code: number; message: string | RegExp; snippet:
     code: 2353,
     message:
       /^Object literal may only specify known properties, and 'archived' does not exist in type 'MigrationFields<[^\n]*>'\.$/,
-    snippet: around(`constant('want')`, `\n    archived: drop(),`).replace(
-      '({ fields, field, constant, derive })',
-      '({ fields, field, constant, derive, drop })',
-    ),
+    snippet: around(`constant('want')`, `\n    archived: absent(),`),
+  },
+  'an optional field the source does not declare, left undeclared': {
+    code: 2345,
+    message:
+      /^Argument of type '[^\n]*' is not assignable to parameter of type 'MigrationFields<[^\n]*>'\.\n {2}Property 'rating' is missing in type '[^\n]*' but required in type '[^\n]*'\.$/,
+    snippet: around(`constant('want')`).replace('rating: absent(),', ''),
   },
   'a required field the source cannot carry, left undeclared': {
     code: 2345,
@@ -169,13 +176,10 @@ const refuses: Record<string, { code: number; message: string | RegExp; snippet:
       /^Argument of type '[^\n]*' is not assignable to parameter of type 'MigrationFields<[^\n]*>'\.\n {2}Property 'pinned' is missing in type '[^\n]*' but required in type '[^\n]*'\.$/,
     snippet: around(`constant('want')`).replace('pinned: constant(false),', ''),
   },
-  'drop() of a required field': {
+  'absent() of a required field': {
     code: 2322,
     message: `Type 'Origin<undefined>' is not assignable to type 'Origin<"want" | "reading" | "finished">'.\n  Type 'undefined' is not assignable to type '"want" | "reading" | "finished"'.`,
-    snippet: around('drop()').replace(
-      '({ fields, field, constant, derive })',
-      '({ fields, field, constant, derive, drop })',
-    ),
+    snippet: around('absent()'),
   },
   'an origin the builder did not make': {
     code: 2353,

@@ -21,7 +21,7 @@ describe('fieldOrigins()', () => {
   test("names each target field's origin, and each field the target drops as no value", () => {
     const result = origins(
       { b: field('a', { x: 'y' }), c: constant('k'), d: derive(() => 1) },
-      { a: status(['x', 'z']), z: { kind: 'string' } },
+      { a: status(['x', 'z']), e: { kind: 'date' }, z: { kind: 'string' } },
       { b: status(['y', 'z']), c: { kind: 'string' }, d: { kind: 'number' }, e: { kind: 'date' } },
     );
     expect(Object.fromEntries(result)).toEqual({
@@ -48,17 +48,14 @@ describe('fieldOrigins()', () => {
 describe('composeOrigins()', () => {
   test('follows a name no origin names through a migration that does not declare it', () => {
     const lower = origins({}, { a: { kind: 'string' } }, { a: { kind: 'string' } });
-    const upper = origins(
-      {},
-      { a: { kind: 'string' } },
-      { a: { kind: 'string' }, n: { kind: 'string' } },
-    );
+    const both = { a: { kind: 'string' }, n: { kind: 'string' } } as const;
+    const upper = origins({}, both, both);
     expect(composeOrigins(lower, upper).get('n')).toEqual({ kind: 'field', field: 'n' });
   });
 
   test('reads a name a lower migration dropped as no value, though an upper one declares it', () => {
     const lower = origins({}, { n: { kind: 'string' } }, {});
-    const upper = origins({}, {}, { n: { kind: 'string' } });
+    const upper = origins({}, { n: { kind: 'string' } }, { n: { kind: 'string' } });
     expect(composeOrigins(lower, upper).get('n')).toEqual({ kind: 'constant', value: undefined });
   });
 

@@ -143,8 +143,8 @@ export interface ReviewContent extends ContentOf<typeof Review.schema> {}
 // Startup: pass to every Stack.open(). Each field's origin comes from a builder
 // typed by both handles, and is checked against both schemas when migration() runs.
 export const migrations = [
-  migration(BookV1, Book, ({ fields, field }) =>
-    fields({ status: field('status', { done: 'finished' }) }),
+  migration(BookV1, Book, ({ fields, field, absent }) =>
+    fields({ status: field('status', { done: 'finished' }), shelfId: absent() }),
   ),
 ];
 
@@ -250,7 +250,7 @@ Tags, attachments, and relationships are unified under a single model:
 
 ### Migrations
 
-Types can evolve over time. A new version names the one it migrates from, and `migration()` builds the step between two handles from where each field of the new version comes from — `field`, `constant`, `derive` or `drop`, from a builder typed by both handles — checked against both schemas when it runs. Pass every step to `Stack.open()`; the library composes adjacent steps into chains:
+Types can evolve over time. A new version names the one it migrates from, and `migration()` builds the step between two handles from where each field of the new version comes from — `field`, `constant`, `derive` or `absent`, from a builder typed by both handles — checked against both schemas when it runs. Pass every step to `Stack.open()`; the library composes adjacent steps into chains:
 
 ```ts
 const NoteV2 = typeHandle({
@@ -268,7 +268,7 @@ const stack = await Stack.open(adapter, {
 await stack.defineType(NoteV2);
 ```
 
-A field the new version does not declare is removed without being named, so a rename must be declared: leave out `by: field('author')` for an optional `by` and every migrated record arrives without it. The previous content stays in version history, but nothing reports the miss — see [Migration fields](https://github.com/haverstack/core/blob/main/docs/spec/data-model.md#migration-fields).
+A field the new version adds says where it comes from — `absent()` if it starts with no value — so a rename can't be left out by accident; a field it no longer declares is removed.
 
 Records stay at the version they were written at: `get()` and `query()` return them as stored, `presentAt: 'latest'` migrates them in memory for one read, and `stack.migrateAll()` commits a family to disk. Because the fields are declared rather than a function, a collection carries a content filter or sort across the versions they translate to — a filter on `title` reaches records still at `@1`. Pass migrations at every startup — see [Writing an app](#writing-an-app).
 

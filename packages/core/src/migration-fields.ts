@@ -48,9 +48,8 @@ export type DeclaredFields = Readonly<Record<string, DeclaredOrigin>> & {
   readonly [fieldsBrand]: true;
 };
 
-type RequiredKeys<T> = { [K in keyof T]-?: undefined extends T[K] ? never : K }[keyof T];
-/** The target's required fields the source cannot carry, so must be declared. */
-type MustDeclare<F, T> = Exclude<RequiredKeys<T>, keyof F>;
+/** The target's fields the source does not declare, so has no field to carry. */
+type MustDeclare<F, T> = Exclude<keyof T, keyof F>;
 /** The values a table may map: a string-shaped scalar's, or an array's elements'. */
 type Mappable<V> = Exclude<V extends readonly (infer E)[] ? E : V, undefined> & string;
 /**
@@ -118,8 +117,8 @@ export type MigrationBuilder<F, S, T> = {
    * does not translate across versions.
    */
   readonly derive: <V>(fn: (content: F) => NoInfer<V>) => Origin<V>;
-  /** No value. */
-  readonly drop: () => Origin<undefined>;
+  /** No value: the field is left absent. */
+  readonly absent: () => Origin<undefined>;
 };
 
 /** The one builder, untyped; `migration()` passes it typed by its handles. */
@@ -141,7 +140,8 @@ export const migrationBuilder: MigrationBuilder<
     }) as unknown as Origin<never>,
   constant: (value) => Object.freeze({ kind: 'constant', value }) as unknown as Origin<never>,
   derive: (fn) => Object.freeze({ kind: 'derived', derive: fn }) as unknown as Origin<never>,
-  drop: () => Object.freeze({ kind: 'constant', value: undefined }) as unknown as Origin<undefined>,
+  absent: () =>
+    Object.freeze({ kind: 'constant', value: undefined }) as unknown as Origin<undefined>,
 });
 
 const describe = (origin: DeclaredOrigin): string => {
@@ -149,7 +149,7 @@ const describe = (origin: DeclaredOrigin): string => {
     case 'field':
       return `field("${origin.field}"${origin.values ? ', …' : ''})`;
     case 'constant':
-      return origin.value === undefined ? 'drop()' : 'constant(…)';
+      return origin.value === undefined ? 'absent()' : 'constant(…)';
     case 'derived':
       return 'derive(…)';
   }
@@ -371,16 +371,17 @@ export const fieldOrigins = (
   );
   for (const [field, def] of Object.entries(to)) {
     const declaredOrigin = Object.hasOwn(fields, field) ? fields[field] : undefined;
-    // migrate() carries every field no origin names, so one an older
-    // version gained in place arrives under its own name.
+    // A field no origin names is carried from the source's field of the
+    // same name, which the source must declare.
     const origin: FieldOrigin = declaredOrigin
       ? declaredOrigin.kind === 'derived'
         ? { kind: 'derived' }
         : declaredOrigin
       : { kind: 'field', field };
-    if (origin.kind === 'field' && !Object.hasOwn(from, origin.field)) {
-      if (def.required) return `"${field}" is required at the target, and nothing produces it`;
-    } else if (origin.kind === 'field') {
+    if (!declaredOrigin && !Object.hasOwn(from, field)) {
+      return `the source does not declare "${field}", so its origin must be declared`;
+    }
+    if (origin.kind === 'field') {
       const problem = carryProblem(
         field,
         from[origin.field] as FieldDef,

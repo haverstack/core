@@ -429,7 +429,7 @@ The migration registry is **per-stack-instance** and lives in memory — differe
 
 #### Migration fields
 
-A migration declares where each of the target's top-level fields comes from. A field it does not name is carried over as it is.
+A migration declares where each of the target's top-level fields comes from. A target field it does not name is carried from the source's field of the same name, which the source must declare.
 
 | Origin                 | The field holds                                                                                                      |
 | ---------------------- | -------------------------------------------------------------------------------------------------------------------- |
@@ -437,21 +437,23 @@ A migration declares where each of the target's top-level fields comes from. A f
 | `field(source, table)` | that value with each value `table` lists replaced by its mapping, keeping any other; an array is mapped element-wise |
 | `constant(value)`      | `value`                                                                                                              |
 | `derive(fn)`           | `fn(content)`, where `content` is the record as stored at `from`; `undefined` leaves the field absent                |
-| `drop()`               | no value                                                                                                             |
+| `absent()`             | no value                                                                                                             |
 
 Origins name top-level fields. A nested change is a `derive` of the field that holds it.
 
 **Every origin reads the record as stored.** No origin sees another's result, so a declaration has no order and names each field once, as an object's keys do: there is no running state for a later origin to disturb. Two fields swap as `{ a: field('b'), b: field('a') }`. A field the target does not declare is removed without being named: the target's schema is the statement of what it keeps, so the declaration is keyed by the target's fields alone, and the source's names are free for it to reuse.
 
-**A field the target renames must be named, or its value is left behind.** If `author` becomes an optional `by` and the declaration leaves out `by: field('author')`, the migration builds, `author` is removed, and `by` arrives absent on every record — nothing reports it. The value is not destroyed: every write of a migrated record snapshots the record as it stood first (see [Versioning § Version history](./versioning.md#version-history)), so [`restoreVersion()`](./versioning.md#restore-semantics) recovers it, and a corrected migration can then carry it. But that takes someone noticing. A rename into a required field cannot be left out — the compiler requires it — so the hazard is a rename into an optional one.
+**Each handle is the statement of its side.** The target's schema says what is kept, so a source field it does not declare is removed without being named, and the declaration is keyed by the target's fields alone. The source's schema says what is stored, so a target field the source does not declare has no field of its own name to carry and must be named — required or optional — with `absent()` where it starts with no value. A rename left out is therefore a compile error, not a field that arrives silently absent. A field an older version gained in place is carried when the app's handle for that version declares it, which a handle evolved in place does; a stale handle is fixed by declaring the field, since `absent()` would leave the stored value behind.
 
 **The declaration comes from a builder `migration()` passes**, `MigrationBuilder<StoredContentOf<F>, ContentOf<F>, ContentOf<T>>` for handles of schemas `F` and `T`: `migration()` calls `declare` once with it, and `declare` returns `fields({ … })`. The builder is where both handles are known, so each origin is typed by the field it is declared for:
 
 - a key is one of the target's top-level fields;
-- `field(source)` names one of the source's fields, and what it carries — the values the source lists, after `table` maps them — is the target field's write type. `table`'s keys are values the source lists, element-wise for an array, or any string for free text. A carry is typed by the source's write type, `ContentOf<F>`, not the stored one: a stored enum may hold a value the source does not list, which is carried through rather than checked;
+- `field(source)` names one of the source's fields, and what it carries — the values the source lists, after `table` maps them — is the target field's write type. `table`'s keys are values the source lists, element-wise for an array, or any string for free text;
 - `constant(value)` takes the target field's write type, `ContentOf<T>[field]`, without `undefined`;
-- what `derive(fn)` returns is the target field's write type, and `fn` reads `StoredContentOf` the source handle, since a stored enum may hold a value the source does not list. A `derive` from free text into an enum therefore compiles only if it maps every value;
-- a field the target requires and the source does not declare must be named.
+- what `derive(fn)` returns is the target field's write type, from `StoredContentOf` the source. A `derive` from free text into an enum therefore compiles only if it maps every value;
+- a target field the source does not declare must be named.
+
+**A carry is checked against what the source declares; a derivation, against what is stored.** A `field()`, and a field carried by its name, is typed by the source's write type, `ContentOf<F>`: the values its handle lists. A value beyond them — one a newer writer of the same version added in place — is carried as it is, and the target's validation decides it when `migrateAll()` or `commitMigration()` writes it, as for any [stale writer](#type-migrations). A `derive` is code that runs on whatever is stored, so `fn` reads `StoredContentOf` the source and has to handle a value it does not list. Typing a carry by the stored content instead would refuse every enum carried into a closed enum, unchanged ones included, since no table can list a value the handle does not know.
 
 An origin is opaque: its brand exists only in the types, so a value the builder did not make does not compile where an origin is expected. `fields()` takes the declaration as an argument rather than as a returned object, because TypeScript checks a misspelled key against an argument and not against a callback's return value.
 
@@ -461,10 +463,10 @@ An origin is opaque: its brand exists only in the types, so a value the builder 
 
 - a key `to` does not declare;
 - a `field()` naming a field the source does not declare, or a `table` key an enum source does not list;
-- a field `to` requires that nothing produces;
+- a target field the source does not declare, left unnamed;
 - a field carried, whether undeclared or through `field()`, that `to` declares in a way its stored values could fail: a different kind (an `enum`, `string` or `text` into `string` or `text` aside), optional into required, an open container into a declared one, or an enum value, after any mapping, that `to`'s enum does not list. Containers are compared field by field;
 - a mapping of a field that is not an `enum`, `string` or `text`, or an array of one;
-- a `constant()`, or a `drop()`, that `to`'s declaration of the field refuses.
+- a `constant()`, or an `absent()`, that `to`'s declaration of the field refuses.
 
 The compiler checks what `derive`'s function is declared to return; what it returns is known only when it runs, so validation against the target Type when `migrateAll()` or `commitMigration()` writes it stays the backstop.
 
@@ -511,10 +513,10 @@ The derived types are a convenience over [runtime validation](#types), which sta
 | `field(source)`        | translated: the path renamed in the older arm                                                | translated: the field per typeId                      |
 | `field(source, table)` | translated: the value replaced by the older value that maps to it                            | **narrowed** — remapped values don't keep their order |
 | `constant(value)`      | decided in core: the constant is matched against the key, which keeps or drops the older arm | translated: the constant per typeId                   |
-| `drop()`               | decided in core, as the constant "no value"                                                  | translated, as the constant "no value"                |
+| `absent()`             | decided in core, as the constant "no value"                                                  | translated, as the constant "no value"                |
 | `derive(fn)`           | narrowed                                                                                     | narrowed                                              |
 
-A field the handle declares and no origin names is read under its own name, since a migration carries every field it does not name — an older version may have gained it in place — and a source field the target does not declare is the constant "no value". A mapping keeps a value it does not list, so more than one older value can arrive as the one a key asks for: `field('status', { done: 'finished' })` carries an unlisted `finished` through as well as remapping `done`. An arm matches one value per path, so it asks for a mapped value first, and each other source becomes a residual the first page probes for, as it probes a narrowed version: a match sets `skipped.older`. One such key per arm is split this way; a second narrows the version. A key no older value maps to drops the older arm, as a constant that does not match does. A key on a field the handle does not declare, which only an untyped caller can write, is narrowed. **A narrowed version is left out of the query**; a dropped arm is left out too, but only because no record there can match. Newer versions stay out of reach either way: the handle cannot represent them.
+A field the handle declares and no origin names is read under its own name, since a migration carries it from the field of that name, and a source field the target does not declare is the constant "no value". A mapping keeps a value it does not list, so more than one older value can arrive as the one a key asks for: `field('status', { done: 'finished' })` carries an unlisted `finished` through as well as remapping `done`. An arm matches one value per path, so it asks for a mapped value first, and each other source becomes a residual the first page probes for, as it probes a narrowed version: a match sets `skipped.older`. One such key per arm is split this way; a second narrows the version. A key no older value maps to drops the older arm, as a constant that does not match does. A key on a field the handle does not declare, which only an untyped caller can write, is narrowed. **A narrowed version is left out of the query**; a dropped arm is left out too, but only because no record there can match. Newer versions stay out of reach either way: the handle cannot represent them.
 
 Records at an older version arrive migrated, as on an unfiltered page, and a sort orders them as their migrated values would order, since a carried field keeps its kind. The first page fixes which versions the query spans, and its cursor carries them: a later page queries the same arms and sort without listing types again, so a version defined mid-pagination cannot change what a cursor resumes. When no older version is left in, the query is sent as a plain `content` filter or `contentField` sort on the handle's `typeId`, which every adapter reaching content answers. An adapter declaring [`filter.contentByType`](./adapters.md#adapter-capabilities) `false` — or `sort.contentFieldByType` `false`, for a content sort — gets that query, with every older version narrowed.
 

@@ -215,8 +215,8 @@ const handle = <const S extends ReadonlyTypeSchema>(
 
 describe('migration()', () => {
   test('builds migrate() from its fields, carrying every field none names', () => {
-    const m = migration(BookV1, Book, ({ fields, field }) =>
-      fields({ status: field('status', { done: 'finished' }) }),
+    const m = migration(BookV1, Book, ({ fields, field, absent }) =>
+      fields({ status: field('status', { done: 'finished' }), pages: absent() }),
     );
     expect(m.from).toBe(BookV1.id);
     expect(m.to).toBe(Book.id);
@@ -227,8 +227,8 @@ describe('migration()', () => {
   });
 
   test('carries a value the source handle does not list through a map', () => {
-    const m = migration(BookV1, Book, ({ fields, field }) =>
-      fields({ status: field('status', { done: 'finished' }) }),
+    const m = migration(BookV1, Book, ({ fields, field, absent }) =>
+      fields({ status: field('status', { done: 'finished' }), pages: absent() }),
     );
     expect(m.migrate({ title: 'Dune', status: 'paused' })).toEqual({
       title: 'Dune',
@@ -278,8 +278,9 @@ describe('migration()', () => {
   });
 
   test('types derive() on the source content as stored', () => {
-    migration(BookV1, Book, ({ fields, derive }) =>
+    migration(BookV1, Book, ({ fields, derive, absent }) =>
       fields({
+        pages: absent(),
         status: derive((c) => {
           expectTypeOf(c).toEqualTypeOf<StoredContentOf<typeof BookV1.schema>>();
           return c.status === 'done' ? 'finished' : 'want';
@@ -295,15 +296,17 @@ describe('migration()', () => {
       schema: Book.schema,
       migratesFrom: Book,
     });
-    expect(() => migration(BookV1, BookV3, ({ fields }) => fields({}))).toThrow(
+    expect(() =>
+      migration(BookV1, BookV3, ({ fields, absent }) => fields({ pages: absent() })),
+    ).toThrow(
       `Cannot migrate "${BookV1.id}" to "${BookV3.id}": "${BookV3.id}" migrates from "${Book.id}".`,
     );
     expect(() => migration(Book, BookV1, ({ fields }) => fields({}))).toThrow(StackMigrationError);
   });
 
   test('builds a migration into another family without lineage', () => {
-    const m = migration(Shelf, Book, ({ fields, field, constant }) =>
-      fields({ title: field('name'), status: constant('want') }),
+    const m = migration(Shelf, Book, ({ fields, field, constant, absent }) =>
+      fields({ title: field('name'), status: constant('want'), pages: absent() }),
     );
     expect(m.migrate({ name: 'Fiction' })).toEqual({ title: 'Fiction', status: 'want' });
   });
@@ -335,13 +338,13 @@ describe('migration()', () => {
     test('a name the target does not declare', () => {
       refused(
         same,
-        ({ fields, drop }) => fields({ nope: drop() }),
-        '"nope": drop(): the target does not declare "nope"',
+        ({ fields, absent }) => fields({ nope: absent() }),
+        '"nope": absent(): the target does not declare "nope"',
       );
       refused(
         at(withoutCount),
-        ({ fields, drop }) => fields({ count: drop() }),
-        '"count": drop(): the target does not declare "count"',
+        ({ fields, absent }) => fields({ count: absent() }),
+        '"count": absent(): the target does not declare "count"',
       );
     });
 
@@ -361,12 +364,14 @@ describe('migration()', () => {
       );
     });
 
-    test('a required field nothing produces', () => {
-      refused(
-        at({ ...V1.schema, due: { kind: 'date', required: true } }),
-        ({ fields }) => fields({}),
-        '"due" is required at the target, and nothing produces it',
-      );
+    test('a target field the source does not declare, left undeclared', () => {
+      for (const required of [true, false]) {
+        refused(
+          at({ ...V1.schema, due: { kind: 'date', required } }),
+          ({ fields }) => fields({}),
+          'the source does not declare "due", so its origin must be declared',
+        );
+      }
     });
 
     test('a carried field the target would refuse', () => {
@@ -418,7 +423,7 @@ describe('migration()', () => {
       );
       refused(
         same,
-        ({ fields, drop }) => fields({ title: drop() }),
+        ({ fields, absent }) => fields({ title: absent() }),
         '"title" is set to a value the target refuses: Required field is missing',
       );
     });

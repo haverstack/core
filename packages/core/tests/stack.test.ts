@@ -83,7 +83,11 @@ const noteV1ToV2 = migration(NoteV1, NoteV2, ({ fields, constant }) =>
 const EntityV1 = typeHandle({
   id: '_entity@1',
   name: 'Entity',
-  schema: { did: { kind: 'string', required: true }, name: { kind: 'string', required: true } },
+  schema: {
+    did: { kind: 'string', required: true },
+    name: { kind: 'string', required: true },
+    handle: { kind: 'string' },
+  },
 });
 
 let adapter: MemoryAdapter;
@@ -234,7 +238,9 @@ describe('Stack.open', () => {
       });
       const s = await Stack.open(emptyAdapter, {
         ownerProfile: { name: 'Jane Smith' },
-        migrations: [migration(EntityV1, EntityV2, ({ fields }) => fields({}))],
+        migrations: [
+          migration(EntityV1, EntityV2, ({ fields, absent }) => fields({ pronouns: absent() })),
+        ],
       });
       await s.defineType(EntityV2);
       await s.migrateAll('_entity');
@@ -307,7 +313,9 @@ describe('Stack.open', () => {
         },
         migratesFrom: EntityV1,
       });
-      await reopenWith(migration(EntityV1, EntityV2, ({ fields }) => fields({})));
+      await reopenWith(
+        migration(EntityV1, EntityV2, ({ fields, absent }) => fields({ pronouns: absent() })),
+      );
       await stack.defineType(EntityV2);
       const created = await stack.create('_entity@1', { did: 'did:key:x', name: 'X' });
       await stack.migrateAll('_entity');
@@ -2241,8 +2249,8 @@ describe('migrateAll', () => {
       // The compiler checks derive() against what the function claims to
       // return; validation at write time checks what it actually returns.
       migrations: [
-        migration(NoteV1, NoteV2, ({ fields, derive }) =>
-          fields({ text: derive(() => 42 as unknown as string) }),
+        migration(NoteV1, NoteV2, ({ fields, derive, absent }) =>
+          fields({ text: derive(() => 42 as unknown as string), title: absent() }),
         ),
       ],
     });
