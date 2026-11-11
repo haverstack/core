@@ -2,24 +2,16 @@
  * Bearer-token issuance and lookup for server implementations.
  */
 
-import type { EntityId, Actor } from './ids.js';
+import type { EntityId, Session } from './ids.js';
 
 /**
- * The two identities a token establishes — an Actor whose `principalId` is
- * always populated, equal to `subjectId` on an undelegated token, so a
- * server reading one never has to default it. Passes to `Stack.asActor()`
- * as is. See docs/spec/access-control.md § Delegation: principal and subject.
+ * The Session a token names, with `principalId` always populated, equal
+ * to `subjectId` on an undelegated token, so a server reading one never
+ * has to default it. A delegated token keeps the chain it was issued on,
+ * validated again on each request. Passes to `Stack.asActor()` as is.
+ * See docs/spec/wire-format.md § The session a token names.
  */
-export type TokenSession = Actor & {
-  principalId: EntityId;
-  /**
-   * The signed delegation chain, root first, a delegated token was issued
-   * on. The server validates it again on each request, so expiry and
-   * revocation reach a live token. See docs/spec/wire-format.md § The
-   * session a token names.
-   */
-  delegationChain?: readonly Uint8Array[];
-};
+export type TokenSession = Session & { principalId: EntityId };
 
 export type TokenInfo = TokenSession & {
   id: string;
@@ -38,7 +30,7 @@ export type TokenInfo = TokenSession & {
  */
 export interface StackTokenStore {
   createToken(
-    session: Actor & Pick<TokenSession, 'delegationChain'>,
+    session: Session,
     opts?: { label?: string; expiresAt?: Date },
   ): Promise<{
     id: string;

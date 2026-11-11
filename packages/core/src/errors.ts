@@ -316,10 +316,9 @@ export class ScopeUnavailableError extends Error {
 /**
  * A session's delegation chain does not validate: malformed, badly signed,
  * expired, revoked, or not from its subject to its principal. Thrown by
- * every operation of a view scoped to it that reaches Records, so expiry
- * and revocation reach a live session; a server answers 401. Outside the StackError taxonomy, as no
- * Stack operation was refused on its own terms.
- * See docs/spec/access-control.md § Signed delegations.
+ * every operation of a view scoped to it, and a server answers 401: an
+ * authentication failure, so outside the StackError taxonomy.
+ * See docs/spec/wire-format.md § The taxonomy root.
  */
 export class DelegationRefusedError extends Error {
   constructor(message: string, options?: { cause?: unknown }) {

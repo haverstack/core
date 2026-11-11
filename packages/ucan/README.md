@@ -54,7 +54,7 @@ authorizes(chain, '/haverstack/record/read', { baseId: 'commons/note' }); // tru
 - **Encoding:** each envelope is the canonical DAG-CBOR encoding of a `ucan/dlg@1.0.0` payload with exactly the spec's fields. Decoding refuses anything else.
 - **Signatures:** Ed25519, P-256 and secp256k1, as UCAN requires. Ed25519 is verified under strict RFC 8032 rules, and ECDSA only in low-S compact form, so a token has one valid signature and one CID. Non-`did:key` issuers resolve through the `resolveKey` option.
 - **Principal alignment:** the first delegation is issued by its subject, and each later one by the previous audience, ignoring DID fragments.
-- **Time bounds:** every link's `nbf` and `exp`, with 60 seconds of clock skew by default.
+- **Time bounds:** every link's `nbf` and `exp`, with 60 seconds of clock skew by default, unless `timeBounds: false`, which checking a chain to revoke uses.
 - **Revocation:** each link's CID against the `isRevoked` option, which also receives the issuers upstream of that link, who may revoke it.
 
 `authorizes()` then asks whether every link's command proves the one invoked and every link's policy accepts the arguments.
@@ -86,7 +86,7 @@ Answer `DelegationRefusedError` with `invalid_delegation` at `/auth/token` and w
 
 Haverstack's commands mirror its grant actions: `/haverstack/record/create`, `/haverstack/record/read`, `/haverstack/record/update` and `/haverstack/record/delete`, each with `{ baseId }` as the arguments a policy constrains. `/haverstack/record` covers all four and will never cover more, so delegating it can't later grant something new. The delegation counts on the app's side of the stack's permission check, beside grants naming the app, and never reaches further than the subject's own grants. A did:key link's signature is checked once and remembered by CID, so revalidating on every operation costs only the time bounds and the revocation check.
 
-A delegation's issuer, or the owner, revokes it by writing a `_revocation` Record naming its CID. See [Access control § Signed delegations](../../docs/spec/access-control.md#signed-delegations).
+A delegation's issuer, or the owner, revokes it with `revokeDelegation(chain)`, served as `POST /revocations`. The verifier validates that chain too, but for its time bounds, so the stack knows who issued each link. See [Access control § Revoking a delegation](../../docs/spec/access-control.md#revoking-a-delegation).
 
 ## Readings of the spec
 

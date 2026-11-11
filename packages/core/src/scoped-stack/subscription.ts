@@ -7,6 +7,7 @@
  * See docs/spec/events.md § Permission scoping.
  */
 
+import { DelegationRefusedError } from '../errors.js';
 import { baseIdOf } from '../schema.js';
 import { Subscription, matchesFilter } from '../stack/changes.js';
 import type { EmittedChange } from '../stack/changes.js';
@@ -47,9 +48,9 @@ export class ScopedSubscription extends Subscription {
 
   /**
    * A held snapshot outlives the write that revokes it unless something
-   * clears it. Both writes that can move it — a `_grant` record, or a
-   * `_group` roster — arrive here as ordinary events, which is what makes
-   * it safe to hold at all; a change that did not emit would strand it.
+   * clears it. Every Record write that can move it — a `_grant`, a
+   * `_group` roster, a `_revocation` — arrives here as an ordinary event;
+   * the snapshot checks Types and the clock itself.
    */
   private invalidateFor(emission: EmittedChange): void {
     this.snapshot.invalidateFor(baseIdOf(emission.change.typeId));
@@ -60,8 +61,11 @@ export class ScopedSubscription extends Subscription {
     try {
       if (!(await this.canRead(emission.record, this.snapshot))) return;
     } catch (err) {
-      // Fail closed: an undecided permission question is not a yes.
+      // Fail closed: an undecided permission question is not a yes. A
+      // refused delegation refuses every later question too, so it ends
+      // the subscription, as it ends a session on the wire.
       this.reportError(err);
+      if (err instanceof DelegationRefusedError) this.close();
       return;
     }
     // After the permission decision, which needs the whole record, and as

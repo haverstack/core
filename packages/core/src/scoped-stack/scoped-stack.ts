@@ -32,6 +32,7 @@ import { validatePatchValues } from '../validate.js';
 import { ChangeEmitter, assertSinceUsable } from '../stack/changes.js';
 import { SYSTEM_TYPES } from '../types/index.js';
 import type {
+  RevocationContent,
   ActorOptions,
   AppContent,
   AppId,
@@ -1066,6 +1067,29 @@ export class ScopedStack implements StackClient {
     return isPlanEmpty(plan)
       ? { status: 'installed', install: plan.existing! }
       : { status: 'pending' };
+  }
+
+  /**
+   * Revoke the last delegation of `chain`, as an identity that issued it or
+   * any link upstream of it, acting as itself; the owner may revoke any.
+   * The `_revocation` Record is written for the stack, so only the owner
+   * can delete it. See docs/spec/access-control.md § Revoking a delegation.
+   */
+  async revokeDelegation(
+    chain: readonly Uint8Array[],
+  ): Promise<StackRecord & { content: RevocationContent }> {
+    const revoker = this.requireActingAlone('A delegation is revoked by a key acting as itself');
+    const { cid, issuerIds } = await this.stack.delegationToRevoke(chain);
+    if (revoker !== this.stack.ownerEntityId && !issuerIds.includes(revoker)) {
+      throw new StackPermissionError(
+        'Only the owner or an issuer in its chain may revoke a delegation',
+      );
+    }
+    return this.stack.create<RevocationContent>(
+      `${SYSTEM_TYPES.REVOCATION}@1`,
+      { cid },
+      { createdBy: this.#authority.requester },
+    );
   }
 
   /**

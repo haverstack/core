@@ -11,6 +11,7 @@ import {
   parseTypeBody,
   parseMigrationBody,
   parseInstallBody,
+  parseRevocationBody,
 } from '../src/wire/index.js';
 import { Stack } from '../src/stack/stack.js';
 import { StackBadRequestError, StackValidationError } from '../src/errors.js';
@@ -41,6 +42,7 @@ describe('body parsers — shared refusals', () => {
     parsePermissionsBody,
     parseTypeBody,
     parseMigrationBody,
+    parseRevocationBody,
   };
 
   for (const [name, parse] of Object.entries(parsers)) {
@@ -112,6 +114,24 @@ describe('parseAuthTokenBody', () => {
       const { [key]: _, ...rest } = body;
       expect(() => parseAuthTokenBody(rest)).toThrow(StackBadRequestError);
       expect(pathOf(() => parseAuthTokenBody({ ...body, [key]: null }))).toBe(key);
+    }
+  });
+});
+
+describe('parseRevocationBody', () => {
+  test('reads the chain, which is required and alone', () => {
+    expect(parseRevocationBody({ delegationChain: ['glhA'] })).toEqual({
+      delegationChain: ['glhA'],
+    });
+    expect(() => parseRevocationBody({})).toThrow(StackBadRequestError);
+    expect(() => parseRevocationBody({ delegationChain: ['glhA'], cid: 'zdpu' })).toThrow(
+      new StackBadRequestError('Unknown key in revocation body: cid'),
+    );
+  });
+
+  test('the chain is held as a token request holds it', () => {
+    for (const delegationChain of [[], 'glhA', ['gl+/'], [1], null]) {
+      expect(pathOf(() => parseRevocationBody({ delegationChain }))).toBe('delegationChain');
     }
   });
 });

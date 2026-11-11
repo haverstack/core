@@ -85,18 +85,6 @@ const VERBS: Record<RecordVerb, { any: GrantAction; own?: GrantAction; bit?: 're
 
 const RECORD_VERBS = Object.keys(VERBS) as RecordVerb[];
 
-/**
- * Families a principal acting for someone else never reaches, by grant or
- * by delegation: their Records are authority, granting it or withdrawing
- * it, so no app can widen its reach or lift a revocation. Grants already
- * refuse all but `_revocation`. See docs/spec/access-control.md
- * § Delegation: principal and subject.
- */
-const AUTHORITY_FAMILIES: ReadonlySet<string> = new Set([
-  ...UNGRANTABLE_SYSTEM_TYPES,
-  SYSTEM_TYPES.REVOCATION,
-]);
-
 const ANYONE: AuthorityAssociation = { kind: 'anyone', label: 'read' };
 
 export class ScopeAuthority {
@@ -128,6 +116,7 @@ export class ScopeAuthority {
           ? Promise.resolve(new Map())
           : loadRosterRoles((q) => this.stack.query(q), subject),
       families: async () => new Set((await this.stack.listTypes()).map((t) => baseIdOf(t.id))),
+      typeGeneration: () => this.stack.typeGeneration,
       delegation: () => this.verifyDelegation(),
       reach: (verb, snapshot) => this.buildReach(verb, snapshot),
     });
@@ -140,6 +129,7 @@ export class ScopeAuthority {
    */
   private async verifyDelegation(): Promise<VerifiedDelegation | null> {
     if (!this.delegationChain) return null;
+    // A chain arrives only through asActor(), which always names a principal.
     const verified = await this.stack.verifyDelegationChain(
       this.delegationChain,
       this.principalId!,
@@ -244,8 +234,9 @@ export class ScopeAuthority {
   /**
    * The families the session's delegation lets the principal `verb`. Each
    * verb it allows reads as that verb's `-any` action through
-   * grantConveys(), so it conveys what a grant naming the principal would.
-   * See docs/spec/access-control.md § Signed delegations.
+   * grantConveys(), so it conveys what a grant naming the principal would,
+   * and never an ungrantable family. See docs/spec/access-control.md
+   * § Signed delegations.
    */
   private async familiesDelegated(
     verb: RecordVerb,
@@ -255,6 +246,7 @@ export class ScopeAuthority {
     if (!delegation) return [];
     const action = VERBS[verb].any;
     return [...(await snapshot.families())].filter((family) => {
+      if (UNGRANTABLE_SYSTEM_TYPES.has(family)) return false;
       const actions = RECORD_VERBS.filter((v) => delegation.allows(v, family)).map(
         (v) => VERBS[v].any,
       );
@@ -287,7 +279,7 @@ export class ScopeAuthority {
               )),
               ...(await this.familiesDelegated(verb, snapshot)),
             ]),
-          ].filter((family) => !AUTHORITY_FAMILIES.has(family)),
+          ],
         };
     const subject = this.subjectId;
     if (subject === this.stack.ownerEntityId) return reach;

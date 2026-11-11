@@ -109,8 +109,10 @@ export function parseAuthChallengeBody(body: unknown): WireAuthChallengeRequest 
  * Parse a `POST /auth/token` body. A subject is never named here: it comes
  * only from a signed `delegationChain`, which a server accepts only when it
  * advertises delegations and says so with `{ delegations: true }`;
- * otherwise the key is unrecognized input like any other. Whether a chain verifies
- * is the server's `invalid_delegation`, not a parse failure.
+ * otherwise the key is unrecognized input like any other. A flag, not
+ * discovery's format list: the body names no format, so there is nothing
+ * to choose, and whether the chain verifies is the server's
+ * `invalid_delegation`, not a parse failure.
  * See docs/spec/wire-format.md § The handshake.
  */
 export function parseAuthTokenBody(
@@ -120,25 +122,46 @@ export function parseAuthTokenBody(
   const label = 'auth token body';
   const keys = ['did', 'nonce', 'signature', ...(opts.delegations ? ['delegationChain'] : [])];
   const b = requireKnownBody(body, keys, label);
-  const chain = b.delegationChain;
-  if (chain !== undefined) {
-    if (
-      !Array.isArray(chain) ||
-      chain.length === 0 ||
-      !chain.every((d) => typeof d === 'string' && BASE64URL.test(d))
-    ) {
-      fieldError(
-        'delegationChain',
-        'delegationChain must be a non-empty array of base64url strings',
-      );
-    }
-  }
+  const chain = b.delegationChain === undefined ? undefined : delegationChainField(b);
   return {
     did: requiredString(b, 'did', label),
     nonce: requiredString(b, 'nonce', label),
     signature: requiredString(b, 'signature', label),
-    ...(chain !== undefined && { delegationChain: chain as string[] }),
+    ...(chain !== undefined && { delegationChain: chain }),
   };
+}
+
+/** `delegationChain`, as every body carrying one holds it. */
+function delegationChainField(b: Record<string, unknown>): string[] {
+  const chain = b.delegationChain;
+  if (
+    !Array.isArray(chain) ||
+    chain.length === 0 ||
+    !chain.every((d) => typeof d === 'string' && BASE64URL.test(d))
+  ) {
+    fieldError('delegationChain', 'delegationChain must be a non-empty array of base64url strings');
+  }
+  return chain as string[];
+}
+
+// -------------------------------------------------------
+// POST /revocations
+// -------------------------------------------------------
+
+/** The delegation to revoke is the last of `delegationChain`, root first. */
+export type WireRevocationRequest = { delegationChain: string[] };
+
+/**
+ * Parse a `POST /revocations` body. Whether the chain validates, and
+ * whether the requester issued a link of it, are revokeDelegation()'s to
+ * judge. See docs/spec/wire-format.md § Revocations.
+ */
+export function parseRevocationBody(body: unknown): WireRevocationRequest {
+  const b = requireKnownBody(body, ['delegationChain'], 'revocation body');
+  if (b.delegationChain === undefined) {
+    throw new StackBadRequestError('Invalid revocation body: delegationChain is required');
+  }
+  return { delegationChain: delegationChainField(b) };
 }
 
 // -------------------------------------------------------

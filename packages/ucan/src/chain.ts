@@ -34,6 +34,11 @@ export type ChainOptions = {
    * Revocation has it.
    */
   isRevoked?: (cid: string, issuers: readonly string[]) => boolean | Promise<boolean>;
+  /**
+   * Whether each link's `nbf` and `exp` apply; default true. False checks a
+   * chain naming a delegation to revoke, which may be withdrawn whenever.
+   */
+  timeBounds?: boolean;
 };
 
 export type ValidChain = {
@@ -100,13 +105,13 @@ export const checkChain = async (
         `Delegation ${i} is not issued by its predecessor's audience.`,
       );
     }
-    if (link.nbf !== undefined && now < link.nbf - skew) {
+    if (options.timeBounds !== false && link.nbf !== undefined && now < link.nbf - skew) {
       throw new UcanError(
         'not-yet-valid',
         `Delegation ${link.cid} is not valid until ${link.nbf}.`,
       );
     }
-    if (link.exp !== null && now > link.exp + skew) {
+    if (options.timeBounds !== false && link.exp !== null && now > link.exp + skew) {
       throw new UcanError('expired', `Delegation ${link.cid} expired at ${link.exp}.`);
     }
 

@@ -2,14 +2,18 @@ import { describe, test, expect, beforeEach } from 'vitest';
 import { Stack } from '../src/stack/stack.js';
 import {
   DelegationRefusedError,
-  ScopeUnavailableError,
   StackBadRequestError,
   StackConflictError,
   StackPermissionError,
   StackValidationError,
 } from '../src/errors.js';
 import { IncapableMemoryAdapter, MemoryAdapter } from '../src/testing.js';
-import type { DelegationVerifier, RecordVerb, VerifiedDelegation } from '../src/types/index.js';
+import type {
+  DelegationCheck,
+  DelegationVerifier,
+  RecordVerb,
+  VerifiedDelegation,
+} from '../src/types/index.js';
 
 const OWNER = 'did:key:z6MkOwner';
 const MEMBER = 'did:key:z6MkMember';
@@ -25,9 +29,12 @@ const fam = (typeId: string): string => typeId.split('@')[0]!;
  */
 const registry = new Map<string, VerifiedDelegation>();
 const keyOf = (chain: readonly Uint8Array[]) => chain.map((link) => link.join('.')).join('|');
-const fakeVerifier: DelegationVerifier = async (chain) => {
+const fakeVerifier: DelegationVerifier = async (chain, { isRevoked }) => {
   const delegation = registry.get(keyOf(chain));
   if (!delegation) throw new Error('not a chain this test issued');
+  for (const link of delegation.links) {
+    if (await isRevoked(link.cid)) throw new Error(`${link.cid} is revoked`);
+  }
   return delegation;
 };
 const chainFor = (delegation: VerifiedDelegation): Uint8Array[] => {
@@ -41,17 +48,17 @@ const delegation = (
   subjectId: string,
   allowed: [RecordVerb, string][],
   principalId = APP,
+  links = [{ cid: `zdpu${subjectId}`, issuerId: subjectId }],
 ): VerifiedDelegation => ({
   subjectId,
   principalId,
   expiresAt: null,
   allows: (verb, baseId) => allowed.some(([v, b]) => v === verb && b === baseId),
+  links,
 });
 
 const everything = (subjectId: string): VerifiedDelegation => ({
-  subjectId,
-  principalId: APP,
-  expiresAt: null,
+  ...delegation(subjectId, []),
   allows: () => true,
 });
 
@@ -179,27 +186,6 @@ describe('Signed delegations — the principal side', () => {
     );
   });
 
-  // The rule is about the principal's side, not about delegations: an app
-  // the owner named directly is held to it too while acting for someone.
-  test('a grant naming the app reaches no _revocation while it acts for someone', async () => {
-    await stack.grantType('_revocation', {
-      actions: ['create', 'read-any', 'delete-any'],
-      grantee: { kind: 'entity', entityId: APP },
-    });
-    await stack.grantType('_revocation', {
-      actions: ['create', 'read-any', 'delete-any'],
-      grantee: { kind: 'entity', entityId: MEMBER },
-    });
-    const revocation = await stack.create('_revocation@1', { cid: 'zdpuSibling' });
-    const view = stack.asActor({ subjectId: MEMBER, principalId: APP });
-    expect((await view.query({ filter: { typeId: '_revocation@1' } })).records).toHaveLength(0);
-    await expect(view.delete(revocation.id)).rejects.toThrow();
-    // Acting as itself, the same grant reaches it.
-    await expect(
-      stack.asEntity(APP).create('_revocation@1', { cid: 'zdpuOwn' }),
-    ).resolves.toBeDefined();
-  });
-
   test('it carries none of the verbs delegation never carries', async () => {
     const view = stack.asActor({
       subjectId: OWNER,
@@ -220,7 +206,7 @@ describe('Signed delegations — the principal side', () => {
 });
 
 // A subscription holds its authority for its life. Defining a Type emits
-// nothing, so the first Record of a new family is what tells it to look again.
+// nothing, so the snapshot checks the stack's Types itself on each use.
 test('a delegated subscription reaches a family defined after it began', async () => {
   const seen: string[] = [];
   await stack
@@ -264,28 +250,28 @@ describe('Signed delegations — the session carries the chain', () => {
     await expect(view.create(COMMENT, { text: 'hi' })).rejects.toThrow(DelegationRefusedError);
   });
 
-  test('a stack opened without a verifier scopes no delegated session', async () => {
+  // Every chain check is verifyDelegationChain()'s, so each failure is one
+  // refusal from one place, a server's missing verifier included.
+  test('a stack opened without a verifier refuses every delegated operation', async () => {
     const plain = await Stack.open(await MemoryAdapter.open({ ownerEntityId: OWNER }));
-    expect(() =>
-      plain.asActor({
-        subjectId: MEMBER,
-        principalId: APP,
-        delegationChain: chainFor(delegation(MEMBER, [])),
-      }),
-    ).toThrow(ScopeUnavailableError);
+    const view = plain.asActor({
+      subjectId: MEMBER,
+      principalId: APP,
+      delegationChain: chainFor(delegation(MEMBER, [])),
+    });
+    await expect(view.query({})).rejects.toThrow(DelegationRefusedError);
     await expect(plain.verifyDelegationChain([Uint8Array.of(1)], APP)).rejects.toThrow(
       DelegationRefusedError,
     );
   });
 
-  test('an undelegated actor carries no chain', () => {
-    expect(() =>
-      stack.asActor({
-        subjectId: MEMBER,
-        principalId: MEMBER,
-        delegationChain: chainFor(delegation(MEMBER, [], MEMBER)),
-      }),
-    ).toThrow(StackBadRequestError);
+  test('an undelegated actor presenting a chain is refused', async () => {
+    const view = stack.asActor({
+      subjectId: MEMBER,
+      principalId: MEMBER,
+      delegationChain: chainFor(delegation(MEMBER, [], MEMBER)),
+    });
+    await expect(view.query({})).rejects.toThrow(DelegationRefusedError);
   });
 
   test('verifyDelegationChain() refuses a key delegating to itself', async () => {
@@ -297,89 +283,138 @@ describe('Signed delegations — the session carries the chain', () => {
   // Revocation is the stack's own: a verifier is handed core's check, so a
   // _revocation applies whichever verifier the stack was opened with.
   test('the verifier is handed the stack’s own revocation check', async () => {
-    const seen: boolean[] = [];
+    const seen: [boolean, boolean][] = [];
     const checking = await Stack.open(await MemoryAdapter.open({ ownerEntityId: OWNER }), {
-      verifyDelegation: async (_chain, { isRevoked }) => {
-        seen.push(await isRevoked('zdpuRevoked', [MEMBER]));
+      verifyDelegation: async (_chain, { isRevoked, timeBounds }) => {
+        seen.push([await isRevoked('zdpuRevoked'), timeBounds]);
         return delegation(MEMBER, []);
       },
     });
     await checking.create('_revocation@1', { cid: 'zdpuRevoked' });
     await checking.verifyDelegationChain([Uint8Array.of(1)], APP);
-    expect(seen).toEqual([true]);
+    expect(seen).toEqual([[true, true]]);
+  });
+
+  test('a refused delegation ends a subscription at its next delivery', async () => {
+    const seen: string[] = [];
+    const errors: unknown[] = [];
+    const verified = everything(OWNER);
+    await stack
+      .asActor({ subjectId: OWNER, principalId: APP, delegationChain: chainFor(verified) })
+      .subscribe((change) => void seen.push(change.typeId), {
+        onError: (err) => void errors.push(err),
+      });
+    await stack.create(COMMENT, { text: 'before' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await stack.revokeDelegation(chainFor(verified));
+    await stack.create(COMMENT, { text: 'after' });
+    await stack.create(COMMENT, { text: 'later' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(seen).toEqual([COMMENT]);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toBeInstanceOf(DelegationRefusedError);
   });
 });
 
-// Whoever grants authority can withdraw it: a revocation counts when the
-// owner wrote it, or an identity that issued the delegation or one upstream
-// of it. Like a grant, it is recoverable.
-describe('_revocation — refusing a delegation', () => {
-  const CID = 'zdpuAxubXwgEpicLJWrbT37gWJJ4wBpEbbzfQAY8ADo2qy1jJ';
+// Whoever grants authority can withdraw it: the owner, or an identity that
+// issued the delegation or one upstream of it, each acting as itself. The
+// rule is checked as the revocation is written, so every one stored counts.
+describe('revokeDelegation() — refusing a delegation', () => {
   const REVOCATION = '_revocation@1';
-  const ISSUERS = [MEMBER, APP];
+  const ROOT = 'zdpuRoot';
+  const LEAF = 'zdpuLeaf';
+  const OTHER = 'did:key:z6MkOther';
+  const twoLinks = () =>
+    chainFor(
+      delegation(MEMBER, [], 'did:key:z6MkLeaf', [
+        { cid: ROOT, issuerId: MEMBER },
+        { cid: LEAF, issuerId: APP },
+      ]),
+    );
 
-  const letMemberRevoke = () =>
-    stack.grantType('_revocation', {
-      actions: ['create', 'read-own', 'delete-own'],
-      grantee: { kind: 'entity', entityId: MEMBER },
+  test('the owner revokes the delegation a chain ends at, and only that one', async () => {
+    expect(await stack.isDelegationRevoked(LEAF)).toBe(false);
+    const record = await stack.revokeDelegation(twoLinks());
+    expect(record.content).toEqual({ cid: LEAF });
+    expect(await stack.isDelegationRevoked(LEAF)).toBe(true);
+    expect(await stack.isDelegationRevoked(ROOT)).toBe(false);
+  });
+
+  test('every issuer in the chain may revoke it, acting as itself', async () => {
+    for (const issuer of [MEMBER, APP]) {
+      const record = await stack.asEntity(issuer).revokeDelegation(twoLinks());
+      expect(record.createdBy).toEqual({ subjectId: issuer });
+    }
+    expect(await stack.asEntity(OWNER).revokeDelegation(twoLinks())).toBeDefined();
+  });
+
+  test('no one else may, nor anyone acting for an issuer', async () => {
+    await expect(stack.asEntity(OTHER).revokeDelegation(twoLinks())).rejects.toThrow(
+      StackPermissionError,
+    );
+    const delegated = stack.asActor({ subjectId: MEMBER, principalId: OTHER });
+    await expect(delegated.revokeDelegation(twoLinks())).rejects.toThrow(StackPermissionError);
+    expect(await stack.isDelegationRevoked(LEAF)).toBe(false);
+  });
+
+  // A revoker never names a chain it could not have signed, but revoking a
+  // delegation before it starts or after it ends is still withdrawing it.
+  test('the chain must validate, but for its time bounds and revocation', async () => {
+    const seen: DelegationCheck[] = [];
+    const checking = await Stack.open(await MemoryAdapter.open({ ownerEntityId: OWNER }), {
+      verifyDelegation: async (chain, check) => {
+        seen.push(check);
+        return fakeVerifier(chain, check);
+      },
     });
-
-  test("the owner's revocation refuses the delegation it names, and only that one", async () => {
-    expect(await stack.isDelegationRevoked(CID, ISSUERS)).toBe(false);
-    await stack.create(REVOCATION, { cid: CID });
-    expect(await stack.isDelegationRevoked(CID, ISSUERS)).toBe(true);
-    expect(await stack.isDelegationRevoked(CID, [])).toBe(true);
-    expect(await stack.isDelegationRevoked('zdpuOther', ISSUERS)).toBe(false);
+    await expect(checking.revokeDelegation([Uint8Array.of(0xff)])).rejects.toThrow(
+      StackBadRequestError,
+    );
+    await checking.create(REVOCATION, { cid: LEAF });
+    await checking.revokeDelegation(twoLinks());
+    expect(seen.map((c) => c.timeBounds)).toEqual([false, false]);
+    expect(await seen[1]!.isRevoked(LEAF)).toBe(false);
+    const plain = await Stack.open(await MemoryAdapter.open({ ownerEntityId: OWNER }));
+    await expect(plain.revokeDelegation(twoLinks())).rejects.toThrow(StackBadRequestError);
   });
 
-  test('an issuer upstream in the chain revokes it too', async () => {
-    await letMemberRevoke();
-    await stack.asEntity(MEMBER).create(REVOCATION, { cid: CID });
-    expect(await stack.isDelegationRevoked(CID, ISSUERS)).toBe(true);
-  });
-
-  test('a revocation by anyone else confers nothing', async () => {
-    await letMemberRevoke();
-    await stack.asEntity(MEMBER).create(REVOCATION, { cid: CID });
-    expect(await stack.isDelegationRevoked(CID, [APP])).toBe(false);
-    expect(await stack.isDelegationRevoked(CID, [])).toBe(false);
-  });
-
-  test('deleting it lifts the refusal, and undeleting restores it', async () => {
-    await letMemberRevoke();
-    const view = stack.asEntity(MEMBER);
-    const record = await view.create(REVOCATION, { cid: CID });
-    await view.delete(record.id);
-    expect(await stack.isDelegationRevoked(CID, ISSUERS)).toBe(false);
+  test('only the owner may write or lift one through the ordinary verbs', async () => {
+    const record = await stack.asEntity(MEMBER).revokeDelegation(twoLinks());
+    await expect(stack.asEntity(MEMBER).delete(record.id)).rejects.toThrow();
+    await expect(stack.asEntity(MEMBER).create(REVOCATION, { cid: ROOT })).rejects.toThrow(
+      StackPermissionError,
+    );
+    await expect(
+      stack.grantType('_revocation', {
+        actions: ['create', 'read-any'],
+        grantee: { kind: 'entity', entityId: MEMBER },
+      }),
+    ).rejects.toThrow(StackValidationError);
+    await stack.delete(record.id);
+    expect(await stack.isDelegationRevoked(LEAF)).toBe(false);
     await stack.undelete(record.id);
-    expect(await stack.isDelegationRevoked(CID, ISSUERS)).toBe(true);
+    expect(await stack.isDelegationRevoked(LEAF)).toBe(true);
   });
 
   test('an unlisted revocation still refuses', async () => {
-    const record = await stack.create(REVOCATION, { cid: CID });
+    const record = await stack.create(REVOCATION, { cid: LEAF });
     await stack.setUnlisted(record.id, true);
-    expect(await stack.isDelegationRevoked(CID, [])).toBe(true);
+    expect(await stack.isDelegationRevoked(LEAF)).toBe(true);
   });
 
   test('the same answer on an adapter that cannot filter by content', async () => {
     const plain = await Stack.open(await IncapableMemoryAdapter.open({ ownerEntityId: OWNER }));
     await plain.create(REVOCATION, { cid: 'zdpuFirst' });
-    await plain.create(REVOCATION, { cid: CID });
-    expect(await plain.isDelegationRevoked(CID, [])).toBe(true);
-    expect(await plain.isDelegationRevoked('zdpuAbsent', [])).toBe(false);
+    await plain.create(REVOCATION, { cid: LEAF });
+    expect(await plain.isDelegationRevoked(LEAF)).toBe(true);
+    expect(await plain.isDelegationRevoked('zdpuAbsent')).toBe(false);
   });
 
   test('its cid is required and never moves', async () => {
     await expect(stack.create(REVOCATION, {})).rejects.toThrow(StackValidationError);
-    const record = await stack.create(REVOCATION, { cid: CID });
+    const record = await stack.create(REVOCATION, { cid: LEAF });
     await expect(stack.patchContent(record.id, { cid: 'zdpuOther' })).rejects.toThrow(
       StackConflictError,
-    );
-  });
-
-  test('writing one takes a grant, like any family', async () => {
-    await expect(stack.asEntity(MEMBER).create(REVOCATION, { cid: CID })).rejects.toThrow(
-      StackPermissionError,
     );
   });
 });

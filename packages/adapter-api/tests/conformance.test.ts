@@ -43,6 +43,7 @@ import {
   getHeadFixtures,
   commitMigrationFixtures,
   installRequestFixtures,
+  revocationFixtures,
   discoveryFixtures,
   errorResponseFixtures,
   attachmentUploadFixtures,
@@ -936,6 +937,47 @@ describe('install request fixtures', () => {
   test('has no requestInstall() when the server advertises no install requests', async () => {
     const adapter = await openAdapter();
     expect(adapter.requestInstall).toBeUndefined();
+  });
+});
+
+// -------------------------------------------------------
+// Revocations — a server that takes delegations takes revocations, so
+// revokeDelegation() exists exactly when discovery advertises them.
+// -------------------------------------------------------
+
+describe('revocation fixtures', () => {
+  const openWithDelegations = (): Promise<APIAdapter> =>
+    openDiscovered({
+      ...DISCOVERY,
+      auth: { methods: ['did-challenge'], delegations: ['ucan/dlg@1.0.0'] },
+    });
+
+  for (const fixture of revocationFixtures) {
+    test(fixture.name, async () => {
+      const adapter = await openWithDelegations();
+      mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
+
+      const chain = fixture.requestBody!.delegationChain.map(base64urlDecode);
+      const attempt = adapter.revokeDelegation!(chain);
+      const body = fixture.responseBody!;
+      if ('error' in body) {
+        await expect(attempt).rejects.toBeInstanceOf(
+          ERROR_CLASS_FOR_CODE[body.error.code as never],
+        );
+      } else {
+        expect((await attempt).content).toEqual(body.content);
+      }
+
+      const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
+      expect(url).toBe(`${BASE_URL}${fixture.path}`);
+      expect(init.method).toBe(fixture.method);
+      expect(JSON.parse(init.body as string)).toEqual(fixture.requestBody);
+    });
+  }
+
+  test('has no revokeDelegation() when the server advertises no delegations', async () => {
+    const adapter = await openAdapter();
+    expect(adapter.revokeDelegation).toBeUndefined();
   });
 });
 

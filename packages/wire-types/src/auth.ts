@@ -48,10 +48,15 @@ export function supportsDelegation(
 }
 
 /**
- * The two request bodies, re-exported from `@haverstack/core/wire`, whose
- * parsers return them — one definition, as with `parseDate`.
+ * The request bodies, re-exported from `@haverstack/core/wire`, whose
+ * parsers return them — one definition, as with `parseDate`. `POST
+ * /revocations` answers 201 with the `_revocation` record.
  */
-export type { WireAuthChallengeRequest, WireAuthTokenRequest } from '@haverstack/core/wire';
+export type {
+  WireAuthChallengeRequest,
+  WireAuthTokenRequest,
+  WireRevocationRequest,
+} from '@haverstack/core/wire';
 
 /** POST /auth/challenge response. */
 export type WireAuthChallengeResponse = {

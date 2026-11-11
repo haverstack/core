@@ -90,7 +90,7 @@ const stack = await Stack.open(adapter, { verifyDelegation: delegationVerifier()
 const scoped = stack.asActor(await tokens.lookupToken(bearer));
 ```
 
-To revoke a delegation, its issuer or you write a `_revocation` Record naming its CID; deleting the Record lifts it again. Grant `create` on `_revocation` to the people whose delegations you honor, so they can take theirs back. See [Access control § Revoking a delegation](./docs/spec/access-control.md#revoking-a-delegation).
+To revoke a delegation, its issuer or you call `revokeDelegation(chain)` with the chain ending at it — Bob over the wire through `APIAdapter.revokeDelegation()`, you on your own stack. The stack checks who may revoke as the revocation is written, and only you can lift one again. See [Access control § Revoking a delegation](./docs/spec/access-control.md#revoking-a-delegation).
 
 **You don't do this for software you didn't choose.** An app someone else uses to reach your stack — a visitor's own client posting a comment — authenticates as _them_, and is bounded by what you granted people, typically a default grant. You grant types to people, never to every client they might be running. See [Identity § App](./docs/spec/identity.md#app) for both postures and [Access control § Delegation](./docs/spec/access-control.md#delegation-principal-and-subject) for what each identity governs; the handshake itself is [Wire format § Authentication](./docs/spec/wire-format.md#authentication).
 

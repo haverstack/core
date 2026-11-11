@@ -7,8 +7,9 @@
  * builds from them — each loaded on first use and shared after, so an operation
  * reads each at most once however many Records it decides. An operation
  * takes its own and drops it when done; a subscription holds one for its
- * life, which is only safe because every write that can move it arrives as
- * an event that clears it. See docs/spec/access-control.md § Reach.
+ * life. Events clear what Record writes move; on each use the snapshot
+ * checks the two inputs no event carries, the stack's defined Types and
+ * the clock. See docs/spec/access-control.md § Reach.
  */
 
 import { Lazy } from '../lazy.js';
@@ -20,6 +21,8 @@ export type AuthoritySources = {
   grants: () => Promise<StackRecord[]>;
   roles: RosterRoles;
   families: () => Promise<ReadonlySet<string>>;
+  /** Moves whenever a Type is defined — see Stack.typeGeneration. */
+  typeGeneration: () => number;
   delegation: () => Promise<VerifiedDelegation | null>;
   reach: (verb: RecordVerb, snapshot: AuthoritySnapshot) => Promise<Reach>;
 };
@@ -28,8 +31,8 @@ export class AuthoritySnapshot {
   private readonly grantSet: Lazy<StackRecord[]>;
   private readonly roleSet: Lazy<Awaited<ReturnType<RosterRoles>>>;
   private readonly familySet: Lazy<ReadonlySet<string>>;
-  /** The families once loaded, so an event can tell synchronously whether it names a new one. */
-  private knownFamilies: ReadonlySet<string> | null = null;
+  /** The type generation the families were read at. */
+  private familiesAt: number | null = null;
   private readonly delegationSet: Lazy<VerifiedDelegation | null>;
   /** When the loaded delegation stops being valid, so a held snapshot never outlives it. */
   private delegationExpiry: number | null = null;
@@ -38,7 +41,10 @@ export class AuthoritySnapshot {
   constructor(private readonly sources: AuthoritySources) {
     this.grantSet = new Lazy(sources.grants);
     this.roleSet = new Lazy(sources.roles);
-    this.familySet = new Lazy(async () => (this.knownFamilies = await sources.families()));
+    this.familySet = new Lazy(async () => {
+      this.familiesAt = sources.typeGeneration();
+      return sources.families();
+    });
     this.delegationSet = new Lazy(async () => {
       const delegation = await sources.delegation();
       this.delegationExpiry = delegation?.expiresAt?.getTime() ?? null;
@@ -55,6 +61,11 @@ export class AuthoritySnapshot {
     if (this.delegationExpiry !== null && Date.now() > this.delegationExpiry) {
       this.clearDelegation();
     }
+    if (this.familiesAt !== null && this.familiesAt !== this.sources.typeGeneration()) {
+      this.familySet.clear();
+      this.familiesAt = null;
+      this.reaches.clear();
+    }
     let reach = this.reaches.get(verb);
     if (!reach) {
       reach = new Lazy(() => this.sources.reach(verb, this));
@@ -66,18 +77,13 @@ export class AuthoritySnapshot {
   /**
    * Drop whatever a change to `typeFamily` can move, and every reach built
    * from it. A load already in flight still answers the event that started
-   * it, which precedes the write; the next question loads afresh. A Record
-   * of a family defined since the families were read means a delegation
-   * may now reach it, since defining a Type emits nothing else to say so.
+   * it, which precedes the write; the next question loads afresh.
    */
   invalidateFor(typeFamily: string): void {
     if (typeFamily === SYSTEM_TYPES.GRANT) this.grantSet.clear();
     else if (typeFamily === SYSTEM_TYPES.GROUP) this.roleSet.clear();
     else if (typeFamily === SYSTEM_TYPES.REVOCATION) return this.clearDelegation();
-    else if (this.knownFamilies && !this.knownFamilies.has(typeFamily)) {
-      this.familySet.clear();
-      this.knownFamilies = null;
-    } else return;
+    else return;
     this.reaches.clear();
   }
 

@@ -6,7 +6,7 @@
  */
 
 import { createHash, randomBytes } from 'node:crypto';
-import type { Actor } from '@haverstack/core';
+import type { Session } from '@haverstack/core';
 import { base64urlDecode, base64urlEncode } from '@haverstack/core/wire';
 import type { TokenSession, TokenInfo } from '@haverstack/core/wire';
 import type { SqlExecutor } from './executor.js';
@@ -31,7 +31,7 @@ export class SharedTokenLogic {
   }
 
   async createToken(
-    session: Actor & Pick<TokenSession, 'delegationChain'>,
+    session: Session,
     opts: { label?: string; expiresAt?: Date } = {},
   ): Promise<{ id: string; token: string }> {
     const id = randomBytes(8).toString('hex');

@@ -7,15 +7,17 @@
 import { describe, expect, it } from 'vitest';
 import {
   AUTH_FIXTURE_DELEGATION,
+  AUTH_FIXTURE_DELEGATION_CID,
   AUTH_FIXTURE_DID,
   AUTH_FIXTURE_FOREIGN_DELEGATION,
   AUTH_FIXTURE_OTHER_DID,
   AUTH_FIXTURE_SUBJECT_DID,
   authTokenFixtures,
+  revocationFixtures,
 } from '@haverstack/conformance-fixtures';
 import { DelegationRefusedError, Stack } from '@haverstack/core';
 import { MemoryAdapter } from '@haverstack/core/testing';
-import { delegationVerifier } from '../src/index.js';
+import { decodeDelegation, delegationVerifier } from '../src/index.js';
 
 const openStack = async () =>
   Stack.open(await MemoryAdapter.open({ ownerEntityId: 'did:key:z6MkFixtureOwner' }), {
@@ -52,5 +54,16 @@ describe('delegation fixtures', () => {
     await expect(stack.verifyDelegationChain(chain, AUTH_FIXTURE_DID)).rejects.toThrow(
       DelegationRefusedError,
     );
+  });
+
+  it('the revocation fixtures name the fixture delegation by its CID, revoked by its issuer', async () => {
+    const d = await decodeDelegation(decode(AUTH_FIXTURE_DELEGATION));
+    expect(d.cid).toBe(AUTH_FIXTURE_DELEGATION_CID);
+    const stack = await openStack();
+    const issued = revocationFixtures.find((f) => f.name === 'revocation-by-issuer')!;
+    const record = await stack
+      .asEntity(AUTH_FIXTURE_SUBJECT_DID)
+      .revokeDelegation(issued.requestBody!.delegationChain.map(decode));
+    expect(record.content).toEqual((issued.responseBody as { content: unknown }).content);
   });
 });

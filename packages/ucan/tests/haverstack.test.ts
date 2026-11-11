@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { DelegationRefusedError, Stack, StackPermissionError } from '@haverstack/core';
+import {
+  DelegationRefusedError,
+  Stack,
+  StackBadRequestError,
+  StackPermissionError,
+} from '@haverstack/core';
 import { MemoryAdapter } from '@haverstack/core/testing';
 import { delegationVerifier } from '../src/index.js';
 import { issue, makeSigner } from './helpers.js';
@@ -108,7 +113,7 @@ describe('a stack opened with delegationVerifier()', () => {
 });
 
 describe('revoking through the stack', () => {
-  it('a _revocation naming any link refuses the chain until it is deleted', async () => {
+  it('the owner revokes the delegation a chain ends at, until the revocation is deleted', async () => {
     const owner = makeSigner();
     const member = makeSigner();
     const app = makeSigner();
@@ -123,7 +128,8 @@ describe('revoking through the stack', () => {
     const chain = [root.bytes, leaf.bytes];
 
     await expect(stack.verifyDelegationChain(chain, device.did)).resolves.toBeDefined();
-    const revocation = await stack.create('_revocation@1', { cid: root.cid });
+    const revocation = await stack.revokeDelegation([root.bytes]);
+    expect(revocation.content).toEqual({ cid: root.cid });
     await expect(stack.verifyDelegationChain(chain, device.did)).rejects.toThrow(
       DelegationRefusedError,
     );
@@ -132,26 +138,51 @@ describe('revoking through the stack', () => {
   });
 
   // Whoever granted the authority can withdraw it, not only the owner.
-  it("the subject who signed revokes their own delegation; a stranger's revocation counts for nothing", async () => {
+  it('every issuer in the chain may revoke it; a stranger may not', async () => {
     const owner = makeSigner();
     const member = makeSigner();
-    const stranger = makeSigner();
+    const app = makeSigner();
+    const device = makeSigner();
+    const stack = await openStack(owner.did);
+    const root = await issue(member, { audience: app.did, cmd: '/haverstack/record' });
+    const leaf = await issue(app, {
+      audience: device.did,
+      subject: member.did,
+      cmd: '/haverstack/record',
+    });
+    const chain = [root.bytes, leaf.bytes];
+
+    await expect(stack.asEntity(makeSigner().did).revokeDelegation(chain)).rejects.toThrow(
+      StackPermissionError,
+    );
+    await expect(stack.verifyDelegationChain(chain, device.did)).resolves.toBeDefined();
+    for (const issuer of [member, app]) {
+      const record = await stack.asEntity(issuer.did).revokeDelegation(chain);
+      expect(record.content).toEqual({ cid: leaf.cid });
+    }
+    await expect(stack.verifyDelegationChain(chain, device.did)).rejects.toThrow(
+      DelegationRefusedError,
+    );
+  });
+
+  // Withdrawing a delegation is still withdrawing it before it starts or
+  // after it ends, so a revocation's chain is checked but for time bounds.
+  it('a delegation can be revoked outside its time bounds', async () => {
+    const owner = makeSigner();
+    const member = makeSigner();
     const app = makeSigner();
     const stack = await openStack(owner.did);
-    for (const who of [member, stranger]) {
-      await stack.grantType('_revocation', {
-        actions: ['create'],
-        grantee: { kind: 'entity', entityId: who.did },
-      });
+    const now = Math.floor(Date.now() / 1000);
+    const later = await issue(member, { audience: app.did, nbf: now + 3600 });
+    const past = await issue(member, { audience: app.did, exp: now - 3600 });
+    for (const d of [later, past]) {
+      const record = await stack.asEntity(member.did).revokeDelegation([d.bytes]);
+      expect(record.content).toEqual({ cid: d.cid });
     }
-    const d = await issue(member, { audience: app.did, cmd: '/haverstack/record' });
-
-    await stack.asEntity(stranger.did).create('_revocation@1', { cid: d.cid });
-    await expect(stack.verifyDelegationChain([d.bytes], app.did)).resolves.toBeDefined();
-
-    await stack.asEntity(member.did).create('_revocation@1', { cid: d.cid });
-    await expect(stack.verifyDelegationChain([d.bytes], app.did)).rejects.toThrow(
-      DelegationRefusedError,
+    const forged = new Uint8Array(later.bytes);
+    forged[forged.length - 1]! ^= 1;
+    await expect(stack.asEntity(member.did).revokeDelegation([forged])).rejects.toThrow(
+      StackBadRequestError,
     );
   });
 
@@ -176,7 +207,7 @@ describe('revoking through the stack', () => {
       });
     const before = await stack.create(NOTE, { text: 'before' });
     await settle();
-    await stack.create('_revocation@1', { cid: d.cid });
+    await stack.asEntity(member.did).revokeDelegation([d.bytes]);
     await stack.create(NOTE, { text: 'after' });
     await settle();
     expect(seen).toEqual([before.id]);

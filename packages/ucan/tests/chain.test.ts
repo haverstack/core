@@ -97,6 +97,8 @@ describe('validateChain', () => {
     expect(await codeOf([root, leaf], { now: NOW - 60 })).toBe('valid');
     expect(await codeOf([root, leaf], { now: NOW - 61 })).toBe('not-yet-valid');
     expect(await codeOf([root, leaf], { now: NOW + 61, clockSkew: 0 })).toBe('expired');
+    expect(await codeOf([root, leaf], { now: NOW + 61, timeBounds: false })).toBe('valid');
+    expect(await codeOf([root, leaf], { now: NOW - 61, timeBounds: false })).toBe('valid');
   });
 
   it('refuses a chain with a revoked link', async () => {

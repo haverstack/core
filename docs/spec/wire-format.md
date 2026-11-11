@@ -86,7 +86,7 @@ A server whose handshake also accepts a [signed delegation](#the-handshake) name
 "auth": { "methods": ["did-challenge"], "delegations": ["ucan/dlg@1.0.0"] }
 ```
 
-`delegations` sits beside `methods` rather than in it, because it is not a way to earn a token: it says which delegation chains a token request may carry, and a chain is presented by a key that proves itself, so any method that proves possession of a key could carry one. Today that is `did-challenge`, with `delegationChain` allowed on `/auth/token`. It names formats rather than saying yes, so a later delegation format arrives as another entry and a client asks for the one it holds. A server that doesn't list a client's format refuses the field as [unrecognized input](#unrecognized-input), so the client checks at `open()` instead of finding out from a 400.
+`delegations` sits beside `methods` rather than in it, because it is not a way to earn a token: it says which delegation chains a token request may carry, and a chain is presented by a key that proves itself, so any method that proves possession of a key could carry one. Today that is `did-challenge`, with `delegationChain` allowed on `/auth/token`. A server that accepts delegations also takes [revocations](#revocations) of them. It names formats rather than saying yes, so a later delegation format arrives as another entry and a client asks for the one it holds. A server that doesn't list a client's format refuses the field as [unrecognized input](#unrecognized-input), so the client checks at `open()` instead of finding out from a 400.
 
 Absent `auth` means only whatever issuance scheme was arranged out of band. A client holding a DID credential then learns at `open()` that there is nothing to perform, rather than discovering it as a 404 partway through a handshake. It is an object rather than a boolean because issuance is the surface most likely to grow another entry — a consent flow (below) arrives here.
 
@@ -162,7 +162,7 @@ Core runs no server, so every control below lives in the implementer's code — 
 - **Spend a nonce when it is redeemed** — do not merely check that it exists and has not expired. This is pinned by `authSequenceFixtures`, the one fixture group whose point is ordering; a single request/response pair cannot express "and not a second time".
 - **Record which DID each nonce was issued to, and check it on redemption.** A redemption can be internally consistent — a valid signature by the DID it names — and still be a nonce that belongs to someone else.
 - **Never let a client name its own subject.** A subject reaches a session only through a delegation it signed, or one the owner asserts through an admin surface of your own; an endpoint where an app requests a token for a user is an app choosing its own authority (see [below](#the-session-a-token-names)).
-- **Open the stack with `verifyDelegation` if you accept delegations, and answer `DelegationRefusedError` with 401.** The stack validates a session's chain on every operation, so expiry and revocation reach a live token; the 401 sends the client's renewal into `invalid_delegation` rather than leaving it a token that no longer works.
+- **Open the stack with `verifyDelegation` if you accept delegations, and answer `DelegationRefusedError` with 401.** The stack validates a session's chain on every operation, so expiry and revocation reach a live token; the 401 sends the client's renewal into `invalid_delegation` rather than leaving it a token that no longer works. Serve [`POST /revocations`](#revocations) too, so whoever issued a delegation can withdraw it.
 - **Generate nonces in the base64url alphabet** (`A-Za-z0-9_-`) — `base64` output containing `+`, `/` or `=` is refused by conforming clients before they sign, so the error surfaces at the client rather than the server that caused it.
 - **Return 401 and 403 for different things.** Anonymous or invalid token is 401; verified-but-ungranted is 403 (see [Error responses](#error-responses)). Collapsing them discards the distinction the whole identity model rests on.
 - **Log the refusal you didn't send.** A 404 covering a record the requester could not read is [deliberately indistinguishable from a missing one](./disclosure.md) — to the client. The operator is not the adversary, so record which of the two it was, along with the requester DID (as [Identity](./identity.md#authentication-challengeresponse) already asks for denied-but-verified requests), the record ID, and the check that refused. Without it the distinction is lost to everyone: a grant that is subtly wrong looks exactly like a bad ID or a write that never landed, so it sends whoever is debugging it to the write path, which is the one place the bug is not. This is the bullet that makes the anti-oracle rule cheap to live with, and skipping it is how a deployment concludes the rule is not worth keeping. Treat the log as sensitive in its own right — "who asked after what, and was refused" is the sharing graph, written down.
@@ -243,6 +243,7 @@ A server built on core reaches this through the wire parsers in `@haverstack/cor
 | `GET /attachments/:fileId`                            | `parseDownloadParams()`         |
 | `POST /types`                                         | `parseTypeBody()`               |
 | `POST /installs`                                      | `parseInstallBody()`            |
+| `POST /revocations`                                   | `parseRevocationBody()`         |
 | `POST /auth/challenge`                                | `parseAuthChallengeBody()`      |
 | `POST /auth/token`                                    | `parseAuthTokenBody()`          |
 
@@ -251,6 +252,8 @@ The body parsers split errors the way [Records](#records) does for a create: a b
 ### The taxonomy root
 
 Every class in the table above extends the abstract `StackError`, so `err instanceof StackError` answers the one question a server's error middleware asks first: is this a Stack-domain failure with a wire representation, or an ordinary bug that should surface as a bare 500? Membership is exactly that guarantee — a `StackError` always has a `code`, and every code has a status. Errors with no wire mapping (`IdGenerationError`, `InvalidDidError`, `InvalidAuthChallengeError`, `UseAfterCloseError`, `InvalidAdapterError`, `OwnerMismatchError`, `ScopeUnavailableError`, `MisfitError`) stay outside the hierarchy for that reason.
+
+**Authentication failures stay outside it too.** A 401 is bodyless on every endpoint but the [handshake's own](#auth-errors), so it has no code to carry. `DelegationRefusedError` is the one core throws: a session's delegation chain no longer validates, which is the session failing to authenticate rather than a Stack operation refused on its own terms, and a server answers it with 401 as it would a missing token.
 
 **The `Stack` prefix is reserved for members.** A class named `Stack…Error` extends `StackError`, and no error outside the hierarchy carries the prefix, so the name alone says whether a server can serialize it.
 
@@ -784,6 +787,24 @@ The server plans the manifest for the session's key and answers with the result:
 | `409`  | `conflict`                                | The key's `_app` card names a different `appId`.                                                                                                                                                                                                  |
 
 Re-sending the same manifest is how an app checks: it answers `202` until the owner approves and `200` after. A manifest that changes anything an approved one said — a new version, a changed request — is `202` again, so an upgrade takes the same path as a first install. `APIAdapter` has `requestInstall()` only when discovery advertises `installs`, so a client learns it from discovery rather than as a `404`.
+
+## Revocations
+
+```
+POST /revocations  — withdraw a delegation, as its issuer or the owner
+```
+
+How the identity that issued a delegation takes it back on this stack (see [Access control § Revoking a delegation](./access-control.md#revoking-a-delegation)). Served by every server listing a format in `auth.delegations`, so `APIAdapter` has `revokeDelegation()` exactly when discovery advertises one.
+
+**The body is `{ "delegationChain": ["glhA…", …] }`**, base64url envelopes, root first, as on [`/auth/token`](#the-handshake); the delegation revoked is the last. `parseRevocationBody()` from `@haverstack/core/wire` reads it. The server passes the decoded chain to `ScopedStack.revokeDelegation()`, which decides the rest:
+
+| Status | Body          | When                                                                                                                                                      |
+| ------ | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `201`  | the record    | The session's key, acting as itself, is the owner or issued a link of the chain. The body is the `_revocation` record naming the last link's CID.         |
+| `403`  | `permission`  | The key issued no link and is not the owner, or the session acts for someone else: revoking is the issuer's own act.                                      |
+| `400`  | `bad_request` | The chain does not validate. Its time bounds and revocations are not checked, so a delegation can be revoked outside them, but every signature must hold. |
+
+A refused chain is a 400 here, not a 401: the session presenting it authenticated, and the chain is what it asks about rather than what it rests on. From the `201` on, every session resting on that delegation, or on one delegated from it, is answered 401.
 
 ## Entity
 

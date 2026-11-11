@@ -56,8 +56,8 @@ export type RecordVerb = 'create' | 'read' | 'update' | 'delete';
 
 /**
  * What a delegation verifier reports of a chain it accepted: whom it acts
- * for, through whom, until when, and what it lets the principal do.
- * See docs/spec/access-control.md § Signed delegations.
+ * for, through whom, until when, what it lets the principal do, and who
+ * issued each link. See docs/spec/access-control.md § Signed delegations.
  */
 export type VerifiedDelegation = {
   subjectId: EntityId;
@@ -66,6 +66,19 @@ export type VerifiedDelegation = {
   expiresAt: Date | null;
   /** Whether the principal may `verb` Records of the family `baseId` for its subject. */
   allows: (verb: RecordVerb, baseId: BaseId) => boolean;
+  /** Each link, root first: the CID naming it and the identity that issued it. */
+  links: readonly { cid: string; issuerId: EntityId }[];
+};
+
+/**
+ * What core asks of a chain beside its own rules. `timeBounds` is false
+ * when the chain names a delegation being revoked, which may be withdrawn
+ * before it starts or after it ends.
+ */
+export type DelegationCheck = {
+  /** Whether the delegation `cid` names is revoked on this stack. */
+  isRevoked: (cid: string) => Promise<boolean>;
+  timeBounds: boolean;
 };
 
 /**
@@ -75,5 +88,13 @@ export type VerifiedDelegation = {
  */
 export type DelegationVerifier = (
   chain: readonly Uint8Array[],
-  check: { isRevoked: (cid: string, issuers: readonly EntityId[]) => Promise<boolean> },
+  check: DelegationCheck,
 ) => Promise<VerifiedDelegation>;
+
+/**
+ * An Actor as a request presents it: the identities, and the signed
+ * delegation chain, root first, a delegated session rests on. The chain
+ * never reaches a Record's attribution. Passes to `Stack.asActor()`.
+ * See docs/spec/access-control.md § Signed delegations.
+ */
+export type Session = Actor & { delegationChain?: readonly Uint8Array[] };

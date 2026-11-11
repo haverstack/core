@@ -26,6 +26,7 @@
 
 import { StackError } from '@haverstack/core';
 import type {
+  RevocationContent,
   JournalQuery,
   VersionsQuery,
   RecordJournalEntry,
@@ -51,6 +52,7 @@ import type {
 } from '@haverstack/core';
 import { OwnerMismatchError, filtersContent } from '@haverstack/core/adapter';
 import type { AdapterQuery, BlobInfo, BlobsQuery, StackAdapter } from '@haverstack/core/adapter';
+import { base64urlEncode } from '@haverstack/core/wire';
 import type { DidCredential } from '@haverstack/core/wire';
 import {
   isWireError,
@@ -232,6 +234,16 @@ export class APIAdapter implements StackAdapter {
   readonly requestInstall?: (manifest: AppManifest) => Promise<InstallRequestResult>;
 
   /**
+   * Revoke the last delegation of `chain`, as the key this adapter
+   * authenticated with: the owner, or an issuer of a link in it. Present
+   * only when discovery advertises delegations, since a server that accepts
+   * them takes revocations. See docs/spec/wire-format.md § Revocations.
+   */
+  readonly revokeDelegation?: (
+    chain: readonly Uint8Array[],
+  ) => Promise<StackRecord & { content: RevocationContent }>;
+
+  /**
    * `GET /blobs`, present only when discovery advertises it: an optional
    * method's presence is the capability, so a copy or a collection tells
    * from it alone whether this store can be enumerated.
@@ -258,6 +270,8 @@ export class APIAdapter implements StackAdapter {
     private readonly changeFeed: DiscoveryChanges | undefined,
     /** Whether discovery advertised `POST /installs`. */
     installRequests: boolean,
+    /** Whether discovery advertised delegations, and so `POST /revocations`. */
+    delegations: boolean,
     /** Whether discovery advertised `GET /blobs`. */
     blobListing: boolean,
     /** Whether discovery advertised `GET /head`. */
@@ -279,6 +293,12 @@ export class APIAdapter implements StackAdapter {
     }
     if (changeFeed) this.subscribeChanges = (opts, handler) => this.relayFeed(opts, handler);
     if (installRequests) this.requestInstall = (manifest) => this.postInstall(manifest);
+    if (delegations) {
+      this.revokeDelegation = async (chain) =>
+        (await this.requestRecord('POST', '/revocations', {
+          delegationChain: chain.map(base64urlEncode),
+        })) as StackRecord & { content: RevocationContent };
+    }
     if (reportsHead) {
       this.head = async () => (await this.requestBody<WireHeadResponse>('GET', '/head')).head;
     }
@@ -375,6 +395,7 @@ export class APIAdapter implements StackAdapter {
       // forgot them would assume both.
       supportsChangeFeed(discovery) ? discovery.changes : undefined,
       supportsInstallRequests(discovery),
+      supportsDelegation(discovery),
       supportsBlobListing(discovery),
       supportsHead(discovery),
     );

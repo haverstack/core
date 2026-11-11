@@ -10,12 +10,14 @@
  *
  * delegationVerifier() is what `Stack.open({ verifyDelegation })` takes:
  * core hands it each session's chain, once per operation, with the stack's
- * own revocation check. See docs/spec/access-control.md § Signed delegations.
+ * own revocation check, and each chain a revocation names. See
+ * docs/spec/access-control.md § Signed delegations.
  */
 
 import type { DelegationVerifier, RecordVerb, VerifiedDelegation } from '@haverstack/core';
 import { authorizes, checkChain, type ChainOptions } from './chain.js';
 import { decodeDelegation } from './delegation.js';
+import { stripFragment } from './did-key.js';
 
 /** Proves every record verb, and only those. */
 export const RECORD_COMMAND = '/haverstack/record';
@@ -30,13 +32,13 @@ export const recordCommand = (verb: RecordVerb): string => `${RECORD_COMMAND}/${
  * authenticates exactly the identities chains accept as issuers.
  */
 export const delegationVerifier = (
-  options: Omit<ChainOptions, 'isRevoked' | 'now'> = {},
+  options: Omit<ChainOptions, 'isRevoked' | 'now' | 'timeBounds'> = {},
 ): DelegationVerifier => {
   const verified = new Set<string>();
-  return async (chain, { isRevoked }): Promise<VerifiedDelegation> => {
+  return async (chain, { isRevoked, timeBounds }): Promise<VerifiedDelegation> => {
     const valid = await checkChain(
       await Promise.all(chain.map((link) => decodeDelegation(new Uint8Array(link)))),
-      { ...options, isRevoked },
+      { ...options, isRevoked: (cid) => isRevoked(cid), timeBounds },
       verified,
     );
     return {
@@ -44,6 +46,7 @@ export const delegationVerifier = (
       principalId: valid.audience,
       expiresAt: valid.expiresAt === null ? null : new Date(valid.expiresAt * 1000),
       allows: (verb, baseId) => authorizes(valid, recordCommand(verb), { baseId }),
+      links: valid.delegations.map((d) => ({ cid: d.cid, issuerId: stripFragment(d.iss) })),
     };
   };
 };

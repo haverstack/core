@@ -56,6 +56,7 @@ export type {
   AuthMethod,
   WireAuthChallengeRequest,
   WireAuthTokenRequest,
+  WireRevocationRequest,
   WireAuthChallengeResponse,
   WireAuthTokenResponse,
   WireAuthErrorCode,

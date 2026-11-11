@@ -104,9 +104,11 @@ export {
   parseTypeBody,
   parseMigrationBody,
   parseInstallBody,
+  parseRevocationBody,
 } from './body.js';
 export type {
   WireAuthChallengeRequest,
   WireAuthTokenRequest,
+  WireRevocationRequest,
   WireMigrationRequest,
 } from './body.js';
