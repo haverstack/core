@@ -678,12 +678,11 @@ const Task = typeHandle({
 });
 
 const TASK_MIGRATIONS = [
-  migration(TaskV1, TaskV2, ({ fields, field, constant, drop, derive }) =>
+  migration(TaskV1, TaskV2, ({ fields, field, constant, derive }) =>
     fields({
       by: field('author'),
       status: field('status', { done: 'finished' }),
       priority: constant('normal'),
-      archived: drop(),
       slug: derive((c) => c.author.toLowerCase()),
     }),
   ),

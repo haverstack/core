@@ -2138,7 +2138,7 @@ describe('Stack.open({ migrations })', () => {
     const Other = typeHandle({ id: 'com.example.other/note@1', name: 'Other', schema: {} });
     await stack.defineType(Other);
     const note = await stack.create(NOTE_V1, { text: 'hi' });
-    await reopenWith(migration(NoteV1, Other, ({ fields, drop }) => fields({ text: drop() })));
+    await reopenWith(migration(NoteV1, Other, ({ fields }) => fields({})));
     await stack.migrateAll(fam(NOTE_V1));
     expect((await stack.get(note.id))?.typeId).toBe(Other.id);
   });

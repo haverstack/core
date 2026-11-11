@@ -252,12 +252,11 @@ describe('migration()', () => {
       },
       V1.id,
     );
-    const m = migration(V1, V2, ({ fields, field, constant, drop, derive }) =>
+    const m = migration(V1, V2, ({ fields, field, constant, derive }) =>
       fields({
         by: field('author'),
         tags: field('tags', { a: 'x' }),
         priority: constant('normal'),
-        archived: drop(),
         initial: derive((c) => c.author.slice(0, 1) || undefined),
       }),
     );
@@ -320,7 +319,11 @@ describe('migration()', () => {
     // Untyped fields, as a caller the compiler cannot see would write them:
     // these pin the checks migration() makes at runtime.
     type Declare = (
-      builder: MigrationBuilder<Record<string, unknown>, Record<string, unknown>>,
+      builder: MigrationBuilder<
+        Record<string, unknown>,
+        Record<string, unknown>,
+        Record<string, unknown>
+      >,
     ) => DeclaredFields;
     const refused = (to: ReturnType<typeof at>, declare: Declare, message: string) =>
       expect(() => migration(V1, to, declare as never)).toThrow(
@@ -329,33 +332,25 @@ describe('migration()', () => {
     const same = at(V1.schema);
     const { count: _count, ...withoutCount } = V1.schema;
 
-    test('a name neither Type declares', () => {
+    test('a name the target does not declare', () => {
       refused(
         same,
         ({ fields, drop }) => fields({ nope: drop() }),
-        '"nope": drop(): "nope" is a field of neither Type',
+        '"nope": drop(): the target does not declare "nope"',
+      );
+      refused(
+        at(withoutCount),
+        ({ fields, drop }) => fields({ count: drop() }),
+        '"count": drop(): the target does not declare "count"',
       );
     });
 
-    test('a field the target does not declare, unless it is dropped or read', () => {
+    test('a mapping of a value the source enum does not list', () => {
       refused(
-        at(withoutCount),
-        ({ fields }) => fields({}),
-        'the target does not declare "count"; drop() it, or read it with field()',
+        same,
+        ({ fields, field }) => fields({ status: field('status', { dnoe: 'open' }) }),
+        '"status": field("status", …): maps "dnoe", which "status" does not list',
       );
-      refused(
-        at(withoutCount),
-        ({ fields, constant }) => fields({ count: constant(1) }),
-        '"count": constant(…): the target does not declare "count", so it can only be dropped',
-      );
-      expect(() =>
-        migration(V1, at(withoutCount), ({ fields, drop }) => fields({ count: drop() })),
-      ).not.toThrow();
-      expect(() =>
-        migration(V1, at({ ...withoutCount, total: { kind: 'number' } }), ({ fields, field }) =>
-          fields({ total: field('count') }),
-        ),
-      ).not.toThrow();
     });
 
     test('a field origin reading a field the source does not declare', () => {

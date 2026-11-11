@@ -441,12 +441,14 @@ A migration declares where each of the target's top-level fields comes from. A f
 
 Origins name top-level fields. A nested change is a `derive` of the field that holds it.
 
-**Every origin reads the record as stored.** No origin sees another's result, so a declaration has no order and names each field once, as an object's keys do: there is no running state for a later origin to disturb. Two fields swap as `{ a: field('b'), b: field('a') }`. A field the target does not declare is removed, so the source's names are free for the target to reuse.
+**Every origin reads the record as stored.** No origin sees another's result, so a declaration has no order and names each field once, as an object's keys do: there is no running state for a later origin to disturb. Two fields swap as `{ a: field('b'), b: field('a') }`. A field the target does not declare is removed without being named: the target's schema is the statement of what it keeps, so the declaration is keyed by the target's fields alone, and the source's names are free for it to reuse.
 
-**The declaration comes from a builder `migration()` passes**, `MigrationBuilder<StoredContentOf<F>, ContentOf<T>>` for handles of schemas `F` and `T`: `migration()` calls `declare` once with it, and `declare` returns `fields({ … })`. The builder is where both handles are known, so each origin is typed by the field it is declared for:
+**A field the target renames must be named, or its value is left behind.** If `author` becomes an optional `by` and the declaration leaves out `by: field('author')`, the migration builds, `author` is removed, and `by` arrives absent on every record — nothing reports it. The value is not destroyed: every write of a migrated record snapshots the record as it stood first (see [Versioning § Version history](./versioning.md#version-history)), so [`restoreVersion()`](./versioning.md#restore-semantics) recovers it, and a corrected migration can then carry it. But that takes someone noticing. A rename into a required field cannot be left out — the compiler requires it — so the hazard is a rename into an optional one.
 
-- a key is one of the target's top-level fields, or one of the source's that the target does not declare, and the only origin such a field takes is `drop()`;
-- `field(source)` names one of the source's fields, and `table`'s values are the target field's values, element-wise for an array;
+**The declaration comes from a builder `migration()` passes**, `MigrationBuilder<StoredContentOf<F>, ContentOf<F>, ContentOf<T>>` for handles of schemas `F` and `T`: `migration()` calls `declare` once with it, and `declare` returns `fields({ … })`. The builder is where both handles are known, so each origin is typed by the field it is declared for:
+
+- a key is one of the target's top-level fields;
+- `field(source)` names one of the source's fields, and what it carries — the values the source lists, after `table` maps them — is the target field's write type. `table`'s keys are values the source lists, element-wise for an array, or any string for free text. A carry is typed by the source's write type, `ContentOf<F>`, not the stored one: a stored enum may hold a value the source does not list, which is carried through rather than checked;
 - `constant(value)` takes the target field's write type, `ContentOf<T>[field]`, without `undefined`;
 - what `derive(fn)` returns is the target field's write type, and `fn` reads `StoredContentOf` the source handle, since a stored enum may hold a value the source does not list. A `derive` from free text into an enum therefore compiles only if it maps every value;
 - a field the target requires and the source does not declare must be named.
@@ -457,9 +459,8 @@ An origin is opaque: its brand exists only in the types, so a value the builder 
 
 **`migration()` checks the declaration against both schemas** and throws `StackMigrationError` naming the field at fault. These are what a caller the compiler cannot see would get wrong, and what the types cannot say:
 
-- a key neither Type declares, or an origin other than `drop()` for a field the target does not declare;
-- a `field()` naming a field the source does not declare;
-- a field the source declares and the target does not, that no `field()` reads and the declaration does not `drop()` — so no field is lost by omission;
+- a key `to` does not declare;
+- a `field()` naming a field the source does not declare, or a `table` key an enum source does not list;
 - a field `to` requires that nothing produces;
 - a field carried, whether undeclared or through `field()`, that `to` declares in a way its stored values could fail: a different kind (an `enum`, `string` or `text` into `string` or `text` aside), optional into required, an open container into a declared one, or an enum value, after any mapping, that `to`'s enum does not list. Containers are compared field by field;
 - a mapping of a field that is not an `enum`, `string` or `text`, or an array of one;

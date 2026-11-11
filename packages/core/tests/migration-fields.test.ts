@@ -3,7 +3,7 @@ import { composeOrigins, fieldOrigins, migrationBuilder } from '../src/migration
 import type { FieldOrigins } from '../src/migration-fields.js';
 import type { ReadonlyTypeSchema } from '../src/type-handle.js';
 
-const { fields, field, constant, drop, derive } = migrationBuilder;
+const { fields, field, constant, derive } = migrationBuilder;
 
 const origins = (
   declared: Parameters<typeof fields>[0],
@@ -20,7 +20,7 @@ const status = (values: string[]) => ({ kind: 'enum', values }) as const;
 describe('fieldOrigins()', () => {
   test("names each target field's origin, and each field the target drops as no value", () => {
     const result = origins(
-      { b: field('a', { x: 'y' }), c: constant('k'), d: derive(() => 1), z: drop() },
+      { b: field('a', { x: 'y' }), c: constant('k'), d: derive(() => 1) },
       { a: status(['x', 'z']), z: { kind: 'string' } },
       { b: status(['y', 'z']), c: { kind: 'string' }, d: { kind: 'number' }, e: { kind: 'date' } },
     );
@@ -57,7 +57,7 @@ describe('composeOrigins()', () => {
   });
 
   test('reads a name a lower migration dropped as no value, though an upper one declares it', () => {
-    const lower = origins({ n: drop() }, { n: { kind: 'string' } }, {});
+    const lower = origins({}, { n: { kind: 'string' } }, {});
     const upper = origins({}, {}, { n: { kind: 'string' } });
     expect(composeOrigins(lower, upper).get('n')).toEqual({ kind: 'constant', value: undefined });
   });

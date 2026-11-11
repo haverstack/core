@@ -381,6 +381,8 @@ const stack = await Stack.open(adapter, {
 await stack.defineType(NoteV2);
 ```
 
+A field the new version does not declare is removed without being named, so a rename must be declared: leave out `by: field('author')` for an optional `by` and every migrated record arrives without it. The previous content stays in version history, but nothing reports the miss — see [Migration fields](./docs/spec/data-model.md#migration-fields).
+
 Records stay at the version they were written at: `get()` and `query()` return them as stored, `presentAt: 'latest'` migrates them in memory for one read, and `stack.migrateAll()` commits a family to disk. Because the fields are declared rather than a function, a collection carries a content filter or sort across the versions they translate to — a filter on `title` reaches records still at `@1`. Pass migrations at every startup — see [Writing an app](#writing-an-app).
 
 ### History, and watching for changes

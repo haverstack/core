@@ -51,26 +51,46 @@ export type DeclaredFields = Readonly<Record<string, DeclaredOrigin>> & {
 type RequiredKeys<T> = { [K in keyof T]-?: undefined extends T[K] ? never : K }[keyof T];
 /** The target's required fields the source cannot carry, so must be declared. */
 type MustDeclare<F, T> = Exclude<RequiredKeys<T>, keyof F>;
-type MapValue<V> = Exclude<V extends readonly (infer E)[] ? E : V, undefined>;
-
+/** The values a table may map: a string-shaped scalar's, or an array's elements'. */
+type Mappable<V> = Exclude<V extends readonly (infer E)[] ? E : V, undefined> & string;
 /**
- * What `fields()` takes: an origin for any of the target's fields, typed
- * by its write type, and `drop()` for a source field the target does not
- * declare.
+ * The table `field()` takes for the source field `K`: keyed by the values
+ * it lists. A misnamed field or an unlisted key makes the origin `never`,
+ * so the compiler reports the argument at fault and nothing after it.
  */
+type Table<S, K> = Readonly<
+  Partial<
+    Record<
+      K extends keyof S
+        ? (NonNullable<S[K]> extends readonly (infer E)[] ? E : NonNullable<S[K]>) & string
+        : never,
+      string
+    >
+  >
+>;
+type Unlisted<M, S, K> = [M] extends [never]
+  ? never
+  : Exclude<keyof M, K extends keyof S ? Mappable<S[K]> : never>;
+/** `V` with each value `M` lists replaced by its mapping, element-wise. */
+type Remapped<V, M> = V extends readonly (infer E)[]
+  ? Remapped<E, M>[]
+  : V extends keyof M
+    ? M[V]
+    : V;
+
+/** What `fields()` takes: an origin for any of the target's fields, typed by its write type. */
 export type MigrationFields<F, T> = {
   readonly [K in Exclude<keyof T, MustDeclare<F, T>>]?: Origin<T[K]>;
-} & { readonly [K in MustDeclare<F, T>]: Origin<T[K]> } & {
-  readonly [K in Exclude<keyof F, keyof T>]?: Origin<undefined>;
-};
+} & { readonly [K in MustDeclare<F, T>]: Origin<T[K]> };
 
 /**
  * What `migration()` hands its callback, typed by both handles: `F` is the
- * content stored at `from`, `T` the content written at `to`. Each origin
- * takes its type from the field it is declared for. See
- * docs/spec/data-model.md § Migration fields.
+ * content stored at `from`, `S` the content written there, whose listed
+ * values are what a carried field is checked by, and `T` the content
+ * written at `to`. Each origin takes its type from the field it is
+ * declared for. See docs/spec/data-model.md § Migration fields.
  */
-export type MigrationBuilder<F, T> = {
+export type MigrationBuilder<F, S, T> = {
   /** The declaration, one origin per field it names. */
   readonly fields: (fields: MigrationFields<F, T>) => DeclaredFields;
   /**
@@ -78,10 +98,18 @@ export type MigrationBuilder<F, T> = {
    * replaced by its mapping, element-wise through an array. A stored enum
    * may hold a value no handle lists, and it is carried through.
    */
-  readonly field: <V>(
-    source: keyof F & string,
-    values?: Readonly<Record<string, NoInfer<MapValue<V>>>>,
-  ) => Origin<V>;
+  readonly field: <K extends string, const M extends Readonly<Record<string, string>> = never>(
+    source: K extends keyof S ? K : keyof S & string,
+    values?: Unlisted<M, S, K> extends never ? M : Table<S, K>,
+  ) => Origin<
+    K extends keyof S
+      ? [M] extends [never]
+        ? S[K]
+        : Unlisted<M, S, K> extends never
+          ? Remapped<S[K], M>
+          : never
+      : never
+  >;
   /** A constant. */
   readonly constant: <V>(value: NoInfer<Exclude<V, undefined>>) => Origin<V>;
   /**
@@ -96,6 +124,7 @@ export type MigrationBuilder<F, T> = {
 
 /** The one builder, untyped; `migration()` passes it typed by its handles. */
 export const migrationBuilder: MigrationBuilder<
+  Record<string, unknown>,
   Record<string, unknown>,
   Record<string, unknown>
 > = Object.freeze({
@@ -182,8 +211,8 @@ export type FieldOrigin =
   | { readonly kind: 'derived' };
 
 /**
- * Every top-level field the target declares, by its origin, and every name
- * the steps removed, as no value.
+ * Every top-level field the target declares, by its origin, and every
+ * field of the source it does not declare, as no value.
  */
 export type FieldOrigins = ReadonlyMap<string, FieldOrigin>;
 
@@ -214,7 +243,7 @@ export const composeOrigins = (lower: FieldOrigins, upper: FieldOrigins): FieldO
       composed.set(field, origin);
       continue;
     }
-    // A name the lower step neither declares nor removed passes through it.
+    // A name the lower migration neither declares nor removed passes through it.
     const inner = lower.get(origin.field) ?? { kind: 'field', field: origin.field };
     composed.set(
       field,
@@ -234,9 +263,15 @@ export const composeOrigins = (lower: FieldOrigins, upper: FieldOrigins): FieldO
 const isStringKind = (def: FieldDef | undefined): boolean =>
   def?.kind === 'enum' || def?.kind === 'string' || def?.kind === 'text';
 
-/** What `map` may remap: a string-shaped scalar, or a declared array of one. */
+/** What a table may remap: a string-shaped scalar, or a declared array of one. */
 const isMappable = (def: FieldDef | undefined): boolean =>
   isStringKind(def) || (def?.kind === 'array' && !def.open && isStringKind(def.items));
+
+/** The values an enum, or an array of one, lists; null for free text. */
+const listedValues = (def: FieldDef): readonly string[] | null => {
+  const scalar = def.kind === 'array' && !def.open ? def.items : def;
+  return scalar.kind === 'enum' ? scalar.values : null;
+};
 
 const MAX_CARRY_DEPTH = 32;
 
@@ -304,43 +339,36 @@ const carryProblem = (
 /**
  * What each of `to`'s top-level fields is in terms of `from`'s, under
  * `fields`. Returns the problem that makes the declaration unusable as a
- * string instead: a name neither Type declares, an origin reading a field
- * the source does not, a field `to` would refuse, or one `from` declares
- * that would be lost without a word. See docs/spec/data-model.md
- * § Migration fields.
+ * string instead: a name `to` does not declare, an origin reading a field
+ * or mapping a value the source does not, or a field `to` would refuse.
+ * See docs/spec/data-model.md § Migration fields.
  */
 export const fieldOrigins = (
   fields: DeclaredFields,
   from: ReadonlyTypeSchema,
   to: ReadonlyTypeSchema,
 ): FieldOrigins | string => {
-  const read = new Set<string>();
   for (const [field, origin] of Object.entries(fields)) {
     const at = `"${field}": ${describe(origin)}`;
-    if (!Object.hasOwn(to, field)) {
-      if (!Object.hasOwn(from, field)) return `${at}: "${field}" is a field of neither Type`;
-      if (origin.kind !== 'constant' || origin.value !== undefined) {
-        return `${at}: the target does not declare "${field}", so it can only be dropped`;
-      }
-    }
+    if (!Object.hasOwn(to, field)) return `${at}: the target does not declare "${field}"`;
     if (origin.kind !== 'field') continue;
-    if (!Object.hasOwn(from, origin.field)) {
-      return `${at}: "${origin.field}" is not a field of the source`;
-    }
-    if (origin.values && !isMappable(from[origin.field] as FieldDef)) {
+    const source = Object.hasOwn(from, origin.field) ? (from[origin.field] as FieldDef) : undefined;
+    if (!source) return `${at}: "${origin.field}" is not a field of the source`;
+    if (!origin.values) continue;
+    if (!isMappable(source)) {
       return `${at}: only an enum, string or text field, or an array of one, can be mapped`;
     }
-    read.add(origin.field);
+    const listed = listedValues(source);
+    const unlisted = listed && Object.keys(origin.values).find((v) => !listed.includes(v));
+    if (unlisted) return `${at}: maps "${unlisted}", which "${origin.field}" does not list`;
   }
 
-  const origins = new Map<string, FieldOrigin>();
-  for (const field of Object.keys(from)) {
-    if (Object.hasOwn(to, field)) continue;
-    if (!Object.hasOwn(fields, field) && !read.has(field)) {
-      return `the target does not declare "${field}"; drop() it, or read it with field()`;
-    }
-    origins.set(field, { kind: 'constant', value: undefined });
-  }
+  // A field the target does not declare is removed, as no value.
+  const origins = new Map<string, FieldOrigin>(
+    Object.keys(from)
+      .filter((field) => !Object.hasOwn(to, field))
+      .map((field) => [field, { kind: 'constant', value: undefined }]),
+  );
   for (const [field, def] of Object.entries(to)) {
     const declaredOrigin = Object.hasOwn(fields, field) ? fields[field] : undefined;
     // migrate() carries every field no origin names, so one an older

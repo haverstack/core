@@ -42,12 +42,12 @@ type V1C = StoredContentOf<typeof V1.schema>;
 
 /** A declaration of V2's fields around `status`, each case's subject. */
 const around = (status: string, rest = '') => `
-migration(V1, V2, ({ fields, field, constant, derive, drop }) =>
+migration(V1, V2, ({ fields, field, constant, derive }) =>
   fields({
     name: field('title'),
     status: ${status},
     pinned: constant(false),
-    archived: drop(),${rest}
+    ${rest}
   }),
 );`;
 
@@ -81,7 +81,7 @@ ${around(`derive((c: V1C) => (c.status === 'done' ? 'finished' : 'want'))`)}`,
   ),
   'the builder used without destructuring': `
 migration(V1, V2, (b) =>
-  b.fields({ name: b.field('title'), status: b.constant('want'), pinned: b.constant(false), archived: b.drop() }),
+  b.fields({ name: b.field('title'), status: b.constant('want'), pinned: b.constant(false) }),
 );`,
 };
 
@@ -128,13 +128,40 @@ const refuses: Record<string, { code: number; message: string | RegExp; snippet:
   },
   "field() mapping to a value the target's enum does not list": {
     code: 2322,
-    message: `Type '"y"' is not assignable to type '"b" | "x"'.`,
+    message:
+      /^Type 'Origin<\("b" \| "y"\)\[\] \| undefined>' is not assignable to type 'Origin<\("b" \| "x"\)\[\] \| undefined>'\.\n[^]*Type '"y"' is not assignable to type '"b" \| "x"'\.$/,
     snippet: around(`constant('want')`, `\n    tags: field('tags', { a: 'y' }),`),
   },
-  'anything but drop() for a field the target does not declare': {
-    code: 2345,
-    message: `Argument of type 'true' is not assignable to parameter of type 'never'.`,
-    snippet: around(`constant('want')`).replace('archived: drop()', 'archived: constant(true)'),
+  "field() carrying a value the target's enum does not list": {
+    code: 2322,
+    message:
+      /^Type 'Origin<\("a" \| "b"\)\[\] \| undefined>' is not assignable to type 'Origin<\("b" \| "x"\)\[\] \| undefined>'\.\n[^]*Type '"a"' is not assignable to type '"b" \| "x"'\.$/,
+    snippet: around(`constant('want')`, `\n    tags: field('tags'),`),
+  },
+  'field() carrying a different kind': {
+    code: 2322,
+    message: /^Type 'Origin<number \| undefined>' is not assignable to type 'Origin<string>'\.\n/,
+    snippet: around(`constant('want')`).replace(`field('title')`, `field('pages')`),
+  },
+  'field() carrying free text into an enum': {
+    code: 2322,
+    message:
+      /^Type 'Origin<string>' is not assignable to type 'Origin<"want" \| "reading" \| "finished">'\.\n/,
+    snippet: around(`field('status')`),
+  },
+  'field() mapping a value the source does not list': {
+    code: 2353,
+    message: `Object literal may only specify known properties, and 'c' does not exist in type 'Readonly<Partial<Record<"a" | "b", string>>>'.`,
+    snippet: around(`constant('want')`, `\n    tags: field('tags', { c: 'x' }),`),
+  },
+  'a field only the source declares': {
+    code: 2353,
+    message:
+      /^Object literal may only specify known properties, and 'archived' does not exist in type 'MigrationFields<[^\n]*>'\.$/,
+    snippet: around(`constant('want')`, `\n    archived: drop(),`).replace(
+      '({ fields, field, constant, derive })',
+      '({ fields, field, constant, derive, drop })',
+    ),
   },
   'a required field the source cannot carry, left undeclared': {
     code: 2345,
@@ -145,7 +172,10 @@ const refuses: Record<string, { code: number; message: string | RegExp; snippet:
   'drop() of a required field': {
     code: 2322,
     message: `Type 'Origin<undefined>' is not assignable to type 'Origin<"want" | "reading" | "finished">'.\n  Type 'undefined' is not assignable to type '"want" | "reading" | "finished"'.`,
-    snippet: around('drop()'),
+    snippet: around('drop()').replace(
+      '({ fields, field, constant, derive })',
+      '({ fields, field, constant, derive, drop })',
+    ),
   },
   'an origin the builder did not make': {
     code: 2353,

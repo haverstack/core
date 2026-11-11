@@ -201,7 +201,9 @@ export type Migration<From = Record<string, unknown>, To = Record<string, unknow
 export const migration = <F extends ReadonlyTypeSchema, T extends ReadonlyTypeSchema>(
   from: TypeHandle<F>,
   to: TypeHandle<T>,
-  declare: (builder: MigrationBuilder<StoredContentOf<F>, ContentOf<T>>) => DeclaredFields,
+  declare: (
+    builder: MigrationBuilder<StoredContentOf<F>, ContentOf<F>, ContentOf<T>>,
+  ) => DeclaredFields,
 ): Migration<StoredContentOf<F>, StoredContentOf<T>> => {
   const refuse = (problem: string) =>
     new StackMigrationError(`Cannot migrate "${from.id}" to "${to.id}": ${problem}.`);
@@ -211,7 +213,7 @@ export const migration = <F extends ReadonlyTypeSchema, T extends ReadonlyTypeSc
     );
   }
   const fields = declare(
-    migrationBuilder as unknown as MigrationBuilder<StoredContentOf<F>, ContentOf<T>>,
+    migrationBuilder as unknown as MigrationBuilder<StoredContentOf<F>, ContentOf<F>, ContentOf<T>>,
   );
   const origins = fieldOrigins(fields, from.schema, to.schema);
   if (typeof origins === 'string') throw refuse(origins);

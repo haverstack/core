@@ -24,8 +24,8 @@ export const UNTRANSLATABLE = 'untranslatable';
 type Untranslated = typeof UNMATCHABLE | typeof UNTRANSLATABLE;
 
 /**
- * The older values a `map` sends to `value`, mapped ones first. A value no
- * entry names maps to itself, and `map` reaches strings only.
+ * The older values a `field()` table sends to `value`, mapped ones first.
+ * A value no entry names maps to itself, and a table reaches strings only.
  */
 const sourcesOf = (values: Readonly<Record<string, string>>, value: unknown): unknown[] => {
   if (typeof value !== 'string') return [value];
@@ -56,7 +56,7 @@ export type TranslatedArm = { arm: ContentArm; residuals: ContentArm[] };
 /**
  * `predicate`, written in the handle's shape, as the arm for the version
  * `origins` describes. A key is translated by its top-level field: the
- * rest of its path is kept, since steps reach top-level fields only.
+ * rest of its path is kept, since origins reach top-level fields only.
  */
 export const translateArm = (
   origins: FieldOrigins,
