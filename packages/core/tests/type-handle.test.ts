@@ -269,6 +269,19 @@ describe('migration()', () => {
     expect(m.migrate({ author: '' })).toEqual({ by: '', priority: 'normal' });
   });
 
+  test('carries a stored field its source handle does not declare, for validation to decide', () => {
+    const m = migration(BookV1, Book, ({ fields, field, absent }) =>
+      fields({ status: field('status', { done: 'finished' }), pages: absent() }),
+    );
+    // Stored content can hold what the handle does not declare.
+    const stored = { title: 'Dune', status: 'want', isbn: '0441013597' } as never;
+    expect(m.migrate(stored)).toEqual({
+      title: 'Dune',
+      status: 'want',
+      isbn: '0441013597',
+    });
+  });
+
   test('swaps two fields, since no origin sees another', () => {
     const V1 = handle(1, { a: { kind: 'string' }, b: { kind: 'string' } });
     const V2 = handle(2, V1.schema, V1.id);
@@ -297,11 +310,17 @@ describe('migration()', () => {
       migratesFrom: Book,
     });
     expect(() =>
-      migration(BookV1, BookV3, ({ fields, absent }) => fields({ pages: absent() })),
+      migration(BookV1, BookV3, ({ fields, field, absent }) =>
+        fields({ status: field('status', { done: 'finished' }), pages: absent() }),
+      ),
     ).toThrow(
       `Cannot migrate "${BookV1.id}" to "${BookV3.id}": "${BookV3.id}" migrates from "${Book.id}".`,
     );
-    expect(() => migration(Book, BookV1, ({ fields }) => fields({}))).toThrow(StackMigrationError);
+    expect(() =>
+      migration(Book, BookV1, ({ fields, field }) =>
+        fields({ status: field('status', { finished: 'done', abandoned: 'done' }) }),
+      ),
+    ).toThrow(StackMigrationError);
   });
 
   test('builds a migration into another family without lineage', () => {

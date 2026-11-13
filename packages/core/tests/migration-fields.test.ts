@@ -27,7 +27,7 @@ describe('fieldOrigins()', () => {
     expect(Object.fromEntries(result)).toEqual({
       b: { kind: 'field', field: 'a', values: { x: 'y' } },
       c: { kind: 'constant', value: 'k' },
-      d: { kind: 'derived' },
+      d: { kind: 'derived', derive: expect.any(Function) },
       e: { kind: 'field', field: 'e' },
       a: { kind: 'constant', value: undefined },
       z: { kind: 'constant', value: undefined },
@@ -41,7 +41,7 @@ describe('fieldOrigins()', () => {
       { a: { kind: 'string' }, b: { kind: 'string' } },
     );
     expect(result.get('a')).toEqual({ kind: 'constant', value: 'k' });
-    expect(result.get('b')).toEqual({ kind: 'derived' });
+    expect(result.get('b')).toEqual({ kind: 'derived', derive: expect.any(Function) });
   });
 });
 
@@ -90,6 +90,6 @@ describe('composeOrigins()', () => {
     );
     const composed = composeOrigins(lower, upper);
     expect(composed.get('k')).toEqual({ kind: 'constant', value: 'b' });
-    expect(composed.get('d')).toEqual({ kind: 'derived' });
+    expect(composed.get('d')).toEqual({ kind: 'derived', derive: expect.any(Function) });
   });
 });

@@ -220,8 +220,7 @@ export const migration = <F extends ReadonlyTypeSchema, T extends ReadonlyTypeSc
   const built = Object.freeze({
     from: from.id,
     to: to.id,
-    migrate: (content: Record<string, unknown>) =>
-      applyFields(fields, from.schema, to.schema, content),
+    migrate: (content: Record<string, unknown>) => applyFields(origins, content),
   }) as unknown as Migration<StoredContentOf<F>, StoredContentOf<T>>;
   recordOrigins(built, origins);
   return built;

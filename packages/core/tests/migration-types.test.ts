@@ -46,7 +46,9 @@ migration(V1, V2, ({ fields, field, constant, derive, absent }) =>
   fields({
     name: field('title'),
     status: ${status},
-    pinned: constant(false),${rest.includes('rating:') ? '' : '\n    rating: absent(),'}${rest}
+    pinned: constant(false),${rest.includes('rating:') ? '' : '\n    rating: absent(),'}${
+      rest.includes('tags:') ? '' : "\n    tags: field('tags', { a: 'x' }),"
+    }${rest}
   }),
 );`;
 
@@ -85,6 +87,7 @@ migration(V1, V2, (b) =>
     status: b.constant('want'),
     pinned: b.constant(false),
     rating: b.absent(),
+    tags: b.field('tags', { a: 'x' }),
   }),
 );`,
 };
@@ -163,6 +166,12 @@ const refuses: Record<string, { code: number; message: string | RegExp; snippet:
     message:
       /^Object literal may only specify known properties, and 'archived' does not exist in type 'MigrationFields<[^\n]*>'\.$/,
     snippet: around(`constant('want')`, `\n    archived: absent(),`),
+  },
+  'a field whose carry by name does not fit, left undeclared': {
+    code: 2345,
+    message:
+      /^Argument of type '[^\n]*' is not assignable to parameter of type 'MigrationFields<[^\n]*>'\.\n {2}Property 'tags' is missing in type '[^\n]*' but required in type '[^\n]*'\.$/,
+    snippet: around(`constant('want')`).replace("tags: field('tags', { a: 'x' }),", ''),
   },
   'an optional field the source does not declare, left undeclared': {
     code: 2345,

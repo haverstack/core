@@ -48,8 +48,15 @@ export type DeclaredFields = Readonly<Record<string, DeclaredOrigin>> & {
   readonly [fieldsBrand]: true;
 };
 
-/** The target's fields the source does not declare, so has no field to carry. */
-type MustDeclare<F, T> = Exclude<keyof T, keyof F>;
+/**
+ * The target's fields with no same-named source field whose values fit:
+ * one the source does not declare, or one whose carry `field()` would
+ * refuse. Each must be declared, so a carry by name is checked as one by
+ * `field()` is.
+ */
+type MustDeclare<S, T> = {
+  [K in keyof T]-?: K extends keyof S ? ([S[K]] extends [T[K]] ? never : K) : K;
+}[keyof T];
 /** The values a table may map: a string-shaped scalar's, or an array's elements'. */
 type Mappable<V> = Exclude<V extends readonly (infer E)[] ? E : V, undefined> & string;
 /**
@@ -78,9 +85,9 @@ type Remapped<V, M> = V extends readonly (infer E)[]
     : V;
 
 /** What `fields()` takes: an origin for any of the target's fields, typed by its write type. */
-export type MigrationFields<F, T> = {
-  readonly [K in Exclude<keyof T, MustDeclare<F, T>>]?: Origin<T[K]>;
-} & { readonly [K in MustDeclare<F, T>]: Origin<T[K]> };
+export type MigrationFields<S, T> = {
+  readonly [K in Exclude<keyof T, MustDeclare<S, T>>]?: Origin<T[K]>;
+} & { readonly [K in MustDeclare<S, T>]: Origin<T[K]> };
 
 /**
  * What `migration()` hands its callback, typed by both handles: `F` is the
@@ -91,7 +98,7 @@ export type MigrationFields<F, T> = {
  */
 export type MigrationBuilder<F, S, T> = {
   /** The declaration, one origin per field it names. */
-  readonly fields: (fields: MigrationFields<F, T>) => DeclaredFields;
+  readonly fields: (fields: MigrationFields<S, T>) => DeclaredFields;
   /**
    * The value of the source field `source`, with each value `values` lists
    * replaced by its mapping, element-wise through an array. A stored enum
@@ -165,19 +172,16 @@ const remap = (value: unknown, values: Readonly<Record<string, string>>): unknow
 };
 
 /**
- * The content `fields` produce from `content`, which is left untouched:
- * each declared field set from its origin, each field `from` declares and
- * `to` does not removed, and every other field carried as it is.
+ * The content a migration's resolved `origins` produce from `content`,
+ * which is left untouched: each name the map holds set from its origin,
+ * and every other field carried as it is.
  */
 export const applyFields = (
-  fields: DeclaredFields,
-  from: ReadonlyTypeSchema,
-  to: ReadonlyTypeSchema,
+  origins: ResolvedOrigins,
   content: Record<string, unknown>,
 ): Record<string, unknown> => {
   const out: Record<string, unknown> = { ...content };
-  for (const field of Object.keys(from)) if (!Object.hasOwn(to, field)) delete out[field];
-  for (const [field, origin] of Object.entries(fields)) {
+  for (const [field, origin] of origins) {
     const value =
       origin.kind === 'field'
         ? origin.values && content[origin.field] !== undefined
@@ -216,6 +220,14 @@ export type FieldOrigin =
  */
 export type FieldOrigins = ReadonlyMap<string, FieldOrigin>;
 
+/**
+ * One migration's origins, each derivation holding its function: what its
+ * `migrate` applies. Composition reads them as `FieldOrigins`, which says
+ * only what each field is, since a function reads its own migration's
+ * source and no other.
+ */
+export type ResolvedOrigins = ReadonlyMap<string, DeclaredOrigin>;
+
 /** `outer` after `inner`, as one table over both domains. */
 const composeValues = (
   inner: Readonly<Record<string, string>> | undefined,
@@ -243,7 +255,9 @@ export const composeOrigins = (lower: FieldOrigins, upper: FieldOrigins): FieldO
       composed.set(field, origin);
       continue;
     }
-    // A name the lower migration neither declares nor removed passes through it.
+    // Every name an upper migration reads is one the lower resolves, unless
+    // the two handles for the version between them differ — one evolved in
+    // place — and then the name passes through the lower migration as is.
     const inner = lower.get(origin.field) ?? { kind: 'field', field: origin.field };
     composed.set(
       field,
@@ -347,7 +361,7 @@ export const fieldOrigins = (
   fields: DeclaredFields,
   from: ReadonlyTypeSchema,
   to: ReadonlyTypeSchema,
-): FieldOrigins | string => {
+): ResolvedOrigins | string => {
   for (const [field, origin] of Object.entries(fields)) {
     const at = `"${field}": ${describe(origin)}`;
     if (!Object.hasOwn(to, field)) return `${at}: the target does not declare "${field}"`;
@@ -364,7 +378,7 @@ export const fieldOrigins = (
   }
 
   // A field the target does not declare is removed, as no value.
-  const origins = new Map<string, FieldOrigin>(
+  const origins = new Map<string, DeclaredOrigin>(
     Object.keys(from)
       .filter((field) => !Object.hasOwn(to, field))
       .map((field) => [field, { kind: 'constant', value: undefined }]),
@@ -373,11 +387,7 @@ export const fieldOrigins = (
     const declaredOrigin = Object.hasOwn(fields, field) ? fields[field] : undefined;
     // A field no origin names is carried from the source's field of the
     // same name, which the source must declare.
-    const origin: FieldOrigin = declaredOrigin
-      ? declaredOrigin.kind === 'derived'
-        ? { kind: 'derived' }
-        : declaredOrigin
-      : { kind: 'field', field };
+    const origin: DeclaredOrigin = declaredOrigin ?? { kind: 'field', field };
     if (!declaredOrigin && !Object.hasOwn(from, field)) {
       return `the source does not declare "${field}", so its origin must be declared`;
     }
