@@ -190,7 +190,7 @@ An app has two layers, because the stack draws a line between them:
 Migrations belong to neither. They are passed to `Stack.open()` on **every startup**, so the chain is complete before the first read.
 
 ```ts
-import { Stack, map, migration, typeHandle } from '@haverstack/core';
+import { Stack, migration, typeHandle } from '@haverstack/core';
 import type { AppManifest, Collection, ContentOf, StackClient } from '@haverstack/core';
 
 export const Shelf = typeHandle({
@@ -230,9 +230,13 @@ export interface ShelfContent extends ContentOf<typeof Shelf.schema> {}
 export interface BookContent extends ContentOf<typeof Book.schema> {}
 export interface ReviewContent extends ContentOf<typeof Review.schema> {}
 
-// Startup: pass to every Stack.open(). Each step is checked against both
-// handles' schemas when migration() runs.
-export const migrations = [migration(BookV1, Book, [map('status', { done: 'finished' })])];
+// Startup: pass to every Stack.open(). Each field's origin comes from a builder
+// typed by both handles, and is checked against both schemas when migration() runs.
+export const migrations = [
+  migration(BookV1, Book, ({ fields, field, absent }) =>
+    fields({ status: field('status', { done: 'finished' }), shelfId: absent() }),
+  ),
+];
 
 // Data layer: one collection per type, and typed records from every verb.
 export class Library {
@@ -359,7 +363,7 @@ A relationship's `target` says which identifier space its value lives in — a R
 
 ### Migrations
 
-Types can evolve over time. A new version names the one it migrates from, and `migration()` builds the step between two handles from declared steps — `rename`, `map`, `add`, `drop` and `derive` — checked against both schemas when it runs. Pass every step to `Stack.open()`; the library composes adjacent steps into chains:
+Types can evolve over time. A new version names the one it migrates from, and `migration()` builds the step between two handles from where each field of the new version comes from — `field`, `constant`, `derive` or `absent`, from a builder typed by both handles — checked against both schemas when it runs. Pass every step to `Stack.open()`; the library composes adjacent steps into chains:
 
 ```ts
 const NoteV2 = typeHandle({
@@ -370,12 +374,16 @@ const NoteV2 = typeHandle({
 });
 
 const stack = await Stack.open(adapter, {
-  migrations: [migration(NoteV1, NoteV2, [add('title', '')])],
+  migrations: [
+    migration(NoteV1, NoteV2, ({ fields, constant }) => fields({ title: constant('') })),
+  ],
 });
 await stack.defineType(NoteV2);
 ```
 
-Records stay at the version they were written at: `get()` and `query()` return them as stored, `presentAt: 'latest'` migrates them in memory for one read, and `stack.migrateAll()` commits a family to disk. Because the steps are declared rather than a function, a collection carries a content filter or sort across the versions they translate to — a filter on `title` reaches records still at `@1`. Pass migrations at every startup — see [Writing an app](#writing-an-app).
+A field the new version adds says where it comes from — `absent()` if it starts with no value — so a rename can't be left out by accident; a field it no longer declares is removed.
+
+Records stay at the version they were written at: `get()` and `query()` return them as stored, `presentAt: 'latest'` migrates them in memory for one read, and `stack.migrateAll()` commits a family to disk. Because the fields are declared rather than a function, a collection carries a content filter or sort across the versions they translate to — a filter on `title` reaches records still at `@1`. Pass migrations at every startup — see [Writing an app](#writing-an-app).
 
 ### History, and watching for changes
 

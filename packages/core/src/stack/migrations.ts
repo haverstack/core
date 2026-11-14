@@ -13,8 +13,8 @@ import { parseTypeId } from '../schema.js';
 import { StackMigrationError } from '../errors.js';
 import type { StackRecord, TypeId } from '../types/index.js';
 import type { Migration } from '../type-handle.js';
-import { composeOrigins, originsOf } from '../migration-steps.js';
-import type { FieldOrigins } from '../migration-steps.js';
+import { composeOrigins, originsOf } from '../migration-fields.js';
+import type { FieldOrigins } from '../migration-fields.js';
 
 export class MigrationRegistry {
   private readonly steps = new Map<TypeId, Migration>();

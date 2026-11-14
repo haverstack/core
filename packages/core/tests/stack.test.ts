@@ -26,7 +26,6 @@ import {
 import type { RecordVersion, TypeSchema } from '../src/types/index.js';
 import { baseIdOf } from '../src/schema.js';
 import { migration, typeHandle } from '../src/type-handle.js';
-import { add, derive, drop } from '../src/migration-steps.js';
 import type { Migration } from '../src/type-handle.js';
 import { RESERVED_CONTENT_KEYS, CONTENT_KEY_PATH_METACHARACTERS } from '../src/validate.js';
 import { InvalidDidError } from '../src/did/did.js';
@@ -77,12 +76,18 @@ const NoteV2 = typeHandle({
   schema: { text: { kind: 'text', required: true }, title: { kind: 'string' } },
   migratesFrom: NoteV1,
 });
-const noteV1ToV2 = migration(NoteV1, NoteV2, [add('title', '')]);
+const noteV1ToV2 = migration(NoteV1, NoteV2, ({ fields, constant }) =>
+  fields({ title: constant('') }),
+);
 
 const EntityV1 = typeHandle({
   id: '_entity@1',
   name: 'Entity',
-  schema: { did: { kind: 'string', required: true }, name: { kind: 'string', required: true } },
+  schema: {
+    did: { kind: 'string', required: true },
+    name: { kind: 'string', required: true },
+    handle: { kind: 'string' },
+  },
 });
 
 let adapter: MemoryAdapter;
@@ -233,7 +238,9 @@ describe('Stack.open', () => {
       });
       const s = await Stack.open(emptyAdapter, {
         ownerProfile: { name: 'Jane Smith' },
-        migrations: [migration(EntityV1, EntityV2, [])],
+        migrations: [
+          migration(EntityV1, EntityV2, ({ fields, absent }) => fields({ pronouns: absent() })),
+        ],
       });
       await s.defineType(EntityV2);
       await s.migrateAll('_entity');
@@ -306,7 +313,9 @@ describe('Stack.open', () => {
         },
         migratesFrom: EntityV1,
       });
-      await reopenWith(migration(EntityV1, EntityV2, []));
+      await reopenWith(
+        migration(EntityV1, EntityV2, ({ fields, absent }) => fields({ pronouns: absent() })),
+      );
       await stack.defineType(EntityV2);
       const created = await stack.create('_entity@1', { did: 'did:key:x', name: 'X' });
       await stack.migrateAll('_entity');
@@ -2070,7 +2079,10 @@ describe("presentAt: 'latest' (explicit in-memory migration)", () => {
       },
       migratesFrom: NoteV2,
     });
-    await reopenWith(noteV1ToV2, migration(NoteV2, NoteV3, [add('pinned', false)]));
+    await reopenWith(
+      noteV1ToV2,
+      migration(NoteV2, NoteV3, ({ fields, constant }) => fields({ pinned: constant(false) })),
+    );
     await stack.defineType(NoteV3);
 
     const record = await stack.create(NOTE_V1, { text: 'hello' });
@@ -2087,7 +2099,9 @@ describe("presentAt: 'latest' (explicit in-memory migration)", () => {
 
 describe('Stack.open({ migrations })', () => {
   test('refuses two migrations from the same TypeId', async () => {
-    const again = migration(NoteV1, NoteV2, [add('title', 'again')]);
+    const again = migration(NoteV1, NoteV2, ({ fields, constant }) =>
+      fields({ title: constant('again') }),
+    );
     await expect(Stack.open(adapter, { migrations: [noteV1ToV2, again] })).rejects.toThrow(
       StackMigrationError,
     );
@@ -2099,9 +2113,9 @@ describe('Stack.open({ migrations })', () => {
       [NOTE_V1, 'com.example.test/note'],
       ['note', NOTE_V2],
     ]) {
-      await expect(
-        Stack.open(adapter, { migrations: [{ from, to, steps: [], migrate }] }),
-      ).rejects.toThrow(StackMigrationError);
+      await expect(Stack.open(adapter, { migrations: [{ from, to, migrate }] })).rejects.toThrow(
+        StackMigrationError,
+      );
     }
   });
 
@@ -2109,7 +2123,7 @@ describe('Stack.open({ migrations })', () => {
     const migrate = (c: Record<string, unknown>) => c;
     for (const to of [NOTE_V1, 'com.example.test/note@0']) {
       await expect(
-        Stack.open(adapter, { migrations: [{ from: NOTE_V1, to, steps: [], migrate }] }),
+        Stack.open(adapter, { migrations: [{ from: NOTE_V1, to, migrate }] }),
       ).rejects.toThrow(StackMigrationError);
     }
   });
@@ -2120,9 +2134,9 @@ describe('Stack.open({ migrations })', () => {
     await expect(
       Stack.open(adapter, {
         migrations: [
-          { from: NOTE_V1, to: NOTE_V2, steps: [], migrate },
-          { from: NOTE_V2, to: other, steps: [], migrate },
-          { from: other, to: NOTE_V1, steps: [], migrate },
+          { from: NOTE_V1, to: NOTE_V2, migrate },
+          { from: NOTE_V2, to: other, migrate },
+          { from: other, to: NOTE_V1, migrate },
         ],
       }),
     ).rejects.toThrow(`The migrations passed form a cycle through "${NOTE_V1}".`);
@@ -2132,7 +2146,7 @@ describe('Stack.open({ migrations })', () => {
     const Other = typeHandle({ id: 'com.example.other/note@1', name: 'Other', schema: {} });
     await stack.defineType(Other);
     const note = await stack.create(NOTE_V1, { text: 'hi' });
-    await reopenWith(migration(NoteV1, Other, [drop('text')]));
+    await reopenWith(migration(NoteV1, Other, ({ fields }) => fields({})));
     await stack.migrateAll(fam(NOTE_V1));
     expect((await stack.get(note.id))?.typeId).toBe(Other.id);
   });
@@ -2172,7 +2186,10 @@ describe('migrateAll', () => {
       schema: NoteV2.schema,
       migratesFrom: NoteV2,
     });
-    await reopenWith(noteV1ToV2, migration(NoteV2, NoteV3, []));
+    await reopenWith(
+      noteV1ToV2,
+      migration(NoteV2, NoteV3, ({ fields }) => fields({})),
+    );
     await stack.defineType(NoteV3);
     const v1 = await stack.create(NOTE_V1, { text: 'one' });
     const v2 = await stack.create(NOTE_V2, { text: 'two', title: 't' });
@@ -2229,9 +2246,13 @@ describe('migrateAll', () => {
     // migration instead of the valid one from the outer beforeEach.
     const buggyAdapter = await MemoryAdapter.open({ ownerEntityId: 'owner-123' });
     const buggyStack = await Stack.open(buggyAdapter, {
-      // What derive() returns is known only when it runs, so validation at
-      // write time is what refuses it.
-      migrations: [migration(NoteV1, NoteV2, [derive('text', () => 42)])],
+      // The compiler checks derive() against what the function claims to
+      // return; validation at write time checks what it actually returns.
+      migrations: [
+        migration(NoteV1, NoteV2, ({ fields, derive, absent }) =>
+          fields({ text: derive(() => 42 as unknown as string), title: absent() }),
+        ),
+      ],
     });
     await buggyStack.defineType(NoteV1);
     await buggyStack.defineType(NoteV2);
@@ -2273,7 +2294,11 @@ describe('migrateAll', () => {
       schema: EntityV1.schema,
       migratesFrom: EntityV1,
     });
-    await reopenWith(migration(EntityV1, EntityV2, [derive('did', () => 'did:key:zHijacked')]));
+    await reopenWith(
+      migration(EntityV1, EntityV2, ({ fields, derive }) =>
+        fields({ did: derive(() => 'did:key:zHijacked') }),
+      ),
+    );
     await stack.defineType(EntityV2);
     const card = await stack.create('_entity@1', { did: 'did:key:zAlice', name: 'Alice' });
 
@@ -2291,9 +2316,12 @@ describe('migrateAll', () => {
       schema: NoteV2.schema,
       migratesFrom: NoteV2,
     });
-    expect(() => migration(NoteV2, NoteV3, [derive('__proto__', () => 'polluted')])).toThrow(
-      StackMigrationError,
-    );
+    expect(() =>
+      migration(NoteV2, NoteV3, ({ fields, derive }) =>
+        // An untyped caller can name any field.
+        fields({ ['__proto__' as 'text']: derive(() => 'polluted') }),
+      ),
+    ).toThrow(StackMigrationError);
   });
 
   test('still carries an unchanged DID binding through a migration', async () => {
@@ -2303,7 +2331,11 @@ describe('migrateAll', () => {
       schema: { ...EntityV1.schema, pronouns: { kind: 'string' } },
       migratesFrom: EntityV1,
     });
-    await reopenWith(migration(EntityV1, EntityV2, [add('pronouns', 'they/them')]));
+    await reopenWith(
+      migration(EntityV1, EntityV2, ({ fields, constant }) =>
+        fields({ pronouns: constant('they/them') }),
+      ),
+    );
     await stack.defineType(EntityV2);
     const card = await stack.create('_entity@1', { did: 'did:key:zAlice', name: 'Alice' });
 

@@ -2,7 +2,6 @@ import { describe, test, expect, expectTypeOf, beforeEach, vi } from 'vitest';
 import { Stack } from '../src/stack/stack.js';
 import { MemoryAdapter } from '../src/testing.js';
 import { migration, typeHandle } from '../src/type-handle.js';
-import { add, derive, drop, map, rename } from '../src/migration-steps.js';
 import type { ContentOf, ReadonlyTypeSchema, UnlistedValue } from '../src/type-handle.js';
 import { MisfitError } from '../src/collection.js';
 import type {
@@ -65,7 +64,9 @@ const Shelf = typeHandle({
   schema: { name: { kind: 'string', required: true } },
 });
 
-const bookV1ToV2 = migration(BookV1, Book, [map('status', { done: 'finished' })]);
+const bookV1ToV2 = migration(BookV1, Book, ({ fields, field, absent }) =>
+  fields({ status: field('status', { done: 'finished' }), pages: absent() }),
+);
 
 // The naming an app does: an interface keeps its name where a type alias would not.
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
@@ -303,11 +304,22 @@ describe.each([
     expect(page.skipped).toEqual({ older: false, newer: false });
   });
 
-  test('a field an older version gained in place is found under its own name', async () => {
-    await stack.defineType({
+  test('a field an older version gained in place, which its handle declares, is found under its own name', async () => {
+    // The app's own @1 handle evolved in place: it declares `pages`, so the
+    // migration carries it without naming it.
+    const BookV1WithPages = typeHandle({
       ...BookV1,
       schema: { ...BookV1.schema, pages: { kind: 'number' } },
     });
+    stack = await Stack.open(adapter, {
+      migrations: [
+        migration(BookV1WithPages, Book, ({ fields, field }) =>
+          fields({ status: field('status', { done: 'finished' }) }),
+        ),
+      ],
+    });
+    await stack.defineType(BookV1WithPages);
+    books = view(stack).collection(Book);
     const old = await stack.create(BookV1.id, { title: 'Emma', status: 'want', pages: 474 });
     await createV1('Dune');
     const page = await books.query({ filter: { content: { pages: 474 } } });
@@ -317,7 +329,7 @@ describe.each([
     expect(sorted.records[0].id).toBe(old.id);
   });
 
-  test('a field no step produces holds what an older record stores there', async () => {
+  test('a field a migration leaves absent holds no value at an older record', async () => {
     const book = await books.create({ title: 'Dune', status: 'want', pages: 412 });
     const old = await createV1();
     const absent = await books.query({ filter: { content: { pages: null } } });
@@ -413,7 +425,7 @@ describe.each([
 
   test('a read of an older record with no migration to bridge the gap throws', async () => {
     const reopened = await Stack.open(adapter, {
-      migrations: [migration(Book, BookV3, [])],
+      migrations: [migration(Book, BookV3, ({ fields, absent }) => fields({ isbn: absent() }))],
     });
     const old = await createV1();
     const v3 = view(reopened).collection(BookV3);
@@ -602,7 +614,9 @@ describe.each([
     stack = await Stack.open(adapter, {
       migrations: [
         bookV1ToV2,
-        migration(Shelf, Book, [rename('name', 'title'), add('status', 'want')]),
+        migration(Shelf, Book, ({ fields, field, constant, absent }) =>
+          fields({ title: field('name'), status: constant('want'), pages: absent() }),
+        ),
       ],
     });
     await stack.defineType(BookV1);
@@ -675,14 +689,15 @@ const Task = typeHandle({
 });
 
 const TASK_MIGRATIONS = [
-  migration(TaskV1, TaskV2, [
-    rename('author', 'by'),
-    map('status', { done: 'finished' }),
-    add('priority', 'normal'),
-    drop('archived'),
-    derive('slug', (c) => c.author.toLowerCase()),
-  ]),
-  migration(TaskV2, Task, [rename('by', 'owner')]),
+  migration(TaskV1, TaskV2, ({ fields, field, constant, derive }) =>
+    fields({
+      by: field('author'),
+      status: field('status', { done: 'finished' }),
+      priority: constant('normal'),
+      slug: derive((c) => c.author.toLowerCase()),
+    }),
+  ),
+  migration(TaskV2, Task, ({ fields, field }) => fields({ owner: field('by') })),
 ];
 
 describe.each([
@@ -820,7 +835,6 @@ describe.each([
         {
           from: TaskV2.id,
           to: Task.id,
-          steps: [],
           migrate: (c: Record<string, unknown>) => TASK_MIGRATIONS[1].migrate(c as never),
         },
       ],
@@ -836,12 +850,15 @@ describe('a collection whose migration throws', () => {
   test('subscribe() still delivers the change, without its record', async () => {
     const stack = await Stack.open(await MemoryAdapter.open({ ownerEntityId: OWNER }), {
       migrations: [
-        migration(BookV1, Book, [
-          map('status', { done: 'finished' }),
-          derive('title', () => {
-            throw new TypeError('broken migration');
+        migration(BookV1, Book, ({ fields, field, derive, absent }) =>
+          fields({
+            status: field('status', { done: 'finished' }),
+            pages: absent(),
+            title: derive(() => {
+              throw new TypeError('broken migration');
+            }),
           }),
-        ]),
+        ),
       ],
     });
     await stack.defineType(BookV1);
