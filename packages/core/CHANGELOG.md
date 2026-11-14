@@ -1,5 +1,19 @@
 # @haverstack/core
 
+## 0.48.0
+
+### Minor Changes
+
+- [#495](https://github.com/haverstack/core/pull/495) [`dcfbf02`](https://github.com/haverstack/core/commit/dcfbf02ac837ae3fcdcc3660b729cdf9ac9059a7) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `@haverstack/core/wire` exports `contentDispositionFilename()`, the one encoder for an attachment filename in `Content-Disposition`: a quoted ASCII fallback plus an RFC 8187 `filename*`. `attachmentContentDisposition()` builds a download's header from it — every download now carries one, `inline` unless the type was forced — and `APIAdapter` now sends it on upload. `parseUploadFilename()` is renamed `parseContentDispositionFilename()`, beside the encoder it inverts, and decodes `filename*` only when its charset is UTF-8. Download fixtures pin the disposition and filename on forced and inline downloads alike, and upload fixtures expect the new header.
+
+- [#505](https://github.com/haverstack/core/pull/505) [`31bf34f`](https://github.com/haverstack/core/commit/31bf34fd0474fb5a8b5d1676454e90cb0a8fa3af) Thanks [@cuibonobo](https://github.com/cuibonobo)! - A migration now declares where each of the target's fields comes from, instead of listing steps. `migration(from, to, declare)` passes `declare` a builder typed by both handles, and `declare` returns `fields({ … })`, one origin per field: `field(source)` or `field(source, table)` for a source field, renamed or remapped; `constant(value)`; `derive(fn)`; or `absent()` for no value. For example, `migration(BookV1, Book, ({ fields, field }) => fields({ status: field('status', { done: 'finished' }) }))`.
+
+  Every origin reads the record as stored, so a declaration has no order and names each field once. The compiler checks each origin against the field it is declared for: target and source field names, a constant's type, what a `field()` carries and a table's keys and values, and what a `derive` returns, so a `derive` from free text into an enum must map every value, and a `field()` from free text into an enum does not compile. A target field the declaration leaves out is carried from the source field of the same name, and may be left out only where that carry would compile as a `field()`: any other, including one the source does not declare, required or optional, must be named, so a rename cannot be left out. A source field the target does not declare is removed without being named.
+
+  The `rename`, `map`, `add`, `drop` and `derive` exports, the step types and `Migration.steps` are removed; `MigrationBuilder`, `MigrationFields`, `DeclaredFields` and `Origin` are exported.
+
+- [#495](https://github.com/haverstack/core/pull/495) [`dcfbf02`](https://github.com/haverstack/core/commit/dcfbf02ac837ae3fcdcc3660b729cdf9ac9059a7) Thanks [@cuibonobo](https://github.com/cuibonobo)! - Migrating a record is gated once on `ScopedStack`: only the owner acting alone, or an installed app migrating a live record within its own families, may do it. `commitMigration()` and a `restoreVersion()` of a snapshot from another family both pass the write gate and then this one, so write access in the family a record was migrated into no longer moves it back into a family the requester does not reach, and the destination family's binding fields are checked against the family being restored into. A restore within the family stays an ordinary write. `commitMigration()` now answers a requester who cannot read the record as for a missing one, as every other write does.
+
 ## 0.47.0
 
 ### Minor Changes
