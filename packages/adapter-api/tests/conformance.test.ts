@@ -7,7 +7,13 @@
  * the documented response. See that package for the fixture data itself.
  */
 import { describe, test, expect } from 'vitest';
-import { APIAdapter, APIAdapterAuthError, APIAdapterHandshakeError } from '../src/index.js';
+import {
+  APIAdapter,
+  APIAdapterAuthError,
+  APIAdapterAuthUnsupportedError,
+  APIAdapterError,
+  APIAdapterHandshakeError,
+} from '../src/index.js';
 import {
   BASE_URL,
   DISCOVERY,
@@ -37,6 +43,7 @@ import {
   getHeadFixtures,
   commitMigrationFixtures,
   installRequestFixtures,
+  revocationFixtures,
   discoveryFixtures,
   errorResponseFixtures,
   attachmentUploadFixtures,
@@ -50,6 +57,8 @@ import {
   AUTH_FIXTURE_PAYLOAD,
   AUTH_FIXTURE_SIGNATURE,
   AUTH_FIXTURE_FOREIGN_SIGNATURE,
+  AUTH_FIXTURE_DELEGATION,
+  AUTH_FIXTURE_SUBJECT_DID,
 } from '@haverstack/conformance-fixtures';
 import type { AssociationEdit, StackType } from '@haverstack/core';
 import type { WireAuthError, WireVersionsResponse } from '@haverstack/wire-types';
@@ -221,6 +230,61 @@ describe('auth handshake fixtures', () => {
       );
     });
   }
+
+  describe('a delegated handshake', () => {
+    const delegatedFixture = authTokenFixtures.find(
+      (f) => f.name === 'auth-token-issues-delegated-token',
+    )!;
+    const DELEGATED_DISCOVERY = {
+      ...DISCOVERY,
+      auth: { methods: ['did-challenge'], delegations: ['ucan/dlg@1.0.0'] },
+    };
+    const delegatedCredential = async () => ({
+      ...didCredentialFromKeypair(await generateDidKeypair()),
+      delegationChain: [base64urlDecode(AUTH_FIXTURE_DELEGATION)],
+    });
+    // The fixture's session, issued to this test's own key rather than the fixture DID.
+    const sessionFor = (did: string, subjectId = AUTH_FIXTURE_SUBJECT_DID) => ({
+      ...(delegatedFixture.responseBody as object),
+      principalId: did,
+      subjectId,
+    });
+
+    test('sends the chain as the fixture documents it', async () => {
+      const credential = await delegatedCredential();
+      mockFetch.mockResolvedValueOnce(jsonResponse(DELEGATED_DISCOVERY));
+      mockFetch.mockResolvedValueOnce(jsonResponse(challengeFixture.responseBody));
+      mockFetch.mockResolvedValueOnce(jsonResponse(sessionFor(credential.did)));
+
+      await APIAdapter.open({ url: BASE_URL, credential });
+      const [, tokenInit] = mockFetch.mock.calls[2] as [string, RequestInit];
+      const sent = JSON.parse(tokenInit.body as string) as Record<string, unknown>;
+      expect(Object.keys(sent).sort()).toEqual(Object.keys(delegatedFixture.requestBody!).sort());
+      expect(sent.delegationChain).toEqual(delegatedFixture.requestBody!.delegationChain);
+    });
+
+    test('is refused before signing by a server that does not advertise it', async () => {
+      mockFetch.mockResolvedValueOnce(
+        jsonResponse({ ...DISCOVERY, auth: { methods: ['did-challenge'] } }),
+      );
+      const err = await APIAdapter.open({
+        url: BASE_URL,
+        credential: await delegatedCredential(),
+      }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(APIAdapterAuthUnsupportedError);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    test('refuses a session that ignored the chain', async () => {
+      const credential = await delegatedCredential();
+      mockFetch.mockResolvedValueOnce(jsonResponse(DELEGATED_DISCOVERY));
+      mockFetch.mockResolvedValueOnce(jsonResponse(challengeFixture.responseBody));
+      mockFetch.mockResolvedValueOnce(jsonResponse(sessionFor(credential.did, credential.did)));
+      const err = await APIAdapter.open({ url: BASE_URL, credential }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(APIAdapterError);
+      expect(err).not.toBeInstanceOf(APIAdapterHandshakeError);
+    });
+  });
 
   test('APIAdapter performs the documented handshake and uses the token it earns', async () => {
     const credential = didCredentialFromKeypair(await generateDidKeypair());
@@ -873,6 +937,47 @@ describe('install request fixtures', () => {
   test('has no requestInstall() when the server advertises no install requests', async () => {
     const adapter = await openAdapter();
     expect(adapter.requestInstall).toBeUndefined();
+  });
+});
+
+// -------------------------------------------------------
+// Revocations — a server that takes delegations takes revocations, so
+// revokeDelegation() exists exactly when discovery advertises them.
+// -------------------------------------------------------
+
+describe('revocation fixtures', () => {
+  const openWithDelegations = (): Promise<APIAdapter> =>
+    openDiscovered({
+      ...DISCOVERY,
+      auth: { methods: ['did-challenge'], delegations: ['ucan/dlg@1.0.0'] },
+    });
+
+  for (const fixture of revocationFixtures) {
+    test(fixture.name, async () => {
+      const adapter = await openWithDelegations();
+      mockFetch.mockResolvedValueOnce(jsonResponse(fixture.responseBody, fixture.responseStatus));
+
+      const chain = fixture.requestBody!.delegationChain.map(base64urlDecode);
+      const attempt = adapter.revokeDelegation!(chain);
+      const body = fixture.responseBody!;
+      if ('error' in body) {
+        await expect(attempt).rejects.toBeInstanceOf(
+          ERROR_CLASS_FOR_CODE[body.error.code as never],
+        );
+      } else {
+        expect((await attempt).content).toEqual(body.content);
+      }
+
+      const [url, init] = mockFetch.mock.lastCall as [string, RequestInit];
+      expect(url).toBe(`${BASE_URL}${fixture.path}`);
+      expect(init.method).toBe(fixture.method);
+      expect(JSON.parse(init.body as string)).toEqual(fixture.requestBody);
+    });
+  }
+
+  test('has no revokeDelegation() when the server advertises no delegations', async () => {
+    const adapter = await openAdapter();
+    expect(adapter.revokeDelegation).toBeUndefined();
   });
 });
 

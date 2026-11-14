@@ -94,7 +94,12 @@ export {
 } from './errors.js';
 // Local errors outside the taxonomy — no wire representation, and no
 // `Stack` prefix. See docs/spec/wire-format.md § The taxonomy root.
-export { UseAfterCloseError, InvalidAdapterError, ScopeUnavailableError } from './errors.js';
+export {
+  UseAfterCloseError,
+  InvalidAdapterError,
+  ScopeUnavailableError,
+  DelegationRefusedError,
+} from './errors.js';
 export type { StackErrorCode } from './errors.js';
 
 // Types
@@ -113,6 +118,11 @@ export type {
   VersionsQuery,
   Actor,
   ActorOptions,
+  RecordVerb,
+  VerifiedDelegation,
+  DelegationCheck,
+  DelegationVerifier,
+  Session,
   ChangeKind,
   ChangeOp,
   ChangeActor,
@@ -167,6 +177,7 @@ export type {
   GrantGrantee,
   InstallContent,
   InstallRequest,
+  RevocationContent,
   TypeGrant,
   PutAttachmentOptions,
   ConfigContent,

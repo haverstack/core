@@ -32,6 +32,7 @@ import { validatePatchValues } from '../validate.js';
 import { ChangeEmitter, assertSinceUsable } from '../stack/changes.js';
 import { SYSTEM_TYPES } from '../types/index.js';
 import type {
+  RevocationContent,
   ActorOptions,
   AppContent,
   AppId,
@@ -47,6 +48,7 @@ import type {
   FileId,
   QueryResult,
   Reach,
+  RecordVerb,
   RecordChange,
   RecordId,
   RecordVersion,
@@ -108,7 +110,7 @@ import type { AppManifest, InstallRequestResult } from '../install.js';
 import { ScopeAuthority } from './authority.js';
 import { familyPolicy, ownerFieldRefusal } from './family-policy.js';
 import { ScopedSubscription } from './subscription.js';
-import type { AuthoritySnapshot, ReachVerb } from './authority-snapshot.js';
+import type { AuthoritySnapshot } from './authority-snapshot.js';
 import type {
   BackdatableCreateRecordOptions,
   CollectAttachmentGarbageOptions,
@@ -132,6 +134,8 @@ export type ScopedStackInit = {
   stack: Stack;
   principalId: EntityId | null;
   subjectId: EntityId | null;
+  /** The delegation chain the session carries, validated in each operation's snapshot. */
+  delegationChain: readonly Uint8Array[] | null;
   idTimestampSkewMs: number | null;
   /**
    * Bytes-storage primitive for putAttachment(), which composes bytes with
@@ -167,6 +171,14 @@ export class ScopedStack implements StackClient {
   // through. See docs/spec/adapters.md § Adapter capabilities.
   declare readonly listBlobs?: (query?: BlobsQuery) => Promise<BlobInfo[]>;
   declare readonly head?: () => Promise<string>;
+  /**
+   * Revoke the last delegation of `chain`, as a key acting as itself that
+   * issued a link of it or is the owner. Present exactly when the Stack's
+   * is. See docs/spec/access-control.md § Revoking a delegation.
+   */
+  declare readonly revokeDelegation?: (
+    chain: readonly Uint8Array[],
+  ) => Promise<StackRecord & { content: RevocationContent }>;
 
   /** Not callable from outside the package — see ScopedStackInit. */
   constructor(token: typeof scopeToken, init: ScopedStackInit) {
@@ -178,6 +190,7 @@ export class ScopedStack implements StackClient {
       init.stack,
       init.principalId,
       init.subjectId,
+      init.delegationChain,
       init.queryReadable,
     );
     this.idTimestampSkewMs = init.idTimestampSkewMs;
@@ -190,6 +203,12 @@ export class ScopedStack implements StackClient {
       this.listBlobs = async (query) => {
         this.requireOwnerActingAlone('Only the stack owner can list blobs');
         return this.stack.listBlobs!(query);
+      };
+    }
+    if (init.stack.revokeDelegation) {
+      this.revokeDelegation = async (chain) => {
+        this.requireActingAlone('A delegation is revoked by a key acting as itself');
+        return this.stack.revokeDelegation!(chain, this.actor);
       };
     }
     if (init.stack.head) {
@@ -289,7 +308,7 @@ export class ScopedStack implements StackClient {
    */
   private async requireVerb(
     id: string,
-    verb: ReachVerb,
+    verb: RecordVerb,
     opts: { fenceGrantRecord: boolean; expect?: ExpectationOptions },
     snapshot: AuthoritySnapshot,
   ): Promise<StackRecord> {
@@ -305,7 +324,7 @@ export class ScopedStack implements StackClient {
   /** requireVerb()'s gate, asked of a record already found in its family. */
   private async gateVerb(
     record: StackRecord,
-    verb: ReachVerb,
+    verb: RecordVerb,
     fenceGrantRecord: boolean,
     snapshot: AuthoritySnapshot,
   ): Promise<void> {

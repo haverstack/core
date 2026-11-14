@@ -52,7 +52,7 @@ Every entry in `capabilities` may be absent, and a foreign server may name a `fi
 
 `ownerEntityId` in the response above is an **unsigned JSON field**, and nothing here challenges the server to prove it holds any binding to that DID. Structurally it cannot: the server deliberately never holds the owner's key (see [Identity](./identity.md)). So a client's belief about _whose stack it is talking to_ rests on TLS and the URL it was given — not on a signature, unlike every other claim in this system. A hostile or misdirected server can present itself as anyone's stack, and a client that writes private data to it has no cryptographic recourse.
 
-This is inherent to the hosted topology rather than an omission, and it is stated here because the rest of the spec is otherwise scrupulous about naming exactly this kind of asymmetry. Proving a server↔owner binding is deferred alongside [key rotation](./identity.md#deferred-key-rotation): both need an identity that outlives a single key, and neither is foreclosed by anything above.
+This is inherent to the hosted topology rather than an omission, and it is stated here because the rest of the spec is otherwise scrupulous about naming exactly this kind of asymmetry. Proving a server↔owner binding is deferred alongside [key rotation](./identity.md#deferred-key-rotation): it needs a delegation the owner signs to a key the server holds, and nothing above forecloses one.
 
 **A client that already knows which DID it expects can say so.** One following a Group's `stackUrl`, or reconnecting to a stack it has used before, holds that expectation. `APIAdapter`'s `ownerEntityId` option states it, comparing it against discovery's `ownerEntityId` and failing `open()` with `OwnerMismatchError` on any difference — including a discovery response carrying no `ownerEntityId` at all, which is not a match. The comparison is exact string equality; no DID method is normalized, since core resolves none of them.
 
@@ -80,6 +80,14 @@ The handshake is optional to implement, so a server that implements it says so i
 "auth": { "methods": ["did-challenge"] }
 ```
 
+A server whose handshake also accepts a [signed delegation](#the-handshake) names the formats it accepts, by envelope tag:
+
+```json
+"auth": { "methods": ["did-challenge"], "delegations": ["ucan/dlg@1.0.0"] }
+```
+
+`delegations` sits beside `methods` rather than in it, because it is not a way to earn a token: it says which delegation chains a token request may carry, and a chain is presented by a key that proves itself, so any method that proves possession of a key could carry one. Today that is `did-challenge`, with `delegationChain` allowed on `/auth/token`. A server that accepts delegations also takes [revocations](#revocations) of them. It names formats rather than saying yes, so a later delegation format arrives as another entry and a client asks for the one it holds. A server that doesn't list a client's format refuses the chain as `invalid_delegation`, so the client checks at `open()` instead of finding out then.
+
 Absent `auth` means only whatever issuance scheme was arranged out of band. A client holding a DID credential then learns at `open()` that there is nothing to perform, rather than discovering it as a 404 partway through a handshake. It is an object rather than a boolean because issuance is the surface most likely to grow another entry — a consent flow (below) arrives here.
 
 ### The handshake
@@ -93,6 +101,15 @@ POST /auth/token       { "did": "did:key:z6Mk...", "nonce": "k7Qm2Zx...", "signa
 ```
 
 Both are unauthenticated — they are how a token is obtained. `signature` is base64url.
+
+**A token request may carry a delegation.** On a server listing `ucan/dlg@1.0.0` in `auth.delegations`, `/auth/token` also takes `delegationChain`: a [UCAN Delegation 1.0](./access-control.md#signed-delegations) chain from a subject to `did`, as base64url envelopes, root first. The token it issues acts for that subject:
+
+```
+POST /auth/token       { "did": "did:key:z6Mk...", "nonce": "...", "signature": "...", "delegationChain": ["glhA..."] }
+                     → { "token": "...", "expiresAt": "...", "principalId": "did:key:z6Mk...", "subjectId": "did:key:z6Mt..." }
+```
+
+The signature proves the principal and the chain, signed by the subject, proves the binding; a client never names a subject itself. `parseAuthTokenBody()` reads `delegationChain` whatever the server supports, and a server MUST NOT ignore one it was sent: issuing an undelegated token for a request that asked to act for someone answers a different question. It checks the chain with `Stack.verifyDelegationChain(chain, { principalId: did })`, which validates every link's signature, the alignment from subject to `did`, time bounds, the families it names and the stack's own revocations, and requires the chain to end at `did` and begin at another identity; on a stack opened without a verifier it refuses every chain. It authenticates `did` exactly as its verifier resolves issuers, passing `didVerifier({ resolveKey })` as the handshake's `verifyDid`, so any key that can be delegated to can also sign in. It then issues a token no longer-lived than the chain's earliest expiry and keeps the chain with it ([below](#the-session-a-token-names)). A chain that fails any of that is `invalid_delegation`. The chain is not part of the signed payload, and needn't be: a delegation is addressed to `did`, so presenting one with a handshake for that key confers nothing the key didn't already hold.
 
 **The nonce.** Opaque to the client, but restricted to unreserved base64url characters (`A-Za-z0-9_-`), because it lands in a newline-delimited signing payload where an unconstrained value could span fields. Its lifetime is the server's to choose and it is returned rather than assumed, so no client has to guess; **it MUST be single-use and bound to the DID it was issued for.** A nonce redeemable twice is a replayable signature, and one redeemable by a different DID proves nothing about either.
 
@@ -119,12 +136,13 @@ Two rules follow, and a server that skips either has a conformance gap rather th
 
 Handshake failures carry their own vocabulary, deliberately outside [`WireErrorCode`](#wire-error-body): no Stack operation has begun, so none of them is a `StackError` and none has a class to reconstruct — the same reason `InvalidDidError` stays outside that hierarchy.
 
-| Code                | Status | Meaning                                                           | Retryable |
-| ------------------- | ------ | ----------------------------------------------------------------- | --------- |
-| `invalid_did`       | 400    | `did` is not a well-formed DID, or not one this server can verify | No        |
-| `unknown_nonce`     | 401    | Never issued, or already spent                                    | Yes       |
-| `expired_nonce`     | 401    | Past `expiresAt`                                                  | Yes       |
-| `invalid_signature` | 401    | Does not verify against the payload                               | No        |
+| Code                 | Status | Meaning                                                                       | Retryable |
+| -------------------- | ------ | ----------------------------------------------------------------------------- | --------- |
+| `invalid_did`        | 400    | `did` is not a well-formed DID, or not one this server can verify             | No        |
+| `unknown_nonce`      | 401    | Never issued, or already spent                                                | Yes       |
+| `expired_nonce`      | 401    | Past `expiresAt`                                                              | Yes       |
+| `invalid_signature`  | 401    | Does not verify against the payload                                           | No        |
+| `invalid_delegation` | 401    | `delegationChain` does not validate, or is not from another identity to `did` | No        |
 
 ```json
 { "error": { "code": "expired_nonce", "message": "Challenge has expired" } }
@@ -143,7 +161,8 @@ Core runs no server, so every control below lives in the implementer's code — 
 - **Derive the signing origin from your own configured public origin, never from a request header.** `Host` and `X-Forwarded-Host` are set by the client. A server that builds the payload from one lets the client choose which origin it signs for, which silently restores the relay this binding exists to prevent — an impostor replays a harvested signature with the matching `Host` and it verifies. The failure has no symptom: every fixture passes, since none varies the header. Behind a TLS terminator, the configured value is the **public** origin clients dial, not the internal one the proxy forwards to.
 - **Spend a nonce when it is redeemed** — do not merely check that it exists and has not expired. This is pinned by `authSequenceFixtures`, the one fixture group whose point is ordering; a single request/response pair cannot express "and not a second time".
 - **Record which DID each nonce was issued to, and check it on redemption.** A redemption can be internally consistent — a valid signature by the DID it names — and still be a nonce that belongs to someone else.
-- **Never let a client name its own subject.** Delegation is asserted by the owner through an admin surface of your own; an endpoint where an app requests a token for a user is an app choosing its own authority (see [below](#the-session-a-token-names)).
+- **Never let a client name its own subject.** A subject reaches a session only through a delegation it signed, or one the owner asserts through an admin surface of your own; an endpoint where an app requests a token for a user is an app choosing its own authority (see [below](#the-session-a-token-names)).
+- **Open the stack with `verifyDelegation` if you accept delegations, and answer `DelegationRefusedError` with 401.** The stack validates a session's chain on every operation, so expiry and revocation reach a live token; the 401 sends the client's renewal into `invalid_delegation` rather than leaving it a token that no longer works. Serve [`POST /revocations`](#revocations) too, so whoever issued a delegation can withdraw it.
 - **Generate nonces in the base64url alphabet** (`A-Za-z0-9_-`) — `base64` output containing `+`, `/` or `=` is refused by conforming clients before they sign, so the error surfaces at the client rather than the server that caused it.
 - **Return 401 and 403 for different things.** Anonymous or invalid token is 401; verified-but-ungranted is 403 (see [Error responses](#error-responses)). Collapsing them discards the distinction the whole identity model rests on.
 - **Log the refusal you didn't send.** A 404 covering a record the requester could not read is [deliberately indistinguishable from a missing one](./disclosure.md) — to the client. The operator is not the adversary, so record which of the two it was, along with the requester DID (as [Identity](./identity.md#authentication-challengeresponse) already asks for denied-but-verified requests), the record ID, and the check that refused. Without it the distinction is lost to everyone: a grant that is subtly wrong looks exactly like a bad ID or a write that never landed, so it sends whoever is debugging it to the write path, which is the one place the bug is not. This is the bullet that makes the anti-oracle rule cheap to live with, and skipping it is how a deployment concludes the rule is not worth keeping. Treat the log as sensitive in its own right — "who asked after what, and was refused" is the sharing graph, written down.
@@ -156,13 +175,15 @@ Two more sit in code this spec doesn't reach but a server does: `createdBy` [mus
 
 ### The session a token names
 
-A token resolves to **two** identities — the principal that authenticated and the subject it acts for (see [Access control § Delegation](./access-control.md#delegation-principal-and-subject)). `/auth/token` reports both, and **always reports them equal**: proving key possession proves the principal and says nothing whatever about whom that key may act for. There is no field a client could add to change that — an app that could name its own subject would be choosing its own authority, and containment would evaporate.
+A token resolves to **two** identities — the principal that authenticated and the subject it acts for (see [Access control § Delegation](./access-control.md#delegation-principal-and-subject)). `/auth/token` reports both, and **reports them equal unless the request carried a delegation that validated**: proving key possession proves the principal and says nothing whatever about whom that key may act for. A client can't add a field naming its subject — an app that could would be choosing its own authority, and containment would evaporate. What it can add is the subject's own signature over the binding, which is what `delegationChain` is.
 
-The pair is reported anyway rather than collapsed to one field, because delegated tokens exist and are issued elsewhere: **the owner asserts the binding out of band**, through an admin surface of the server's own. That is safe without the subject's involvement because effective authority is the intersection of both parties' grants, so a mis-issued delegation cannot escalate anyone — the binding is a question of correctness and consent, not a security boundary.
+**A delegated session carries its chain.** The token store keeps it, `lookupToken()` returns it as `delegationChain`, and the server passes the session to `asActor()` as it passes any other: the stack validates the chain on every operation and counts it on the principal's side of the intersection as a [signed delegation](./access-control.md#signed-delegations).
 
-**Scoped consent is the extension point this shape reserves.** A flow where the _subject_ authorizes an app directly — OAuth/IndieAuth-shaped — issues a token of exactly this shape through a different route, advertises itself as another entry in `auth.methods`, and needs nothing here to change. Nothing in core builds it today.
+Delegated tokens are also issued elsewhere: **the owner may assert the binding out of band**, through an admin surface of the server's own. That is safe without the subject's involvement because effective authority is the intersection of both parties' grants, so a mis-issued delegation cannot escalate anyone — the binding is a question of correctness and consent, not a security boundary.
 
-(`@haverstack/core` defines the `StackTokenStore` contract — `createToken(actor)` / `lookupToken` / `listTokens` / `revokeToken` — and `record-adapter-sqlite` ships `NativeTokenStore`, a hashed-token reference implementation in its own file, separate from the records database, for servers that want DB-backed bearer tokens without rolling their own storage. This is optional tooling, not part of the wire protocol. `lookupToken()` returns an [Actor](./data-model.md#actor) with both identities always populated, so no caller has to know which field stands in for the other when there is no delegation, and `Stack.asActor()` takes it as is — see [Access control § Enforcement](./access-control.md#enforcement-stackasentity). Its values are DIDs, same as everywhere else — see [Identity](./identity.md).)
+**A subject authorizing an app directly is a signed delegation,** advertised in `auth.delegations` and issuing a token of exactly this shape. A consent flow that collects the subject's signature interactively, OAuth/IndieAuth-shaped, is an app's concern above it: what reaches the server is still the chain.
+
+(`@haverstack/core` defines the `StackTokenStore` contract — `createToken(session)` / `lookupToken` / `listTokens` / `revokeToken` — and `record-adapter-sqlite` ships `NativeTokenStore`, a hashed-token reference implementation in its own file, separate from the records database, for servers that want DB-backed bearer tokens without rolling their own storage. This is optional tooling, not part of the wire protocol. `lookupToken()` returns an [Actor](./data-model.md#actor) with both identities always populated, and the `delegationChain` a delegated token was issued on, so no caller has to know which field stands in for the other when there is no delegation. `createToken()` takes the same shape `lookupToken()` returns, and `Stack.asActor()` takes it as is — see [Access control § Enforcement](./access-control.md#enforcement-stackasentity). Its values are DIDs, same as everywhere else — see [Identity](./identity.md).)
 
 ## Success responses
 
@@ -222,6 +243,7 @@ A server built on core reaches this through the wire parsers in `@haverstack/cor
 | `GET /attachments/:fileId`                            | `parseDownloadParams()`         |
 | `POST /types`                                         | `parseTypeBody()`               |
 | `POST /installs`                                      | `parseInstallBody()`            |
+| `POST /revocations`                                   | `parseRevocationBody()`         |
 | `POST /auth/challenge`                                | `parseAuthChallengeBody()`      |
 | `POST /auth/token`                                    | `parseAuthTokenBody()`          |
 
@@ -230,6 +252,8 @@ The body parsers split errors the way [Records](#records) does for a create: a b
 ### The taxonomy root
 
 Every class in the table above extends the abstract `StackError`, so `err instanceof StackError` answers the one question a server's error middleware asks first: is this a Stack-domain failure with a wire representation, or an ordinary bug that should surface as a bare 500? Membership is exactly that guarantee — a `StackError` always has a `code`, and every code has a status. Errors with no wire mapping (`IdGenerationError`, `InvalidDidError`, `InvalidAuthChallengeError`, `UseAfterCloseError`, `InvalidAdapterError`, `OwnerMismatchError`, `ScopeUnavailableError`, `MisfitError`) stay outside the hierarchy for that reason.
+
+**Authentication failures stay outside it too.** A 401 is bodyless on every endpoint but the [handshake's own](#auth-errors), so it has no code to carry. `DelegationRefusedError` is the one core throws: a session's delegation chain no longer validates, which is the session failing to authenticate rather than a Stack operation refused on its own terms, and a server answers it with 401 as it would a missing token.
 
 **The `Stack` prefix is reserved for members.** A class named `Stack…Error` extends `StackError`, and no error outside the hierarchy carries the prefix, so the name alone says whether a server can serialize it.
 
@@ -765,6 +789,24 @@ The server plans the manifest for the session's key and answers with the result:
 | `409`  | `conflict`                                | The key's `_app` card names a different `appId`.                                                                                                                                                                                                  |
 
 Re-sending the same manifest is how an app checks: it answers `202` until the owner approves and `200` after. A manifest that changes anything an approved one said — a new version, a changed request — is `202` again, so an upgrade takes the same path as a first install. `APIAdapter` has `requestInstall()` only when discovery advertises `installs`, so a client learns it from discovery rather than as a `404`.
+
+## Revocations
+
+```
+POST /revocations  — withdraw a delegation, as its issuer or the owner
+```
+
+How the identity that issued a delegation takes it back on this stack (see [Access control § Revoking a delegation](./access-control.md#revoking-a-delegation)). Served by every server listing a format in `auth.delegations`, so `APIAdapter` has `revokeDelegation()` exactly when discovery advertises one.
+
+**The body is `{ "delegationChain": ["glhA…", …] }`**, base64url envelopes, root first, as on [`/auth/token`](#the-handshake); the delegation revoked is the last. `parseRevocationBody()` from `@haverstack/core/wire` reads it. The server passes the decoded chain to `ScopedStack.revokeDelegation()`, present on a stack opened with `verifyDelegation`, which decides the rest:
+
+| Status | Body          | When                                                                                                                                                |
+| ------ | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `201`  | the record    | The session's key, acting as itself, is the owner or issued a link of the chain. The body is the `_revocation` record naming the last link's CID.   |
+| `403`  | `permission`  | The key issued no link and is not the owner, or the session acts for someone else: revoking is the issuer's own act.                                |
+| `400`  | `bad_request` | The chain's signatures or links do not hold. What it allows, its time bounds and its revocations are not checked, so any delegation can be revoked. |
+
+A refused chain is a 400 here, not a 401: the session presenting it authenticated, and the chain is what it asks about rather than what it rests on. From the `201` on, every session resting on that delegation, or on one delegated from it, is answered 401.
 
 ## Entity
 

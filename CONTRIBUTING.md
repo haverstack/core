@@ -289,4 +289,5 @@ packages/
   wire-types/                # Wire serialization shapes and error mapping
   conformance-fixtures/      # Wire-format fixtures shared by client and server
   commons/                   # Schema Commons type constants + defineCommonsTypes()
+  ucan/                      # UCAN 1.0 delegations: issue, decode, validate a chain
 ```

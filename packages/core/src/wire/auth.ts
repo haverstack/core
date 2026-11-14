@@ -17,7 +17,13 @@
  * single-use enforcement and token issuance are the server's.
  */
 
-import { isValidDid, signWithDid, verifyDidSignature, type DidKeypair } from '../did/did.js';
+import {
+  isValidDid,
+  isValidDidKey,
+  signWithDid,
+  verifyDidSignature,
+  type DidKeypair,
+} from '../did/did.js';
 
 // -------------------------------------------------------
 // Errors
@@ -49,11 +55,11 @@ export class InvalidAuthChallengeError extends Error {
 export const AUTH_PAYLOAD_LABEL = 'haverstack-auth-v1';
 
 /**
- * A server-issued nonce is opaque, but not arbitrary — it lands in a
- * newline-delimited payload, so the charset is what keeps a nonce from
- * spanning fields. base64url, hex and UUID all satisfy it.
+ * Unreserved base64url characters, nothing else: how a nonce, a signature
+ * or an encoded delegation travels. For a nonce it is also what keeps one
+ * from spanning fields of a newline-delimited payload.
  */
-const NONCE_FORMAT = /^[A-Za-z0-9_-]+$/;
+export const BASE64URL = /^[A-Za-z0-9_-]+$/;
 
 export type AuthChallenge = {
   /** The server's own public origin, e.g. "https://stack.example.com". */
@@ -96,7 +102,7 @@ export const buildAuthChallengePayload = (challenge: AuthChallenge): Uint8Array 
   if (!isValidDid(challenge.did)) {
     throw new InvalidAuthChallengeError(`Not a valid DID: "${challenge.did}"`);
   }
-  if (!NONCE_FORMAT.test(challenge.nonce)) {
+  if (!BASE64URL.test(challenge.nonce)) {
     throw new InvalidAuthChallengeError(
       'Nonce must be a non-empty string of unreserved base64url characters.',
     );
@@ -117,17 +123,36 @@ export const signAuthChallenge = async (
 ): Promise<Uint8Array> => signWithDid(privateKey, buildAuthChallengePayload(challenge));
 
 /**
+ * Verifies a signature by a DID: whatever key types and DID methods its
+ * implementer accepts, resolving a method whose keys live in a document or
+ * log rather than in the DID string. `@haverstack/ucan`'s didVerifier()
+ * covers every did:key UCAN accepts, and any DID its `resolveKey` finds.
+ * See docs/spec/identity.md § Authentication: challenge–response.
+ */
+export type DidSignatureVerifier = (
+  did: string,
+  signature: Uint8Array,
+  payload: Uint8Array,
+) => Promise<boolean>;
+
+/**
  * Verify a challenge signature. Answers only "this signature was made by
  * the key behind this DID, for this origin and nonce" — whether the nonce
  * was ever issued, is unexpired, and has not already been spent is the
- * server's to track, and all three matter.
+ * server's to track, and all three matter. `verifyDid`, when given, is the
+ * one answer for every DID, so a server checks exactly the keys it accepts
+ * elsewhere; without it, an Ed25519 did:key is verified here and any other
+ * DID is refused.
  */
 export const verifyAuthChallenge = async (
   challenge: AuthChallenge,
   signature: Uint8Array,
+  opts: { verifyDid?: DidSignatureVerifier } = {},
 ): Promise<boolean> => {
   const payload = buildAuthChallengePayload(challenge);
   try {
+    if (opts.verifyDid) return await opts.verifyDid(challenge.did, signature, payload);
+    if (!isValidDidKey(challenge.did)) return false;
     return await verifyDidSignature(challenge.did, signature, payload);
   } catch {
     // A DID whose key can't be decoded verifies nothing — a false answer,
@@ -149,6 +174,12 @@ export const verifyAuthChallenge = async (
 export type DidCredential = {
   did: string;
   sign: (payload: Uint8Array) => Promise<Uint8Array>;
+  /**
+   * A delegation chain to `did`, root first, to act for the subject at its
+   * root. Sent with every handshake, so a renewed session acts for the same
+   * subject. See docs/spec/wire-format.md § The handshake.
+   */
+  delegationChain?: Uint8Array[];
 };
 
 /**
@@ -172,7 +203,7 @@ export const base64urlEncode = (bytes: Uint8Array): string => {
 };
 
 export const base64urlDecode = (encoded: string): Uint8Array => {
-  if (!NONCE_FORMAT.test(encoded)) {
+  if (!BASE64URL.test(encoded)) {
     throw new InvalidAuthChallengeError('Not valid base64url.');
   }
   const padded = encoded.replace(/-/g, '+').replace(/_/g, '/');

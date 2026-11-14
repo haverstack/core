@@ -379,7 +379,9 @@ export class ChangeEmitter {
     // Snapshotted: a handler may subscribe or unsubscribe while this loop
     // runs, and neither should be seen by the emission already in flight.
     for (const subscription of [...this.subscriptions]) {
-      if (!subscription.isClosed) subscription.accept(emission);
+      // A subscription can close itself, so it's dropped where it's found.
+      if (subscription.isClosed) this.subscriptions.delete(subscription);
+      else subscription.accept(emission);
     }
   }
 

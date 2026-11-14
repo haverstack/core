@@ -149,6 +149,17 @@ export type AttachmentContent = {
   filename?: string;
 };
 
+/**
+ * Content for _revocation records: a refusal of one signed delegation,
+ * named by its CID. Every live one counts, since only the owner or
+ * revokeDelegation()'s check writes one; deleting it lifts the refusal.
+ * See docs/spec/access-control.md § Revoking a delegation.
+ */
+export type RevocationContent = {
+  /** The delegation's CID: CIDv1, DAG-CBOR, SHA-256, base58btc (`zdpu...`). */
+  cid: string;
+};
+
 /** Content for _config records — one singleton per stack, created on initialization. */
 export type ConfigContent = {
   /**
@@ -171,4 +182,6 @@ export const SYSTEM_TYPES = {
   CONFIG: '_config',
   /** An owner's approval of an app's manifest. See InstallContent. */
   INSTALL: '_install',
+  /** A refusal of a signed delegation. See RevocationContent. */
+  REVOCATION: '_revocation',
 } as const;

@@ -46,6 +46,7 @@ import { listBlobsFixtures } from './blobs.js';
 import { getHeadFixtures } from './head.js';
 import { commitMigrationFixtures } from './migration.js';
 import { installRequestFixtures } from './installs.js';
+import { revocationFixtures } from './revocations.js';
 import { errorResponseFixtures } from './errors.js';
 import { authChallengeFixtures, authTokenFixtures } from './auth.js';
 
@@ -60,6 +61,7 @@ export * from './blobs.js';
 export * from './head.js';
 export * from './migration.js';
 export * from './installs.js';
+export * from './revocations.js';
 export * from './errors.js';
 export * from './auth.js';
 export * from './attachments.js';
@@ -100,5 +102,6 @@ export const allConformanceFixtures: ConformanceFixture[] = [
   ...getHeadFixtures,
   ...commitMigrationFixtures,
   ...installRequestFixtures,
+  ...revocationFixtures,
   ...errorResponseFixtures,
 ];

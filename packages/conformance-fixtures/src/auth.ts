@@ -45,6 +45,21 @@ export const AUTH_FIXTURE_OTHER_DID = 'did:key:z6Mktp5FtRqj2M7JxnPz9JWGMCUTE5o3X
 export const AUTH_FIXTURE_OTHER_DID_SIGNATURE =
   'HV-vmd5p9cj6V4HjTUWLt1ySnFpp-hT4P_Lh_JXueTV8D992L4V-oEyL6koGY-kbkMB3ulJTLf7SYfnuXkXZDQ';
 
+/** The subject that signed the delegation fixtures. Its key was discarded once they were made. */
+export const AUTH_FIXTURE_SUBJECT_DID = 'did:key:z6MkhMhNLcHRM13UW6XFnetW6phCH3V4MkwGNjkyCruPM8wP';
+
+/**
+ * A UCAN Delegation 1.0 envelope, base64url: AUTH_FIXTURE_SUBJECT_DID delegates
+ * `/haverstack/record` on the one family `com.example/note` to AUTH_FIXTURE_DID,
+ * with no expiry, so the fixtures never age out.
+ */
+export const AUTH_FIXTURE_DELEGATION =
+  'glhACeFALJyqywjUGRrOYfbH-EoXu1thGFqKX0PdBsfcOiIlCQra4Pf6XXWgouXLKWIGA-B2NW76T0Mh507odYjtDaJhaEg0Ae0B7QETcW51Y2FuL2RsZ0AxLjAuMKdjYXVkeDhkaWQ6a2V5Ono2TWtmc3o5b0s2aTIzNTVtdkV3dERZZEFtcUNONmttUUVUVGhKdEFSZmo5aUd1bWNjbWRyL2hhdmVyc3RhY2svcmVjb3JkY2V4cPZjaXNzeDhkaWQ6a2V5Ono2TWtoTWhOTGNIUk0xM1VXNlhGbmV0VzZwaENIM1Y0TWt3R05qa3lDcnVQTTh3UGNwb2yBg2I9PWcuYmFzZUlkcGNvbS5leGFtcGxlL25vdGVjc3VieDhkaWQ6a2V5Ono2TWtoTWhOTGNIUk0xM1VXNlhGbmV0VzZwaENIM1Y0TWt3R05qa3lDcnVQTTh3UGVub25jZVJoYXZlcnN0YWNrLWZpeHR1cmU';
+
+/** The same delegation made to AUTH_FIXTURE_OTHER_DID instead: valid, and not this key's. */
+export const AUTH_FIXTURE_FOREIGN_DELEGATION =
+  'glhAQTGupjZitVCf7FF4c4fRWdVJ6l8InhGD9rWLTznuEe2IVMjTKtzxEdHcRj55I_Or0P09WlRPMR4CGIRzywOCAKJhaEg0Ae0B7QETcW51Y2FuL2RsZ0AxLjAuMKdjYXVkeDhkaWQ6a2V5Ono2TWt0cDVGdFJxajJNN0p4blB6OUpXR01DVVRFNW8zWEd0MWJyMTFUY3pLR3A3QmNjbWRyL2hhdmVyc3RhY2svcmVjb3JkY2V4cPZjaXNzeDhkaWQ6a2V5Ono2TWtoTWhOTGNIUk0xM1VXNlhGbmV0VzZwaENIM1Y0TWt3R05qa3lDcnVQTTh3UGNwb2yBg2I9PWcuYmFzZUlkcGNvbS5leGFtcGxlL25vdGVjc3VieDhkaWQ6a2V5Ono2TWtoTWhOTGNIUk0xM1VXNlhGbmV0VzZwaENIM1Y0TWt3R05qa3lDcnVQTTh3UGVub25jZVJoYXZlcnN0YWNrLWZpeHR1cmU';
+
 export const authChallengeFixtures: ConformanceFixture<
   WireAuthChallengeRequest,
   WireAuthChallengeResponse | WireAuthError
@@ -91,8 +106,8 @@ export const authTokenFixtures: ConformanceFixture<
       "that payload includes the server's own public origin, which is what stops a signature " +
       'made for one server being redeemed at another. principalId and subjectId are both ' +
       'reported and are equal here: a handshake proves key possession, which says nothing about ' +
-      'whom that key may act for, so this endpoint never delegates. The pair is reported anyway ' +
-      'so an issuance path that does delegate needs no different shape.',
+      'whom that key may act for. Only a signed `delegationChain` makes them differ — see ' +
+      'auth-token-issues-delegated-token.',
     method: 'POST',
     path: '/auth/token',
     requestBody: {
@@ -106,6 +121,52 @@ export const authTokenFixtures: ConformanceFixture<
       expiresAt: '2024-06-22T12:00:00.000Z',
       principalId: AUTH_FIXTURE_DID,
       subjectId: AUTH_FIXTURE_DID,
+    },
+  },
+  {
+    name: 'auth-token-issues-delegated-token',
+    description:
+      'A handshake carrying `delegationChain` — a UCAN chain, base64url envelopes root first, from a ' +
+      'subject to the DID that signs — issues a token acting for that subject. The signature ' +
+      'proves the principal; the chain, signed by the subject, is the only way a subject reaches ' +
+      'the session, so a client never names one. A server listing "ucan/dlg@1.0.0" in `auth.delegations` ' +
+      'validates the chain (signatures, alignment, time bounds, revocation), requires it to end ' +
+      'at `did` and begin elsewhere, keeps it with the token to validate again on every request, ' +
+      "and caps the token at the chain's earliest expiry.",
+    method: 'POST',
+    path: '/auth/token',
+    requestBody: {
+      did: AUTH_FIXTURE_DID,
+      nonce: AUTH_FIXTURE_NONCE,
+      signature: AUTH_FIXTURE_SIGNATURE,
+      delegationChain: [AUTH_FIXTURE_DELEGATION],
+    },
+    responseStatus: 200,
+    responseBody: {
+      token: 'b84e1d7c0f9a4b2e8c6d5f3a1e7b9c0db84e1d7c0f9a4b2e8c6d5f3a1e7b9c0d',
+      expiresAt: '2024-06-22T12:00:00.000Z',
+      principalId: AUTH_FIXTURE_DID,
+      subjectId: AUTH_FIXTURE_SUBJECT_DID,
+    },
+  },
+  {
+    name: 'auth-token-rejects-delegation-to-another-key',
+    description:
+      'A chain that verifies, but is delegated to a key other than the one that signed the ' +
+      'challenge, is 401 / code "invalid_delegation". So is any chain that fails to validate: ' +
+      'malformed, badly signed, expired or revoked. Fatal rather than retryable, since the same ' +
+      'chain fails the same way on a fresh nonce.',
+    method: 'POST',
+    path: '/auth/token',
+    requestBody: {
+      did: AUTH_FIXTURE_DID,
+      nonce: AUTH_FIXTURE_NONCE,
+      signature: AUTH_FIXTURE_SIGNATURE,
+      delegationChain: [AUTH_FIXTURE_FOREIGN_DELEGATION],
+    },
+    responseStatus: 401,
+    responseBody: {
+      error: { code: 'invalid_delegation', message: 'Delegation is not to this key' },
     },
   },
   {

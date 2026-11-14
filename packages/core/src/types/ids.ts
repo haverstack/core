@@ -47,3 +47,62 @@ export type Actor = {
   subjectId: EntityId;
   principalId?: EntityId;
 };
+
+/**
+ * What a request can do to a Record: the grant actions without `-own`/`-any`.
+ * Each builds its own reach, and a signed delegation authorizes them by name.
+ */
+export type RecordVerb = 'create' | 'read' | 'update' | 'delete';
+
+/**
+ * What a delegation verifier reports of a chain it accepted: whom it acts
+ * for, through whom, until when, what it lets the principal do, and who
+ * issued each link. See docs/spec/access-control.md § Signed delegations.
+ */
+export type VerifiedDelegation = {
+  subjectId: EntityId;
+  principalId: EntityId;
+  /** The chain's earliest expiry, or null if no link expires. */
+  expiresAt: Date | null;
+  /**
+   * What the principal may do for its subject, named family by family as
+   * grants are: never a pattern, so the set needs no list of the stack's
+   * families to read.
+   */
+  families: readonly { baseId: BaseId; verbs: readonly RecordVerb[] }[];
+  /** Each link, root first: the CID naming it and the identity that issued it. */
+  links: readonly { cid: string; issuerId: EntityId }[];
+};
+
+/**
+ * Why core asks. To `act`, a chain is checked whole, against this stack's
+ * revocations. To `revoke` one of its delegations, only who signed each
+ * link matters: a delegation can be withdrawn before it starts, after it
+ * ends, and whatever it allows, so time bounds, revocations and authority
+ * go unread and `families` is empty.
+ */
+export type DelegationCheck =
+  | {
+      purpose: 'act';
+      /** Whether the delegation `cid` names is revoked on this stack. */
+      isRevoked: (cid: string) => Promise<boolean>;
+    }
+  | { purpose: 'revoke' };
+
+/**
+ * Validates an encoded delegation chain, root first, throwing to refuse it.
+ * Core supplies the revocation check, so the stack's own `_revocation`
+ * Records always apply. `@haverstack/ucan`'s delegationVerifier() is one.
+ */
+export type DelegationVerifier = (
+  chain: readonly Uint8Array[],
+  check: DelegationCheck,
+) => Promise<VerifiedDelegation>;
+
+/**
+ * An Actor as a request presents it: the identities, and the signed
+ * delegation chain, root first, a delegated session rests on. The chain
+ * never reaches a Record's attribution. Passes to `Stack.asActor()`.
+ * See docs/spec/access-control.md § Signed delegations.
+ */
+export type Session = Actor & { delegationChain?: readonly Uint8Array[] };

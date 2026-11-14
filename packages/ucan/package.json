@@ -1,0 +1,51 @@
+{
+  "name": "@haverstack/ucan",
+  "version": "0.0.0",
+  "description": "UCAN 1.0 delegations for Haverstack: issue, decode and verify",
+  "type": "module",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/haverstack/core.git",
+    "directory": "packages/ucan"
+  },
+  "license": "CC0-1.0",
+  "keywords": [
+    "haverstack",
+    "ucan",
+    "delegation",
+    "capabilities",
+    "did"
+  ],
+  "scripts": {
+    "prepublishOnly": "pnpm run build",
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src tests"
+  },
+  "dependencies": {
+    "@haverstack/core": "workspace:^",
+    "@ipld/dag-cbor": "^10.0.2",
+    "@noble/curves": "^2.4.0",
+    "multiformats": "^14.0.5"
+  },
+  "devDependencies": {
+    "@haverstack/conformance-fixtures": "workspace:^",
+    "@types/node": "^22.0.0",
+    "iso-signatures": "0.7.0",
+    "iso-ucan": "3.0.0",
+    "typescript": "^5.5.0",
+    "vitest": "^4.1.11"
+  }
+}

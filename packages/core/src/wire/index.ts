@@ -19,7 +19,7 @@ export {
   base64urlEncode,
   base64urlDecode,
 } from './auth.js';
-export type { AuthChallenge, DidCredential } from './auth.js';
+export type { AuthChallenge, DidCredential, DidSignatureVerifier } from './auth.js';
 
 // No in-repo caller: a server must derive the signing origin from its own
 // configured public origin — this is the primitive it does that with.
@@ -108,9 +108,11 @@ export {
   parseTypeBody,
   parseMigrationBody,
   parseInstallBody,
+  parseRevocationBody,
 } from './body.js';
 export type {
   WireAuthChallengeRequest,
   WireAuthTokenRequest,
+  WireRevocationRequest,
   WireMigrationRequest,
 } from './body.js';

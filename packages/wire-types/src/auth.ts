@@ -16,6 +16,12 @@ import { hasErrorBody } from './errors.js';
  */
 export type DiscoveryAuth = {
   methods: AuthMethod[];
+  /**
+   * The delegation formats `POST /auth/token` accepts, by envelope tag, so
+   * a token may act for the subject who signed one. Absent means none.
+   * See docs/spec/wire-format.md § The handshake.
+   */
+  delegations?: string[];
 };
 
 /** The challenge–response handshake of docs/spec/wire-format.md § Authentication. */
@@ -23,16 +29,34 @@ export const AUTH_METHOD_DID_CHALLENGE = 'did-challenge';
 
 export type AuthMethod = typeof AUTH_METHOD_DID_CHALLENGE;
 
+/** UCAN Delegation 1.0, the one delegation format this protocol defines. */
+export const DELEGATION_FORMAT_UCAN = 'ucan/dlg@1.0.0';
+
 /** Whether a server advertises the DID challenge–response handshake. */
 export function supportsDidChallenge(discovery: { auth?: DiscoveryAuth }): boolean {
   return discovery.auth?.methods?.includes(AUTH_METHOD_DID_CHALLENGE) ?? false;
 }
 
+/** Whether a server's handshake accepts delegations in `format`. */
+export function supportsDelegation(
+  discovery: { auth?: DiscoveryAuth },
+  format: string = DELEGATION_FORMAT_UCAN,
+): boolean {
+  return (
+    supportsDidChallenge(discovery) && (discovery.auth?.delegations?.includes(format) ?? false)
+  );
+}
+
 /**
- * The two request bodies, re-exported from `@haverstack/core/wire`, whose
- * parsers return them — one definition, as with `parseDate`.
+ * The request bodies, re-exported from `@haverstack/core/wire`, whose
+ * parsers return them — one definition, as with `parseDate`. `POST
+ * /revocations` answers 201 with the `_revocation` record.
  */
-export type { WireAuthChallengeRequest, WireAuthTokenRequest } from '@haverstack/core/wire';
+export type {
+  WireAuthChallengeRequest,
+  WireAuthTokenRequest,
+  WireRevocationRequest,
+} from '@haverstack/core/wire';
 
 /** POST /auth/challenge response. */
 export type WireAuthChallengeResponse = {
@@ -42,11 +66,10 @@ export type WireAuthChallengeResponse = {
 };
 
 /**
- * POST /auth/token response. Both identities are always present, and this
- * endpoint always reports them equal — a handshake proves key possession,
- * which says nothing about whom that key may act for. The pair is reported
- * anyway so an issuance path that does delegate needs no new shape.
- * See docs/spec/wire-format.md § Authentication.
+ * POST /auth/token response. Both identities are always present. They are
+ * equal unless the request carried a delegation the server verified: a
+ * handshake proves key possession, which says nothing about whom that key
+ * may act for. See docs/spec/wire-format.md § The session a token names.
  */
 export type WireAuthTokenResponse = {
   token: string;
@@ -66,7 +89,8 @@ export type WireAuthErrorCode =
   | 'invalid_did'
   | 'unknown_nonce'
   | 'expired_nonce'
-  | 'invalid_signature';
+  | 'invalid_signature'
+  | 'invalid_delegation';
 
 export type WireAuthError = {
   error: {
@@ -82,6 +106,7 @@ export const WIRE_AUTH_ERROR_STATUS: Record<WireAuthErrorCode, number> = {
   unknown_nonce: 401,
   expired_nonce: 401,
   invalid_signature: 401,
+  invalid_delegation: 401,
 };
 
 /** Codes a fresh handshake can resolve. Anything else is fatal to retry. */

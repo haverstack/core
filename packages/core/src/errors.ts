@@ -312,3 +312,17 @@ export class ScopeUnavailableError extends Error {
     this.name = 'ScopeUnavailableError';
   }
 }
+
+/**
+ * A session's delegation chain does not validate: malformed, badly signed,
+ * expired, revoked, or not from its subject to its principal. Thrown by
+ * every operation of a view scoped to it, and a server answers 401: an
+ * authentication failure, so outside the StackError taxonomy.
+ * See docs/spec/wire-format.md § The taxonomy root.
+ */
+export class DelegationRefusedError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'DelegationRefusedError';
+  }
+}

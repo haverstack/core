@@ -6,7 +6,8 @@
  */
 
 import { createHash, randomBytes } from 'node:crypto';
-import type { Actor } from '@haverstack/core';
+import type { Session } from '@haverstack/core';
+import { base64urlDecode, base64urlEncode } from '@haverstack/core/wire';
 import type { TokenSession, TokenInfo } from '@haverstack/core/wire';
 import type { SqlExecutor } from './executor.js';
 import { toMs, fromMs } from './mappers.js';
@@ -30,24 +31,27 @@ export class SharedTokenLogic {
   }
 
   async createToken(
-    actor: Actor,
+    session: Session,
     opts: { label?: string; expiresAt?: Date } = {},
   ): Promise<{ id: string; token: string }> {
     const id = randomBytes(8).toString('hex');
     const token = randomBytes(32).toString('hex');
     const tokenHash = hashToken(token);
     this.exec.run(
-      'INSERT INTO tokens (id, token_hash, principal_id, subject_id, label, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO tokens (id, token_hash, principal_id, subject_id, label, created_at, expires_at, delegation_chain) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
       [
         id,
         tokenHash,
         // Stored rather than left null for an undelegated token, so a
         // reader never has to know which column stands in for the other.
-        actor.principalId ?? actor.subjectId,
-        actor.subjectId,
+        session.principalId ?? session.subjectId,
+        session.subjectId,
         opts.label ?? null,
         toMs(new Date()),
         opts.expiresAt ? toMs(opts.expiresAt) : null,
+        session.delegationChain
+          ? JSON.stringify(session.delegationChain.map((link) => base64urlEncode(link)))
+          : null,
       ],
     );
     return { id, token };
@@ -59,10 +63,18 @@ export class SharedTokenLogic {
       principal_id: string;
       subject_id: string;
       expires_at: number | null;
-    }>('SELECT principal_id, subject_id, expires_at FROM tokens WHERE token_hash = ?', [hash]);
+      delegation_chain: string | null;
+    }>(
+      'SELECT principal_id, subject_id, expires_at, delegation_chain FROM tokens WHERE token_hash = ?',
+      [hash],
+    );
     if (!row) return null;
     if (row.expires_at !== null && Date.now() > row.expires_at) return null;
-    return { principalId: row.principal_id, subjectId: row.subject_id };
+    return {
+      principalId: row.principal_id,
+      subjectId: row.subject_id,
+      ...delegationChainOf(row.delegation_chain),
+    };
   }
 
   async listTokens(): Promise<TokenInfo[]> {
@@ -73,13 +85,15 @@ export class SharedTokenLogic {
       label: string | null;
       created_at: number;
       expires_at: number | null;
+      delegation_chain: string | null;
     }>(
-      'SELECT id, principal_id, subject_id, label, created_at, expires_at FROM tokens ORDER BY created_at DESC',
+      'SELECT id, principal_id, subject_id, label, created_at, expires_at, delegation_chain FROM tokens ORDER BY created_at DESC',
     );
     return rows.map((row) => ({
       id: row.id,
       principalId: row.principal_id,
       subjectId: row.subject_id,
+      ...delegationChainOf(row.delegation_chain),
       ...(row.label && { label: row.label }),
       createdAt: fromMs(row.created_at),
       ...(row.expires_at !== null && { expiresAt: fromMs(row.expires_at) }),
@@ -90,3 +104,9 @@ export class SharedTokenLogic {
     this.exec.run('DELETE FROM tokens WHERE id = ?', [id]);
   }
 }
+
+/** A stored chain, as TokenSession carries it: present only on a delegated token. */
+const delegationChainOf = (stored: string | null): { delegationChain?: Uint8Array[] } =>
+  stored === null
+    ? {}
+    : { delegationChain: (JSON.parse(stored) as string[]).map((d) => base64urlDecode(d)) };

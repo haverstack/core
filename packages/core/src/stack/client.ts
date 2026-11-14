@@ -10,6 +10,7 @@ import type {
   Actor,
   AppId,
   AssociationEdit,
+  DelegationVerifier,
   AttachmentContent,
   AuthorityAssociation,
   BlobInfo,
@@ -110,6 +111,12 @@ export type StackOptions = {
    * docs/spec/data-model.md § Type migrations.
    */
   migrations?: readonly Migration[];
+  /**
+   * Validates the delegation chains sessions carry. A stack opened without
+   * one scopes no delegated session. See docs/spec/access-control.md
+   * § Signed delegations.
+   */
+  verifyDelegation?: DelegationVerifier;
 };
 
 export type CollectAttachmentGarbageOptions = {

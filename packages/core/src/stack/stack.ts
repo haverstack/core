@@ -73,6 +73,10 @@ import type {
   InstallContent,
   RecordId,
   Actor,
+  DelegationVerifier,
+  Session,
+  RevocationContent,
+  VerifiedDelegation,
   ActorOptions,
   ChangeActor,
   RecordChange,
@@ -89,11 +93,13 @@ import {
   ElementSetMovedError,
   UseAfterCloseError,
   ScopeUnavailableError,
+  DelegationRefusedError,
   InvalidAdapterError,
   StackConflictError,
   StackMigrationError,
   StackNotFoundError,
   StackBadRequestError,
+  StackPermissionError,
   StackSchemaDriftError,
   StackValidationError,
   StackVersionConflictError,
@@ -130,7 +136,7 @@ import {
   validateIdTimestampSkew,
   DEFAULT_ID_TIMESTAMP_SKEW_MS,
 } from './record-id.js';
-import { queryAllPages, lookupEntityByDid } from './reads.js';
+import { queryAllPages, lookupEntityByDid, isRevokedCid } from './reads.js';
 import { contentEqual } from '../record-changes.js';
 import {
   assertAssociationSet,
@@ -264,10 +270,23 @@ export class Stack implements StackClient {
   declare readonly listBlobs?: (query?: BlobsQuery) => Promise<BlobInfo[]>;
   declare readonly head?: () => Promise<string>;
 
+  /**
+   * Revoke the last delegation of `chain`: write the `_revocation` Record
+   * naming it, so no chain through it validates here again. Without
+   * `actor` the revoker is the owner; an `actor` must be an issuer of a
+   * link, or the owner, acting as itself. Present only on a stack opened
+   * with `verifyDelegation`. See docs/spec/access-control.md § Revoking a delegation.
+   */
+  declare readonly revokeDelegation?: (
+    chain: readonly Uint8Array[],
+    opts?: ActorOptions,
+  ) => Promise<StackRecord & { content: RevocationContent }>;
+
   private constructor(
     private readonly adapter: StackAdapter,
     private readonly idTimestampSkewMsValue: number | null,
     private readonly migrations: MigrationRegistry,
+    private readonly delegationVerifier: DelegationVerifier | undefined,
   ) {
     if (adapter.listBlobs) {
       this.listBlobs = async (query) => {
@@ -280,6 +299,10 @@ export class Stack implements StackClient {
         this.assertOpen();
         return this.adapter.head!();
       };
+    }
+    if (delegationVerifier) {
+      this.revokeDelegation = (chain, opts) =>
+        this.writeRevocation(delegationVerifier, chain, opts);
     }
   }
 
@@ -327,6 +350,7 @@ export class Stack implements StackClient {
       adapter,
       opts.idTimestampSkewMs === undefined ? DEFAULT_ID_TIMESTAMP_SKEW_MS : opts.idTimestampSkewMs,
       new MigrationRegistry(opts.migrations ?? []),
+      opts.verifyDelegation,
     );
     for (const type of systemTypeDefinitions()) await stack.defineType(type);
     if (opts.ownerProfile) {
@@ -365,6 +389,54 @@ export class Stack implements StackClient {
     return this.getEntityByDid(this.ownerEntityId);
   }
 
+  /**
+   * Whether the signed delegation `cid` names is revoked: a live
+   * `_revocation` Record names it. Every one counts, since each was
+   * written by the owner or checked by revokeDelegation() as it entered.
+   * See docs/spec/access-control.md § Revoking a delegation.
+   */
+  async isDelegationRevoked(cid: string): Promise<boolean> {
+    this.assertOpen();
+    return isRevokedCid(this, cid);
+  }
+
+  /**
+   * The body of revokeDelegation(). The chain's signatures and links must
+   * hold, so no one revokes through links they could not have signed; the
+   * revoker's standing is checked here, where every
+   * non-owner revocation is written, so every stored one counts.
+   */
+  private async writeRevocation(
+    verifier: DelegationVerifier,
+    chain: readonly Uint8Array[],
+    opts: ActorOptions = {},
+  ): Promise<StackRecord & { content: RevocationContent }> {
+    this.assertOpen();
+    let verified: VerifiedDelegation;
+    try {
+      verified = await verifier(chain, { purpose: 'revoke' });
+    } catch {
+      throw new StackBadRequestError('The delegation chain does not validate');
+    }
+    const actor = normalizeActor(opts.actor);
+    if (actor) {
+      const issuer =
+        actor.subjectId === this.ownerEntityId ||
+        verified.links.some((link) => link.issuerId === actor.subjectId);
+      if (actor.principalId !== undefined || !issuer) {
+        throw new StackPermissionError(
+          'Only the owner or an issuer in its chain, acting as itself, may revoke a delegation',
+        );
+      }
+    }
+    const cid = verified.links[verified.links.length - 1]!.cid;
+    return this.create<RevocationContent>(
+      `${SYSTEM_TYPES.REVOCATION}@1`,
+      { cid },
+      actor ? { createdBy: actor } : {},
+    );
+  }
+
   get capabilities(): StackCapabilities {
     return this.adapter.capabilities;
   }
@@ -381,14 +453,55 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Scope to an Actor — a delegated app acting for its user, or a
+   * Scope to a Session — a delegated app acting for its user, or a
    * TokenSession as StackTokenStore.lookupToken() returns it, which is what
-   * a server should pass at its request boundary.
-   * See docs/spec/access-control.md § Delegation: principal and subject.
+   * a server should pass at its request boundary. A chain is validated by
+   * verifyDelegationChain() on every operation of the view, not here.
+   * See docs/spec/access-control.md § Signed delegations.
    */
-  asActor(actor: Actor): ScopedStack {
-    const { subjectId, principalId = subjectId } = normalizeActor(actor)!;
-    return this.scope(principalId, subjectId);
+  asActor(session: Session): ScopedStack {
+    const { subjectId, principalId = subjectId } = normalizeActor(session)!;
+    return this.scope(principalId, subjectId, session.delegationChain ?? null);
+  }
+
+  /**
+   * Validate a delegation chain presented by the key that authenticated as
+   * `principalId`, and, given `subjectId`, for that subject: what a server
+   * runs at `/auth/token` before issuing a delegated token, and what every
+   * operation of a delegated view runs again. Revocation is this stack's
+   * own `_revocation` Records. Every refusal is DelegationRefusedError, a
+   * stack opened without `verifyDelegation` included.
+   * See docs/spec/access-control.md § Signed delegations.
+   */
+  async verifyDelegationChain(
+    chain: readonly Uint8Array[],
+    expect: { principalId: EntityId; subjectId?: EntityId },
+  ): Promise<VerifiedDelegation> {
+    this.assertOpen();
+    if (!this.delegationVerifier) {
+      throw new DelegationRefusedError('This stack was opened without `verifyDelegation`.');
+    }
+    let verified: VerifiedDelegation;
+    try {
+      verified = await this.delegationVerifier(chain, {
+        purpose: 'act',
+        isRevoked: (cid) => this.isDelegationRevoked(cid),
+      });
+    } catch (cause) {
+      throw new DelegationRefusedError('The delegation chain does not validate.', { cause });
+    }
+    if (verified.principalId !== expect.principalId) {
+      throw new DelegationRefusedError(
+        'The delegation chain is not to the key that authenticated.',
+      );
+    }
+    if (verified.subjectId === expect.principalId) {
+      throw new DelegationRefusedError('A key needs no delegation to act as itself.');
+    }
+    if (expect.subjectId !== undefined && verified.subjectId !== expect.subjectId) {
+      throw new DelegationRefusedError('The delegation chain is from a different subject.');
+    }
+    return verified;
   }
 
   /**
@@ -397,7 +510,11 @@ export class Stack implements StackClient {
    * stack is scoped by the session that opened it instead.
    * See docs/spec/access-control.md § Enforcement: Stack.asEntity().
    */
-  private scope(principalId: EntityId | null, subjectId: EntityId | null): ScopedStack {
+  private scope(
+    principalId: EntityId | null,
+    subjectId: EntityId | null,
+    delegationChain: readonly Uint8Array[] | null = null,
+  ): ScopedStack {
     this.assertOpen();
     const queryReadable = this.adapter.queryReadable?.bind(this.adapter);
     if (!queryReadable) {
@@ -418,6 +535,7 @@ export class Stack implements StackClient {
       stack: this,
       principalId,
       subjectId,
+      delegationChain,
       idTimestampSkewMs: this.idTimestampSkewMsValue,
       adapter: this.adapter,
       changes: this.changes,

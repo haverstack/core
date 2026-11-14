@@ -24,6 +24,7 @@ import type {
   GrantContent,
   GroupRole,
   InstallContent,
+  RevocationContent,
   QueryResult,
   RecordId,
   StackQuery,
@@ -149,6 +150,27 @@ export async function loadInstallRecords(
     filter: { baseId: SYSTEM_TYPES.INSTALL, ...EVERY_RECORD },
   });
   return records as (StackRecord & { content: InstallContent })[];
+}
+
+/**
+ * Whether a live `_revocation` names `cid`. Unlisted ones count; a deleted
+ * one refuses nothing, as a deleted `_grant` grants nothing. Takes the
+ * unscoped Stack, as findAppCardByDid().
+ * See docs/spec/access-control.md § Revoking a delegation.
+ */
+export async function isRevokedCid(stack: Stack, cid: string): Promise<boolean> {
+  const match = await findFirstMatch(
+    (q) => stack.query(q),
+    {
+      filter: {
+        typeId: `${SYSTEM_TYPES.REVOCATION}@1`,
+        includeUnlisted: true,
+        ...(filtersContent(stack.capabilities) && { content: { cid } }),
+      },
+    },
+    (r) => (r.content as RevocationContent).cid === cid,
+  );
+  return match !== undefined;
 }
 
 /**

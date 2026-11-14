@@ -62,6 +62,9 @@ export const performHandshake = async (
     did: credential.did,
     nonce: challenge.nonce,
     signature: base64urlEncode(signature),
+    ...(credential.delegationChain && {
+      delegationChain: credential.delegationChain.map(base64urlEncode),
+    }),
   });
   if (!tokenRes.ok) {
     const err = await handshakeError(tokenRes, '/auth/token');
@@ -75,5 +78,17 @@ export const performHandshake = async (
     }
     throw err;
   }
-  return successBody<WireAuthTokenResponse>(tokenRes, 'POST', '/auth/token');
+  const session = await successBody<WireAuthTokenResponse>(tokenRes, 'POST', '/auth/token');
+  // A server that ignored the chain would issue this key a session acting
+  // only as itself: the session asked for acts for someone else, through it.
+  if (
+    credential.delegationChain &&
+    (session.principalId !== credential.did || session.subjectId === credential.did)
+  ) {
+    throw new APIAdapterError(
+      `POST /auth/token issued a session for ${session.subjectId} through ${session.principalId}; ` +
+        `asked to act through ${credential.did} for the subject its delegation chain names.`,
+    );
+  }
+  return session;
 };

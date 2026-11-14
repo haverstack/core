@@ -387,7 +387,7 @@ Apps that care about semantics filter by exact `typeId`; apps that want flexibil
 
 ### System types
 
-Reserved, library-defined types: `_config@1` ([Stack initialization](../spec.md#stack-initialization)), `_entity@1`, `_app@1`, `_group@1` ([Identity](./identity.md)), `_grant@1` ([Access control](./access-control.md#type-level-grants)), `_attachment@1` ([Attachments](./attachments.md)), and `_install@1` ([App installs](./apps.md#the-_install-record)). System types follow the same versioned ID format as user-defined types and can evolve using the same migration mechanism. All seven are pre-seeded when a Stack is opened with `Stack.open()` — always available without any setup by the caller.
+Reserved, library-defined types: `_config@1` ([Stack initialization](../spec.md#stack-initialization)), `_entity@1`, `_app@1`, `_group@1` ([Identity](./identity.md)), `_grant@1` ([Access control](./access-control.md#type-level-grants)), `_attachment@1` ([Attachments](./attachments.md)), `_install@1` ([App installs](./apps.md#the-_install-record)) and `_revocation@1` ([Access control § Revoking a delegation](./access-control.md#revoking-a-delegation)). System types follow the same versioned ID format as user-defined types and can evolve using the same migration mechanism. All eight are pre-seeded when a Stack is opened with `Stack.open()` — always available without any setup by the caller.
 
 ### Type migrations
 

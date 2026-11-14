@@ -56,6 +56,7 @@ export type {
   AuthMethod,
   WireAuthChallengeRequest,
   WireAuthTokenRequest,
+  WireRevocationRequest,
   WireAuthChallengeResponse,
   WireAuthTokenResponse,
   WireAuthErrorCode,
@@ -63,7 +64,9 @@ export type {
 } from './auth.js';
 export {
   AUTH_METHOD_DID_CHALLENGE,
+  DELEGATION_FORMAT_UCAN,
   supportsDidChallenge,
+  supportsDelegation,
   WIRE_AUTH_ERROR_STATUS,
   isWireAuthError,
   isRetryableAuthError,

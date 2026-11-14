@@ -2,42 +2,54 @@
  * Authority snapshot
  * -------------------------------------------------------
  * The authority one request acts with, read once: the `_grant` Records,
- * the roles the subject holds on rosters, and the reach each verb builds
- * from them — each loaded on first use and shared after, so an operation
+ * the roles the subject holds on rosters, the session's delegation as
+ * validated now, and the reach each verb
+ * builds from them — each loaded on first use and shared after, so an operation
  * reads each at most once however many Records it decides. An operation
  * takes its own and drops it when done; a subscription holds one for its
- * life, which is only safe because every write that can move it arrives as
- * an event that clears it. See docs/spec/access-control.md § Reach.
+ * life. Events clear what Record writes move; on each use the snapshot
+ * checks the one input no event carries, the clock, against the
+ * delegation's expiry. See docs/spec/access-control.md § Reach.
  */
 
 import { Lazy } from '../lazy.js';
 import { SYSTEM_TYPES } from '../types/index.js';
 import type { RosterRoles } from '../access.js';
-import type { Reach, StackRecord } from '../types/index.js';
-
-/** The verbs a reach is built for: one per thing a request can do to a Record. */
-export type ReachVerb = 'create' | 'read' | 'update' | 'delete';
+import type { Reach, RecordVerb, StackRecord, VerifiedDelegation } from '../types/index.js';
 
 export type AuthoritySources = {
   grants: () => Promise<StackRecord[]>;
   roles: RosterRoles;
-  reach: (verb: ReachVerb, snapshot: AuthoritySnapshot) => Promise<Reach>;
+  delegation: () => Promise<VerifiedDelegation | null>;
+  reach: (verb: RecordVerb, snapshot: AuthoritySnapshot) => Promise<Reach>;
 };
 
 export class AuthoritySnapshot {
   private readonly grantSet: Lazy<StackRecord[]>;
   private readonly roleSet: Lazy<Awaited<ReturnType<RosterRoles>>>;
-  private readonly reaches = new Map<ReachVerb, Lazy<Reach>>();
+  private readonly delegationSet: Lazy<VerifiedDelegation | null>;
+  /** When the loaded delegation stops being valid, so a held snapshot never outlives it. */
+  private delegationExpiry: number | null = null;
+  private readonly reaches = new Map<RecordVerb, Lazy<Reach>>();
 
   constructor(private readonly sources: AuthoritySources) {
     this.grantSet = new Lazy(sources.grants);
     this.roleSet = new Lazy(sources.roles);
+    this.delegationSet = new Lazy(async () => {
+      const delegation = await sources.delegation();
+      this.delegationExpiry = delegation?.expiresAt?.getTime() ?? null;
+      return delegation;
+    });
   }
 
   readonly grants = (): Promise<StackRecord[]> => this.grantSet.get();
   readonly roles: RosterRoles = () => this.roleSet.get();
+  readonly delegation = (): Promise<VerifiedDelegation | null> => this.delegationSet.get();
 
-  reach(verb: ReachVerb): Promise<Reach> {
+  reach(verb: RecordVerb): Promise<Reach> {
+    if (this.delegationExpiry !== null && Date.now() > this.delegationExpiry) {
+      this.clearDelegation();
+    }
     let reach = this.reaches.get(verb);
     if (!reach) {
       reach = new Lazy(() => this.sources.reach(verb, this));
@@ -54,7 +66,14 @@ export class AuthoritySnapshot {
   invalidateFor(typeFamily: string): void {
     if (typeFamily === SYSTEM_TYPES.GRANT) this.grantSet.clear();
     else if (typeFamily === SYSTEM_TYPES.GROUP) this.roleSet.clear();
+    else if (typeFamily === SYSTEM_TYPES.REVOCATION) return this.clearDelegation();
     else return;
+    this.reaches.clear();
+  }
+
+  private clearDelegation(): void {
+    this.delegationSet.clear();
+    this.delegationExpiry = null;
     this.reaches.clear();
   }
 }

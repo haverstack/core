@@ -156,6 +156,41 @@ describe('signAuthChallenge / verifyAuthChallenge', () => {
     ).toBe(false);
   });
 
+  // A verifier the caller supplies is the one answer for every DID, so a
+  // server authenticates exactly the keys it accepts elsewhere.
+  test('verifyDid decides every DID when given, against the payload core builds', async () => {
+    const kp = await getKeypair();
+    const challenge = { origin: ORIGIN, did: 'did:example:alice', nonce: NONCE };
+    const signature = await signAuthChallenge(kp.privateKey, { ...challenge, did: kp.did });
+    const seen: { did: string; payload: string }[] = [];
+    const verifyDid = async (did: string, _sig: Uint8Array, payload: Uint8Array) => {
+      seen.push({ did, payload: decode(payload) });
+      return did === 'did:example:alice';
+    };
+    expect(await verifyAuthChallenge(challenge, signature, { verifyDid })).toBe(true);
+    expect(seen).toEqual([
+      { did: 'did:example:alice', payload: decode(buildAuthChallengePayload(challenge)) },
+    ]);
+
+    const keyChallenge = { origin: ORIGIN, did: kp.did, nonce: NONCE };
+    const keySignature = await signAuthChallenge(kp.privateKey, keyChallenge);
+    const rejecting = async () => false;
+    expect(await verifyAuthChallenge(keyChallenge, keySignature, { verifyDid: rejecting })).toBe(
+      false,
+    );
+    const throwing = async (): Promise<boolean> => {
+      throw new Error('unresolvable');
+    };
+    expect(await verifyAuthChallenge(challenge, signature, { verifyDid: throwing })).toBe(false);
+  });
+
+  test('without verifyDid, only an Ed25519 did:key verifies', async () => {
+    const kp = await getKeypair();
+    const challenge = { origin: ORIGIN, did: 'did:example:alice', nonce: NONCE };
+    const signature = await signAuthChallenge(kp.privateKey, { ...challenge, did: kp.did });
+    expect(await verifyAuthChallenge(challenge, signature)).toBe(false);
+  });
+
   test('signs the payload the builder produces, not the bare nonce', async () => {
     const kp = await getKeypair();
     const challenge = { origin: ORIGIN, did: kp.did, nonce: NONCE };

@@ -32,7 +32,6 @@ import {
   queryAllPages,
 } from '../stack/reads.js';
 import { AuthoritySnapshot } from './authority-snapshot.js';
-import type { ReachVerb } from './authority-snapshot.js';
 import { SYSTEM_TYPES } from '../types/index.js';
 import type {
   Actor,
@@ -47,6 +46,8 @@ import type {
   InstallContent,
   QueryResult,
   Reach,
+  RecordVerb,
+  VerifiedDelegation,
   StackRecord,
   TypeId,
 } from '../types/index.js';
@@ -70,7 +71,7 @@ type GrantSide = typeof SUBJECT_SIDE | typeof PRINCIPAL_SIDE;
  * the one reaching the subject's own Records in it, and the permission bit
  * reaching one Record. See docs/spec/access-control.md § Reach.
  */
-const VERBS: Record<ReachVerb, { any: GrantAction; own?: GrantAction; bit?: 'read' | 'write' }> = {
+const VERBS: Record<RecordVerb, { any: GrantAction; own?: GrantAction; bit?: 'read' | 'write' }> = {
   create: { any: 'create' },
   read: { any: 'read-any', own: 'read-own', bit: 'read' },
   update: { any: 'update-any', own: 'update-own', bit: 'write' },
@@ -86,6 +87,8 @@ export class ScopeAuthority {
     readonly principalId: EntityId | null,
     /** Whom this request acts for and attributes writes to — see ScopedStack.subjectId. */
     readonly subjectId: EntityId | null,
+    /** The delegation chain the session carries, read on the principal's side. */
+    private readonly delegationChain: readonly Uint8Array[] | null,
     /** Stack.query() within a reach — see ScopedStack.query(). */
     private readonly queryReadable: (split: SplitQuery, reach: Reach) => Promise<QueryResult>,
   ) {}
@@ -105,7 +108,22 @@ export class ScopeAuthority {
         subject === null
           ? Promise.resolve(new Map())
           : loadRosterRoles((q) => this.stack.query(q), subject),
+      delegation: () => this.verifyDelegation(),
       reach: (verb, snapshot) => this.buildReach(verb, snapshot),
+    });
+  }
+
+  /**
+   * The session's delegation, validated now: once per operation, so expiry
+   * and revocation reach a view held across requests. Null when the
+   * session carries none. See docs/spec/access-control.md § Signed delegations.
+   */
+  private async verifyDelegation(): Promise<VerifiedDelegation | null> {
+    if (!this.delegationChain) return null;
+    // A chain arrives only through asActor(), which always names both.
+    return this.stack.verifyDelegationChain(this.delegationChain, {
+      principalId: this.principalId!,
+      subjectId: this.subjectId!,
     });
   }
 
@@ -201,23 +219,56 @@ export class ScopeAuthority {
   }
 
   /**
+   * The families the session's delegation lets the principal `verb`, read
+   * as familiesConveying() reads a grant: each verb as its `-any` action
+   * through grantConveys(), and never an ungrantable family.
+   * See docs/spec/access-control.md § Signed delegations.
+   */
+  private async familiesDelegated(
+    verb: RecordVerb,
+    snapshot: AuthoritySnapshot,
+  ): Promise<BaseId[]> {
+    const delegation = await snapshot.delegation();
+    if (!delegation) return [];
+    const action = VERBS[verb].any;
+    return delegation.families
+      .filter(
+        ({ baseId, verbs }) =>
+          !UNGRANTABLE_SYSTEM_TYPES.has(baseId) &&
+          grantConveys(
+            verbs.map((v) => VERBS[v].any),
+            action,
+          ),
+      )
+      .map(({ baseId }) => baseId);
+  }
+
+  /**
    * What this request may do with `verb` — that verb's rules, built whole
    * even where a Record's own permissions would settle it, since every gate
    * asks one value at a flat cost. The principal's grants fence it; within,
    * the subject reaches what grants and permissions give it, an owner
    * subject everything. See docs/spec/access-control.md § Reach.
    */
-  private async buildReach(verb: ReachVerb, snapshot: AuthoritySnapshot): Promise<Reach> {
+  private async buildReach(verb: RecordVerb, snapshot: AuthoritySnapshot): Promise<Reach> {
+    // Validated even where the principal's side reads nothing from it, so a
+    // revoked or expired chain ends the session whoever its principal is.
+    await snapshot.delegation();
     const { any, own, bit } = VERBS[verb];
     const reach: Reach = this.principalUnbounded
       ? {}
       : {
-          fence: await this.familiesConveying(
-            this.principalId,
-            PRINCIPAL_SIDE,
-            own ? [any, own] : [any],
-            snapshot,
-          ),
+          fence: [
+            ...new Set([
+              ...(await this.familiesConveying(
+                this.principalId,
+                PRINCIPAL_SIDE,
+                own ? [any, own] : [any],
+                snapshot,
+              )),
+              ...(await this.familiesDelegated(verb, snapshot)),
+            ]),
+          ],
         };
     const subject = this.subjectId;
     if (subject === this.stack.ownerEntityId) return reach;
@@ -262,7 +313,11 @@ export class ScopeAuthority {
   }
 
   /** Whether this request may `verb` the Record: its reach, asked of one Record. */
-  async may(verb: ReachVerb, record: ReachedRecord, snapshot: AuthoritySnapshot): Promise<boolean> {
+  async may(
+    verb: RecordVerb,
+    record: ReachedRecord,
+    snapshot: AuthoritySnapshot,
+  ): Promise<boolean> {
     return inReach(record, await snapshot.reach(verb));
   }
 
@@ -271,7 +326,7 @@ export class ScopeAuthority {
    * reaches the Record, for a refusal that says which side lacked the verb.
    */
   async subjectMay(
-    verb: ReachVerb,
+    verb: RecordVerb,
     record: ReachedRecord,
     snapshot: AuthoritySnapshot,
   ): Promise<boolean> {
