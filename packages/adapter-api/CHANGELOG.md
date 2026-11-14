@@ -1,5 +1,17 @@
 # @haverstack/adapter-api
 
+## 0.47.0
+
+### Minor Changes
+
+- [#495](https://github.com/haverstack/core/pull/495) [`dcfbf02`](https://github.com/haverstack/core/commit/dcfbf02ac837ae3fcdcc3660b729cdf9ac9059a7) Thanks [@cuibonobo](https://github.com/cuibonobo)! - `@haverstack/core/wire` exports `contentDispositionFilename()`, the one encoder for an attachment filename in `Content-Disposition`: a quoted ASCII fallback plus an RFC 8187 `filename*`. `attachmentContentDisposition()` builds a download's header from it — every download now carries one, `inline` unless the type was forced — and `APIAdapter` now sends it on upload. `parseUploadFilename()` is renamed `parseContentDispositionFilename()`, beside the encoder it inverts, and decodes `filename*` only when its charset is UTF-8. Download fixtures pin the disposition and filename on forced and inline downloads alike, and upload fixtures expect the new header.
+
+### Patch Changes
+
+- Updated dependencies [[`dcfbf02`](https://github.com/haverstack/core/commit/dcfbf02ac837ae3fcdcc3660b729cdf9ac9059a7), [`31bf34f`](https://github.com/haverstack/core/commit/31bf34fd0474fb5a8b5d1676454e90cb0a8fa3af), [`dcfbf02`](https://github.com/haverstack/core/commit/dcfbf02ac837ae3fcdcc3660b729cdf9ac9059a7)]:
+  - @haverstack/core@0.48.0
+  - @haverstack/wire-types@0.47.0
+
 ## 0.46.0
 
 ### Minor Changes
