@@ -24,7 +24,7 @@ const delegation = await issueDelegation({
   audience: appDid,
   subject: credential.did,
   cmd: '/haverstack/record/read',
-  pol: [['like', '.baseId', 'commons/*']],
+  pol: [['==', '.baseId', 'commons/note']],
   exp: Math.floor(Date.now() / 1000) + 3600,
 });
 
@@ -72,7 +72,7 @@ const verifyDid = didVerifier({ resolveKey });
 
 // At POST /auth/token, when the body carries a delegationChain:
 if (!(await verifyAuthChallenge(challenge, signature, { verifyDid }))) throw unauthorized();
-const { subjectId, expiresAt } = await stack.verifyDelegationChain(chain, did);
+const { subjectId, expiresAt } = await stack.verifyDelegationChain(chain, { principalId: did });
 await tokens.createToken(
   { subjectId, principalId: did, delegationChain: chain },
   { expiresAt: expiresAt ?? undefined },
@@ -84,7 +84,7 @@ const scoped = stack.asActor(await tokens.lookupToken(bearer));
 
 Answer `DelegationRefusedError` with `invalid_delegation` at `/auth/token` and with 401 on any other request. Passing the same `resolveKey` to both means a server authenticates as principals exactly the identities it accepts as issuers.
 
-Haverstack's commands mirror its grant actions: `/haverstack/record/create`, `/haverstack/record/read`, `/haverstack/record/update` and `/haverstack/record/delete`, each with `{ baseId }` as the arguments a policy constrains. `/haverstack/record` covers all four and will never cover more, so delegating it can't later grant something new. The delegation counts on the app's side of the stack's permission check, beside grants naming the app, and never reaches further than the subject's own grants. A did:key link's signature is checked once and remembered by CID, so revalidating on every operation costs only the time bounds and the revocation check.
+Haverstack's commands mirror its grant actions: `/haverstack/record/create`, `/haverstack/record/read`, `/haverstack/record/update` and `/haverstack/record/delete`, each with `{ baseId }` as the arguments a policy constrains. `/haverstack/record` covers all four and will never cover more, so delegating it can't later grant something new. A chain must name the families it allows, as a grant does: each link's policy is empty or `[['==', '.baseId', family]]`, or an `or` of those, and at least one link names them, so `delegationVerifier()` refuses a pattern like `like`. The delegation counts on the app's side of the stack's permission check, beside grants naming the app, and never reaches further than the subject's own grants. A did:key link's signature is checked once and remembered by CID, so revalidating on every operation costs only the time bounds and the revocation check.
 
 A delegation's issuer, or the owner, revokes it with `revokeDelegation(chain)`, served as `POST /revocations`. The verifier validates that chain too, but for its time bounds, so the stack knows who issued each link. See [Access control § Revoking a delegation](../../docs/spec/access-control.md#revoking-a-delegation).
 

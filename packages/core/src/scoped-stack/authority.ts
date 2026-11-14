@@ -12,12 +12,7 @@
 import { groupRoleFromAssociations, readCompanions, roleSatisfies } from '../access.js';
 import { inReach } from '../adapter/reach.js';
 import type { ReachedRecord } from '../adapter/reach.js';
-import {
-  DelegationRefusedError,
-  StackError,
-  StackNotFoundError,
-  StackPermissionError,
-} from '../errors.js';
+import { StackError, StackNotFoundError, StackPermissionError } from '../errors.js';
 import {
   UNGRANTABLE_SYSTEM_TYPES,
   grantConveys,
@@ -83,8 +78,6 @@ const VERBS: Record<RecordVerb, { any: GrantAction; own?: GrantAction; bit?: 're
   delete: { any: 'delete-any', own: 'delete-own', bit: 'write' },
 };
 
-const RECORD_VERBS = Object.keys(VERBS) as RecordVerb[];
-
 const ANYONE: AuthorityAssociation = { kind: 'anyone', label: 'read' };
 
 export class ScopeAuthority {
@@ -115,8 +108,6 @@ export class ScopeAuthority {
         subject === null
           ? Promise.resolve(new Map())
           : loadRosterRoles((q) => this.stack.query(q), subject),
-      families: async () => new Set((await this.stack.listTypes()).map((t) => baseIdOf(t.id))),
-      typeGeneration: () => this.stack.typeGeneration,
       delegation: () => this.verifyDelegation(),
       reach: (verb, snapshot) => this.buildReach(verb, snapshot),
     });
@@ -129,15 +120,11 @@ export class ScopeAuthority {
    */
   private async verifyDelegation(): Promise<VerifiedDelegation | null> {
     if (!this.delegationChain) return null;
-    // A chain arrives only through asActor(), which always names a principal.
-    const verified = await this.stack.verifyDelegationChain(
-      this.delegationChain,
-      this.principalId!,
-    );
-    if (verified.subjectId !== this.subjectId) {
-      throw new DelegationRefusedError('The delegation chain is from a different subject.');
-    }
-    return verified;
+    // A chain arrives only through asActor(), which always names both.
+    return this.stack.verifyDelegationChain(this.delegationChain, {
+      principalId: this.principalId!,
+      subjectId: this.subjectId!,
+    });
   }
 
   /** Whether a delegated app is acting for someone other than itself. */
@@ -232,11 +219,10 @@ export class ScopeAuthority {
   }
 
   /**
-   * The families the session's delegation lets the principal `verb`. Each
-   * verb it allows reads as that verb's `-any` action through
-   * grantConveys(), so it conveys what a grant naming the principal would,
-   * and never an ungrantable family. See docs/spec/access-control.md
-   * § Signed delegations.
+   * The families the session's delegation lets the principal `verb`, read
+   * as familiesConveying() reads a grant: each verb as its `-any` action
+   * through grantConveys(), and never an ungrantable family.
+   * See docs/spec/access-control.md § Signed delegations.
    */
   private async familiesDelegated(
     verb: RecordVerb,
@@ -245,13 +231,16 @@ export class ScopeAuthority {
     const delegation = await snapshot.delegation();
     if (!delegation) return [];
     const action = VERBS[verb].any;
-    return [...(await snapshot.families())].filter((family) => {
-      if (UNGRANTABLE_SYSTEM_TYPES.has(family)) return false;
-      const actions = RECORD_VERBS.filter((v) => delegation.allows(v, family)).map(
-        (v) => VERBS[v].any,
-      );
-      return grantConveys(actions, action);
-    });
+    return delegation.families
+      .filter(
+        ({ baseId, verbs }) =>
+          !UNGRANTABLE_SYSTEM_TYPES.has(baseId) &&
+          grantConveys(
+            verbs.map((v) => VERBS[v].any),
+            action,
+          ),
+      )
+      .map(({ baseId }) => baseId);
   }
 
   /**

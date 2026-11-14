@@ -9,7 +9,7 @@ import type { ConformanceFixture } from './types.js';
 // its description names.
 
 /** The CID of AUTH_FIXTURE_DELEGATION, which a revocation of it names. */
-export const AUTH_FIXTURE_DELEGATION_CID = 'zdpuB1UVi3dGqr5f1GMUgB1U5vN1Cs1k8gxVQ8215VhTKccq4';
+export const AUTH_FIXTURE_DELEGATION_CID = 'zdpuAyHgSVWpaZyMo36Pfq4oanEXU1CMNi67EagHapZ3jvBp5';
 
 export const revocationFixtures: ConformanceFixture<
   WireRevocationRequest,

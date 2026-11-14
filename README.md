@@ -74,7 +74,7 @@ const session = await tokens.lookupToken(bearer); // { subjectId, principalId }
 const scoped = stack.asActor(session);
 ```
 
-The delegation itself — "this app acts for Bob" — is never the app's to claim: proving key possession proves who the app _is_ and nothing about whom it may speak for, and an app that could name its own subject would be choosing its own authority. Either you assert it when the token is issued, or Bob signs it. A signed delegation is a UCAN chain from Bob to the app's key, which `@haverstack/ucan` issues and the app's credential carries through the handshake:
+The delegation itself — "this app acts for Bob" — is never the app's to claim: proving key possession proves who the app _is_ and nothing about whom it may speak for, and an app that could name its own subject would be choosing its own authority. Either you assert it when the token is issued, or Bob signs it. A signed delegation is a UCAN chain from Bob to the app's key, naming the families it covers as a grant would, which `@haverstack/ucan` issues and the app's credential carries through the handshake:
 
 ```ts
 const credential = {

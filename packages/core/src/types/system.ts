@@ -151,9 +151,9 @@ export type AttachmentContent = {
 
 /**
  * Content for _revocation records: a refusal of one signed delegation,
- * named by its CID. It counts when its writer is the stack owner or an
- * issuer upstream in the delegation's chain; deleting it lifts the
- * refusal. See docs/spec/access-control.md § Revoking a delegation.
+ * named by its CID. Every live one counts, since only the owner or
+ * revokeDelegation()'s check writes one; deleting it lifts the refusal.
+ * See docs/spec/access-control.md § Revoking a delegation.
  */
 export type RevocationContent = {
   /** The delegation's CID: CIDv1, DAG-CBOR, SHA-256, base58btc (`zdpu...`). */

@@ -99,6 +99,7 @@ import {
   StackMigrationError,
   StackNotFoundError,
   StackBadRequestError,
+  StackPermissionError,
   StackSchemaDriftError,
   StackValidationError,
   StackVersionConflictError,
@@ -253,7 +254,6 @@ export class Stack implements StackClient {
    * docs/spec/data-model.md § Type cache.
    */
   private readonly typeCache = new Map<TypeId, StackType>();
-  private typeWrites = 0;
 
   /** Set by close(). See docs/spec/adapters.md § Lifecycle. */
   private closed = false;
@@ -269,6 +269,18 @@ export class Stack implements StackClient {
   // through. See docs/spec/adapters.md § Adapter capabilities.
   declare readonly listBlobs?: (query?: BlobsQuery) => Promise<BlobInfo[]>;
   declare readonly head?: () => Promise<string>;
+
+  /**
+   * Revoke the last delegation of `chain`: write the `_revocation` Record
+   * naming it, so no chain through it validates here again. Without
+   * `actor` the revoker is the owner; an `actor` must be an issuer of a
+   * link, or the owner, acting as itself. Present only on a stack opened
+   * with `verifyDelegation`. See docs/spec/access-control.md § Revoking a delegation.
+   */
+  declare readonly revokeDelegation?: (
+    chain: readonly Uint8Array[],
+    opts?: ActorOptions,
+  ) => Promise<StackRecord & { content: RevocationContent }>;
 
   private constructor(
     private readonly adapter: StackAdapter,
@@ -287,6 +299,10 @@ export class Stack implements StackClient {
         this.assertOpen();
         return this.adapter.head!();
       };
+    }
+    if (delegationVerifier) {
+      this.revokeDelegation = (chain, opts) =>
+        this.writeRevocation(delegationVerifier, chain, opts);
     }
   }
 
@@ -385,52 +401,40 @@ export class Stack implements StackClient {
   }
 
   /**
-   * Revoke the last delegation of `chain`, as the owner: write the
-   * `_revocation` Record naming it, so no chain through it validates here
-   * again. ScopedStack.revokeDelegation() is the same for an issuer in the
-   * chain. See docs/spec/access-control.md § Revoking a delegation.
+   * The body of revokeDelegation(). The chain's signatures and links must
+   * hold, so no one revokes through links they could not have signed; the
+   * revoker's standing is checked here, where every
+   * non-owner revocation is written, so every stored one counts.
    */
-  async revokeDelegation(
+  private async writeRevocation(
+    verifier: DelegationVerifier,
     chain: readonly Uint8Array[],
+    opts: ActorOptions = {},
   ): Promise<StackRecord & { content: RevocationContent }> {
-    const { cid } = await this.delegationToRevoke(chain);
-    return this.create<RevocationContent>(`${SYSTEM_TYPES.REVOCATION}@1`, { cid });
-  }
-
-  /**
-   * The delegation `chain` ends at, and every link's issuer: what a
-   * revocation names and who may write it. The chain must validate but for
-   * time bounds and revocation, so no one can revoke through links they
-   * fabricated. Throws StackBadRequestError otherwise.
-   */
-  async delegationToRevoke(
-    chain: readonly Uint8Array[],
-  ): Promise<{ cid: string; issuerIds: EntityId[] }> {
     this.assertOpen();
-    if (!this.delegationVerifier) {
-      throw new StackBadRequestError('This stack was opened without `verifyDelegation`.');
-    }
     let verified: VerifiedDelegation;
     try {
-      verified = await this.delegationVerifier(chain, {
-        isRevoked: async () => false,
-        timeBounds: false,
-      });
+      verified = await verifier(chain, { purpose: 'revoke' });
     } catch {
       throw new StackBadRequestError('The delegation chain does not validate');
     }
-    return {
-      cid: verified.links[verified.links.length - 1]!.cid,
-      issuerIds: verified.links.map((link) => link.issuerId),
-    };
-  }
-
-  /**
-   * Counts every defineType() that wrote, so a held authority snapshot can
-   * tell its families are stale: defining a Type emits no change event.
-   */
-  get typeGeneration(): number {
-    return this.typeWrites;
+    const actor = normalizeActor(opts.actor);
+    if (actor) {
+      const issuer =
+        actor.subjectId === this.ownerEntityId ||
+        verified.links.some((link) => link.issuerId === actor.subjectId);
+      if (actor.principalId !== undefined || !issuer) {
+        throw new StackPermissionError(
+          'Only the owner or an issuer in its chain, acting as itself, may revoke a delegation',
+        );
+      }
+    }
+    const cid = verified.links[verified.links.length - 1]!.cid;
+    return this.create<RevocationContent>(
+      `${SYSTEM_TYPES.REVOCATION}@1`,
+      { cid },
+      actor ? { createdBy: actor } : {},
+    );
   }
 
   get capabilities(): StackCapabilities {
@@ -462,15 +466,16 @@ export class Stack implements StackClient {
 
   /**
    * Validate a delegation chain presented by the key that authenticated as
-   * `principalId`: what a server runs at `/auth/token` before issuing a
-   * delegated token, and what every operation of a delegated view runs
-   * again. Revocation is this stack's own `_revocation` Records. Every
-   * refusal is DelegationRefusedError, a stack opened without
-   * `verifyDelegation` included. See docs/spec/access-control.md § Signed delegations.
+   * `principalId`, and, given `subjectId`, for that subject: what a server
+   * runs at `/auth/token` before issuing a delegated token, and what every
+   * operation of a delegated view runs again. Revocation is this stack's
+   * own `_revocation` Records. Every refusal is DelegationRefusedError, a
+   * stack opened without `verifyDelegation` included.
+   * See docs/spec/access-control.md § Signed delegations.
    */
   async verifyDelegationChain(
     chain: readonly Uint8Array[],
-    principalId: EntityId,
+    expect: { principalId: EntityId; subjectId?: EntityId },
   ): Promise<VerifiedDelegation> {
     this.assertOpen();
     if (!this.delegationVerifier) {
@@ -479,19 +484,22 @@ export class Stack implements StackClient {
     let verified: VerifiedDelegation;
     try {
       verified = await this.delegationVerifier(chain, {
+        purpose: 'act',
         isRevoked: (cid) => this.isDelegationRevoked(cid),
-        timeBounds: true,
       });
     } catch (cause) {
       throw new DelegationRefusedError('The delegation chain does not validate.', { cause });
     }
-    if (verified.principalId !== principalId) {
+    if (verified.principalId !== expect.principalId) {
       throw new DelegationRefusedError(
         'The delegation chain is not to the key that authenticated.',
       );
     }
-    if (verified.subjectId === principalId) {
+    if (verified.subjectId === expect.principalId) {
       throw new DelegationRefusedError('A key needs no delegation to act as itself.');
+    }
+    if (expect.subjectId !== undefined && verified.subjectId !== expect.subjectId) {
+      throw new DelegationRefusedError('The delegation chain is from a different subject.');
     }
     return verified;
   }
@@ -621,7 +629,6 @@ export class Stack implements StackClient {
 
     await this.adapter.saveType(type);
     this.typeCache.set(id, type);
-    this.typeWrites++;
     return type;
   }
 

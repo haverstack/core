@@ -32,12 +32,12 @@ describe('delegation fixtures', () => {
     expect(fixture.requestBody!.delegationChain).toEqual([AUTH_FIXTURE_DELEGATION]);
     const accepted = await (
       await openStack()
-    ).verifyDelegationChain([decode(AUTH_FIXTURE_DELEGATION)], AUTH_FIXTURE_DID);
+    ).verifyDelegationChain([decode(AUTH_FIXTURE_DELEGATION)], { principalId: AUTH_FIXTURE_DID });
     expect(accepted.subjectId).toBe(AUTH_FIXTURE_SUBJECT_DID);
     expect(accepted.expiresAt).toBeNull();
-    for (const verb of ['create', 'read', 'update', 'delete'] as const) {
-      expect(accepted.allows(verb, 'com.example/note')).toBe(true);
-    }
+    expect(accepted.families).toEqual([
+      { baseId: 'com.example/note', verbs: ['create', 'read', 'update', 'delete'] },
+    ]);
     expect((fixture.responseBody as { subjectId: string }).subjectId).toBe(
       AUTH_FIXTURE_SUBJECT_DID,
     );
@@ -46,14 +46,14 @@ describe('delegation fixtures', () => {
   it('the foreign delegation is valid for another key and refused for the fixture DID', async () => {
     const chain = [decode(AUTH_FIXTURE_FOREIGN_DELEGATION)];
     const stack = await openStack();
-    await expect(stack.verifyDelegationChain(chain, AUTH_FIXTURE_OTHER_DID)).resolves.toMatchObject(
-      {
-        subjectId: AUTH_FIXTURE_SUBJECT_DID,
-      },
-    );
-    await expect(stack.verifyDelegationChain(chain, AUTH_FIXTURE_DID)).rejects.toThrow(
-      DelegationRefusedError,
-    );
+    await expect(
+      stack.verifyDelegationChain(chain, { principalId: AUTH_FIXTURE_OTHER_DID }),
+    ).resolves.toMatchObject({
+      subjectId: AUTH_FIXTURE_SUBJECT_DID,
+    });
+    await expect(
+      stack.verifyDelegationChain(chain, { principalId: AUTH_FIXTURE_DID }),
+    ).rejects.toThrow(DelegationRefusedError);
   });
 
   it('the revocation fixtures name the fixture delegation by its CID, revoked by its issuer', async () => {
@@ -61,9 +61,9 @@ describe('delegation fixtures', () => {
     expect(d.cid).toBe(AUTH_FIXTURE_DELEGATION_CID);
     const stack = await openStack();
     const issued = revocationFixtures.find((f) => f.name === 'revocation-by-issuer')!;
-    const record = await stack
-      .asEntity(AUTH_FIXTURE_SUBJECT_DID)
-      .revokeDelegation(issued.requestBody!.delegationChain.map(decode));
+    const record = await stack.asEntity(AUTH_FIXTURE_SUBJECT_DID).revokeDelegation!(
+      issued.requestBody!.delegationChain.map(decode),
+    );
     expect(record.content).toEqual((issued.responseBody as { content: unknown }).content);
   });
 });

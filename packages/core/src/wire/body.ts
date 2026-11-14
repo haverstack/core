@@ -107,21 +107,14 @@ export function parseAuthChallengeBody(body: unknown): WireAuthChallengeRequest 
 
 /**
  * Parse a `POST /auth/token` body. A subject is never named here: it comes
- * only from a signed `delegationChain`, which a server accepts only when it
- * advertises delegations and says so with `{ delegations: true }`;
- * otherwise the key is unrecognized input like any other. A flag, not
- * discovery's format list: the body names no format, so there is nothing
- * to choose, and whether the chain verifies is the server's
- * `invalid_delegation`, not a parse failure.
+ * only from a signed `delegationChain`. Whether the server can verify one,
+ * and whether it does, is the handshake's `invalid_delegation`, not a
+ * parse failure, as at every endpoint whose availability is the server's.
  * See docs/spec/wire-format.md § The handshake.
  */
-export function parseAuthTokenBody(
-  body: unknown,
-  opts: { delegations?: boolean } = {},
-): WireAuthTokenRequest {
+export function parseAuthTokenBody(body: unknown): WireAuthTokenRequest {
   const label = 'auth token body';
-  const keys = ['did', 'nonce', 'signature', ...(opts.delegations ? ['delegationChain'] : [])];
-  const b = requireKnownBody(body, keys, label);
+  const b = requireKnownBody(body, ['did', 'nonce', 'signature', 'delegationChain'], label);
   const chain = b.delegationChain === undefined ? undefined : delegationChainField(b);
   return {
     did: requiredString(b, 'did', label),

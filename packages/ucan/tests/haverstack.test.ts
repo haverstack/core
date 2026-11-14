@@ -7,10 +7,24 @@ import {
 } from '@haverstack/core';
 import { MemoryAdapter } from '@haverstack/core/testing';
 import { delegationVerifier } from '../src/index.js';
-import { issue, makeSigner } from './helpers.js';
+import { issue as issueAny, makeSigner, type TestSigner } from './helpers.js';
+import type { DelegationOptions } from '../src/index.js';
 
 const NOTE = 'com.example.test/note@1';
 const COMMENT = 'com.example.test/comment@1';
+
+/** A delegation naming both test families, as every accepted chain must name its own. */
+const BOTH = [
+  [
+    'or',
+    [
+      ['==', '.baseId', 'com.example.test/note'],
+      ['==', '.baseId', 'com.example.test/comment'],
+    ],
+  ],
+];
+const issue = (issuer: TestSigner, overrides: Partial<DelegationOptions> = {}) =>
+  issueAny(issuer, { pol: BOTH, ...overrides });
 
 const openStack = async (ownerDid: string) =>
   Stack.open(await MemoryAdapter.open({ ownerEntityId: ownerDid }), {
@@ -52,29 +66,30 @@ describe('a stack opened with delegationVerifier()', () => {
 
   it('reports the subject and earliest expiry for the key that authenticated', async () => {
     const d = await issue(member, { audience: app.did, cmd: '/haverstack/record', exp: 2e9 });
-    const verified = await stack.verifyDelegationChain([d.bytes], app.did);
+    const verified = await stack.verifyDelegationChain([d.bytes], { principalId: app.did });
     expect(verified).toMatchObject({
       subjectId: member.did,
       principalId: app.did,
       expiresAt: new Date(2e9 * 1000),
     });
-    for (const verb of ['create', 'read', 'update', 'delete'] as const) {
-      expect(verified.allows(verb, 'com.example.test/note')).toBe(true);
-    }
+    expect(verified.families).toEqual([
+      { baseId: 'com.example.test/note', verbs: ['create', 'read', 'update', 'delete'] },
+      { baseId: 'com.example.test/comment', verbs: ['create', 'read', 'update', 'delete'] },
+    ]);
   });
 
   it('refuses a chain to another key, a key delegating to itself, and bytes that are no chain', async () => {
     const toOther = await issue(member, { audience: makeSigner().did });
-    await expect(stack.verifyDelegationChain([toOther.bytes], app.did)).rejects.toThrow(
-      DelegationRefusedError,
-    );
+    await expect(
+      stack.verifyDelegationChain([toOther.bytes], { principalId: app.did }),
+    ).rejects.toThrow(DelegationRefusedError);
     const self = await issue(app, { audience: app.did });
-    await expect(stack.verifyDelegationChain([self.bytes], app.did)).rejects.toThrow(
-      DelegationRefusedError,
-    );
-    await expect(stack.verifyDelegationChain([Uint8Array.of(1, 2, 3)], app.did)).rejects.toThrow(
-      DelegationRefusedError,
-    );
+    await expect(
+      stack.verifyDelegationChain([self.bytes], { principalId: app.did }),
+    ).rejects.toThrow(DelegationRefusedError);
+    await expect(
+      stack.verifyDelegationChain([Uint8Array.of(1, 2, 3)], { principalId: app.did }),
+    ).rejects.toThrow(DelegationRefusedError);
   });
 
   // Expiry and revocation reach a view already in hand: each operation
@@ -127,14 +142,18 @@ describe('revoking through the stack', () => {
     });
     const chain = [root.bytes, leaf.bytes];
 
-    await expect(stack.verifyDelegationChain(chain, device.did)).resolves.toBeDefined();
-    const revocation = await stack.revokeDelegation([root.bytes]);
+    await expect(
+      stack.verifyDelegationChain(chain, { principalId: device.did }),
+    ).resolves.toBeDefined();
+    const revocation = await stack.revokeDelegation!([root.bytes]);
     expect(revocation.content).toEqual({ cid: root.cid });
-    await expect(stack.verifyDelegationChain(chain, device.did)).rejects.toThrow(
+    await expect(stack.verifyDelegationChain(chain, { principalId: device.did })).rejects.toThrow(
       DelegationRefusedError,
     );
     await stack.delete(revocation.id);
-    await expect(stack.verifyDelegationChain(chain, device.did)).resolves.toBeDefined();
+    await expect(
+      stack.verifyDelegationChain(chain, { principalId: device.did }),
+    ).resolves.toBeDefined();
   });
 
   // Whoever granted the authority can withdraw it, not only the owner.
@@ -152,15 +171,17 @@ describe('revoking through the stack', () => {
     });
     const chain = [root.bytes, leaf.bytes];
 
-    await expect(stack.asEntity(makeSigner().did).revokeDelegation(chain)).rejects.toThrow(
+    await expect(stack.asEntity(makeSigner().did).revokeDelegation!(chain)).rejects.toThrow(
       StackPermissionError,
     );
-    await expect(stack.verifyDelegationChain(chain, device.did)).resolves.toBeDefined();
+    await expect(
+      stack.verifyDelegationChain(chain, { principalId: device.did }),
+    ).resolves.toBeDefined();
     for (const issuer of [member, app]) {
-      const record = await stack.asEntity(issuer.did).revokeDelegation(chain);
+      const record = await stack.asEntity(issuer.did).revokeDelegation!(chain);
       expect(record.content).toEqual({ cid: leaf.cid });
     }
-    await expect(stack.verifyDelegationChain(chain, device.did)).rejects.toThrow(
+    await expect(stack.verifyDelegationChain(chain, { principalId: device.did })).rejects.toThrow(
       DelegationRefusedError,
     );
   });
@@ -176,12 +197,12 @@ describe('revoking through the stack', () => {
     const later = await issue(member, { audience: app.did, nbf: now + 3600 });
     const past = await issue(member, { audience: app.did, exp: now - 3600 });
     for (const d of [later, past]) {
-      const record = await stack.asEntity(member.did).revokeDelegation([d.bytes]);
+      const record = await stack.asEntity(member.did).revokeDelegation!([d.bytes]);
       expect(record.content).toEqual({ cid: d.cid });
     }
     const forged = new Uint8Array(later.bytes);
     forged[forged.length - 1]! ^= 1;
-    await expect(stack.asEntity(member.did).revokeDelegation([forged])).rejects.toThrow(
+    await expect(stack.asEntity(member.did).revokeDelegation!([forged])).rejects.toThrow(
       StackBadRequestError,
     );
   });
@@ -207,7 +228,7 @@ describe('revoking through the stack', () => {
       });
     const before = await stack.create(NOTE, { text: 'before' });
     await settle();
-    await stack.asEntity(member.did).revokeDelegation([d.bytes]);
+    await stack.asEntity(member.did).revokeDelegation!([d.bytes]);
     await stack.create(NOTE, { text: 'after' });
     await settle();
     expect(seen).toEqual([before.id]);
@@ -248,5 +269,63 @@ describe('revoking through the stack', () => {
     }
     expect(seen).toEqual([before.id]);
     expect(errors.some((e) => e instanceof DelegationRefusedError)).toBe(true);
+  });
+});
+
+// A chain names its families as a grant does, so what it allows is a list
+// rather than a predicate asked of every family the stack defines.
+describe('what a chain allows', () => {
+  const owner = makeSigner();
+  const member = makeSigner();
+  const app = makeSigner();
+  const device = makeSigner();
+  const allowed = async (chain: Uint8Array[], audience = app.did) =>
+    (await (await openStack(owner.did)).verifyDelegationChain(chain, { principalId: audience }))
+      .families;
+  const note = (family: string) => [['==', '.baseId', family]];
+
+  it('is the families its links name, intersected, with the verbs every command covers', async () => {
+    const root = await issue(member, { audience: app.did, cmd: '/haverstack/record' });
+    const leaf = await issueAny(app, {
+      audience: device.did,
+      subject: member.did,
+      cmd: '/haverstack/record/read',
+      pol: note('com.example.test/note'),
+    });
+    expect(await allowed([root.bytes, leaf.bytes], device.did)).toEqual([
+      { baseId: 'com.example.test/note', verbs: ['read'] },
+    ]);
+  });
+
+  it('may be named by any one link, the others leaving it alone', async () => {
+    const root = await issueAny(member, { audience: app.did, cmd: '/haverstack/record' });
+    const leaf = await issue(app, { audience: device.did, subject: member.did, cmd: '/' });
+    expect((await allowed([root.bytes, leaf.bytes], device.did)).length).toBe(2);
+  });
+
+  it('refuses a chain naming no family, and a policy that does not list them', async () => {
+    const unnamed = await issueAny(member, { audience: app.did, cmd: '/haverstack/record' });
+    const pattern = await issueAny(member, {
+      audience: app.did,
+      cmd: '/haverstack/record',
+      pol: [['like', '.baseId', 'com.example.test/*']],
+    });
+    const twoStatements = await issueAny(member, {
+      audience: app.did,
+      cmd: '/haverstack/record',
+      pol: [...note('com.example.test/note'), ...note('com.example.test/note')],
+    });
+    for (const d of [unnamed, pattern, twoStatements]) {
+      await expect(allowed([d.bytes])).rejects.toThrow(DelegationRefusedError);
+    }
+  });
+
+  // What a delegation allows has no bearing on withdrawing it, so a root
+  // that names no family is revoked like any other.
+  it('does not bear on revoking', async () => {
+    const stack = await openStack(owner.did);
+    const unnamed = await issueAny(member, { audience: app.did, cmd: '/haverstack/record' });
+    const record = await stack.asEntity(member.did).revokeDelegation!([unnamed.bytes]);
+    expect(record.content).toEqual({ cid: unnamed.cid });
   });
 });

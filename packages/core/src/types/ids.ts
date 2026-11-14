@@ -64,22 +64,30 @@ export type VerifiedDelegation = {
   principalId: EntityId;
   /** The chain's earliest expiry, or null if no link expires. */
   expiresAt: Date | null;
-  /** Whether the principal may `verb` Records of the family `baseId` for its subject. */
-  allows: (verb: RecordVerb, baseId: BaseId) => boolean;
+  /**
+   * What the principal may do for its subject, named family by family as
+   * grants are: never a pattern, so the set needs no list of the stack's
+   * families to read.
+   */
+  families: readonly { baseId: BaseId; verbs: readonly RecordVerb[] }[];
   /** Each link, root first: the CID naming it and the identity that issued it. */
   links: readonly { cid: string; issuerId: EntityId }[];
 };
 
 /**
- * What core asks of a chain beside its own rules. `timeBounds` is false
- * when the chain names a delegation being revoked, which may be withdrawn
- * before it starts or after it ends.
+ * Why core asks. To `act`, a chain is checked whole, against this stack's
+ * revocations. To `revoke` one of its delegations, only who signed each
+ * link matters: a delegation can be withdrawn before it starts, after it
+ * ends, and whatever it allows, so time bounds, revocations and authority
+ * go unread and `families` is empty.
  */
-export type DelegationCheck = {
-  /** Whether the delegation `cid` names is revoked on this stack. */
-  isRevoked: (cid: string) => Promise<boolean>;
-  timeBounds: boolean;
-};
+export type DelegationCheck =
+  | {
+      purpose: 'act';
+      /** Whether the delegation `cid` names is revoked on this stack. */
+      isRevoked: (cid: string) => Promise<boolean>;
+    }
+  | { purpose: 'revoke' };
 
 /**
  * Validates an encoded delegation chain, root first, throwing to refuse it.
